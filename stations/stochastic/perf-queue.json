@@ -1,0 +1,98 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "targetStation": "perf-sweep (Epic 10)",
+  "queue": [
+    {
+      "id": "PD-020",
+      "candidateRef": "sto-performance-par-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "estimate_ar_with_pacf_annual",
+      "anchor": "crates/cobre-stochastic/src/par/fitting/estimation.rs:397",
+      "severity": "B",
+      "claim": "Narrowed: the parallelizable region is specifically the INITIAL per-hydro estimation loop of estimate_ar_with_pacf_annual (the `for &hydro_id in hydro_ids { ... estimates.push(...) }` block starting estimation.rs:397), NOT the subsequent annual reduction (apply_annual_prepass_reductions / reduce_en\u2026",
+      "byteNeutralFixShape": "Lift the initial per-hydro block of estimate_ar_with_pacf_annual (the `for &hydro_id in hydro_ids { ... estimates.push(...) }` region) into the same hydro_ids.par_iter().flat_map_iter(|&hydro_id| { build this hydro's Vec<ArCoefficientEstimate> }).collect() shape the classical estimate_all_hydro_ar_\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    },
+    {
+      "id": "PD-021",
+      "candidateRef": "sto-performance-par-01",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "compute_seasonal_matrices",
+      "anchor": "crates/cobre-stochastic/src/par/fitting/correlation.rs:391",
+      "severity": "B",
+      "claim": "Narrowed: the double date-set intersection holds only for seasons that pass the MIN_CORRELATION_PAIRS gate \u2014 a rejected season intersects once (in min_pairs) then `continue`s (correlation.rs:418-420), so it pays the walk once, not twice. And this is fitting/setup-time work (one correlation build pe\u2026",
+      "byteNeutralFixShape": "Two independent, fitting-local reductions with no cross-crate blast radius. (i) Compute each pair's overlap count once: have compute_pearson_correlation_matrix (or a shared helper it calls) return the min pair count alongside the matrix, and drop compute_seasonal_matrices' separate min_pairs pre-wa\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    },
+    {
+      "id": "PD-023",
+      "candidateRef": "sto-performance-sampling-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "ClassSampler::fill",
+      "anchor": "crates/cobre-stochastic/src/sampling/class_sampler.rs:311",
+      "severity": "B",
+      "claim": "Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/External are allocation-free per the positives): the direction matrix + scramble params are recomputed and heap-allocated per (iteration, scenario, stage) though invariant across the scenario axis, and the existing SobolP\u2026",
+      "byteNeutralFixShape": "Give the OutOfSample class sampler (or the caller that owns the per-(iteration,stage) loop) a per-stage SobolPrecomputed cache keyed on (forward_seed, iteration, noise_group_id, dim), built once when the stage/iteration first appears and reused across every scenario draw, then pass Some(&ctx) into\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    },
+    {
+      "id": "PD-024",
+      "candidateRef": "sto-performance-sampling-01",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "fill_uncorrelated",
+      "anchor": "crates/cobre-stochastic/src/sampling/out_of_sample.rs:125",
+      "severity": "B",
+      "claim": "Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-sieve + nested Vec<Vec<Vec<u32>>> scramble-table allocation and recomputation is scenario-invariant and should be hoisted per (iteration, stage); because NO HaltonPrecomputed seam exists (unlike Sobol's dormant one), the\u2026",
+      "byteNeutralFixShape": "Mirror the Sobol hoist: introduce a per-(iteration,stage) precomputed Halton context (a HaltonPrecomputed holding the prime list and the scramble tables) built once per (forward_seed, iteration, noise_group_id, dim, total_scenarios) and reused across every scenario draw. This requires a new precomp\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    },
+    {
+      "id": "PD-025",
+      "candidateRef": "sto-performance-sampling-02",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "fill_uncorrelated",
+      "anchor": "crates/cobre-stochastic/src/sampling/out_of_sample.rs:92",
+      "severity": "B",
+      "claim": "Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not allocation \u2014 perm_scratch is caller-owned): the scenario-invariant set of `dim` Fisher-Yates permutations of `total_scenarios` strata is reshuffled once per scenario, giving the quadratic-in-scenario O(dim*total_scenar\u2026",
+      "byteNeutralFixShape": "Hoist the per-(iteration,stage) LHS permutation set across the scenario axis: build the `dim` stratification permutations once per (forward_seed, iteration, noise_group_id, total_scenarios) into a per-stage cache (a stride-dim*n usize buffer, or a batch already produced by the tree-noise `generate_\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    },
+    {
+      "id": "PD-026",
+      "candidateRef": "sto-performance-tree-noise-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "generate_opening_tree",
+      "anchor": "crates/cobre-stochastic/src/tree/generate.rs:327",
+      "severity": "B",
+      "claim": "Narrowed: the confirmed defect is a pure eliminable-work perf issue -- the stage-invariant per-entity position resolution (entity_order.iter().position at resolve.rs:428) recomputed n_openings x n_groups times per stage because resolve_class_positions has zero callers so class_positions stays None;\u2026",
+      "byteNeutralFixShape": "Hoist entity-position resolution to once per tree. Either give generate_opening_tree a &mut DecomposedCorrelation and call resolve_class_positions once per class (inflow_order/load_order/ncs_order) before the stage loop so every opening lands on apply_group_precomputed; or resolve positions at corr\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    },
+    {
+      "id": "PD-027",
+      "candidateRef": "sto-performance-tree-noise-01",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "apply_group_precomputed",
+      "anchor": "crates/cobre-stochastic/src/correlation/resolve.rs:379",
+      "severity": "B",
+      "claim": "Narrowed to the live path: at baseline only apply_group_scan's n>64 branch (resolve.rs:426/436-437, three transient Vecs) is actually reached from the tree loop -- apply_group_precomputed is unreachable in production because class_positions stays None (per perf-00), so its n>64 allocation (resolve.\u2026",
+      "byteNeutralFixShape": "Give the apply functions caller-owned reusable scratch: allocate gathered/correlated (and, for the scan path, positions) once, sized to the maximum group dimension, in generate_opening_tree before the stage/opening loops and thread them in, or hold them on a per-tree workspace. Keep the small-group\u2026",
+      "measured": false,
+      "status": "UNMEASURED \u2014 PD-004 deferred-pending-profile"
+    }
+  ]
+}

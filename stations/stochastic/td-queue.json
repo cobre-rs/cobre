@@ -1,0 +1,185 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "targetStation": "test-corpus (Epic 8)",
+  "queue": [
+    {
+      "id": "TD-024",
+      "candidateRef": "sto-test-bloat-par-00",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-stochastic/tests/forward_sampler.rs",
+        "crates/cobre-stochastic/tests/forward_sampler.rs",
+        "crates/cobre-stochastic/tests/forward_sampler.rs",
+        "crates/cobre-stochastic/tests/conformance.rs",
+        "crates/cobre-stochastic/tests/conformance.rs",
+        "crates/cobre-stochastic/tests/conformance.rs"
+      ],
+      "anchors": [
+        "crates/cobre-stochastic/tests/forward_sampler.rs:74",
+        "crates/cobre-stochastic/tests/forward_sampler.rs:61",
+        "crates/cobre-stochastic/tests/forward_sampler.rs:161",
+        "crates/cobre-stochastic/tests/conformance.rs:61",
+        "crates/cobre-stochastic/tests/conformance.rs:23",
+        "crates/cobre-stochastic/tests/conformance.rs:130"
+      ],
+      "claim": "Narrowed: the confirmable byte-identical duplication is make_bus (forward_sampler.rs:61 == conformance.rs:23) and make_hydro (forward_sampler.rs:74 == conformance.rs:61) across the two in-scope binaries, with no tests/common module and no test-support feature to home them. I concede identity_correl\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-025",
+      "candidateRef": "sto-test-bloat-par-01",
+      "severity": "B",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-stochastic/src/par/precompute.rs:653",
+        "crates/cobre-stochastic/src/par/evaluate.rs:515",
+        "crates/cobre-stochastic/src/par/precompute.rs:628",
+        "crates/cobre-stochastic/src/par/evaluate.rs:490",
+        "crates/cobre-stochastic/src/par/validation.rs:160",
+        "crates/cobre-stochastic/src/par/aggregate.rs:169"
+      ],
+      "claim": "Narrowed: the provable byte-identical duplication is specifically the make_model pair (precompute.rs:653 == evaluate.rs:515, empty diff) and the make_stage pair (precompute.rs:628 vs evaluate.rs:490) differing only by the dummy_date wrapper. The broader '~9 par test sites' fragmentation claim is so\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-026",
+      "candidateRef": "sto-test-bloat-par-02",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-stochastic/src/par/fitting/tests.rs:2032",
+        "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs:149"
+      ],
+      "claim": "Narrowed: the confirmable residue is the maintenance/drift hazard of a duplicated 35-line deterministic PAR(2) generator across two sibling files (tests.rs:2032 and estimation/tests.rs:149), whose fix hoists one copy to a shared #[cfg(test)] par/fitting helper. I concede the divergence is currently\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-027",
+      "candidateRef": "sto-test-bloat-par-03",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-stochastic/src/par/fitting/tests.rs:1157",
+        "crates/cobre-stochastic/src/par/fitting/tests.rs:2354"
+      ],
+      "claim": "Narrowed: the confirmable residue is the byte-identical 11-line population mean/std helper duplicated within a single file \u2014 pop_mean_std (tests.rs:1157) and pop_mean_std_ann (tests.rs:2354) \u2014 both inside the crate's own inline #[cfg(test)] module. It is a minor (severity-C) in-file test-hygiene de\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-028",
+      "candidateRef": "sto-test-bloat-sampling-00",
+      "severity": "B",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-stochastic/src/sampling/external.rs:2513",
+        "crates/cobre-stochastic/src/sampling/historical.rs:1902",
+        "crates/cobre-stochastic/src/sampling/mod.rs:670",
+        "crates/cobre-stochastic/src/sampling/class_sampler.rs:446",
+        "crates/cobre-stochastic/src/sampling/mod.rs:791",
+        "crates/cobre-stochastic/src/sampling/insample.rs:56"
+      ],
+      "claim": "Narrowed to the verified mechanical duplications \u2014 the 3x byte-identical uniform_tree, the 2x one-cosmetic-line make_hydro (external/historical) and the 2x identical dated_stage \u2014 as the consolidation-worthy core; mod.rs's make_hydro is a divergent variant (2024 + mirror-unit-group) and the ~9 Stag\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-029",
+      "candidateRef": "sto-test-bloat-sampling-01",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-stochastic/tests/saa_golden_value.rs",
+        "crates/cobre-stochastic/tests/saa_golden_value.rs"
+      ],
+      "anchors": [
+        "crates/cobre-stochastic/tests/saa_golden_value.rs:53",
+        "crates/cobre-stochastic/tests/saa_golden_value.rs:32"
+      ],
+      "claim": "Narrowed to the single verified byte-identical duplication \u2014 saa_golden_value.rs's 28-line identity_correlation copy of the QMC binaries' fixture; 're-declares the integration-binary fixture prelude' over-reaches because saa carries only this one of the ~8 shared prelude helpers and its make_stage\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-030",
+      "candidateRef": "sto-test-bloat-tree-noise-00",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-stochastic/tests/halton_integration.rs",
+        "crates/cobre-stochastic/tests/sobol_integration.rs",
+        "crates/cobre-stochastic/tests/lhs_integration.rs",
+        "crates/cobre-stochastic/tests/halton_integration.rs",
+        "crates/cobre-stochastic/tests/halton_integration.rs"
+      ],
+      "anchors": [
+        "crates/cobre-stochastic/tests/halton_integration.rs:207",
+        "crates/cobre-stochastic/tests/sobol_integration.rs:207",
+        "crates/cobre-stochastic/tests/lhs_integration.rs:206",
+        "crates/cobre-stochastic/tests/halton_integration.rs:43",
+        "crates/cobre-stochastic/tests/halton_integration.rs:105"
+      ],
+      "claim": "Narrowed: the confirmed residue is strictly the byte-identical eight-helper fixture prelude physically copied across the QMC trio (halton/sobol/lhs), with make_hydro also copied into reproducibility (verified) and no tests/common/ home, already drifting into two identity_correlation return types; I\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-031",
+      "candidateRef": "sto-test-bloat-tree-noise-01",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-stochastic/src/tree/generate.rs:341",
+        "crates/cobre-stochastic/src/correlation/resolve.rs:446",
+        "crates/cobre-stochastic/src/normal/precompute.rs:299",
+        "crates/cobre-stochastic/src/tree/opening_tree.rs:438",
+        "crates/cobre-stochastic/src/correlation/spectral.rs:286"
+      ],
+      "claim": "Narrowed: no RATIFIED homing threshold exists at baseline -- testing-architecture.md section 5 is a 'Proposed standard' and section 5.1's ~500-test-LOC/~40-fn line is explicitly a 'proposal' -- so the surviving claim asserts only (a) the verified intra-crate inconsistency (inline vs extracted sibli\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-032",
+      "candidateRef": "sto-test-bloat-seam-00",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-stochastic/tests/reproducibility.rs"
+      ],
+      "anchors": [
+        "crates/cobre-stochastic/src/context.rs:852",
+        "crates/cobre-stochastic/src/provenance.rs:96",
+        "crates/cobre-stochastic/tests/reproducibility.rs:68",
+        "crates/cobre-stochastic/src/seeds.rs:198"
+      ],
+      "claim": "The duplication narrows to the byte-identical make_bus/make_stage/make_hydro/identity_correlation across context.rs, provenance.rs and tests/reproducibility.rs plus the fourth date-differing make_hydro in seeds.rs; it does NOT extend to make_inflow_model (a legitimate parameterized-superset vs fixe\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    },
+    {
+      "id": "TD-033",
+      "candidateRef": "sto-test-bloat-seam-01",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-stochastic/src/season_cast/mod.rs:1271",
+        "crates/cobre-stochastic/src/season_cast/mod.rs:615"
+      ],
+      "claim": "The test adds zero behavioral coverage beyond the existing helper-level unit tests (season_period_window/nth_previous_occurrence/cast each already tested at 687-986); its only residual function is to pin season_occurrence's delegation to those three helpers, an implementation-detail change-detector\u2026",
+      "yardstick": "docs/design/testing-architecture.md",
+      "crossRef": "docs/design/reserved-seams-and-deferred-debt.md \u2014 Oracle test-harness duplication",
+      "targetStation": "test-corpus (Epic 8)"
+    }
+  ]
+}

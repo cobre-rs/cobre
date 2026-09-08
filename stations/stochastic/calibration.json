@@ -1,0 +1,1368 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "assigned": [
+    {
+      "candidateRef": "sto-architecture-par-00",
+      "id": "CD-064",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "par",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "leaky-boundary",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed to the SDDP two-pass phase phrasing that genuinely encodes a single-engine assumption: 'forward/backward passes' (precompute.rs:11), 'forward pass' (lag_transition.rs:60), 'training/simulation lag transitions' (lag_transition.rs:137) and 'forward-pass hot path' (lag_transition.rs:160). I concede 'LP RHS patching' and 'consumed read-only during optimization' (precompute.rs:1,4; PrecomputedPar:78) are generic LP-solver phrasing any deterministic ED/OPF consumer would also use, not engine paradigm nouns, so those two phrases are over-reach.",
+      "title": "Decomposition-engine phase vocabulary in par L1-kernel doc comments (forward/backward passes, training/simulation, LP RHS patching) \u2014 paradigm leakage the genericity gate does not catch",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "PrecomputedPar",
+          "line": 78
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "mod precompute (module doc)",
+          "line": 11
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "derive_downstream_par_order",
+          "line": 137
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "precompute_stage_lag_transitions",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "resolve_stage_lag_transition (referenced from UNIFORM_MONTHLY_TRANSITION doc)",
+          "line": 60
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-over-engineering-par-01",
+      "id": "OD-027",
+      "class": "OD",
+      "lens": "over-engineering",
+      "subStation": "par",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "redundant-wrapper",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the confirmable residue is that all three bare forms have zero production callers (only crate tests + doctests exercise them) and estimate_ar_coefficients/estimate_seasonal_stats are additionally re-exported at the crate root (lib.rs:46-47) on top of the par::fitting:: path. I concede a single documented no-season-map convenience overload is a defensible public-API ergonomics choice for an L1 reusable kernel, so the defect is the unmarked, production-unconsumed redundancy of the trio (and its intent should be marked if kept), not that the functions are dead weight to delete outright.",
+      "title": "Bare `estimate_ar_coefficients` / `estimate_correlation` / `estimate_seasonal_stats` are pub forwarding shims over their `_with_season_map` twins with zero production consumers (only the crate's own tests + doctests)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs",
+          "symbol": "estimate_ar_coefficients",
+          "line": 88
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "estimate_correlation",
+          "line": 115
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/seasonal_stats.rs",
+          "symbol": "estimate_seasonal_stats",
+          "line": 221
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-over-engineering-par-00",
+      "id": "OD-026",
+      "class": "OD",
+      "lens": "over-engineering",
+      "subStation": "par",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "speculative-generality",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the fatal check inside validate_par_parameters (validation.rs:120, the zero-std/ar_order>0 error propagated by `?`) is live and load-bearing at context.rs:616 and must stay. The confirmable residue is only the WARNING side \u2014 the single-variant ParWarning enum plus the warnings: Vec<ParWarning> field of ParValidationReport \u2014 which is computed at validation.rs:138 then discarded by the `let _report =` bind at the sole production caller, with no production reader. Any surfacing of the warning would trigger the Python-parity rule (an owner call).",
+      "title": "PAR validation warning apparatus (single-variant `ParWarning` enum + single-field `ParValidationReport`) is built then discarded at its only production caller",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParWarning",
+          "line": 54
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParValidationReport",
+          "line": 39
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "validate_par_parameters",
+          "line": 117
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-par-01",
+      "id": "PD-021",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "par",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the double date-set intersection holds only for seasons that pass the MIN_CORRELATION_PAIRS gate \u2014 a rejected season intersects once (in min_pairs) then `continue`s (correlation.rs:418-420), so it pays the walk once, not twice. And this is fitting/setup-time work (one correlation build per solve), so the confirmable cost is bounded setup latency and allocation traffic scaling with n_hydros^2 * observation-length, NOT a per-scenario/per-stage runtime-hot-path regression. Any fix must keep the two documented determinism contracts (canonical hydro_ids-order collect; NaiveDate-ordered pair accumulation) so declaration-order invariance is preserved.",
+      "title": "Per-season correlation matrices recompute every hydro-pair date-set intersection twice and clone the full residual map per (hydro, season)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_seasonal_matrices",
+          "line": 391
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_pearson_correlation_matrix",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_hydro_residuals",
+          "line": 199
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-par-00",
+      "id": "PD-020",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "par",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "asymmetry",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the parallelizable region is specifically the INITIAL per-hydro estimation loop of estimate_ar_with_pacf_annual (the `for &hydro_id in hydro_ids { ... estimates.push(...) }` block starting estimation.rs:397), NOT the subsequent annual reduction (apply_annual_prepass_reductions / reduce_entity_orders_annual), which mutates `estimates` across hydro index sets and must remain serial in this change. It is a fitting/setup-time asymmetry (one fit per solve), and correctness requires the flat_map_iter/collect canonical hydro_ids-order reassembly (estimation.rs:947-951) so the result stays declaration-order-invariant.",
+      "title": "PAR-A initial per-hydro AR estimation runs single-threaded while the byte-identical classical path already parallelizes the same per-hydro shape",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 397
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 952
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-par-02",
+      "id": "PD-022",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "par",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the borrow-view substitution is valid only where the consumer never mutates the owned vector \u2014 verified true at the two reduction loops and the PAR-A initial estimate, which build obs_refs: Vec<&[f64]> and only read (e.g. the classical closure's `obs_by_season[season].len() < 2` guard reads, never writes). It is setup-time memory-traffic debt (one fit per solve), so the confirmable defect is bounded allocation/copy volume (2x classical / up to 4x PAR-A of raw history), NOT a per-iteration hot-path regression; and the classical par_iter closure's canonical hydro_ids-order collect (estimation.rs:947-951) is unaffected by swapping clone_from for a shared-immutable borrow.",
+      "title": "Per-hydro observation vectors are deep-copied out of group_obs on every estimate/reduce pass (2x classical, 4x PAR-A) though the consumers only read them",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 959
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders",
+          "line": 1067
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders_annual",
+          "line": 689
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 407
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-par-03",
+      "id": "TD-027",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "par",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the confirmable residue is the byte-identical 11-line population mean/std helper duplicated within a single file \u2014 pop_mean_std (tests.rs:1157) and pop_mean_std_ann (tests.rs:2354) \u2014 both inside the crate's own inline #[cfg(test)] module. It is a minor (severity-C) in-file test-hygiene dedup with zero behavior divergence, no coverage change, and no production or public-API impact; the fix is a trivial single-file edit repointing the `_ann` call sites at pop_mean_std.",
+      "title": "pop_mean_std and pop_mean_std_ann are identical population mean/std helpers declared twice in the same file (par/fitting/tests.rs)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std",
+          "line": 1157
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std_ann",
+          "line": 2354
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-par-02",
+      "id": "TD-026",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "par",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the confirmable residue is the maintenance/drift hazard of a duplicated 35-line deterministic PAR(2) generator across two sibling files (tests.rs:2032 and estimation/tests.rs:149), whose fix hoists one copy to a shared #[cfg(test)] par/fitting helper. I concede the divergence is currently latent, not actual: at the baseline the two bodies are byte-identical modulo the cosmetic lcg/lcg_state rename, so no golden or assertion discrepancy exists today \u2014 the surviving claim is the drift risk, not a present numeric bug.",
+      "title": "simulate_two_season_par2 PAR(2) Box-Muller scenario simulator duplicated byte-for-byte across the two par/fitting sibling test files",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 2032
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 149
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-par-01",
+      "id": "TD-025",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "par",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the provable byte-identical duplication is specifically the make_model pair (precompute.rs:653 == evaluate.rs:515, empty diff) and the make_stage pair (precompute.rs:628 vs evaluate.rs:490) differing only by the dummy_date wrapper. The broader '~9 par test sites' fragmentation claim is softer: the validation.rs:160 make_model hardcodes mean_m3s:100.0 and aggregate.rs:169 make_stage uses duration 720.0/branching_factor 1 vs precompute/evaluate's 744.0/10, so those copies are structurally-similar-but-divergent (different default literals), not byte-identical dupes \u2014 the field-add-fragmentation cost is real but the strictly-identical residue is the precompute<->evaluate make_model/make_stage pair.",
+      "title": "Inline/sibling unit-test fixture builders (Stage / InflowModel) re-authored across ~9 par test sites with make_model byte-identical between precompute.rs and evaluate.rs",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_model",
+          "line": 653
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_model",
+          "line": 515
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_stage",
+          "line": 628
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_stage",
+          "line": 490
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "make_model",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/aggregate.rs",
+          "symbol": "make_stage",
+          "line": 169
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-par-00",
+      "id": "TD-024",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "par",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the confirmable byte-identical duplication is make_bus (forward_sampler.rs:61 == conformance.rs:23) and make_hydro (forward_sampler.rs:74 == conformance.rs:61) across the two in-scope binaries, with no tests/common module and no test-support feature to home them. I concede identity_correlation (forward_sampler.rs:161 vs conformance.rs:130) is a near-duplicate differing by the `ids` vs `entity_ids` param name, not byte-identical; and the wider halton/sobol/lhs/reproducibility/saa_golden_value prelude spread and the crate-wide integration-binary total are out of this sub-station (owned by tree-noise and the test-corpus station per the scope walls and the prior-register Oracle cross-reference), so the surviving claim is scoped to the forward_sampler<->conformance make_bus/make_hydro pair.",
+      "title": "Integration-binary fixture prelude (make_bus / make_hydro / identity_correlation) re-authored byte-for-byte across the par integration binaries with no shared tests/common",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_hydro",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_bus",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "identity_correlation",
+          "line": 161
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_hydro",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_bus",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "identity_correlation",
+          "line": 130
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-sampling-01",
+      "id": "CD-066",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "sampling",
+      "severity": "B (A-risk)",
+      "reviewerRating": "C",
+      "downgradeReason": "raised from C per the silent-divergence seam precedent: the untyped &str class gate silently mis-gates on a call-site literal typo",
+      "category": "bad-abstraction",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Only the single `class_name != \"inflow\"` Historical gate at mod.rs:436 is a correctness rule (not a diagnostic) riding on the &str class identity, contradicting the \"used only in error messages\" doc comment; the two format! diagnostics and the correlation-side entity_type matching are legitimate and not indicted.",
+      "title": "Entity-class identity degrades to a stringly-typed &str at the build_class_sampler seam, where a correctness rule is gated by string equality",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 360
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ClassSamplerParams",
+          "line": 297
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-sampling-00",
+      "id": "CD-065",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "sampling",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "missing-seam",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "advances-1",
+      "alignmentCites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "partIRef": "I.3-1",
+      "queuedTo": "alignment",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The structural residue only: the four realized-value Option<&Library> fields share one flat Copy bundle with the &StochasticContext store handle and no type-level separation of the two concerns/lifetimes, so a reader of the seam cannot tell store from per-run input without reading build_forward_sampler's body \u2014 the store/param split the alignment epic should reshape (the shape that survives the Part IV/V Switchable<T> unification), not a runtime defect.",
+      "title": "ForwardSamplerConfig is both a store handle and a parameter bag, and is the point where the generation-side and realized-value halves straddle",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_forward_sampler",
+          "line": 403
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-over-engineering-sampling-01",
+      "id": "OD-029",
+      "class": "OD",
+      "lens": "over-engineering",
+      "subStation": "sampling",
+      "severity": "B (A-risk)",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "over-parameterization",
+      "effort": "L",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The rationale's \"no natural sub-grouping exists\" clause is false \u2014 the four are a documented atomic seed reset together at each outer boundary and re-threaded verbatim through >=6 signatures; the defensible residue is the silent same-typed transposition hazard between derived_accum and derived_weight (both &[f64], both length n_hydros, adjacent positional args) plus the reset-together invariant restated across >=3 doc blocks, which a by-ref DerivedSeed aggregate removes. The #[allow] itself stays (all three functions remain >7 args), so this is not an eliminate-the-lint finding.",
+      "title": "standardize_external_inflow's #[allow(too_many_arguments)] rationale ('no natural sub-grouping exists') is contradicted by the derived-seed 4-tuple being re-threaded verbatim through four signatures across two crates",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "standardize_external_inflow",
+          "line": 262
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/eta_inversion.rs",
+          "symbol": "run_eta_inversion",
+          "line": 37
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "standardize_historical_windows",
+          "line": 296
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-over-engineering-sampling-00",
+      "id": "OD-028",
+      "class": "OD",
+      "lens": "over-engineering",
+      "subStation": "sampling",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "over-parameterization",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Representability only: the config permits exactly two invalid/redundant states \u2014 (a) a class scheme selects External/Historical but the paired Option is None (caught only at runtime), and (b) a library is Some while the class scheme never reads it (silent dead input) \u2014 and the hard-wired historical_library:None for load/ncs shows the four Options are not independent; folding each class's scheme+library into a per-class source enum makes both states unrepresentable. No claim of a runtime bug: the MissingScenarioSource check is correct today.",
+      "title": "ForwardSamplerConfig encodes a per-class scheme x library validity matrix as four independent Option<&Library> fields, so invalid scheme/library pairings are representable and caught only at runtime",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 317
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-sampling-00",
+      "id": "PD-023",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "sampling",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/External are allocation-free per the positives): the direction matrix + scramble params are recomputed and heap-allocated per (iteration, scenario, stage) though invariant across the scenario axis, and the existing SobolPrecomputed/sobol_ctx seam already amortizes this bit-identically \u2014 so the residue is wiring an existing dormant hoist whose sole production caller hard-codes None, not new infrastructure and not a determinism risk.",
+      "title": "OutOfSample QmcSobol forward draws re-derive the Sobol direction matrix + scramble params per scenario; the dormant `SobolPrecomputed` hoist is never wired (its `Some` branch is dead in production)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 103
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 84
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-sampling-02",
+      "id": "PD-025",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "sampling",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not allocation \u2014 perm_scratch is caller-owned): the scenario-invariant set of `dim` Fisher-Yates permutations of `total_scenarios` strata is reshuffled once per scenario, giving the quadratic-in-scenario O(dim*total_scenarios^2) per stage that a per-(iteration,stage) permutation cache (or the existing generate_lhs batch primitive) collapses to O(dim*total_scenarios), determinism preserved.",
+      "title": "OutOfSample LHS forward draws regenerate a full Fisher-Yates permutation of `total_scenarios` per dimension per scenario, giving O(dim * total_scenarios^2) work per stage across the scenario axis",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 92
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-sampling-01",
+      "id": "PD-024",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "sampling",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "missing-seam",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-sieve + nested Vec<Vec<Vec<u32>>> scramble-table allocation and recomputation is scenario-invariant and should be hoisted per (iteration, stage); because NO HaltonPrecomputed seam exists (unlike Sobol's dormant one), the precompute primitive is a cross-station dependency on the tree-noise cell and only the sampler-side wiring is this sub-station's part; determinism is preserved (tables are a pure function of the existing seed tuple).",
+      "title": "OutOfSample QmcHalton forward draws rebuild the prime sieve and a `total_scenarios`-sized Vec<Vec<Vec<u32>>> scramble table on every scenario; no precompute hoist exists",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 125
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-sampling-00",
+      "id": "TD-028",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "sampling",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed to the verified mechanical duplications \u2014 the 3x byte-identical uniform_tree, the 2x one-cosmetic-line make_hydro (external/historical) and the 2x identical dated_stage \u2014 as the consolidation-worthy core; mod.rs's make_hydro is a divergent variant (2024 + mirror-unit-group) and the ~9 Stage builders take different parameter shapes, so the byte-identical claim holds only for the enumerated set and the broader hand-rolled-Stage boilerplate is a weaker structural-similarity claim.",
+      "title": "Per-file test fixtures re-declared across the sampling inline test modules: make_hydro x3, uniform_tree x3 (byte-identical), monthly_season_map x3 (2 byte-identical), dated_stage x2 (byte-identical), plus ~9 hand-rolled Stage struct literals",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "make_hydro",
+          "line": 2513
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "make_hydro",
+          "line": 1902
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "make_hydro",
+          "line": 670
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "uniform_tree",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "uniform_tree",
+          "line": 791
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/insample.rs",
+          "symbol": "uniform_tree",
+          "line": 56
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-sampling-01",
+      "id": "TD-029",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "sampling",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed to the single verified byte-identical duplication \u2014 saa_golden_value.rs's 28-line identity_correlation copy of the QMC binaries' fixture; 're-declares the integration-binary fixture prelude' over-reaches because saa carries only this one of the ~8 shared prelude helpers and its make_stage is a distinct 3-arg builder, so identity_correlation is the only byte-identical copy.",
+      "title": "saa_golden_value.rs re-declares the integration-binary fixture prelude: identity_correlation is byte-identical to the halton/sobol/lhs copies and make_stage is a fourth hand-rolled Stage builder",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "identity_correlation",
+          "line": 53
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "make_stage",
+          "line": 32
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-seam-01",
+      "id": "CD-071",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "seam",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "leaky-boundary",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "advances-1",
+      "alignmentCites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "partIRef": "I.3-1",
+      "queuedTo": "alignment",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The defect narrows to just the 2 pass-through seed fields (base_seed, forward_seed) being RunParams-shaped config echoed through the store's getters rather than computed payload; the struct is correctly shaped and correctly a many-reader store today, so the residue is only that these two fields mark the exact seam to unpick when the RunParams split lands, not that the store is malformed or over-abstracted now.",
+      "title": "StochasticContext is both a computed store and a config/layout echo: 5 precomputed components + 5 derived-layout scalars + 2 pass-through seeds + 1 metadata field, each exposed via a 1:1 &-getter (the nascent Switchable<T> uncertainty store)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "StochasticContext",
+          "line": 258
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "set_solve_order",
+          "line": 317
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-seam-00",
+      "id": "CD-070",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "seam",
+      "severity": "B (A-risk)",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "L",
+      "confidence": "high",
+      "alignmentHint": "advances-1",
+      "alignmentCites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "partIRef": "I.3-1",
+      "queuedTo": "alignment",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The confirmed defect is confined to (1) the second parallel copy of the declared-id->study-index resolver (stage_id_to_index at context.rs:406 duplicating cobre-io's StageIdResolver) as the sole drift risk, and (2) the placement observation that the L1 store constructor owns realized-value external-scenario adaptation; it is NOT a dispute of the ratified External-authoritative behavior or the sigma=0 rejection, and the sample-moment derivation itself is correctly single-owned (not duplicated).",
+      "title": "generation seam ingests realized external-scenario tables: external_ar0_inflow_models/external_derived_load_models synthesize fitted models from System::external_*_scenarios() and re-derive cobre-io's stage-id resolution inside the L1 store constructor module",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "stage_id_to_index",
+          "line": 406
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "resolve_row_stages",
+          "line": 419
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_derived_load_models",
+          "line": 444
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_ar0_inflow_models",
+          "line": 492
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-over-engineering-seam-00",
+      "id": "OD-031",
+      "class": "OD",
+      "lens": "over-engineering",
+      "subStation": "seam",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "speculative-generality",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Confirmed as three pub StochasticError variants with zero production construction site (not compiler-dead: each is Display/Debug-exercised by inline tests and exhaustively matched); the sharper residue is that SpectralDecompositionFailed is additionally a live doc lie at context.rs:593 (promising a return spectral.rs never makes, since it maps failures to InvalidCorrelation), whereas SeedDerivationError and UnsupportedSamplingScheme are merely never-constructed variants removable with no match-arm edit.",
+      "title": "Three StochasticError variants have no production producer \u2014 dead public error taxonomy (SpectralDecompositionFailed, SeedDerivationError, UnsupportedSamplingScheme)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "StochasticError",
+          "line": 5
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SpectralDecompositionFailed",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SeedDerivationError",
+          "line": 45
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "UnsupportedSamplingScheme",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "build_stochastic_context",
+          "line": 593
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-seam-00",
+      "id": "PD-029",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "seam",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "The quadratic is real but bounded to a single setup-time construction (StudySetup::new, once per study) and to l_state = max PAR lag order (a small bounded model parameter, not n_scenarios/n_stages/n_iterations), so the confirmed residue is a low-magnitude O(n_hydros*l_state^2*S) setup-time redundancy fixable by walking the occurrence chain once per hydro, never a hot-path or per-iteration cost.",
+      "title": "Backward season-occurrence walk is quadratic in l_state: derive_inflow_seeds restarts nth_previous_occurrence from the anchor for every k",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 104
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "nth_previous_occurrence",
+          "line": 302
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-seam-01",
+      "id": "PD-030",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "seam",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Real O(n_hydros*(|record|+|conditioning|)) re-scan, but confined to the one-per-study StudySetup::new construction (never a per-scenario/stage/iteration path); the confirmed residue is a setup-time overscan fixable by a single group-by-hydro_id pass, and any fix must preserve the returned canonical-order positional layout bit-for-bit.",
+      "title": "derive_inflow_seeds re-scans the entire record and conditioning slices once per hydro instead of grouping by hydro_id in one pass",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 73
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-seam-00",
+      "id": "TD-032",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "seam",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The duplication narrows to the byte-identical make_bus/make_stage/make_hydro/identity_correlation across context.rs, provenance.rs and tests/reproducibility.rs plus the fourth date-differing make_hydro in seeds.rs; it does NOT extend to make_inflow_model (a legitimate parameterized-superset vs fixed-value split) nor to seeds.rs's make_stage/season-map builders (distinct signatures), so the defensible residue is one shared entity-builder surface owed for exactly those four builders, coverage-neutral with no test deleted.",
+      "title": "Entity-fixture prelude (make_bus/make_stage/make_hydro/make_inflow_model/identity_correlation) duplicated near-verbatim across two inline seam test modules and the seam integration binary",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "make_hydro",
+          "line": 852
+        },
+        {
+          "path": "crates/cobre-stochastic/src/provenance.rs",
+          "symbol": "make_hydro",
+          "line": 96
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/reproducibility.rs",
+          "symbol": "make_hydro",
+          "line": 68
+        },
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "make_hydro",
+          "line": 198
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-seam-01",
+      "id": "TD-033",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "seam",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The test adds zero behavioral coverage beyond the existing helper-level unit tests (season_period_window/nth_previous_occurrence/cast each already tested at 687-986); its only residual function is to pin season_occurrence's delegation to those three helpers, an implementation-detail change-detector rather than a contract, so the residue is remove-or-reduce (not that the test is wholly inert: it would fire if the wrapper stopped delegating).",
+      "title": "Tautological equivalence test: test_season_occurrence_matches_pre_refactor_helper_sequence recomputes the same delegating arithmetic on both sides",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "test_season_occurrence_matches_pre_refactor_helper_sequence",
+          "line": 1271
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-tree-noise-01",
+      "id": "CD-068",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "tree-noise",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The narrow residue is that the full-vector applier trio (apply_correlation + resolve_positions + GroupFactor.positions) is pub production surface with NO production caller (kept alive only as the per-class path's differential-test oracle, test_per_class_tree_matches_full_vector_*) and the per-class precompute (resolve_class_positions + GroupFactor.class_positions) is wholly unwired (zero callers, class_positions never populated) -- so exactly one applier (apply_correlation_for_class) and zero precompute run in production; this is duplicated-but-tested surface plus a dead precompute, NOT literal unreferenced dead code, and its removal-vs-wiring is the open question candidate perf-00 pulls the other way on.",
+      "title": "DecomposedCorrelation ships a superseded full-vector correlation seam (test-only) beside the live per-class seam, and both position-precompute fast paths are unwired in production",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 31
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_positions",
+          "line": 253
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation",
+          "line": 307
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-tree-noise-00",
+      "id": "CD-067",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "tree-noise",
+      "severity": "B (A-risk)",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "bad-abstraction",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The in-station residue is the in-crate GroupFactor.entity_type String field plus the two `!=` dispatch sites (resolve.rs:286, 352) that a boundary-parse to an in-crate EntityClass{Inflow,Load,Ncs} enum at build() would make compiler-checked; the source-of-truth String is cobre-core's CorrelationEntity.entity_type (scenario.rs:594) which is OUT of station (a cross-station note, not changed here), so the confirmed defect is the stochastic-side stringly-typed carrier + comparisons, not the cobre-core field.",
+      "title": "Entity class (inflow/load/ncs) is a stringly-typed closed set matched by `==` across generate.rs and resolve.rs, with no compiler-checked enum",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 28
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 338
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-architecture-tree-noise-02",
+      "id": "CD-069",
+      "class": "CD",
+      "lens": "architecture",
+      "subStation": "tree-noise",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "The residue is strictly the missing shared parameter-carrier: the three structs are byte-identical in field set and types (differing only in name and one Lhs doc line), so the defect is purely a triplicated bag-of-parameters seam (Sev C); each struct is a live, exercised type (not a speculative one-consumer abstraction) and the three point generators legitimately keep distinct algorithms -- only the parameter carrier is duplicated, nothing about the generators themselves.",
+      "title": "Three structurally identical point-sample parameter bundles (LhsPointSpec / HaltonPointSpec / SobolPointSpec) with no shared type",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/lhs.rs",
+          "symbol": "LhsPointSpec",
+          "line": 89
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs",
+          "symbol": "HaltonPointSpec",
+          "line": 236
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs",
+          "symbol": "SobolPointSpec",
+          "line": 236
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-over-engineering-tree-noise-00",
+      "id": "OD-030",
+      "class": "OD",
+      "lens": "over-engineering",
+      "subStation": "tree-noise",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "speculative-generality",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the defensible residue is only that SweepDirection::Ascending and its comparator arm (opening_tree.rs:168) have ZERO non-test constructors while every production path passes Descending -- an unwired second variant exercised solely by opening_tree.rs's own tests. I concede this does NOT establish the enum must be deleted: SweepDirection is a minimal, engine-neutral two-variant sort-direction API (not a speculative multi-variant fan-out), so keeping a two-way ordering knob on a generic L1 primitive is defensible; the finding is the unwired variant, not that the `direction` parameter is itself over-abstraction.",
+      "title": "SweepDirection is effectively one-valued in production: Ascending is constructed only inside opening_tree.rs's own #[cfg(test)] module; every production caller passes Descending",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "SweepDirection",
+          "line": 14
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "set_solve_order",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-tree-noise-02",
+      "id": "PD-028",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "tree-noise",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "S",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": null,
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "The eliminable cost is precisely the stage-constant profile+slice resolution (the profile_for_stage HashMap probe plus the factors.get BTreeMap<String> string-keyed walk) repeated 3 x n_openings per stage; I concede the per-group entity_type filter and the spectral transform must stay per-call/per-group -- only the profile-name and group-factor-slice lookup is hoistable to once per stage, so the defect is repeated map traversal, not the per-opening application itself.",
+      "title": "apply_correlation_for_class re-resolves the active profile (HashMap<i32,String> + BTreeMap<String,_> string-keyed lookup) on every one of its three per-opening calls, though the profile is constant across a stage's openings",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 345
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-tree-noise-01",
+      "id": "PD-027",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "tree-noise",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "missing-seam",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Narrowed to the live path: at baseline only apply_group_scan's n>64 branch (resolve.rs:426/436-437, three transient Vecs) is actually reached from the tree loop -- apply_group_precomputed is unreachable in production because class_positions stays None (per perf-00), so its n>64 allocation (resolve.rs:380-381) is latent, not currently on any production path; the confirmed residue is the per-opening transient scratch allocation in apply_group_scan for any correlation group exceeding MAX_STACK_DIM=64.",
+      "title": "apply_group_precomputed and apply_group_scan heap-allocate gathered/correlated (and positions) scratch per call for correlation groups larger than MAX_STACK_DIM=64, invoked once per opening from the tree loop",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_precomputed",
+          "line": 379
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 425
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-performance-tree-noise-00",
+      "id": "PD-026",
+      "class": "PD",
+      "lens": "performance",
+      "subStation": "tree-noise",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "performance-sweep",
+      "measured": false,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the confirmed defect is a pure eliminable-work perf issue -- the stage-invariant per-entity position resolution (entity_order.iter().position at resolve.rs:428) recomputed n_openings x n_groups times per stage because resolve_class_positions has zero callers so class_positions stays None; I concede the scan output is numerically correct and bit-identical to the precomputed/full-vector path (proven by test_per_class_tree_matches_full_vector_*), so this is not a correctness defect, and the fix requires either &mut DecomposedCorrelation plumbing into generate_opening_tree or build-time resolution.",
+      "title": "generate_opening_tree pays a per-opening O(group*class) linear position scan because the per-class precomputed fast path (resolve_class_positions) has zero call sites",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 327
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 390
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-tree-noise-01",
+      "id": "TD-031",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "tree-noise",
+      "severity": "C",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "asymmetry",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: no RATIFIED homing threshold exists at baseline -- testing-architecture.md section 5 is a 'Proposed standard' and section 5.1's ~500-test-LOC/~40-fn line is explicitly a 'proposal' -- so the surviving claim asserts only (a) the verified intra-crate inconsistency (inline vs extracted sibling coexist with no deciding rule) and (b) the extreme outlier tree/generate.rs at ~2030 inline test-LOC versus the already-extracted par/fitting form; it is a Sev C uniformity/navigability smell resolvable by relocation, NOT evidence that any specific numeric threshold is the correct cut nor a coverage/bloat defect.",
+      "title": "Inline-giant vs extracted-sibling unit-test homing coin-flip inside cobre-stochastic: tree/generate.rs carries ~2030 inline test-LOC while par/fitting uses extracted tests.rs siblings",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "tests",
+          "line": 341
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "tests",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/normal/precompute.rs",
+          "symbol": "tests",
+          "line": 299
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "tests",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/spectral.rs",
+          "symbol": "tests",
+          "line": 286
+        }
+      ]
+    },
+    {
+      "candidateRef": "sto-test-bloat-tree-noise-00",
+      "id": "TD-030",
+      "class": "TD",
+      "lens": "test-bloat",
+      "subStation": "tree-noise",
+      "severity": "B",
+      "reviewerRating": null,
+      "downgradeReason": null,
+      "category": "duplication",
+      "effort": "M",
+      "confidence": "high",
+      "alignmentHint": "neutral",
+      "alignmentCites": "Part IV crate table \u2014 L1 cobre-stochastic",
+      "partIRef": null,
+      "queuedTo": "test-corpus",
+      "measured": null,
+      "conflicts": null,
+      "survivingClaim": "Narrowed: the confirmed residue is strictly the byte-identical eight-helper fixture prelude physically copied across the QMC trio (halton/sobol/lhs), with make_hydro also copied into reproducibility (verified) and no tests/common/ home, already drifting into two identity_correlation return types; I concede the ~50 genuinely per-family lines (make_stage_<family> and build_<family>_context, differing only in NoiseMethod variant / block presence / panic-string) are legitimate and must survive any consolidation as thin per-family wrappers -- the finding is the shared prelude only, not the whole file, and it is distinct from (cites, does not restate) the cobre-sddp Oracle-harness mirror entry.",
+      "title": "Near-verbatim ~230-line fixture prelude copied across the QMC integration binaries (halton/sobol/lhs) with eight byte-identical helpers and no test_support home; the copy is already drifting",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/sobol_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/lhs_integration.rs",
+          "symbol": "make_hydro",
+          "line": 206
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "approx_erf",
+          "line": 43
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "identity_correlation",
+          "line": 105
+        }
+      ]
+    }
+  ],
+  "cleared": [],
+  "merged": []
+}

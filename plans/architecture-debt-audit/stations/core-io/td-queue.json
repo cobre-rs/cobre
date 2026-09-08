@@ -1,0 +1,214 @@
+{
+  "station": "core-io",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "targetStation": "test-corpus",
+  "queue": [
+    {
+      "id": "TD-001",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Narrower than 'every test': the derived-Clone/Debug non-empty assertions (`all_variants_clone`, `all_variants_debug_non_empty`, `stopping_rule_result_debug_non_empty`, and the `format!(\"{:?}\")` non-empty checks) plus the runtime value-echo inside the `*_fields_accessible` bodies are tautological -- discharged by codegen; but the fully-destructured `*_fields_accessible` tests (no `..`) still act as a weak compile-time tripwire on a field-set change, and `all_variants_construct` is a fixture-length pin rather than an echo/Debug test, so those are not pure echoes.",
+      "measurement": "The file declares zero `impl` blocks, so `TrainingEvent` and its payload structs have no behaviour to test;",
+      "command": "grep -c 'impl ' crates/cobre-core/src/constraints/training_event.rs; grep -n '#\\[cfg(test)\\]' crates/cobre-core/src/constraints/training_event.rs; wc -l < crate"
+    },
+    {
+      "id": "TD-002",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Narrower than 'all-same-value ... one per test module': HydroPenalties has no shared fixture or Default, so five zero-valued fixtures plus one uniform-`v` (`penalties_all`) each re-spell all 16 fields and a field addition breaks all six at once;",
+      "measurement": "Six fixture sites in the sub-station build the same uniform-value `HydroPenalties`.",
+      "command": "grep -rn \"fn zero_penalties\\|fn zero_hydro_penalties\\|fn penalties_all\\|let zero_penalties = HydroPenalties {\" crates/cobre-core/src crates/cobre-core/tests; se"
+    },
+    {
+      "id": "TD-003",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Narrower than 'all eight exercise only derives': the pure clone/eq/hash tests (`test_equality`, `test_hash_consistency`, `test_bus_equality`, `test_contract_type_equality`, `annual_component_partial_eq_clone`, `test_hydro_storage_clone`) assert only derive- or std-library-guaranteed behavior and are tautological; but `test_copy` also acts as a compile-tripwire for EntityId: Copy (the `let b = a;",
+      "measurement": "I read each of these eight bodies.",
+      "command": "grep -nE 'fn (test_equality|test_copy|test_hash_consistency|test_bus_equality|test_contract_type_equality|test_pumping_station_construction|annual_component_par"
+    },
+    {
+      "id": "TD-004",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Narrower than 'ad-hoc comparators ... where the yardstick calls for one shared comparator': the defect is not that they are bloat (they back a real indexing/stride guard via make_distinct_bounds_table) nor that they collapse to one comparator (per-struct field enumeration is irreducible) -- it is only that they are non-exhaustive by construction, written as to_bits() chains instead of a `..`-free destructure, so a field added to any bounds struct compiles and is silently dropped from the bit-exactness assertion;",
+      "measurement": "Six struct-specific bit comparators plus one Option helper are hand-written inside one inline test module, each an explicit `a.field.to_bits() == b.field.to_bits()` chain per field.",
+      "command": "grep -n 'fn opt_f64_bits_eq\\|fn hydro_stage_bounds_bits_eq\\|fn hydro_block_bounds_bits_eq\\|fn thermal_block_bounds_bits_eq\\|fn line_bounds_bits_eq\\|fn pumping_b"
+    },
+    {
+      "id": "TD-005",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Narrower than 'copy-pasted across five test sites': the plain zero-varying builders (make_bus/make_line/make_thermal/make_ncs/make_group/make_hydro) are structurally duplicated across topology/network.rs, system/mod.rs and tests/integration.rs, differing only in trivial axes (name string, a 100->200 capacity), so a field add to Line/Bus/etc. is O(sites);",
+      "measurement": "The same builder family is declared in `topology/network.rs`, `system/mod.rs`, `tests/integration.rs`, `topology/cascade.rs` (make_hydro only) and twice inside `system/builder.rs` under the names `bus`/`line`/`hydro`/`thermal`/`ncs`/`contract`/`pumping`.",
+      "command": "grep -rn 'fn make_bus\\|fn make_line\\|fn make_thermal\\|fn make_ncs\\|fn make_group' crates/cobre-core/src crates/cobre-core/tests && diff <(sed -n '218,232p' crat"
+    },
+    {
+      "id": "TD-006",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The < 1024 bound is an undocumented magic literal asserted only against a single-bus System, giving it too much headroom to catch an encoding regression on a realistic payload; it is at most a coarse compactness canary, narrower than the title's contract-free/tier-less framing.",
+      "measurement": "The literal 1024 occurs exactly once in the file, inside the assertion itself.",
+      "command": "sed -n '580,586p' crates/cobre-io/src/broadcast.rs ; grep -n '1024\\|size budget\\|payload size' crates/cobre-io/src/broadcast.rs"
+    },
+    {
+      "id": "TD-007",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The input path has no shared test-support module while the validation path does, and the fully-verbatim, fully-verified duplication is the 16 write_parquet plus 5 make_global bodies; write_json is 17 copies (not 18) with 2 non-verbatim variants, so the '39 across 20 files' total is 38 with fewer than 18 verbatim write_json.",
+      "measurement": "Three fixture helpers are copied verbatim across the whole sub-station B surface with zero variation: every one of the 16 write_parquet bodies hashes to the same md5, and every one of the 5 make_global bodies hashes to the same md5 over a 36-line window.",
+      "command": "grep -rn 'fn write_parquet(' --include='*.rs' crates/cobre-io/src | while IFS=: read -r f l rest; do printf '%s %s:%s\\n' \"$(sed -n \"${l},$((l+7))p\" \"$f\" | sed '"
+    },
+    {
+      "id": "TD-008",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The durable, threshold-independent residue is the intra-directory homing inconsistency -- scenarios/estimation.rs extracted to a sibling while scenarios/correlation.rs stays inline in the same directory, alongside seven multi-thousand-line inline modules -- not the violation of the unratified ~500-LOC number (and the sibling has 36, not 65, test fns).",
+      "measurement": "docs/design/testing-architecture.md section 5.1 asks for one deterministic homing rule -- inline below roughly 500 test-LOC or 40 test fns, extracted to a sibling tests.rs above it -- and section 3.2 item 4 records the inline-giant-versus-extracted-sibling asymmetry as a ranked sustainability problem, naming cobre-sddp anchors.",
+      "command": "for f in <the 8 files>; do l=$(grep -n '^#\\[cfg(test)\\]' \"$f\" | tail -1 | cut -d: -f1); t=$(wc -l < \"$f\"); n=$(grep -c '^\\s*#\\[test\\]' \"$f\"); printf '%-58s mod_"
+    },
+    {
+      "id": "TD-009",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The genuinely redundant triplicated surface is make_batch plus the five non-determinism common cases (valid-sorted, negative-std, nan-mean, missing-column, empty); the three per-parser declaration_order_invariance tests are load-bearing determinism-hard-rule pins and are NOT bloat, and each parser's unit-specific error-message assertions must survive any consolidation.",
+      "measurement": "Three parsers over the identical four-column (entity_id, stage_id, mean, std) Parquet shape carry the same test template: valid-4-rows-sorted, negative-std reject, NaN-mean reject, missing-mean-column reject, empty-Parquet-returns-empty, declaration-order invariance.",
+      "command": "paste <(grep -o 'fn test_[a-z0-9_]*' inflow_stats.tests) <(grep -o 'fn test_[a-z0-9_]*' load_stats.tests) <(grep -o 'fn test_[a-z0-9_]*' non_controllable_stats."
+    },
+    {
+      "id": "TD-010",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The six binaries do verbatim re-declare 'mod helpers' and re-link arrow/parquet + the rlib six times, but per section 5.1 this is an opportunistic-only, off-critical-path cleanup for a non-solver crate (no solver-link amplifier); the only clearly self-justifying merges are the two sub-200-LOC binaries (scalar_parameters 136, productivity_resolution 199).",
+      "measurement": "Cargo compiles one executable per tests/*.rs file, so each of the six input-path binaries is its own crate: helpers/mod.rs is compiled six times and the cobre-io rlib plus arrow and parquet are linked six times, and Cargo runs the resulting integration binaries sequentially.",
+      "command": "grep -rn '^mod helpers' crates/cobre-io/tests/*.rs ; find crates/cobre-io/tests -maxdepth 1 -name '*.rs' | wc -l ; wc -l crates/cobre-io/tests/helpers/mod.rs ; "
+    },
+    {
+      "id": "TD-011",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "test_bus_ordering_invariance is redundant because its bus2.name assertion -- the one surface not textually present in full_case -- is still logically implied by the whole-System assert_eq!; removal is safe only if that named bus handle is folded into full_case or its loss accepted, and the finding does NOT extend to test_stage_ordering_invariance.",
+      "measurement": "The two tests are built from the identical pair of fixture builders (helpers::make_multi_entity_case and the file-local make_shuffled_multi_entity_case at line 25) and each loads both directories, so their inputs are the same values.",
+      "command": "sed -n '173,232p;226,313p' crates/cobre-io/tests/invariance.rs"
+    },
+    {
+      "id": "TD-012",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The two IoError tests (test_load_error_io_display @152 and test_load_error_io_helper @240) are near-duplicates -- both build via LoadError::io and assert the same path+source contains facts, differing only in literals plus one matches! -- so one is redundant; and test_load_error_schema_display @181 re-covers the contains(\"bus_id\") fact the module doctest at error.rs:27 already asserts.",
+      "measurement": "Every assertion in the module is of the form `display.contains(<a value the test just put into the variant>)`, which the `#[error(\"...",
+      "command": "sed -n '29,32p;49,52p' crates/cobre-io/src/error.rs; sed -n '26,27p' crates/cobre-io/src/error.rs; sed -n '152,164p;240,248p' crates/cobre-io/src/error.rs | gre"
+    },
+    {
+      "id": "TD-013",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The >= 17 floor in both the doctest (schema.rs:84) and test_generate_schemas_returns_expected_count (166) is looser than the 18 schemas produced, so deleting one un-name-pinned export passes a count-named test; and the three structural walks (172/182/193) collapse to one, since is_object implies !is_null and any schema with properties satisfies the structural-key check.",
+      "measurement": "`generate_schemas` builds 18 entries and `schemas/` holds 18 committed files, yet both the rustdoc doctest at line 84 and the unit test at line 166 assert only `>= 17`, so deleting one export passes the assertion whose name promises an expected count.",
+      "command": "grep -n 'schemas.len() >= 17' crates/cobre-io/src/schema.rs; awk 'NR>=88 && NR<=150' crates/cobre-io/src/schema.rs | grep -c '\\.schema\\.json\"'; ls schemas/*.jso"
+    },
+    {
+      "id": "TD-014",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The minimal-case corpus + write_file are duplicated across two same-crate inline modules (validation/schema.rs and validation/referential.rs) that could already share one #[cfg(test)] fixture, and make_minimal_case is restated in both referential.rs and tests/helpers/mod.rs; the tests/helpers copy alone is barrier-forced and only removable under section-5.2's unimplemented test-support convention.",
+      "measurement": "After stripping leading/trailing whitespace, comments and the `pub` qualifier, the eight `VALID_*_JSON` constants in the `validation/schema.rs` inline test module are byte-identical (57 lines) to the eight in `tests/helpers/mod.rs`, and the four in the `validation/referential.rs` inline test module are byte-identical to the first four of that same corpus (52 lines).",
+      "command": "diff <(sed -n '807,884p' crates/cobre-io/src/validation/schema.rs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^pub const/const/' | grep -vE '^(//|$)') <(sed -n"
+    },
+    {
+      "id": "TD-015",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "test_filling_guard_no_exit_no_error (hydro.rs:1795) is identical to test_filling_guard_entry_below_horizon_no_error (1692) except its assertion message, and because make_filling_hydro never sets exit_stage_id it cannot exercise the no-exit condition it is named for -- making it a coverage-free duplicate (the guard's rejection path is covered separately at 1771).",
+      "measurement": "The two seventeen-line test bodies differ on exactly one line, the assertion's failure message;",
+      "command": "diff <(sed -n '1693,1709p' crates/cobre-io/src/validation/semantic/hydro.rs) <(sed -n '1796,1812p' crates/cobre-io/src/validation/semantic/hydro.rs); sed -n '15"
+    },
+    {
+      "id": "TD-016",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Because validation/semantic/test_support is pub(super)-scoped, four validation/-level phase modules hand-roll the five proven-identical families -- the 1.0 penalty builder (dimensional/productivity_resolution/referential), zero_hydro_penalties = penalties_all(0.0), make_unit_group/make_pumping, and the full ParsedData skeleton restated in dimensional.rs and productivity_resolution.rs -- all removable by homing the fixture one level up.",
+      "measurement": "`mod test_support;` is private inside `validation/semantic/mod.rs` and all 31 of its helpers are `pub(super)`, so the module is reachable only from `validation::semantic`.",
+      "command": "sed -n '152,153p' crates/cobre-io/src/validation/semantic/mod.rs; grep -c 'pub(super)' crates/cobre-io/src/validation/semantic/test_support.rs; grep -rln 'super"
+    },
+    {
+      "id": "TD-017",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "Three boundary_tests mirror earlier tests with identical fixture arguments, and the stage_id=5 mirror (thermal.rs:3742) is strictly weaker than its original (3598) which also pins the diagnostic text; the in-file \"do not delete\" comment (3710-3714) has no register/design-doc backing (zero markdown references), so the duplication is not a sanctioned seam.",
+      "measurement": "Three of the four tests in `boundary_tests` build their fixture with arguments identical to a test earlier in the same file: (5, row(1,4)) at 3580 and 3721, (5, row(1,5)) at 3601 and 3742, (5, row(1,-1)) at 3637 and 3790.",
+      "command": "grep -n 'make_data_thermal_bounds(5, vec!\\[make_thermal_bounds_row(1, \\(4\\|5\\|-1\\))\\])' crates/cobre-io/src/validation/semantic/thermal.rs; sed -n '3710,3714p' "
+    },
+    {
+      "id": "TD-018",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "make_config (43 lines) and make_system (6 lines) are byte-identical between output/convergence_reader.rs and output/results_writer.rs; make_output_context is identical except one DistributionInfo import line, so 49 lines are byte-identical, not the full 73 the title claims.",
+      "measurement": "The two `make_config()` bodies (43 lines each) hash identically at the pinned baseline, so they are byte-for-byte the same fixture.",
+      "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-io/src/output/convergence_reader.rs | sed -n '278,320p' | md5sum; git show a136840d4f2ea137f685f0"
+    },
+    {
+      "id": "TD-019",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "every_hydros_schema_column_has_description (3226) and every_hydro_bus_generation_schema_column_has_description (3239) are pure strict subsets of the exhaustive sweep with zero residual; new_energy_columns_have_descriptions (3193) is redundant only because the retained new_energy_columns_have_units already pins those same five column names.",
+      "measurement": "`every_listed_schema_column_has_a_nonempty_description` iterates `variables_csv_schemas()` and asserts `!description_for(file, field).is_empty()` for every column of every listed schema.",
+      "command": "sed -n '222,228p' crates/cobre-io/src/output/dictionary.rs; for c in equivalent_productivity_mw_per_m3s accumulated_productivity_mw_per_m3s incremental_inflow_e"
+    },
+    {
+      "id": "TD-020",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The defensible core is the three named helpers \u2014 fixed_delivery::read_batch and generic_constraints_echo::read_batch are byte-identical, solver_stats_writer::read_parquet is the same body under a different name \u2014 plus the ~34-38 per-function ParquetRecordBatchReaderBuilder re-imports; collapsing every one of the ~44 remaining four-line inline read-back sites into one helper is optional homing cleanup, not all defect.",
+      "measurement": "49 total sites;",
+      "command": "grep -rc 'ParquetRecordBatchReaderBuilder::try_new' crates/cobre-io/src/output/*.rs | grep -v ':0'; grep -r 'ParquetRecordBatchReaderBuilder::try_new' crates/co"
+    },
+    {
+      "id": "TD-021",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The 21 codec-only and 15 checkpoint-only tests are homed in policy/mod.rs (production ends line 28) while codec.rs carries 1 inline test and checkpoint.rs carries 0; the defect narrows to those two submodules, since records.rs already owns its 3 tests in-place, not the 'three submodules' the title states.",
+      "measurement": "The production body of `policy/mod.rs` ends at line 28 (module doc, three `pub mod` lines, four `pub use` blocks);",
+      "command": "grep -n '#\\[cfg(test)\\]' crates/cobre-io/src/output/policy/mod.rs; wc -l crates/cobre-io/src/output/policy/*.rs; for f in codec checkpoint records; do printf '%"
+    },
+    {
+      "id": "TD-022",
+      "severity": "C",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "The redundant surface is the count-only per-schema tests (thermals_schema_field_count and its count-only siblings, whose whole body is a length assert already in the umbrella's expected table) plus the bare length line inside the name-vector tests; the name-vector assertions themselves are NOT redundant (they pin the wire contract against renames) and must survive.",
+      "measurement": "`all_schema_functions_return_valid_schemas` (line 1282) holds a twenty-row `expected: &[(&str, usize)]` table asserting the field count of every output schema.",
+      "command": "python3 - <<'EOF'  # parse the umbrella `expected` table, parse every per-schema `fields().len(), N` assert, intersect"
+    },
+    {
+      "id": "TD-023",
+      "severity": "B",
+      "targetStation": "test-corpus",
+      "yardstick": "docs/design/testing-architecture.md",
+      "claim": "parquet_helpers.rs has zero #[cfg(test)] module (166 lines, all non-test), so the six extractors' missing-column and wrong-type SchemaError message contract is pinned by no owner-level test; the narrower residue drops 'all twelve reachable transitively' \u2014 consumer paths like scenarios/inflow_history.rs intercept the missing-column case as a legacy-layout error before the helper's arm, so transitive coverage is partial, not uniform.",
+      "measurement": "Zero `#[cfg(test)]` modules, which matches the inventory's `linesRaw: 166` equalling `linesNonTest: 166` for this file.",
+      "command": "grep -c '#\\[cfg(test)\\]' crates/cobre-io/src/parquet_helpers.rs; grep -n '^pub(crate) fn' crates/cobre-io/src/parquet_helpers.rs; grep -rln 'crate::parquet_help"
+    }
+  ]
+}

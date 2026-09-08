@@ -1,0 +1,148 @@
+{
+  "station": "core-io",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "queue": [
+    {
+      "id": "PD-007",
+      "severity": "B",
+      "claimType": "single-process",
+      "layout": "4t",
+      "target": {
+        "path": "crates/cobre-core/src/model/temporal/overlap.rs",
+        "symbol": "window_period_overlaps"
+      },
+      "claim": "Confirmed narrowly: all five discarding call sites lie on one-time setup/validation paths (PAR lag-transition build, season-cast coverage, cobre-io travel-time semantic validation, SDDP bucket-topology setup), none on a declared hot path. The single site whose allocation cost is worse than O(1) per call is check_horizon_inertness (travel_time.rs:332-334), which makes O(N) predicate-only calls each allocating an O(remaining-stages) vector, i.e.",
+      "byteNeutralFixShape": "Keep the vector-returning function as the multi-period answer, and give the same module two narrower entry points beside it that the discarding callers can use: a scalar single-period overlap that returns the intersected hours for one period without touching the heap, and a reach predicate or depth count that answers how far a window extends by walking periods and returning a boolean or an index instead of materialising the per-period series. All three should share one internal walk so the overlap arithmetic stays single-owner and the existing bit-exactness tests keep covering it.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-008",
+      "severity": "B",
+      "claimType": "collective",
+      "layout": "2x2",
+      "target": {
+        "path": "crates/cobre-core/src/system/mod.rs",
+        "symbol": "System"
+      },
+      "claim": "Confirmed, narrowed to a one-time study-setup MPI broadcast payload (not any per-iteration hot-path cost) and with the title's count corrected: the skipped-and-rebuilt siblings are the seven entity index maps plus stage_index (eight, not 'three fields above'). The defensible residue is that cascade+network's five HashMaps are transmitted on the wire despite being pure, content-determined derivations of the seven entity slices already serialized ahead of them in the same struct, and thus locally reconstructible in rebuild_indices.",
+      "byteNeutralFixShape": "Give `cascade` and `network` the same treatment their sibling index maps already have: mark both fields skipped on the wire, drop them from the deserialize shadow struct, and extend the existing rebuild step that `From<SystemRepr>` already calls so it reconstructs both topologies from the deserialized entity slices alongside the seven entity indices and the stage index. The rebuild is safe to make unconditional because both builders are content-determined: the cascade's topological order is drawn from a min-heap keyed on the raw entity id (so it does not inherit the surrounding map's iteration order), and every upstream and per-bus list is explicitly sorted by id before the builder returns.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-009",
+      "severity": "B",
+      "claimType": "single-process",
+      "layout": "4t",
+      "target": {
+        "path": "crates/cobre-io/src/scenarios/estimation.rs",
+        "symbol": "resolve_coverage_gated_observations"
+      },
+      "claim": "The projection join at estimation.rs:468-479 is O(occurrences x windows) per hydro \u2014 quadratic in unbounded historical record depth \u2014 plus a per-occurrence throwaway `Vec<RealizedWindow>` copy of what is a contiguous subslice of the already-sorted, provably-disjoint `windows`; the second anchor (check_std_ratio_divergence:842) is a bounded (hydros x seasons) scan that does not scale with record depth and is not part of the surviving defect.",
+      "byteNeutralFixShape": "Replace the nested filter with a single forward sweep that advances one cursor through the hydro's window slice as it advances through the occurrence list, since both are already ascending and the windows are already proven disjoint. Hand `cast` the resulting contiguous subslice of the existing window list by borrow instead of building a per-occurrence owned vector, which removes the allocation and the copy entirely.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-010",
+      "severity": "B",
+      "claimType": "single-process",
+      "layout": "4t",
+      "target": {
+        "path": "crates/cobre-io/src/validation/semantic/inflow_seeding.rs",
+        "symbol": "merged_windows_for_hydro"
+      },
+      "claim": "The nested O(hydros x [inflow_history + recent_observations] rows) filter in merged_windows_for_hydro (181/185) is paid once per hydro inside each of check_slot_coverage (244) and check_inprogress_partial_coverage (339); the ADDITIONAL cross-rule duplicate construction of the same per-hydro merged map only occurs when both rules' preconditions hold at once (inflow_ar_coefficients non-empty and l_state > 0), not on every deck.",
+      "byteNeutralFixShape": "Bucket the history rows and the recent observations by hydro id in one pass at the top of the inflow-seeding entry point, merge each bucket once, and pass the resulting per-hydro map into both the slot-coverage rule and the in-progress-coverage rule. That removes the nested scan and the duplicate construction together.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-011",
+      "severity": "B",
+      "claimType": "single-process",
+      "layout": "4t",
+      "target": {
+        "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+        "symbol": "check_prefix_coherence"
+      },
+      "claim": "check_prefix_coherence (846-857) re-walks stages 0..=sn per transition and re-does identical cell comparisons for any two transitions sharing (source column cn, target column cm, source stage depth sn); the redundancy is real specifically in the no-disagreement case (find_map+break bounds the walk once a stage disagrees), and de-duplicating to once-per-pair alters per-edge warning attribution unless the per-edge loop is retained with a decided-pair short-circuit.",
+      "byteNeutralFixShape": "Compare each distinct column pair once rather than once per edge. Collect the distinct pairs with their maximum source stage depth and one representative edge before the comparison, then walk each pair's prefix a single time and attribute the first disagreement to its representative edge.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-014",
+      "severity": "B",
+      "claimType": "single-process",
+      "layout": "4t",
+      "target": {
+        "path": "crates/cobre-io/src/validation/semantic/stages.rs",
+        "symbol": "slot_occupying_classes"
+      },
+      "claim": "slot_occupying_classes (357) full-scans up to three external tables plus a fresh HashSet per call, and check_realization_rules invokes it once per node (308 inside for node in nodes) so nodes sharing a stage recompute an identical stage-keyed result \u2014 that per-node redundancy is the solid defect; call sites 667/797 recompute once per DISTINCT staged stage (staged is already deduped), not per node, and the sibling ClassExternal.raw_c (536/716) holds the same count in one pass but reusing it is a cross-module (scenarios.rs->stages.rs) share, not a free local one.",
+      "byteNeutralFixShape": "Compute the per-stage slot-occupancy vector once per validation run, before any node or stage loop, with a single pass over each external table that accumulates a distinct-scenario-id count per resolved stage index, and have all three call sites index that vector instead of recounting. The value already has an owner one module over: the external-library coherence check builds exactly this vector in one pass and keeps it on its per-class record.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-017",
+      "severity": "B",
+      "claimType": "collective",
+      "layout": "2x2",
+      "target": {
+        "path": "crates/cobre-io/src/output/simulation_writer.rs",
+        "symbol": "write_partition"
+      },
+      "claim": "The partitions_written inventory reaches no output file (SimulationMetadata at manifest.rs:434-462 has no field for it and write_simulation_results at results_writer.rs:133-155 never reads it), so its cross-run retention, merge clone-and-sort (mod.rs:431-435), and MPI allgatherv (simulation.rs:305-357) are unconsumed work; the per-partition format! allocation itself is negligible.",
+      "byteNeutralFixShape": "Decide first whether any consumer still needs the partition inventory; the evidence says none does.",
+      "status": "queued"
+    },
+    {
+      "id": "PD-018",
+      "severity": "B",
+      "claimType": "single-process",
+      "layout": "4t",
+      "target": {
+        "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+        "symbol": "SolverStatsRow"
+      },
+      "claim": "On the one-shot output-conversion path (cli outputs.rs / python run.rs, not the hot push loop) delta_to_stats_row allocates a String per log entry for phase (solver_stats.rs:293) though the value is a closed four-item vocabulary an enum/&'static str field would carry allocation-free; the owned-Vec<u64> histogram clone is conceded as a defensible cross-Python-boundary DTO choice.",
+      "byteNeutralFixShape": "Change the row's phase field to a borrowed or enumerated phase so the closed vocabulary travels without an allocation, and let the row reference the producer's histogram rather than owning a copy of it, since the writer's only use of it is to fold it into the aggregation map. If a borrow is undesirable across the crate boundary, the alternative shape is to have the writer accept the producer's log slice directly and do the phase-name and histogram handling internally, which removes the intermediate `Vec<SolverStatsRow>` entirely.",
+      "status": "queued"
+    }
+  ],
+  "notQueued": [
+    {
+      "id": "PD-006",
+      "severity": "C",
+      "status": "UNMEASURED",
+      "reason": "Sev-C perf finding; recorded in the section, not queued to the sweep"
+    },
+    {
+      "id": "PD-012",
+      "severity": "C",
+      "status": "UNMEASURED",
+      "reason": "Sev-C perf finding; recorded in the section, not queued to the sweep"
+    },
+    {
+      "id": "PD-013",
+      "severity": "C",
+      "status": "UNMEASURED",
+      "reason": "Sev-C perf finding; recorded in the section, not queued to the sweep"
+    },
+    {
+      "id": "PD-015",
+      "severity": "C",
+      "status": "UNMEASURED",
+      "reason": "Sev-C perf finding; recorded in the section, not queued to the sweep"
+    },
+    {
+      "id": "PD-016",
+      "severity": "C",
+      "status": "UNMEASURED",
+      "reason": "Sev-C perf finding; recorded in the section, not queued to the sweep"
+    },
+    {
+      "id": "PD-019",
+      "severity": "C",
+      "status": "UNMEASURED",
+      "reason": "Sev-C perf finding; recorded in the section, not queued to the sweep"
+    }
+  ]
+}

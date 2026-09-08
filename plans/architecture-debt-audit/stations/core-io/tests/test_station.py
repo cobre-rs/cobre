@@ -695,6 +695,139 @@ class IngestTests(sc.StationCase):
         )
 
 
+CALIB_ID_RE = re.compile(r"^(CD|PD|OD|TD)-\d{3}$")
+CALIB_FLOOR = {"CD": 40, "PD": 6, "OD": 10, "TD": 1}
+STATION_SECTION = "★ QUALITY EVALUATION (2026-09, baseline a136840d) — core-io"
+ALIGN_VOCAB = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
+
+
+class CalibrationTests(sc.StationCase):
+    SLUG = "core-io"
+
+    def setUp(self):
+        self.cal = sc.load_json(self.artifact("calibration.json"))
+        self.assigned = self.cal["assigned"]
+        register = sc.BACKLOG.read_text(encoding="utf-8")
+        self.reg_lines = register.splitlines()
+        self.section = backlog_parse.find_section(self.reg_lines, STATION_SECTION)
+        self.section_entries = {
+            e.id: e for e in backlog_parse.iter_entries(self.section)
+        }
+
+    def test_ids_well_formed_and_in_range(self):
+        for a in self.assigned:
+            idn = a["id"]
+            self.assertRegex(idn, CALIB_ID_RE, f"{idn}: malformed id")
+            cls, num = idn.split("-")
+            self.assertGreaterEqual(
+                int(num), CALIB_FLOOR[cls], f"{idn}: below the class floor"
+            )
+
+    def test_ids_unique_across_whole_register(self):
+        # Uniqueness of entry HEADINGS (a `**ID · …**` line), not prose mentions: an id may
+        # be referenced again in a Part-I cross-reference list, which is not a second entry.
+        heading_ids = [
+            e.id
+            for section in backlog_parse.all_evaluation_sections(self.reg_lines)
+            for e in backlog_parse.iter_entries(section)
+        ]
+        dupes = {i for i in heading_ids if heading_ids.count(i) > 1}
+        self.assertEqual(
+            dupes, set(), f"duplicate entry-heading ids in BACKLOG.md: {dupes}"
+        )
+        mine = {a["id"] for a in self.assigned}
+        self.assertLessEqual(
+            mine, set(heading_ids), "every assigned id must head exactly one entry"
+        )
+
+    def test_ids_contiguous_from_floor_per_class(self):
+        for cls, floor in CALIB_FLOOR.items():
+            nums = sorted(
+                int(a["id"].split("-")[1]) for a in self.assigned if a["class"] == cls
+            )
+            if not nums:
+                continue
+            self.assertEqual(
+                nums,
+                list(range(floor, floor + len(nums))),
+                f"{cls}: not contiguous from {floor}",
+            )
+
+    def test_severity_and_alignment(self):
+        for a in self.assigned:
+            self.assertIn(
+                a["severity"][0], "ABC", f"{a['id']}: severity {a['severity']!r}"
+            )
+            self.assertIn(
+                a["alignmentHint"],
+                ALIGN_VOCAB,
+                f"{a['id']}: alignment {a['alignmentHint']!r}",
+            )
+
+    def test_downgrade_records_reviewer_rating(self):
+        for a in self.assigned:
+            if a.get("reviewerRating"):
+                self.assertNotEqual(
+                    a["reviewerRating"],
+                    a["severity"][0],
+                    f"{a['id']}: reviewer == house",
+                )
+                self.assertTrue(
+                    (a.get("downgradeReason") or "").strip(),
+                    f"{a['id']}: downgrade without reason",
+                )
+
+    def test_every_assigned_entry_in_section(self):
+        for a in self.assigned:
+            self.assertIn(
+                a["id"],
+                self.section_entries,
+                f"{a['id']}: not rendered in the station section",
+            )
+
+    def test_fields_check_exits_zero_over_section(self):
+        code = subprocess.run(
+            [sys.executable, str(sc.TOOLS / "fields-check.py"), STATION_SECTION],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        ).returncode
+        self.assertEqual(
+            code, 0, "fields-check.py must exit 0 over the station section"
+        )
+
+    def test_perf_queue_only_sev_ab_pd_ids(self):
+        q = sc.load_json(self.artifact("perf-queue.json"))
+        pd_ids = {
+            a["id"]
+            for a in self.assigned
+            if a["class"] == "PD" and a["severity"][0] in ("A", "B")
+        }
+        for row in q["queue"]:
+            self.assertIn(
+                row["id"], pd_ids, f"{row['id']}: not a Sev-A/B PD id from this section"
+            )
+            self.assertIn(row["layout"], {"4t", "2x2"}, f"{row['id']}: bad layout")
+            self.assertIn(
+                row["claimType"],
+                {"single-process", "collective"},
+                f"{row['id']}: bad claimType",
+            )
+
+    def test_td_queue_points_at_test_corpus(self):
+        q = sc.load_json(self.artifact("td-queue.json"))
+        td_ids = {a["id"] for a in self.assigned if a["class"] == "TD"}
+        for row in q["queue"]:
+            self.assertEqual(
+                row["targetStation"],
+                "test-corpus",
+                f"{row['id']}: wrong target station",
+            )
+            self.assertIn(
+                row["id"], td_ids, f"{row['id']}: not a TD id from this section"
+            )
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--validate-partI":
         failures = validate_partI_envelope(

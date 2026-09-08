@@ -1,0 +1,481 @@
+{
+  "baseline": "00abd53a3316fbcb1222dcbee30815be19ba0ba8",
+  "generatedAt": "2026-09-08T19:43:33.612165+00:00",
+  "nonTestRule": "mirrors scripts/loc-stats.sh: sibling tests.rs and test_support.rs count zero; inline #[cfg(test)] items excluded; #[cfg(any(test, feature = \"test-support\"))] counts as test; #[cfg(not(test))] does not",
+  "files": [
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
+      "total_lines": 9026,
+      "non_test_lines": 1313,
+      "top_symbols": [
+        "use cobre_core::commissioning",
+        "use cobre_core",
+        "use crate::hydro_models",
+        "use crate::indexer",
+        "use super::EVAPORATION_FLOW_SAFETY_MARGIN",
+        "use super::layout",
+        "use crate::generic_constraints::contract_family_slot",
+        "struct ColumnBufs",
+        "fn fill_stage_columns",
+        "fn fill_storage_columns",
+        "fn fill_transit_bucket_columns",
+        "fn fill_anticipated_slot_columns"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs",
+      "total_lines": 245,
+      "non_test_lines": 243,
+      "top_symbols": [
+        "use cobre_solver::StageTemplate",
+        "use crate::error::SddpError",
+        "use crate::indexer",
+        "use super::template::StageGeometry",
+        "const COMMITMENT_DRIFT_REL",
+        "const COMMITMENT_DRIFT_ABS",
+        "fn drift_margin",
+        "enum Reconciliation",
+        "fn reconcile_commitment",
+        "struct BoundRelaxations",
+        "impl BoundRelaxations",
+        "struct DeliveryPins"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/commitment_reconcile/tests.rs",
+      "total_lines": 250,
+      "non_test_lines": 0,
+      "top_symbols": [
+        "use super",
+        "use crate::indexer::StateSpace",
+        "use cobre_solver::StageTemplate",
+        "const GEN_SCALE",
+        "const SOLVER_PRIMAL_TOLERANCE",
+        "fn commitment_inside_bounds_needs_no_patch",
+        "fn commitment_exactly_at_cap_needs_no_patch",
+        "fn solver_tolerance_drift_past_cap_is_absorbed",
+        "fn solver_tolerance_drift_below_floor_is_absorbed",
+        "fn genuine_over_commitment_is_a_violation_not_a_relaxation",
+        "fn genuine_under_commitment_is_a_violation",
+        "fn margin_is_the_discrimination_line"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/delivery_ring.rs",
+      "total_lines": 567,
+      "non_test_lines": 299,
+      "top_symbols": [
+        "use std::ops::Range",
+        "use super::columns::ColumnBufs",
+        "struct DeliveryRing",
+        "impl DeliveryRing"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+      "total_lines": 10079,
+      "non_test_lines": 1672,
+      "top_symbols": [
+        "use cobre_core::commissioning",
+        "use cobre_core",
+        "use crate::generic_constraints::resolve_variable_ref",
+        "use crate::hydro_models::EvaporationModel",
+        "use crate::indexer",
+        "use super::M3S_TO_HM3",
+        "use super::delivery_ring::DeliveryRing",
+        "use super::fpha_cursor::for_each_fpha_plane",
+        "use super::layout",
+        "use crate::generic_constraints",
+        "use std::ops::Range",
+        "fn anticipated_ring"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs",
+      "total_lines": 100,
+      "non_test_lines": 100,
+      "top_symbols": [
+        "use crate::hydro_models",
+        "use crate::indexer",
+        "use super::layout",
+        "struct FphaVisit",
+        "fn for_each_fpha_plane"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/layout.rs",
+      "total_lines": 2090,
+      "non_test_lines": 1962,
+      "top_symbols": [
+        "use std::collections",
+        "use std::ops::Range",
+        "use cobre_core::commissioning",
+        "use cobre_core",
+        "use cobre_stochastic::par::precompute::PrecomputedPar",
+        "use crate::generic_constraints::GenericResolverGeom",
+        "use crate::hydro_models",
+        "use crate::indexer",
+        "use crate::lead_time",
+        "use crate::setup::PostStudyResolved",
+        "use super::template::StageGeometry",
+        "use super"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/layout/tests.rs",
+      "total_lines": 3565,
+      "non_test_lines": 0,
+      "top_symbols": [
+        "use std::collections",
+        "use chrono::NaiveDate",
+        "use cobre_core",
+        "use cobre_stochastic::par::precompute::PrecomputedPar",
+        "use crate::hydro_models",
+        "use crate::indexer",
+        "use crate::lead_time",
+        "use crate::resolved_parameters::ResolvedParameters",
+        "use crate::setup::PostStudyResolved",
+        "use crate::test_support",
+        "use super::super::test_support",
+        "use super"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/mod.rs",
+      "total_lines": 157,
+      "non_test_lines": 145,
+      "top_symbols": [
+        "mod columns",
+        "mod commitment_reconcile",
+        "mod delivery_ring",
+        "mod entries",
+        "mod fpha_cursor",
+        "mod layout",
+        "mod patch",
+        "mod rows",
+        "mod scaling",
+        "mod template",
+        "use commitment_reconcile::BoundRelaxations",
+        "use patch::PatchBuffer"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/patch.rs",
+      "total_lines": 1168,
+      "non_test_lines": 413,
+      "top_symbols": [
+        "use super::commitment_reconcile::BoundRelaxations",
+        "use crate::indexer",
+        "struct PatchBuffer",
+        "impl PatchBuffer"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/rows.rs",
+      "total_lines": 588,
+      "non_test_lines": 588,
+      "top_symbols": [
+        "use cobre_core",
+        "use crate::hydro_models::EvaporationModel",
+        "use crate::indexer",
+        "use super::columns",
+        "use super::fpha_cursor::for_each_fpha_plane",
+        "use super::layout",
+        "fn fill_stage_rows",
+        "fn fill_water_balance_rows",
+        "fn fill_parallel_water_rows",
+        "fn fill_chronological_water_rows",
+        "fn fill_transit_bucket_definition_rows",
+        "fn fill_filling_target_rows"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/scaling.rs",
+      "total_lines": 770,
+      "non_test_lines": 265,
+      "top_symbols": [
+        "use cobre_core::commissioning",
+        "use cobre_core",
+        "use cobre_solver::StageTemplate",
+        "use cobre_stochastic::par::precompute::PrecomputedPar",
+        "use crate::indexer::StateSpace",
+        "use super::M3S_TO_HM3",
+        "fn compute_col_scale",
+        "fn apply_col_scale",
+        "fn apply_bucket_col_scale",
+        "fn apply_commitment_hold_col_scale_unscale",
+        "fn compute_row_scale",
+        "fn apply_row_scale"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/template.rs",
+      "total_lines": 1329,
+      "non_test_lines": 1293,
+      "top_symbols": [
+        "use std::collections",
+        "use std::ops::Range",
+        "use cobre_core::scenario",
+        "use cobre_core",
+        "use cobre_io::StageIdResolver",
+        "use cobre_solver::StageTemplate",
+        "use cobre_stochastic::normal::precompute::PrecomputedNormal",
+        "use cobre_stochastic::par::precompute::PrecomputedPar",
+        "use crate::error::SddpError",
+        "use crate::hydro_models",
+        "use crate::inflow_method::InflowNonNegativityMethod",
+        "use crate::lead_time"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/template/tests.rs",
+      "total_lines": 5355,
+      "non_test_lines": 0,
+      "top_symbols": [
+        "use chrono::NaiveDate",
+        "use cobre_core::scenario::SamplingScheme",
+        "use cobre_core",
+        "use cobre_stochastic::PrecomputedNormal",
+        "use cobre_stochastic::par::precompute::PrecomputedPar",
+        "use cobre_stochastic::season_cast::post_study_calendar_stages",
+        "use crate::hydro_models::PrepareHydroModelsResult",
+        "use crate::indexer",
+        "use crate::inflow_method::InflowNonNegativityMethod",
+        "use crate::lead_time::AnticipatedResolution",
+        "use crate::resolved_parameters::ResolvedParameters",
+        "use crate::setup::bucket_topology::build_transit_bucket_topology"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/builder/test_support.rs",
+      "total_lines": 179,
+      "non_test_lines": 0,
+      "top_symbols": [
+        "use std::collections::HashMap",
+        "use chrono::NaiveDate",
+        "use cobre_core",
+        "use cobre_stochastic::par::precompute::PrecomputedPar",
+        "use crate::indexer::StateSpace",
+        "use crate::lead_time",
+        "use crate::setup::bucket_topology::build_transit_bucket_topology",
+        "use crate::setup::resolve_anticipated_commitments_core",
+        "use super::layout::TemplateBuildCtx",
+        "fn ctx_anticipated_and_mask_inputs",
+        "fn state_layout_for",
+        "fn state_layout_with_resolution"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/generic_constraints.rs",
+      "total_lines": 987,
+      "non_test_lines": 985,
+      "top_symbols": [
+        "use std::collections",
+        "use std::ops::Range",
+        "use cobre_core",
+        "use crate::hydro_models",
+        "use crate::indexer",
+        "struct GenericResolverGeom",
+        "impl GenericResolverGeom",
+        "struct EntityPositionMaps",
+        "struct CascadeRefs",
+        "struct PumpingRefs",
+        "struct ContractRefs",
+        "fn resolve_variable_ref"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/generic_constraints/tests.rs",
+      "total_lines": 2951,
+      "non_test_lines": 0,
+      "top_symbols": [
+        "use std::collections",
+        "use cobre_core::entities",
+        "use cobre_core",
+        "use super",
+        "use crate::hydro_models",
+        "use crate::indexer",
+        "use crate::lp_builder::StageGeometry",
+        "use crate::test_support",
+        "fn make_state",
+        "fn make_state_anticipated",
+        "fn make_geom",
+        "fn make_geom_with_contracts"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs",
+      "total_lines": 368,
+      "non_test_lines": 112,
+      "top_symbols": [
+        "use std::borrow::Cow",
+        "use super",
+        "use crate::lead_time::LeadTime::Stages",
+        "use crate::lead_time::PointResolution",
+        "use crate::lead_time",
+        "use cobre_core::commissioning::commissioning_active",
+        "fn is_anticipated_decision_active_for_delivery",
+        "fn anticipated_resolution_for"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/block_grid.rs",
+      "total_lines": 198,
+      "non_test_lines": 126,
+      "top_symbols": [
+        "use super::BlockIdx",
+        "struct BlockGrid",
+        "impl BlockGrid"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+      "total_lines": 994,
+      "non_test_lines": 292,
+      "top_symbols": [
+        "use cobre_core::temporal::StageStateConfig",
+        "use super",
+        "struct CutStateProjection",
+        "impl CutStateProjection"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/entity_index.rs",
+      "total_lines": 387,
+      "non_test_lines": 293,
+      "top_symbols": [
+        "struct HydroSys",
+        "impl HydroSys",
+        "struct HydroCell",
+        "impl HydroCell",
+        "struct ThermalSys",
+        "impl ThermalSys",
+        "struct LineSys",
+        "impl LineSys",
+        "struct FphaLocal",
+        "impl FphaLocal",
+        "struct FphaCellLocal",
+        "impl FphaCellLocal"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/hydro_cell.rs",
+      "total_lines": 457,
+      "non_test_lines": 204,
+      "top_symbols": [
+        "use std::ops::Range",
+        "use cobre_core",
+        "use super",
+        "struct HydroCellIndex",
+        "impl HydroCellIndex"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/index.rs",
+      "total_lines": 326,
+      "non_test_lines": 247,
+      "top_symbols": [
+        "struct Col",
+        "impl Col",
+        "struct Row",
+        "impl Row",
+        "struct StateDim",
+        "impl StateDim",
+        "struct CutSlot",
+        "impl CutSlot",
+        "struct InCol",
+        "impl InCol",
+        "struct BlockIdx",
+        "impl BlockIdx"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/layout.rs",
+      "total_lines": 72,
+      "non_test_lines": 40,
+      "top_symbols": [
+        "struct EvaporationIndices",
+        "struct FphaRowRange"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/mod.rs",
+      "total_lines": 125,
+      "non_test_lines": 125,
+      "top_symbols": [
+        "mod anticipated_gate",
+        "mod block_grid",
+        "mod cut_state_projection",
+        "mod entity_index",
+        "mod hydro_cell",
+        "mod index",
+        "mod layout",
+        "mod range_cursor",
+        "mod state_space",
+        "mod storage_boundary_grid",
+        "mod study_dimensions",
+        "use anticipated_gate"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/range_cursor.rs",
+      "total_lines": 41,
+      "non_test_lines": 41,
+      "top_symbols": [
+        "use std::ops::Range",
+        "struct RangeCursor",
+        "impl RangeCursor"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+      "total_lines": 1823,
+      "non_test_lines": 729,
+      "top_symbols": [
+        "use std::ops::Range",
+        "use super",
+        "use crate::lead_time::AnticipatedResolution",
+        "use cobre_core::temporal::StageStateConfig",
+        "struct StateSpace",
+        "enum StateRegion",
+        "const REGION_ORDER",
+        "impl StateRegion",
+        "impl StateSpace"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/storage_boundary_grid.rs",
+      "total_lines": 100,
+      "non_test_lines": 77,
+      "top_symbols": [
+        "use super::Boundary",
+        "struct StorageBoundaryGrid",
+        "impl StorageBoundaryGrid"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/indexer/study_dimensions.rs",
+      "total_lines": 50,
+      "non_test_lines": 50,
+      "top_symbols": [
+        "struct StudyDimensions"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/src/lp/mod.rs",
+      "total_lines": 27,
+      "non_test_lines": 25,
+      "top_symbols": [
+        "mod builder",
+        "mod generic_constraints",
+        "mod indexer",
+        "use builder"
+      ]
+    }
+  ],
+  "totals": {
+    "file_count": 30,
+    "total_lines": 44374,
+    "non_test_lines": 11639
+  }
+}

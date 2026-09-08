@@ -982,6 +982,75 @@ class SectionVerifyTests(sc.StationCase):
         )
 
 
+class GateTests(sc.StationCase):
+    """The owner ratification gate's own executable check.
+
+    A mis-recorded gate must not open the next station: gate.md carries exactly one
+    Decision line (ratified|returned); a ratified gate stamps the section with a ratified
+    date and the Gate: RETURNED marker; every downgrade recorded in the owner-gate table is
+    applied in the entry heading; and the three checkers still pass over the section.
+    """
+
+    SLUG = "core-io"
+    SECTION_TITLE = "core-io"
+    DECISION_RE = re.compile(r"(?m)^\*\*Decision:\s*(ratified|returned)\*\*\s*$")
+    DOWNGRADE_RE = re.compile(
+        r"(?m)^\|\s*(CD|PD|OD|TD)-(\d{3})\s*\|\s*downgrade\s*\|\s*([ABC])\b"
+    )
+
+    def setUp(self):
+        self.gate = self.artifact("gate.md").read_text(encoding="utf-8")
+        lines = backlog_parse.read_register(sc.BACKLOG)
+        self.section = backlog_parse.find_section(lines, self.SECTION_TITLE)
+        self.section_text = "\n".join(self.section.lines)
+        self.entries = {e.id: e for e in backlog_parse.iter_entries(self.section)}
+
+    def test_single_decision_line(self):
+        found = self.DECISION_RE.findall(self.gate)
+        self.assertEqual(
+            len(found),
+            1,
+            "gate.md must carry exactly one **Decision: ratified|returned** line",
+        )
+
+    def test_ratified_carries_markers_returned_does_not(self):
+        decision = self.DECISION_RE.findall(self.gate)[0]
+        if decision == "ratified":
+            self.assertRegex(self.section_text, r"Ratified \d{4}-\d{2}-\d{2}")
+            self.assertRegex(self.section_text, r"\*\*Gate: RETURNED \d{4}-\d{2}-\d{2}")
+        else:
+            self.assertNotRegex(self.section_text, r"Ratified \d{4}-\d{2}-\d{2}")
+
+    def test_recorded_downgrades_applied_in_place(self):
+        seen = 0
+        for cls, num, newsev in self.DOWNGRADE_RE.findall(self.section_text):
+            seen += 1
+            eid = f"{cls}-{num}"
+            self.assertIn(
+                eid,
+                self.entries,
+                f"{eid}: downgraded in the gate but absent from the section",
+            )
+            self.assertRegex(
+                self.entries[eid].heading,
+                rf"Sev {newsev}\b",
+                f"{eid}: gate downgrade to Sev {newsev} not applied in the entry heading",
+            )
+        self.assertGreaterEqual(
+            seen,
+            1,
+            "core-io gate downgraded CD-046; expected at least one downgrade row",
+        )
+
+    def test_checkers_green_after_the_gate(self):
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            self.assertEqual(
+                sc.run_checker(tool, self.SLUG),
+                0,
+                f"{tool} must exit 0 after the gate is applied",
+            )
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--validate-partI":
         failures = validate_partI_envelope(

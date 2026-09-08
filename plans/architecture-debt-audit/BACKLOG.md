@@ -36,12 +36,12 @@ Strict precedence: `0a` < `0b` < `1`. `neutral` advances no phase and is ordered
 dependency only. Sequencing principle (pull, don't push; a second consumer proves a seam
 before the data model breaks): plans/generalizing/beyond-sddp-generalization.md V.0.
 
-| Milestone | Meaning | Precedes | Source |
-| --- | --- | --- | --- |
-| `0a` | Engine seam; `study` config block + admission gate; shared output orchestration in cobre-io; rank-0-executes MPI; byte-identical for SDDP | `0b` | beyond-sddp-generalization.md V.1 (split resolved by D12) |
-| `0b` | Carve `cobre-model` from the engine-neutral part of cobre-sddp `lp/` | `1` | beyond-sddp-generalization.md V.1 / IV.2 (split resolved by D12) |
-| `1` | Purify the data model: stochastic off System/Stage, training_event out of cobre-core, StageTemplate shed, case v2 + bit-for-bit shim | — | beyond-sddp-generalization.md V.2 |
-| `neutral` | Advances no phase | — | — |
+| Milestone | Meaning                                                                                                                                   | Precedes | Source                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------- |
+| `0a`      | Engine seam; `study` config block + admission gate; shared output orchestration in cobre-io; rank-0-executes MPI; byte-identical for SDDP | `0b`     | beyond-sddp-generalization.md V.1 (split resolved by D12)        |
+| `0b`      | Carve `cobre-model` from the engine-neutral part of cobre-sddp `lp/`                                                                      | `1`      | beyond-sddp-generalization.md V.1 / IV.2 (split resolved by D12) |
+| `1`       | Purify the data model: stochastic off System/Stage, training_event out of cobre-core, StageTemplate shed, case v2 + bit-for-bit shim      | —        | beyond-sddp-generalization.md V.2                                |
+| `neutral` | Advances no phase                                                                                                                         | —        | —                                                                |
 
 Triggers: `gnl-import` — the GNL anticipated-coupling import. Wave 3 (boundary frame)
 MUST land before it (Execution-waves table, Wave 3 row, 2026-08-22 section). SATISFIED
@@ -1689,7 +1689,7 @@ for the ring). **But the fixed-post-horizon-commitments work added a THIRD bound
 `build_boundary_fold` (`policy/reconcile.rs:227`) folds a class-4 fixed post-horizon window's declared
 MW as a **constant into each cut's raw intercept** (see `sddp.md` "The ring axis" / anticipated
 thermal-commitment contract). It is a constant-fold, not a state-family carrier, so it does not add a
-fourth *state* channel — but it is a fourth bespoke path by which an externally-authored boundary
+fourth _state_ channel — but it is a fourth bespoke path by which an externally-authored boundary
 couples the study, exactly the proliferation CD-039 warns about. The generic
 `BoundaryStateRequirements` frame (tier-1) is now guarding against a moving target: land it before the
 next boundary-coupling family, not after.
@@ -1897,16 +1897,16 @@ from merged `main` (the fixed-post-horizon branch's PR is pending at ratificatio
 
 ### Execution waves (refines the 2026-08-19 tiers; ordered by dependency + deadline)
 
-| Wave | Content | Effort | Gate / notes |
-| ---- | ------- | ------ | ------------ |
-| **0** | Owner-decision execution + dead-surface sweep: OD-001 register entry; CD-020 MAGIC reframe; removals/gates OD-002/003/004/005/006/007/008, CD-019, CD-017 (assert + drop `new_tight`), CD-036 | all S (~2–3 days) | No parity risk (dead/test-only surfaces); OD-003 gates via the `test-support` pattern |
-| **1** | CD-010: typed `StateFamily` in cobre-io + `EntitySlot::family()`; absorb the `checkpoint.rs:30` duplicate const; disambiguate the `OUTPUT_ENTITY_*` collision; cover the public cobre-python seam | S–M | Byte-neutral (wire stays u8); regen `schemas/` if schemars-visible |
-| **2** | Nested-UB consolidation: CD-032 (+ its 3 folded sub-items) + CD-033 + PD-005 | S–M, one region | `ForwardBound::NestedRisk` promotion; land before the next risk-measure/stopping-rule feature; order-flexible vs Wave 3 |
-| **3** | Boundary frame: CD-031 + CD-039 — family-generic `BoundaryStateRequirements` resolver, `BoundaryPolicy::checkpoint_path`, parameterized reservation helper | M–L | ⏰ MUST land before the GNL anticipated-coupling import; depends on Wave 1 |
-| **4** | Setup lifecycle redesign: CD-001 (Sev A non-root mirror) + CD-003/004 (`ResolvedRunConfig` single projection) + CD-005 (Model/RunParams/output split) + CD-002; CD-024-successor seam activates or dies here | L, dedicated plan | MPI byte-repro bar: parity goldens, rank-invariance, `mpiexec -n 1/2` repro |
-| **5** | Output single owner: CD-025 hoist (shared output helpers reachable by CLI + Python) + CD-029 fold (`PrepPhase` boundary check + Python parity) | M | Python-parity tests; parallelizable with Waves 2–4 (disjoint files) |
-| **6** | Retrofit/typed-seam sweep: CD-015+022 (one extraction, relieves CD-014), CD-018, CD-035, CD-034, CD-023 prep re-home | S–M each | Proven fix-shapes; byte-neutral vs sacred parity goldens |
-| **7** | C-tier batch: CD-007/009/011/012/014-remnant/016/021/028/030/037/038 + OD-009 (owner-optional) + the two v0.14.2 residues | opportunistic | Batch with adjacent feature work; no dedicated push |
+| Wave  | Content                                                                                                                                                                                                      | Effort            | Gate / notes                                                                                                            |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **0** | Owner-decision execution + dead-surface sweep: OD-001 register entry; CD-020 MAGIC reframe; removals/gates OD-002/003/004/005/006/007/008, CD-019, CD-017 (assert + drop `new_tight`), CD-036                | all S (~2–3 days) | No parity risk (dead/test-only surfaces); OD-003 gates via the `test-support` pattern                                   |
+| **1** | CD-010: typed `StateFamily` in cobre-io + `EntitySlot::family()`; absorb the `checkpoint.rs:30` duplicate const; disambiguate the `OUTPUT_ENTITY_*` collision; cover the public cobre-python seam            | S–M               | Byte-neutral (wire stays u8); regen `schemas/` if schemars-visible                                                      |
+| **2** | Nested-UB consolidation: CD-032 (+ its 3 folded sub-items) + CD-033 + PD-005                                                                                                                                 | S–M, one region   | `ForwardBound::NestedRisk` promotion; land before the next risk-measure/stopping-rule feature; order-flexible vs Wave 3 |
+| **3** | Boundary frame: CD-031 + CD-039 — family-generic `BoundaryStateRequirements` resolver, `BoundaryPolicy::checkpoint_path`, parameterized reservation helper                                                   | M–L               | ⏰ MUST land before the GNL anticipated-coupling import; depends on Wave 1                                              |
+| **4** | Setup lifecycle redesign: CD-001 (Sev A non-root mirror) + CD-003/004 (`ResolvedRunConfig` single projection) + CD-005 (Model/RunParams/output split) + CD-002; CD-024-successor seam activates or dies here | L, dedicated plan | MPI byte-repro bar: parity goldens, rank-invariance, `mpiexec -n 1/2` repro                                             |
+| **5** | Output single owner: CD-025 hoist (shared output helpers reachable by CLI + Python) + CD-029 fold (`PrepPhase` boundary check + Python parity)                                                               | M                 | Python-parity tests; parallelizable with Waves 2–4 (disjoint files)                                                     |
+| **6** | Retrofit/typed-seam sweep: CD-015+022 (one extraction, relieves CD-014), CD-018, CD-035, CD-034, CD-023 prep re-home                                                                                         | S–M each          | Proven fix-shapes; byte-neutral vs sacred parity goldens                                                                |
+| **7** | C-tier batch: CD-007/009/011/012/014-remnant/016/021/028/030/037/038 + OD-009 (owner-optional) + the two v0.14.2 residues                                                                                    | opportunistic     | Batch with adjacent feature work; no dedicated push                                                                     |
 
 **Scheduling refinements vs the 2026-08-19 tiers (recorded):** CD-025 is demoted out of the
 tier-1 cluster into its own wave — it shares the principle (one owner per fact) but has zero
@@ -2276,6 +2276,7 @@ comment/doc/voice, allow-rationale, python-parity) + `cargo doc -D warnings` + f
 
 **CD-040 · Sev B · asymmetry · effort M · confidence high**
 HydroPenalties (entities/hydro.rs:58) and HydroStagePenalties (model/resolved/penalties.rs:37) are structurally identical 16-f64 types joined by an unguarded positional field-copy in cobre-io (resolution/penalties.rs:397-419) where any two-line transposition compiles silently; the HydroPenaltyOverrides third declaration is justified by its distinct Option cascade semantics and is not part of the defect.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/entities/hydro.rs::HydroPenalties`, `crates/cobre-core/src/model/resolved/penalties.rs::HydroStagePenalties`, `crates/cobre-core/src/model/penalty.rs::HydroPenaltyOverrides`
@@ -2285,6 +2286,7 @@ HydroPenalties (entities/hydro.rs:58) and HydroStagePenalties (model/resolved/pe
 
 **CD-041 · Sev B · asymmetry · effort M · confidence high**
 DisconnectedBus (error.rs:65) and InvalidPenalty (error.rs:72) are emitted by no production/validation path and both carry a false 'Emitted by cobre-io validation' doc line while cobre-io imports ValidationError zero times; DisconnectedBus additionally has a discarded buses builder parameter (network.rs:90-91) behind a TODO. Narrower than 'constructed nowhere', because DisconnectedBus is constructed in the test_error_trait test at error.rs:196.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/error.rs::ValidationError`, `crates/cobre-core/src/error.rs:72`, `crates/cobre-core/src/topology/network.rs::build`
@@ -2294,6 +2296,7 @@ DisconnectedBus (error.rs:65) and InvalidPenalty (error.rs:72) are emitted by no
 
 **CD-042 · Sev C · asymmetry · effort S · confidence high**
 The uniform-stride flat-index arithmetic is repeated at 14 sites across hydro/line/pumping/contract with no shared helper and, unlike thermal, no stride debug_assert: a DRY/symmetry and guard-asymmetry gap only. It is not a correctness bug (all four share the bounds-checked n_stages stride) and the thermal_cell_index helper is justified by thermal's genuinely distinct padded stride.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/resolved/bounds.rs::thermal_cell_index`, `crates/cobre-core/src/model/resolved/bounds.rs::ResolvedBounds`
@@ -2303,6 +2306,7 @@ The uniform-stride flat-index arithmetic is repeated at 14 sites across hydro/li
 
 **CD-043 · Sev B · asymmetry · effort M · confidence high**
 SystemBuilder::build re-sorts stages by id (builder.rs:364) but neither reassigns nor validates Stage.index (only cobre-io stages.rs:811-815 writes it; validate.rs has no check), so a non-cobre-io producer can silently supply an index disagreeing with the post-sort slot: a latent footgun, not a live wrong result on the cobre-io path (stable sort of already-indexed input).
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/temporal.rs::Stage`, `crates/cobre-core/src/system/builder.rs::build`, `crates/cobre-core/src/model/temporal/stage_key.rs::StudyPos`
@@ -2312,6 +2316,7 @@ SystemBuilder::build re-sorts stages by id (builder.rs:364) but neither reassign
 
 **CD-044 · Sev B · asymmetry · effort M · confidence high**
 StageLagTransition (temporal.rs:175) has zero cobre-core consumers (all 4 occurrences are its own declaration/comments) and its field doc references the L3 pub(crate) symbol accumulate_and_shift_lag_state (noise.rs:232) that no cobre-core reader can resolve; the strictly-defensible residue is this zero-consumer plus broken-L0-doc-contract pair, leaving physical relocation to Epic-9 layering adjudication.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/temporal.rs::StageLagTransition`, `crates/cobre-core/src/model/temporal.rs:202`
@@ -2322,6 +2327,7 @@ StageLagTransition (temporal.rs:175) has zero cobre-core consumers (all 4 occurr
 
 **CD-045 · Sev B · asymmetry · effort M · confidence high**
 The three *_models accessors (mod.rs:432/438/466) promise canonical order that no write path enforces (setters silent at builder.rs:229/237/244, build never sorts them) and with_scenario_models (mod.rs:571) replaces inflow_models post-construction with no sort/validation, while L1's PrecomputedPar::build depends on that order; the four 'raw' tables carry an explicit setter precondition and are honest delegation, so they fall outside the defect.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/system/builder.rs::build`, `crates/cobre-core/src/system/builder.rs::inflow_models`, `crates/cobre-core/src/system/mod.rs::inflow_models`, `crates/cobre-core/src/system/mod.rs::with_scenario_models`
@@ -2330,8 +2336,9 @@ The three *_models accessors (mod.rs:432/438/466) promise canonical order that n
 - **Alignment:** advances-1 (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-1 (cross-reference; verdict travels to Epic 9).
 
-**CD-046 · Sev B · asymmetry · effort M · confidence high**
+**CD-046 · Sev C · asymmetry · effort M · confidence high**
 The wire-reproducibility rationale in the System serde(skip) comment (mod.rs:64) is enforced by three unrelated bespoke mechanisms yet six HashMap fields on HorizonGraph/CascadeTopology/NetworkTopology serialize unguarded as non-skipped SystemRepr fields (mod.rs:157/158/160), an inconsistency with no single owner and no guard test; explicitly NOT a live wrong result today (single-serialize-then-broadcast plus a value-equality round-trip guard).
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/system/mod.rs::System`, `crates/cobre-core/src/model/horizon.rs::HorizonGraph`, `crates/cobre-core/src/topology/cascade.rs::CascadeTopology`, `crates/cobre-core/src/topology/network.rs::NetworkTopology`
@@ -2341,6 +2348,7 @@ The wire-reproducibility rationale in the System serde(skip) comment (mod.rs:64)
 
 **CD-047 · Sev C · asymmetry · effort S · confidence high**
 Six numeric extractors in extensions/{hydro_geometry,hydro_energy_productivity,tailrace_curves}.rs re-implement parquet_helpers' extract_required_int32/float64 (byte-identical to each other, three-line delta vs the shared exports), and the File::open->try_new->build->rows prologue recurs 28x across 19 files uncovered by parquet_helpers; the evaporation_models.rs:158 string extractor is NOT part of the defect (a genuine gap -- parquet_helpers offers no Utf8 extractor, documented at :157).
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/extensions/hydro_geometry.rs::extract_int32_column`, `crates/cobre-io/src/extensions/hydro_energy_productivity.rs::extract_int32_column`, `crates/cobre-io/src/extensions/tailrace_curves.rs::extract_int32_column`, `crates/cobre-io/src/constraints/bounds.rs::parse_line_bounds`, `crates/cobre-io/src/scenarios/inflow_stats.rs::parse_inflow_seasonal_stats`, `crates/cobre-io/src/parquet_helpers.rs::extract_required_int32`
@@ -2350,6 +2358,7 @@ Six numeric extractors in extensions/{hydro_geometry,hydro_energy_productivity,t
 
 **CD-048 · Sev B · asymmetry · effort M · confidence high**
 bounds.rs:24 and penalties.rs:23 state `sorted by ID` for entity families that all carry operational_start_date, contradicting the enforced `(operational_start_date, id)` canonical order (builder.rs sort_canonical, pipeline.rs:289) on the publicly reachable resolve_bounds/resolve_penalties surface -- a doc-contract-vs-enforced-contract drift, not a live miscompute; generic_bounds.rs:15's `sorted by ID` is correct (no date axis) and the three `must be sorted` spellings (ncs_bounds/load_factors/ncs_factors) are underspecified rather than wrong, so `two wrong statements` is the exact residue.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/resolution/bounds.rs::BoundsEntitySlices`, `crates/cobre-io/src/resolution/penalties.rs::PenaltiesEntitySlices`, `crates/cobre-io/src/resolution/ncs_bounds.rs::resolve_ncs_bounds`, `crates/cobre-io/src/resolution/load_factors.rs::resolve_load_factors`, `crates/cobre-io/src/resolution/ncs_factors.rs::resolve_ncs_factors`, `crates/cobre-io/src/resolution/group_bounds.rs::resolve_hydro_unit_group_bounds`, `crates/cobre-io/src/lib.rs:130`
@@ -2359,6 +2368,7 @@ bounds.rs:24 and penalties.rs:23 state `sorted by ID` for entity families that a
 
 **CD-049 · Sev C · asymmetry · effort S · confidence high**
 The two resolvers share an identical algorithm skeleton and five parallel tests collapsible to one generic routine parameterised over the id accessor and destination table; residual differences are confined to the entity/entry/output-table types, local names, and one incidental `usize::try_from` spelling (load_factors.rs:59 vs ncs_factors.rs:61). `Same function twice` over-reaches (they are two monomorphizations over distinct output-table types, not literal copies), but the duplication is real and has two live consumers.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/resolution/load_factors.rs::resolve_load_factors`, `crates/cobre-io/src/resolution/ncs_factors.rs::resolve_ncs_factors`
@@ -2368,6 +2378,7 @@ The two resolvers share an identical algorithm skeleton and five parallel tests 
 
 **CD-050 · Sev B · asymmetry · effort M · confidence high**
 Exactly two semantic branches -- block-duration>0 (semantic/stages.rs:88-103) and CVaR alpha/lambda range (:104-131), rules 4-5 in the mod.rs:83-84 table -- are unreachable for any pipeline-loaded deck because parse-layer validate_block_hours (stages.rs:623) and the CVaR-range half of validate_risk_measure (:661) reject such decks first and validate_schema bails before pipeline.rs:89; this is a duplicated-rule/doc-table drift against the retired-rule-42 convention, NOT a correctness gap (the rules ARE enforced at parse time), and the parser's unrecognized-risk-measure-string check (stages.rs:665) has no semantic counterpart and is excluded from the redundancy.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/stages.rs::validate_block_hours`, `crates/cobre-io/src/stages.rs::validate_risk_measure`, `crates/cobre-io/src/stages.rs::validate_raw_stages`, `crates/cobre-io/src/stages.rs::convert_stages`, `crates/cobre-io/src/validation/semantic/stages.rs::check_stage_structure`
@@ -2378,6 +2389,7 @@ Exactly two semantic branches -- block-duration>0 (semantic/stages.rs:88-103) an
 
 **CD-051 · Sev B · asymmetry · effort M · confidence high**
 The scenario-source admission rules are enforced only lazily inside the accessor and cobre-io's own load pipeline (`run_pipeline`) never rejects an invalid config, the nine let-else/`.ok()` swallows resting on a false premise comment at scenarios.rs:459 that `validate_config` does not establish; but rejection is not lost end-to-end because each consumer (validate.rs:382, setup/mod.rs:385, cobre-python) re-propagates, so the defect is a mislocated/duplicated admission gate, not a production silent-accept.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/config/mod.rs::validate_scenario_source_cfg`, `crates/cobre-io/src/config/mod.rs::validate_openings_cfg`, `crates/cobre-io/src/config/mod.rs::validate_config`, `crates/cobre-io/src/validation/semantic/scenarios.rs::check_external_scheme_has_files`
@@ -2388,6 +2400,7 @@ The scenario-source admission rules are enforced only lazily inside the accessor
 
 **CD-052 · Sev B · asymmetry · effort M · confidence high**
 Confirmed narrowly: `LoadError::CrossReferenceError` is a dead variant (zero production producers, findings routed through `ConstraintError`) retaining two cobre-python consumer arms, and the overlapping line/hydro-filling predicate pairs can drift undetected because only cobre-io's copy fires in the production pipeline, not that cobre-core's builder validation is itself redundant (it legitimately guards cobre-core's public builder for direct/test constructors).
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/referential.rs::validate_referential_integrity`, `crates/cobre-io/src/validation/referential.rs::check_line_references`, `crates/cobre-io/src/validation/semantic/hydro.rs::check_filling_guards`, `crates/cobre-io/src/error.rs::LoadError`
@@ -2397,6 +2410,7 @@ Confirmed narrowly: `LoadError::CrossReferenceError` is a dead variant (zero pro
 
 **CD-053 · Sev B · asymmetry · effort M · confidence high**
 Confirmed as-scoped to two concrete divergences: the block-id-range defect is `BusinessRuleViolation` in block_bounds.rs but `InvalidValue` in referential.rs, and the duplicate-row rule keys per-column in Layer 5a versus per-row in Layer 3 so a disjoint-column duplicate is legal for six families and rejected for generic constraint bounds; plus the NCS negative-value check sits in the reference-only Layer 3 module.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/referential.rs::check_generic_constraint_bounds_validity`, `crates/cobre-io/src/validation/semantic/block_bounds.rs::check_bound_block_id_range`, `crates/cobre-io/src/validation/semantic/block_bounds.rs::check_duplicate_bound_rows`, `crates/cobre-io/src/validation/referential.rs::check_ncs_bounds_and_factors`
@@ -2406,6 +2420,7 @@ Confirmed as-scoped to two concrete divergences: the block-id-range defect is `B
 
 **CD-054 · Sev B · asymmetry · effort M · confidence high**
 Confirmed narrowly: the uniform flat 'field is in id-set' reference blocks and the 20 copies of the `s.id >= 0` study-stage predicate are open-coded despite in-crate precedents (`FamilyMeta` table, `StageIdResolver`), and the header comment stands in for one message-template definition, conceding that Option-valued, nested, and per-plant-scoped references are not mechanically table-collapsible, so the residue is redundant idiom restatement rather than a single table replacing all 48 blocks.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/referential.rs::check_scenario_references`, `crates/cobre-io/src/validation/referential.rs::check_bounds_references`, `crates/cobre-io/src/validation/semantic/block_bounds.rs::FamilyMeta`
@@ -2415,6 +2430,7 @@ Confirmed narrowly: the uniform flat 'field is in id-set' reference blocks and t
 
 **CD-055 · Sev C · asymmetry · effort S · confidence high**
 Confirmed narrowly on the concrete drift: registry row 26 asserts a live semantic rule for `simulation.sampling_scheme.type`, a field `deny_unknown_fields` now rejects at parse-time with a different ErrorKind, while curated retirements elsewhere prove the table is maintained, so the demonstrated defect is this one drifted row, the unbound prose registry being the mechanism rather than a second proven drift.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/mod.rs:105`, `crates/cobre-io/src/validation/semantic/mod.rs::validate_semantic_stages_penalties_scenarios`, `crates/cobre-io/src/config/simulation.rs::SimulationConfig`
@@ -2424,6 +2440,7 @@ Confirmed narrowly on the concrete drift: registry row 26 asserts a live semanti
 
 **CD-056 · Sev B · asymmetry · effort M · confidence high**
 Confirmed narrowly: the stage-axis out-of-horizon validator is missing for the five block-eligible non-thermal bound families (hydro/line/pumping/contract/hydro_unit_group), whose out-of-horizon rows are silently dropped by resolve_bounds, whereas thermal (5a) and NCS (Layer 3, different ErrorKind) reject hard, so the fix is to add the five missing checks; thermal's guard is legitimately family-specific (padded resolution region), making this a coverage/consistency gap rather than a claim that the two existing rules are misplaced.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/thermal.rs::check_thermal_bounds_override_stage_range`, `crates/cobre-io/src/validation/semantic/block_bounds.rs:98`, `crates/cobre-io/src/validation/referential.rs::check_ncs_bounds_and_factors`
@@ -2433,6 +2450,7 @@ Confirmed narrowly: the stage-axis out-of-horizon validator is missing for the f
 
 **CD-057 · Sev B (A-risk) · asymmetry · effort M · confidence high**
 Confirmed narrowly: the positional `FILE_ENTRIES` to `manifest_fields_mut` zip is guarded only by an equal-length assertion that cannot detect a same-arity reordering, so swapping two entries silently misassigns presence flags; the `ParsedData`/schema.rs list is a third parallel restatement of the file set but keyed by name (a DRY/fan-out concern), not part of the positional join.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/structural.rs::manifest_fields_mut`, `crates/cobre-io/src/validation/structural.rs::FileManifest`, `crates/cobre-io/src/validation/structural.rs::validate_structure`, `crates/cobre-io/src/validation/schema.rs::ParsedData`
@@ -2443,6 +2461,7 @@ Confirmed narrowly: the positional `FILE_ENTRIES` to `manifest_fields_mut` zip i
 
 **CD-058 · Sev B · asymmetry · effort M · confidence high**
 The crash-safety hole is specifically the in-place (O_TRUNC) overwrites of manifest.bin at checkpoint.rs:244 and of entities.csv/variables.csv in dictionary.rs, which can leave a truncated file replacing the previous good one; the cuts/basis/states .bin payload writes are covered by the manifest-last commit-signal design and are not an independent crash-safety hole.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/atomic.rs::write_bytes_atomic`, `crates/cobre-io/src/output/policy/checkpoint.rs::write_policy_checkpoint`, `crates/cobre-io/src/output/policy/checkpoint.rs:242`, `crates/cobre-io/src/output/dictionary.rs::write_entities_csv`, `crates/cobre-io/src/output/dictionary.rs::write_variables_csv`
@@ -2452,6 +2471,7 @@ The crash-safety hole is specifically the in-place (O_TRUNC) overwrites of manif
 
 **CD-059 · Sev B · asymmetry · effort M · confidence high**
 The confirmed defect is narrowly the false module-doc contract at output/mod.rs:6-8 (write_results does not 'write all output artifacts' and does not mirror load_case) and the resulting undocumented CLI/Python hand-mirror; it does not establish that write_results must be expanded to orchestrate every artifact - that consolidation is the 0a design choice, not part of the present defect.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/mod.rs:6`, `crates/cobre-io/src/output/results_writer.rs::write_results`, `crates/cobre-io/src/output/results_writer.rs::write_training_results`
@@ -2461,6 +2481,7 @@ The confirmed defect is narrowly the false module-doc contract at output/mod.rs:
 
 **CD-060 · Sev B · asymmetry · effort M · confidence high**
 The load-bearing, concretely-defective residue is the over-broad self-description of the two enumerations versus their partial hand-maintained lists - chiefly the axis-spelling gate's 'a later file cannot reintroduce a variant without failing this one test' asserted over a 21-of-34 subset; the wider 'no single owner' framing is the shape of the fix, not itself the proven defect.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/schemas.rs::costs_schema`, `crates/cobre-io/src/output/dictionary.rs::variables_csv_schemas`, `crates/cobre-io/src/output/schemas.rs::one_spelling_per_axis_across_every_output_schema`, `crates/cobre-io/src/output/stochastic.rs::noise_openings_schema`, `crates/cobre-io/src/output/hydro_models.rs::fpha_hyperplanes_schema`, `crates/cobre-io/src/output/dictionary.rs::bounds_schema`
@@ -2470,6 +2491,7 @@ The load-bearing, concretely-defective residue is the over-broad self-descriptio
 
 **CD-061 · Sev B · asymmetry · effort M · confidence high**
 The confirmed defect is the register/oracle-coverage gap only: the Parquet convergence/timing/row_selection schemas and IterationRecord carry training-loop column names that Part-I I.3-6 does not name and the word-boundary genericity gate deliberately cannot see; it is expressly NOT an enforced-contract violation (the ratified sddp/SDDP/Benders/standalone-cut tokens are absent) and requires no rename now - only widening the I.3-6 disposition.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/schemas.rs::convergence_schema`, `crates/cobre-io/src/output/schemas.rs::iteration_timing_schema`, `crates/cobre-io/src/output/schemas.rs::row_selection_schema`, `crates/cobre-io/src/output/mod.rs::IterationRecord`, `scripts/ci/check-infra-genericity.sh:79`
@@ -2480,6 +2502,7 @@ The confirmed defect is the register/oracle-coverage gap only: the Parquet conve
 
 **CD-062 · Sev B · asymmetry · effort M · confidence high**
 The confirmed defect is the unreconciled duplication plus the contradictory documented contract for the empty-family case (new() creates a directory for a system-declared-but-payload-empty family, which write_scenario's doc says cannot exist), with new()'s create_dir_all otherwise redundant against write_partition's own create_dir_all; the two predicate sets are each locally sensible and this is not a runtime data-corruption bug.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/simulation_writer.rs::new`, `crates/cobre-io/src/output/simulation_writer.rs::write_scenario`, `crates/cobre-io/src/output/simulation_writer.rs::write_partition`
@@ -2490,6 +2513,7 @@ The confirmed defect is the unreconciled duplication plus the contradictory docu
 
 **CD-063 · Sev C · asymmetry · effort S · confidence high**
 The concrete defensible defect is the cross-domain mis-homing of ensure_parent_dir inside stochastic.rs (imported by three unrelated writers) together with its two verbatim open-coded copies in scaling_report.rs:24 and provenance.rs:26; the 'ten identical prologues' is the broader repetition a fix would fold, not itself the load-bearing residue.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/parquet_helpers.rs::extract_required_date32`, `crates/cobre-io/src/output/stochastic.rs::ensure_parent_dir`, `crates/cobre-io/src/output/fixed_delivery.rs::write_fixed_delivery`, `crates/cobre-io/src/output/scaling_report.rs::write_scaling_report`, `crates/cobre-io/src/output/provenance.rs::write_provenance_report`
@@ -2501,6 +2525,7 @@ The concrete defensible defect is the cross-domain mis-homing of ensure_parent_d
 
 **PD-006 · Sev C · allocation · effort S · confidence high**
 Confirmed as a loader/study-setup-path inefficiency only (not any hot path in training/forward, training/backward, or simulation/pipeline): canonical_calendar_days rebuilds a compile-time-constant 366-entry Vec on each call, and is_multi_resolution is re-swept once per raw stage over the immutable season_map. Narrowed: the per-stage sweep is O(1) for Monthly/Weekly maps (the cycle_type early-return at temporal.rs:487), so the recomputation cost is non-trivial only for Custom maps, where it is 366 * seasons per stage.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/temporal.rs::canonical_calendar_days`, `crates/cobre-core/src/model/temporal.rs::is_multi_resolution`, `crates/cobre-core/src/model/temporal.rs::span_days`, `crates/cobre-core/src/model/temporal.rs::resolution_level_of`
@@ -2510,6 +2535,7 @@ Confirmed as a loader/study-setup-path inefficiency only (not any hot path in tr
 
 **PD-007 · Sev B · allocation · effort M · confidence high**
 Confirmed narrowly: all five discarding call sites lie on one-time setup/validation paths (PAR lag-transition build, season-cast coverage, cobre-io travel-time semantic validation, SDDP bucket-topology setup), none on a declared hot path. The single site whose allocation cost is worse than O(1) per call is check_horizon_inertness (travel_time.rs:332-334), which makes O(N) predicate-only calls each allocating an O(remaining-stages) vector, i.e. O(N^2) allocation for what is only an emptiness test.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/temporal/overlap.rs::window_period_overlaps`, `crates/cobre-core/src/model/temporal/overlap.rs:41`, `crates/cobre-core/src/model/temporal/overlap.rs:55`
@@ -2519,6 +2545,7 @@ Confirmed narrowly: all five discarding call sites lie on one-time setup/validat
 
 **PD-008 · Sev B · allocation · effort M · confidence high**
 Confirmed, narrowed to a one-time study-setup MPI broadcast payload (not any per-iteration hot-path cost) and with the title's count corrected: the skipped-and-rebuilt siblings are the seven entity index maps plus stage_index (eight, not 'three fields above'). The defensible residue is that cascade+network's five HashMaps are transmitted on the wire despite being pure, content-determined derivations of the seven entity slices already serialized ahead of them in the same struct, and thus locally reconstructible in rebuild_indices.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/system/mod.rs::System`, `crates/cobre-core/src/system/mod.rs::SystemRepr`, `crates/cobre-core/src/system/mod.rs::rebuild_indices`, `crates/cobre-core/src/topology/cascade.rs::CascadeTopology`, `crates/cobre-core/src/topology/network.rs::NetworkTopology`
@@ -2528,6 +2555,7 @@ Confirmed, narrowed to a one-time study-setup MPI broadcast payload (not any per
 
 **PD-009 · Sev B · allocation · effort M · confidence high**
 The projection join at estimation.rs:468-479 is O(occurrences x windows) per hydro — quadratic in unbounded historical record depth — plus a per-occurrence throwaway `Vec<RealizedWindow>` copy of what is a contiguous subslice of the already-sorted, provably-disjoint `windows`; the second anchor (check_std_ratio_divergence:842) is a bounded (hydros x seasons) scan that does not scale with record depth and is not part of the surviving defect.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/scenarios/estimation.rs::resolve_coverage_gated_observations`, `crates/cobre-io/src/scenarios/estimation.rs::check_std_ratio_divergence`
@@ -2537,6 +2565,7 @@ The projection join at estimation.rs:468-479 is O(occurrences x windows) per hyd
 
 **PD-010 · Sev B · allocation · effort M · confidence high**
 The nested O(hydros x [inflow_history + recent_observations] rows) filter in merged_windows_for_hydro (181/185) is paid once per hydro inside each of check_slot_coverage (244) and check_inprogress_partial_coverage (339); the ADDITIONAL cross-rule duplicate construction of the same per-hydro merged map only occurs when both rules' preconditions hold at once (inflow_ar_coefficients non-empty and l_state > 0), not on every deck.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/inflow_seeding.rs::merged_windows_for_hydro`, `crates/cobre-io/src/validation/semantic/inflow_seeding.rs::check_slot_coverage`, `crates/cobre-io/src/validation/semantic/inflow_seeding.rs::check_inprogress_partial_coverage`
@@ -2546,6 +2575,7 @@ The nested O(hydros x [inflow_history + recent_observations] rows) filter in mer
 
 **PD-011 · Sev B · allocation · effort M · confidence high**
 check_prefix_coherence (846-857) re-walks stages 0..=sn per transition and re-does identical cell comparisons for any two transitions sharing (source column cn, target column cm, source stage depth sn); the redundancy is real specifically in the no-disagreement case (find_map+break bounds the walk once a stage disagrees), and de-duplicating to once-per-pair alters per-edge warning attribution unless the per-edge loop is retained with a decided-pair short-circuit.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/scenarios.rs::check_prefix_coherence`, `crates/cobre-io/src/validation/semantic/scenarios.rs:853`
@@ -2555,6 +2585,7 @@ check_prefix_coherence (846-857) re-walks stages 0..=sn per transition and re-do
 
 **PD-012 · Sev C · allocation · effort S · confidence high**
 On a chain-dialect deck (data.stages.policy_graph.nodes empty, guard at 620) extract_class's cells map retains f64 values no rule reads (its only value reader check_prefix_coherence at 855 is skipped) while the map keys are still used for in-build duplicate detection; the wider 'four full-table structures per class' is narrowed because inflow_sample_rows is inflow-class-only (693-694) and union_by_stage is bounded by distinct scenario_ids per stage rather than the full row count.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/scenarios.rs::extract_class`, `crates/cobre-io/src/validation/semantic/scenarios.rs::check_external_library_coherence`
@@ -2564,6 +2595,7 @@ On a chain-dialect deck (data.stages.policy_graph.nodes empty, guard at 620) ext
 
 **PD-013 · Sev C · allocation · effort S · confidence high**
 The identical stage_index build (season.rs:141, season.rs:264, scenarios.rs:1012) and the identical partition_point predecessor lookup over data.inflow_history are triplicated under the shared estimation-active predicate; the narrowed residue is that shared index+lookup only, NOT a fully-shared season resolution (site 1 adds an .or_else season_for_date fallback, site 3 resolves to stage-occurrence + cast() coverage gating rather than a season), and the three do not always co-fire (site 2 requires non-External inflow scheme, site 3's index needs season_map present).
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/season.rs::check_observation_season_alignment`, `crates/cobre-io/src/validation/semantic/season.rs::check_season_observation_coverage`, `crates/cobre-io/src/validation/semantic/scenarios.rs::check_estimation_prerequisites`
@@ -2573,6 +2605,7 @@ The identical stage_index build (season.rs:141, season.rs:264, scenarios.rs:1012
 
 **PD-014 · Sev B · allocation · effort M · confidence high**
 slot_occupying_classes (357) full-scans up to three external tables plus a fresh HashSet per call, and check_realization_rules invokes it once per node (308 inside for node in nodes) so nodes sharing a stage recompute an identical stage-keyed result — that per-node redundancy is the solid defect; call sites 667/797 recompute once per DISTINCT staged stage (staged is already deduped), not per node, and the sibling ClassExternal.raw_c (536/716) holds the same count in one pass but reusing it is a cross-module (scenarios.rs->stages.rs) share, not a free local one.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/stages.rs::slot_occupying_classes`, `crates/cobre-io/src/validation/semantic/stages.rs::check_realization_rules`, `crates/cobre-io/src/validation/semantic/stages.rs::check_num_openings_declaration`, `crates/cobre-io/src/validation/semantic/stages.rs::check_sampling_method_meaningfulness`, `crates/cobre-io/src/validation/semantic/scenarios.rs::ClassExternal`
@@ -2582,6 +2615,7 @@ slot_occupying_classes (357) full-scans up to three external tables plus a fresh
 
 **PD-015 · Sev C · allocation · effort S · confidence high**
 The internal checkpoint write path pays an avoidable full-buffer memcpy: each serializer's finished_data().to_vec() (codec.rs:284/333/365/455) is copied only for fs::write in checkpoint.rs:221/227/237/244 to borrow it as a slice and drop it, but the copy occurs at checkpoint cadence and the owned-Vec return stays justified for the pub API's doctest/external callers.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/policy/codec.rs::serialize_stage_cuts`, `crates/cobre-io/src/output/policy/checkpoint.rs::write_policy_checkpoint`
@@ -2592,6 +2626,7 @@ The internal checkpoint write path pays an avoidable full-buffer memcpy: each se
 
 **PD-016 · Sev C · allocation · effort S · confidence high**
 Each build_*_batch reconstructs its run-invariant Arrow Field list (with fresh column-name Strings) once per scenario (simulation_writer.rs:1076; schemas.rs:10-53) and write_parquet_atomic rebuilds WriterProperties per file (atomic.rs:109-114): a bounded, data-volume-independent per-scenario/per-file allocation, not a row-count-scaling cost.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/simulation_writer.rs::build_costs_batch`, `crates/cobre-io/src/output/schemas.rs::costs_schema`, `crates/cobre-io/src/output/atomic.rs::write_parquet_atomic`
@@ -2601,6 +2636,7 @@ Each build_*_batch reconstructs its run-invariant Arrow Field list (with fresh c
 
 **PD-017 · Sev B · allocation · effort M · confidence high**
 The partitions_written inventory reaches no output file (SimulationMetadata at manifest.rs:434-462 has no field for it and write_simulation_results at results_writer.rs:133-155 never reads it), so its cross-run retention, merge clone-and-sort (mod.rs:431-435), and MPI allgatherv (simulation.rs:305-357) are unconsumed work; the per-partition format! allocation itself is negligible.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/simulation_writer.rs::write_partition`, `crates/cobre-io/src/output/mod.rs::SimulationOutput`, `crates/cobre-io/src/output/mod.rs::merge`
@@ -2611,6 +2647,7 @@ The partitions_written inventory reaches no output file (SimulationMetadata at m
 
 **PD-018 · Sev B · allocation · effort M · confidence high**
 On the one-shot output-conversion path (cli outputs.rs / python run.rs, not the hot push loop) delta_to_stats_row allocates a String per log entry for phase (solver_stats.rs:293) though the value is a closed four-item vocabulary an enum/&'static str field would carry allocation-free; the owned-Vec<u64> histogram clone is conceded as a defensible cross-Python-boundary DTO choice.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/solver_stats_writer.rs::SolverStatsRow`, `crates/cobre-io/src/output/solver_stats_writer.rs::SolverStatsRow`, `crates/cobre-io/src/output/solver_stats_writer.rs::build_retry_histogram_batch`
@@ -2620,6 +2657,7 @@ On the one-shot output-conversion path (cli outputs.rs / python run.rs, not the 
 
 **PD-019 · Sev C · allocation · effort S · confidence high**
 build_iterations_columns (solver_stats_writer.rs:88-176) alone builds 18 scalar columns via <Array>::from(iter.collect::<Vec<..>>()), paying one redundant intermediate Vec allocation + copy per column that a pre-sized Builder::with_capacity+append (the idiom every sibling writer uses) would avoid, a one-shot iterations.parquet write cost, not a hot-path cost.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/solver_stats_writer.rs::build_iterations_columns`
@@ -2631,6 +2669,7 @@ build_iterations_columns (solver_stats_writer.rs:88-176) alone builds 18 scalar 
 
 **OD-010 · Sev C · speculative-generality · effort S · confidence high**
 InvalidPenalty is constructed nowhere at all (not even a test) and carries no reserving TODO, and both it and DisconnectedBus bear a doc comment falsely attributing emission to cobre-io validation, which raises ErrorKind (validation/mod.rs:56) not ValidationError; DisconnectedBus is at least test-constructed (error.rs:196) and reserved by the network.rs:90 TODO, so for it only the false attribution -- not its existence -- is the defect.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/error.rs::ValidationError`, `crates/cobre-core/src/error.rs:65`, `crates/cobre-core/src/error.rs:72`
@@ -2640,6 +2679,7 @@ InvalidPenalty is constructed nowhere at all (not even a test) and carries no re
 
 **OD-011 · Sev B · speculative-generality · effort M · confidence high**
 The single missing wire is at columns.rs:1136: the NCS curtailment objective is sourced from the stage-invariant entity field ncs.curtailment_cost instead of ResolvedPenalties::ncs_penalties(ncs_idx, stage_idx), making the NCS resolved axis write-only in production while its three siblings are read at columns.rs:347/687/722; the resolution and write path (incl. the penalty_overrides_ncs override at resolution/penalties.rs:387) is fully functional -- only the LP read is absent.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/resolved/penalties.rs::ncs_penalties`, `crates/cobre-core/src/model/resolved/penalties.rs::ncs_penalties_mut`, `crates/cobre-core/src/model/resolved/penalties.rs::NcsStagePenalties`, `crates/cobre-core/src/model/resolved/penalties.rs::ResolvedPenalties`
@@ -2650,6 +2690,7 @@ The single missing wire is at columns.rs:1136: the NCS curtailment objective is 
 
 **OD-012 · Sev C · speculative-generality · effort S · confidence high**
 The genuinely unconsumed public surface is the population-statistics arm: population ci_95_half_width and the count accessor have only test callers, and the population variance/std_dev are public entry points whose sole non-test use is internal delegation within a population branch no production path reaches (the one consumer uses the sample arm exclusively); variance and sample_variance are conceded to be live internal delegates, not deletable outright.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/stats/welford.rs::WelfordAccumulator`, `crates/cobre-core/src/stats/welford.rs::variance`, `crates/cobre-core/src/stats/welford.rs::std_dev`, `crates/cobre-core/src/stats/welford.rs::sample_variance`, `crates/cobre-core/src/stats/welford.rs::ci_95_half_width`, `crates/cobre-core/src/stats/welford.rs::count`
@@ -2659,6 +2700,7 @@ The genuinely unconsumed public surface is the population-statistics arm: popula
 
 **OD-013 · Sev B · speculative-generality · effort M · confidence high**
 The load-bearing residue is the build-time plus broadcast-wire cost of a reader-less structure: the System.network field lacks the serde(skip) its seven sibling index fields carry, so NetworkTopology is serialized into every postcard System payload (mirrored in SystemRepr) despite zero production reader -- the only callers are three sites in cobre-core/tests/integration.rs and the unit test at system/mod.rs:970.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/topology/network.rs::NetworkTopology`, `crates/cobre-core/src/topology/network.rs::build`, `crates/cobre-core/src/topology/network.rs:91`, `crates/cobre-core/src/system/mod.rs:87`, `crates/cobre-core/src/system/mod.rs::network`
@@ -2669,6 +2711,7 @@ The load-bearing residue is the build-time plus broadcast-wire cost of a reader-
 
 **OD-014 · Sev C · speculative-generality · effort S · confidence high**
 The four helper FUNCTIONS (not the Broadcast* mirror types, which setup.rs:288 genuinely consumes) are absent from the production MPI path; serialize_system/deserialize_system retain a single integration round-trip assertion (integration.rs:989-995) as their only non-file consumer and serialize_parameters/deserialize_parameters have none beyond their own doctests, so the defensible residue is that the four functions duplicate the encoding cli/broadcast.rs:419/:456 open-codes, not that the whole broadcast module is unused.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/broadcast.rs::serialize_system`, `crates/cobre-io/src/broadcast.rs::deserialize_system`, `crates/cobre-io/src/broadcast.rs::serialize_parameters`, `crates/cobre-io/src/broadcast.rs::deserialize_parameters`
@@ -2678,6 +2721,7 @@ The four helper FUNCTIONS (not the Broadcast* mirror types, which setup.rs:288 g
 
 **OD-015 · Sev C · speculative-generality · effort S · confidence high**
 Both are pub speculative surfaces with no non-test consumer (only crate-root re-exports plus their own #[cfg(test)] assertions and doctests) - the title zero-consumer claim holds strictly for non-test callers; load_scalar_parameters_json specifically is the OD-002 shape (schema.rs:544 open-codes the constraints/generic_parameters.json join it wraps), while build_season_stage_map is NOT a duplicate of the production season-map owner but a distinct raw stage_id->season_id builder that nothing calls (resolve_stage_seasons at residual_derivation.rs:219 produces dense ordinals instead).
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/extensions/scalar_parameters.rs::load_scalar_parameters_json`, `crates/cobre-io/src/stages.rs::build_season_stage_map`
@@ -2687,6 +2731,7 @@ Both are pub speculative surfaces with no non-test consumer (only crate-root re-
 
 **OD-016 · Sev B · speculative-generality · effort M · confidence high**
 The zero-non-test-consumer claim holds exactly (only lib.rs:134/137 re-exports; three in-file tests plus a no_run doctest exercise it); the load-bearing residue is the by-construction divergence at mod.rs:397-403 (residual derivation gated on manifest.stages_json) versus the unconditional pipeline.rs:224 call, so the second public carrier can leave residual_std_ratio = 1.0 unresolved - but the eleven per-file load_* helpers it wraps are NOT dead (schema.rs consumes them), so the confirmed defect is the aggregate orchestrator plus ScenarioData only.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/scenarios/mod.rs::load_scenarios`, `crates/cobre-io/src/scenarios/mod.rs::ScenarioData`, `crates/cobre-io/src/pipeline.rs:225`
@@ -2697,6 +2742,7 @@ The zero-non-test-consumer claim holds exactly (only lib.rs:134/137 re-exports; 
 
 **OD-017 · Sev C · speculative-generality · effort S · confidence high**
 default_severity (validation/mod.rs:95) has no caller outside its own unit test AND its BusinessRuleViolation->Error classification contradicts the sole BusinessRuleViolation emission (add_warning at season.rs:175-177); the defensible residue is an uncalled, already-divergent parallel severity table, conceding the title's 'purports to describe the call sites' framing since the method's doc only claims a per-kind default, never a mirror of the emission sites.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/mod.rs::default_severity`, `crates/cobre-io/src/validation/semantic/season.rs:177`
@@ -2706,6 +2752,7 @@ default_severity (validation/mod.rs:95) has no caller outside its own unit test 
 
 **OD-018 · Sev B · speculative-generality · effort M · confidence high**
 ParsedData.penalties (schema.rs:75) has zero data.penalties reads workspace-wide and its rationale's saving is false (Layer-5 reads hydro.penalties at scenarios.rs:179, not the bundle); the scalar_parameters #[allow(dead_code)] (schema.rs:113) is merely REDUNDANT because the field is read at pipeline.rs:96 and moved at :244, so — narrowing the title — only its allow is stale while its rationale naming the resolution consumer is accurate.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/schema.rs::ParsedData`, `crates/cobre-io/src/validation/schema.rs::ParsedData`
@@ -2715,6 +2762,7 @@ ParsedData.penalties (schema.rs:75) has zero data.penalties reads workspace-wide
 
 **OD-019 · Sev B (A-risk) · speculative-generality · effort M · confidence high**
 The defect is the ORDER-unguarded positional zip between FILE_ENTRIES and manifest_fields_mut (structural.rs:376): the sole guard asserts equal length only (structural.rs:612-623, comment: length not order), so swapping any two same-required-ness optional rows silently misassigns presence flags exactly as the helper's doc warns (structural.rs:396-397) while all tests stay green; conceding the title's 'three redundant lists' framing, the named-bool struct itself earns its place via the type-checked manifest.<field> reads in schema.rs, so the residue is the unguarded order coupling, not the existence of named fields.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/structural.rs::FileManifest`, `crates/cobre-io/src/validation/structural.rs::FILE_ENTRIES`, `crates/cobre-io/src/validation/structural.rs::manifest_fields_mut`
@@ -2725,6 +2773,7 @@ The defect is the ORDER-unguarded positional zip between FILE_ENTRIES and manife
 
 **OD-020 · Sev C · speculative-generality · effort S · confidence high**
 The removable defect is precisely the unread third parameter `_config: &Config` on write_dictionaries (dictionary.rs:71) and the module's sole `use crate::Config` (dictionary.rs:16) that exists only to name it; the caller write_training_results still legitimately holds &Config for its own fields, so only the writer's parameter and import can go, not the caller's signature.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/dictionary.rs::write_dictionaries`, `crates/cobre-io/src/output/dictionary.rs:71`, `crates/cobre-io/src/output/dictionary.rs:16`, `crates/cobre-io/src/output/results_writer.rs::write_training_results`
@@ -2735,6 +2784,7 @@ The removable defect is precisely the unread third parameter `_config: &Config` 
 
 **OD-021 · Sev C · speculative-generality · effort S · confidence high**
 The narrower defect is needless pub visibility: both functions back only a same-module serde default-path attribute where a private fn suffices; and contra the title only default_bounds is actually crate-root public API (re-exported at output/mod.rs:47, zero external callers), while default_upper_bound_kind is pub but never re-exported, so it is merely pub inside a private module.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/manifest.rs::default_bounds`, `crates/cobre-io/src/output/manifest.rs::default_upper_bound_kind`, `crates/cobre-io/src/output/mod.rs:47`
@@ -2744,6 +2794,7 @@ The narrower defect is needless pub visibility: both functions back only a same-
 
 **OD-022 · Sev C · speculative-generality · effort S · confidence high**
 The defect is exactly the two fields IterationRecord.time_bwd_setup_ms (mod.rs:141) and time_fwd_setup_ms (mod.rs:149): they are the only two time_* fields the convergence-path conversion loop skips (slots 8 and 11, training_output.rs:517-530), so they are populated at training_output.rs:234,237 and read nowhere; the columns they doc-arrow to are real but fed solely from the per-worker WorkerPhaseTimings path, not from IterationRecord.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/mod.rs::IterationRecord`, `crates/cobre-io/src/output/mod.rs::IterationRecord`, `crates/cobre-io/src/output/training_writer.rs::build_iteration_timing_batch`
@@ -2753,6 +2804,7 @@ The defect is exactly the two fields IterationRecord.time_bwd_setup_ms (mod.rs:1
 
 **OD-023 · Sev B · speculative-generality · effort M · confidence high**
 Conceding the struct is not dead (its three fields are read by every parquet writer) and that pinning the encoding values is itself justified by the binary-formats spec (parquet_config.rs:5) and output-byte comparability, the narrower defect is the caller-varied-config machinery: no path constructs a non-default value, exports.compression is a rejected input, and the &ParquetWriterConfig parameter is threaded through only four functions while ~13 production writers rebuild the default locally, so the variability has no present consumer and cannot be honored uniformly.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/parquet_config.rs::ParquetWriterConfig`, `crates/cobre-io/src/output/parquet_config.rs::Default`, `crates/cobre-io/src/output/atomic.rs::write_parquet_atomic`, `crates/cobre-io/src/output/dictionary.rs:76`, `crates/cobre-io/src/output/stochastic.rs:132`, `crates/cobre-io/src/output/hydro_models.rs:87`, `crates/cobre-io/src/config/exports.rs::ExportsConfig`
@@ -2762,6 +2814,7 @@ Conceding the struct is not dead (its three fields are read by every parquet wri
 
 **OD-024 · Sev C · speculative-generality · effort S · confidence high**
 Conceding the byte-parsing body itself is correct and harmless (a faithful mirror of read_f64_vector), the narrower defect is purely its retention as dead code: at baseline the symbol resolves only at codec.rs:575, carries the scope's sole #[allow(dead_code)] (codec.rs:574), and its comment names neither owner nor landing reader, so it qualifies as neither sanctioned #[allow] census class.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/policy/codec.rs::read_f32_vector_as_f64`
@@ -2772,6 +2825,7 @@ Conceding the byte-parsing body itself is correct and harmless (a faithful mirro
 
 **OD-025 · Sev C · speculative-generality · effort S · confidence high**
 Conceding run_pipeline_with_artifacts is the legitimate working function and the four public lib.rs entry points each justify a distinct return shape, the narrower defect is the two pub(crate) intermediates run_pipeline (pipeline.rs:47) and run_pipeline_with_report (pipeline.rs:57): each is a one-line .map projection with exactly one caller that is itself a one-line lib.rs adapter (lib.rs:235 and lib.rs:266), so each re-derives a shape the public entry points already own and can be folded into its caller with no loss of any contract or caller.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/pipeline.rs::run_pipeline`, `crates/cobre-io/src/pipeline.rs::run_pipeline_with_report`, `crates/cobre-io/src/pipeline.rs::run_pipeline_with_artifacts`
@@ -2783,6 +2837,7 @@ Conceding run_pipeline_with_artifacts is the legitimate working function and the
 
 **TD-001 · Sev B · duplication · effort M · confidence high**
 Narrower than 'every test': the derived-Clone/Debug non-empty assertions (`all_variants_clone`, `all_variants_debug_non_empty`, `stopping_rule_result_debug_non_empty`, and the `format!("{:?}")` non-empty checks) plus the runtime value-echo inside the `*_fields_accessible` bodies are tautological -- discharged by codegen; but the fully-destructured `*_fields_accessible` tests (no `..`) still act as a weak compile-time tripwire on a field-set change, and `all_variants_construct` is a fixture-length pin rather than an echo/Debug test, so those are not pure echoes.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/constraints/training_event.rs::make_all_variants`, `crates/cobre-core/src/constraints/training_event.rs::all_variants_construct`, `crates/cobre-core/src/constraints/training_event.rs::all_variants_clone`, `crates/cobre-core/src/constraints/training_event.rs::all_variants_debug_non_empty`, `crates/cobre-core/src/constraints/training_event.rs::forward_pass_complete_fields_accessible`, `crates/cobre-core/src/constraints/training_event.rs::stage_row_selection_record_fields_accessible`
@@ -2792,6 +2847,7 @@ Narrower than 'every test': the derived-Clone/Debug non-empty assertions (`all_v
 
 **TD-002 · Sev B · duplication · effort M · confidence high**
 Narrower than 'all-same-value ... one per test module': HydroPenalties has no shared fixture or Default, so five zero-valued fixtures plus one uniform-`v` (`penalties_all`) each re-spell all 16 fields and a field addition breaks all six at once; but they are not identical constants -- five sites pin inflow_nonnegativity_cost = 1000.0 while system/builder.rs:511 pins it to 0.0 and penalties_all sets it to 1000.0 with the rest = v, so the residue is divergent near-uniform duplication (the copies disagree), not an all-same-value fixture.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/entities/hydro.rs::HydroPenalties`, `crates/cobre-core/src/entities/hydro.rs::penalties_all`, `crates/cobre-core/src/system/builder.rs::zero_penalties`, `crates/cobre-core/src/system/mod.rs:636`, `crates/cobre-core/src/topology/cascade.rs:145`, `crates/cobre-core/src/topology/network.rs:235`, `crates/cobre-core/tests/integration.rs::zero_hydro_penalties`
@@ -2801,6 +2857,7 @@ Narrower than 'all-same-value ... one per test module': HydroPenalties has no sh
 
 **TD-003 · Sev C · duplication · effort S · confidence high**
 Narrower than 'all eight exercise only derives': the pure clone/eq/hash tests (`test_equality`, `test_hash_consistency`, `test_bus_equality`, `test_contract_type_equality`, `annual_component_partial_eq_clone`, `test_hydro_storage_clone`) assert only derive- or std-library-guaranteed behavior and are tautological; but `test_copy` also acts as a compile-tripwire for EntityId: Copy (the `let b = a; ...
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/entity_id.rs::test_equality`, `crates/cobre-core/src/entity_id.rs::test_copy`, `crates/cobre-core/src/entity_id.rs::test_hash_consistency`, `crates/cobre-core/src/entities/bus.rs::test_bus_equality`, `crates/cobre-core/src/entities/energy_contract.rs::test_contract_type_equality`, `crates/cobre-core/src/entities/pumping_station.rs::test_pumping_station_construction`, `crates/cobre-core/src/model/scenario.rs::annual_component_partial_eq_clone`, `crates/cobre-core/src/constraints/initial_conditions.rs::test_hydro_storage_clone`
@@ -2810,6 +2867,7 @@ Narrower than 'all eight exercise only derives': the pure clone/eq/hash tests (`
 
 **TD-004 · Sev B · duplication · effort M · confidence high**
 Narrower than 'ad-hoc comparators ... where the yardstick calls for one shared comparator': the defect is not that they are bloat (they back a real indexing/stride guard via make_distinct_bounds_table) nor that they collapse to one comparator (per-struct field enumeration is irreducible) -- it is only that they are non-exhaustive by construction, written as to_bits() chains instead of a `..`-free destructure, so a field added to any bounds struct compiles and is silently dropped from the bit-exactness assertion; only the scalar/Option<f64> primitive (`opt_f64_bits_eq`), re-rolled again in cobre-solver/tests/clp_determinism.rs, is genuinely shareable.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/model/resolved/bounds.rs::opt_f64_bits_eq`, `crates/cobre-core/src/model/resolved/bounds.rs::hydro_stage_bounds_bits_eq`, `crates/cobre-core/src/model/resolved/bounds.rs::hydro_block_bounds_bits_eq`, `crates/cobre-core/src/model/resolved/bounds.rs::thermal_block_bounds_bits_eq`, `crates/cobre-core/src/model/resolved/bounds.rs::line_bounds_bits_eq`, `crates/cobre-core/src/model/resolved/bounds.rs::pumping_bounds_bits_eq`, `crates/cobre-core/src/model/resolved/bounds.rs::contract_bounds_bits_eq`
@@ -2819,6 +2877,7 @@ Narrower than 'ad-hoc comparators ... where the yardstick calls for one shared c
 
 **TD-005 · Sev B · duplication · effort M · confidence high**
 Narrower than 'copy-pasted across five test sites': the plain zero-varying builders (make_bus/make_line/make_thermal/make_ncs/make_group/make_hydro) are structurally duplicated across topology/network.rs, system/mod.rs and tests/integration.rs, differing only in trivial axes (name string, a 100->200 capacity), so a field add to Line/Bus/etc. is O(sites); but system/builder.rs's bus/line/hydro are a deliberately date+name-parameterized variant for canonical-order tests, not plain copies, and the full eight-name family is not present at every one of the five sites.
+
 - **Station:** cobre-core + cobre-io (sub-station A)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-core/src/topology/network.rs::make_line`, `crates/cobre-core/src/system/mod.rs::make_line`, `crates/cobre-core/tests/integration.rs::make_line`, `crates/cobre-core/src/system/builder.rs::line`, `crates/cobre-core/src/topology/cascade.rs::make_hydro`
@@ -2828,6 +2887,7 @@ Narrower than 'copy-pasted across five test sites': the plain zero-varying build
 
 **TD-006 · Sev C · duplication · effort S · confidence high**
 The < 1024 bound is an undocumented magic literal asserted only against a single-bus System, giving it too much headroom to catch an encoding regression on a realistic payload; it is at most a coarse compactness canary, narrower than the title's contract-free/tier-less framing.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/broadcast.rs::test_serialized_size_reasonable`
@@ -2837,6 +2897,7 @@ The < 1024 bound is an undocumented magic literal asserted only against a single
 
 **TD-007 · Sev B · duplication · effort M · confidence high**
 The input path has no shared test-support module while the validation path does, and the fully-verbatim, fully-verified duplication is the 16 write_parquet plus 5 make_global bodies; write_json is 17 copies (not 18) with 2 non-verbatim variants, so the '39 across 20 files' total is 38 with fewer than 18 verbatim write_json.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/constraints/bounds.rs::write_parquet`, `crates/cobre-io/src/system/buses.rs::make_global`, `crates/cobre-io/src/system/buses.rs::write_json`, `crates/cobre-io/src/validation/semantic/mod.rs::test_support`, `crates/cobre-io/tests/helpers/mod.rs::write_file`
@@ -2846,6 +2907,7 @@ The input path has no shared test-support module while the validation path does,
 
 **TD-008 · Sev C · duplication · effort S · confidence high**
 The durable, threshold-independent residue is the intra-directory homing inconsistency -- scenarios/estimation.rs extracted to a sibling while scenarios/correlation.rs stays inline in the same directory, alongside seven multi-thousand-line inline modules -- not the violation of the unratified ~500-LOC number (and the sibling has 36, not 65, test fns).
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/constraints/generic.rs::tests`, `crates/cobre-io/src/scenarios/estimation.rs::tests`, `crates/cobre-io/src/scenarios/correlation.rs::tests`, `crates/cobre-io/src/resolution/bounds.rs::tests`, `crates/cobre-io/src/system/hydros.rs::tests`, `crates/cobre-io/src/stages.rs::tests`
@@ -2855,6 +2917,7 @@ The durable, threshold-independent residue is the intra-directory homing inconsi
 
 **TD-009 · Sev C · duplication · effort S · confidence high**
 The genuinely redundant triplicated surface is make_batch plus the five non-determinism common cases (valid-sorted, negative-std, nan-mean, missing-column, empty); the three per-parser declaration_order_invariance tests are load-bearing determinism-hard-rule pins and are NOT bloat, and each parser's unit-specific error-message assertions must survive any consolidation.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/scenarios/inflow_stats.rs::tests`, `crates/cobre-io/src/scenarios/load_stats.rs::tests`, `crates/cobre-io/src/scenarios/non_controllable_stats.rs::tests`, `crates/cobre-io/src/scenarios/non_controllable_stats.rs::make_batch`, `crates/cobre-io/src/scenarios/load_stats.rs::make_batch`
@@ -2864,6 +2927,7 @@ The genuinely redundant triplicated surface is make_batch plus the five non-dete
 
 **TD-010 · Sev C · duplication · effort S · confidence high**
 The six binaries do verbatim re-declare 'mod helpers' and re-link arrow/parquet + the rlib six times, but per section 5.1 this is an opportunistic-only, off-critical-path cleanup for a non-solver crate (no solver-link amplifier); the only clearly self-justifying merges are the two sub-200-LOC binaries (scalar_parameters 136, productivity_resolution 199).
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/tests/integration.rs::helpers`, `crates/cobre-io/tests/invariance.rs::helpers`, `crates/cobre-io/tests/resolver_builder_index_alignment.rs::helpers`, `crates/cobre-io/tests/post_study_stages.rs::helpers`, `crates/cobre-io/tests/load_case_productivity_resolution.rs::helpers`, `crates/cobre-io/tests/load_case_scalar_parameters.rs::helpers`
@@ -2873,6 +2937,7 @@ The six binaries do verbatim re-declare 'mod helpers' and re-link arrow/parquet 
 
 **TD-011 · Sev C · duplication · effort S · confidence high**
 test_bus_ordering_invariance is redundant because its bus2.name assertion -- the one surface not textually present in full_case -- is still logically implied by the whole-System assert_eq!; removal is safe only if that named bus handle is folded into full_case or its loss accepted, and the finding does NOT extend to test_stage_ordering_invariance.
+
 - **Station:** cobre-core + cobre-io (sub-station B)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/tests/invariance.rs::test_bus_ordering_invariance`, `crates/cobre-io/tests/invariance.rs::test_full_case_ordering_invariance`, `crates/cobre-io/tests/invariance.rs::make_shuffled_multi_entity_case`
@@ -2882,6 +2947,7 @@ test_bus_ordering_invariance is redundant because its bus2.name assertion -- the
 
 **TD-012 · Sev C · duplication · effort S · confidence high**
 The two IoError tests (test_load_error_io_display @152 and test_load_error_io_helper @240) are near-duplicates -- both build via LoadError::io and assert the same path+source contains facts, differing only in literals plus one matches! -- so one is redundant; and test_load_error_schema_display @181 re-covers the contains("bus_id") fact the module doctest at error.rs:27 already asserts.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/error.rs::LoadError`, `crates/cobre-io/src/error.rs::test_load_error_io_display`, `crates/cobre-io/src/error.rs::test_load_error_io_helper`, `crates/cobre-io/src/error.rs::test_load_error_schema_display`, `crates/cobre-io/src/error.rs::test_load_error_is_std_error`
@@ -2891,6 +2957,7 @@ The two IoError tests (test_load_error_io_display @152 and test_load_error_io_he
 
 **TD-013 · Sev C · duplication · effort S · confidence high**
 The >= 17 floor in both the doctest (schema.rs:84) and test_generate_schemas_returns_expected_count (166) is looser than the 18 schemas produced, so deleting one un-name-pinned export passes a count-named test; and the three structural walks (172/182/193) collapse to one, since is_object implies !is_null and any schema with properties satisfies the structural-key check.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/schema.rs::test_generate_schemas_returns_expected_count`, `crates/cobre-io/src/schema.rs::test_all_schema_filenames_and_values_non_empty`, `crates/cobre-io/src/schema.rs::test_all_schemas_are_objects`, `crates/cobre-io/src/schema.rs::test_all_schemas_have_structure_keys`, `crates/cobre-io/src/schema.rs::generate_schemas`
@@ -2900,6 +2967,7 @@ The >= 17 floor in both the doctest (schema.rs:84) and test_generate_schemas_ret
 
 **TD-014 · Sev B · duplication · effort M · confidence high**
 The minimal-case corpus + write_file are duplicated across two same-crate inline modules (validation/schema.rs and validation/referential.rs) that could already share one #[cfg(test)] fixture, and make_minimal_case is restated in both referential.rs and tests/helpers/mod.rs; the tests/helpers copy alone is barrier-forced and only removable under section-5.2's unimplemented test-support convention.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/schema.rs::VALID_CONFIG_JSON`, `crates/cobre-io/src/validation/schema.rs::write_file`, `crates/cobre-io/src/validation/referential.rs::make_minimal_case`, `crates/cobre-io/src/validation/referential.rs::VALID_CONFIG_JSON`, `crates/cobre-io/tests/helpers/mod.rs::make_minimal_case`, `crates/cobre-io/tests/helpers/mod.rs::VALID_CONFIG_JSON`
@@ -2909,6 +2977,7 @@ The minimal-case corpus + write_file are duplicated across two same-crate inline
 
 **TD-015 · Sev C · duplication · effort S · confidence high**
 test_filling_guard_no_exit_no_error (hydro.rs:1795) is identical to test_filling_guard_entry_below_horizon_no_error (1692) except its assertion message, and because make_filling_hydro never sets exit_stage_id it cannot exercise the no-exit condition it is named for -- making it a coverage-free duplicate (the guard's rejection path is covered separately at 1771).
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/hydro.rs::test_filling_guard_no_exit_no_error`, `crates/cobre-io/src/validation/semantic/hydro.rs::test_filling_guard_entry_below_horizon_no_error`, `crates/cobre-io/src/validation/semantic/hydro.rs::make_filling_hydro`, `crates/cobre-io/src/validation/semantic/hydro.rs::test_filling_guard_exit_on_filling_errors`
@@ -2918,6 +2987,7 @@ test_filling_guard_no_exit_no_error (hydro.rs:1795) is identical to test_filling
 
 **TD-016 · Sev B · duplication · effort M · confidence high**
 Because validation/semantic/test_support is pub(super)-scoped, four validation/-level phase modules hand-roll the five proven-identical families -- the 1.0 penalty builder (dimensional/productivity_resolution/referential), zero_hydro_penalties = penalties_all(0.0), make_unit_group/make_pumping, and the full ParsedData skeleton restated in dimensional.rs and productivity_resolution.rs -- all removable by homing the fixture one level up.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/mod.rs::test_support`, `crates/cobre-io/src/validation/semantic/test_support.rs::penalties_all`, `crates/cobre-io/src/validation/semantic/test_support.rs::base_parsed_data`, `crates/cobre-io/src/validation/dimensional.rs::penalties_default`, `crates/cobre-io/src/validation/dimensional.rs::base_parsed_data`, `crates/cobre-io/src/validation/productivity_resolution.rs::penalties_default`, `crates/cobre-io/src/validation/productivity_resolution.rs::base_parsed_data`, `crates/cobre-io/src/validation/referential.rs::hydro_penalties`, `crates/cobre-io/src/validation/referential.rs::make_unit_group`, `crates/cobre-io/src/validation/scalar_parameters.rs::zero_hydro_penalties`
@@ -2927,6 +2997,7 @@ Because validation/semantic/test_support is pub(super)-scoped, four validation/-
 
 **TD-017 · Sev C · duplication · effort S · confidence high**
 Three boundary_tests mirror earlier tests with identical fixture arguments, and the stage_id=5 mirror (thermal.rs:3742) is strictly weaker than its original (3598) which also pins the diagnostic text; the in-file "do not delete" comment (3710-3714) has no register/design-doc backing (zero markdown references), so the duplication is not a sanctioned seam.
+
 - **Station:** cobre-core + cobre-io (sub-station C)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/validation/semantic/thermal.rs::boundary_tests`, `crates/cobre-io/src/validation/semantic/thermal.rs::override_at_t_minus_1_acceptance_boundary`, `crates/cobre-io/src/validation/semantic/thermal.rs::test_thermal_bounds_override_stage_within_horizon_accepted`, `crates/cobre-io/src/validation/semantic/thermal.rs::test_thermal_bounds_override_stage_equals_n_rejected`, `crates/cobre-io/src/validation/semantic/thermal.rs::test_thermal_bounds_override_multiple_offending_rows`
@@ -2936,6 +3007,7 @@ Three boundary_tests mirror earlier tests with identical fixture arguments, and 
 
 **TD-018 · Sev B · duplication · effort M · confidence high**
 make_config (43 lines) and make_system (6 lines) are byte-identical between output/convergence_reader.rs and output/results_writer.rs; make_output_context is identical except one DistributionInfo import line, so 49 lines are byte-identical, not the full 73 the title claims.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/convergence_reader.rs::make_config`, `crates/cobre-io/src/output/results_writer.rs::make_config`, `crates/cobre-io/src/output/convergence_reader.rs::make_output_context`, `crates/cobre-io/src/output/results_writer.rs::make_output_context`, `crates/cobre-io/src/output/convergence_reader.rs::make_system`, `crates/cobre-io/src/output/results_writer.rs::make_system`
@@ -2945,6 +3017,7 @@ make_config (43 lines) and make_system (6 lines) are byte-identical between outp
 
 **TD-019 · Sev C · duplication · effort S · confidence high**
 every_hydros_schema_column_has_description (3226) and every_hydro_bus_generation_schema_column_has_description (3239) are pure strict subsets of the exhaustive sweep with zero residual; new_energy_columns_have_descriptions (3193) is redundant only because the retained new_energy_columns_have_units already pins those same five column names.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/dictionary.rs::every_listed_schema_column_has_a_nonempty_description`, `crates/cobre-io/src/output/dictionary.rs::new_energy_columns_have_descriptions`, `crates/cobre-io/src/output/dictionary.rs::every_hydros_schema_column_has_description`, `crates/cobre-io/src/output/dictionary.rs::every_hydro_bus_generation_schema_column_has_description`, `crates/cobre-io/src/output/dictionary.rs::variables_csv_schemas`
@@ -2954,6 +3027,7 @@ every_hydros_schema_column_has_description (3226) and every_hydro_bus_generation
 
 **TD-020 · Sev C · duplication · effort S · confidence high**
 The defensible core is the three named helpers — fixed_delivery::read_batch and generic_constraints_echo::read_batch are byte-identical, solver_stats_writer::read_parquet is the same body under a different name — plus the ~34-38 per-function ParquetRecordBatchReaderBuilder re-imports; collapsing every one of the ~44 remaining four-line inline read-back sites into one helper is optional homing cleanup, not all defect.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/fixed_delivery.rs::read_batch`, `crates/cobre-io/src/output/generic_constraints_echo.rs::read_batch`, `crates/cobre-io/src/output/solver_stats_writer.rs::read_parquet`, `crates/cobre-io/src/output/simulation_writer.rs:2653`, `crates/cobre-io/src/output/stochastic.rs:851`
@@ -2963,6 +3037,7 @@ The defensible core is the three named helpers — fixed_delivery::read_batch an
 
 **TD-021 · Sev B · duplication · effort M · confidence high**
 The 21 codec-only and 15 checkpoint-only tests are homed in policy/mod.rs (production ends line 28) while codec.rs carries 1 inline test and checkpoint.rs carries 0; the defect narrows to those two submodules, since records.rs already owns its 3 tests in-place, not the 'three submodules' the title states.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/policy/mod.rs::tests`, `crates/cobre-io/src/output/policy/codec.rs::tests`, `crates/cobre-io/src/output/policy/checkpoint.rs::read_policy_checkpoint`, `crates/cobre-io/src/output/policy/records.rs::tests`
@@ -2973,6 +3048,7 @@ The 21 codec-only and 15 checkpoint-only tests are homed in policy/mod.rs (produ
 
 **TD-022 · Sev C · duplication · effort S · confidence high**
 The redundant surface is the count-only per-schema tests (thermals_schema_field_count and its count-only siblings, whose whole body is a length assert already in the umbrella's expected table) plus the bare length line inside the name-vector tests; the name-vector assertions themselves are NOT redundant (they pin the wire contract against renames) and must survive.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/output/schemas.rs::all_schema_functions_return_valid_schemas`, `crates/cobre-io/src/output/schemas.rs::thermals_schema_field_count`, `crates/cobre-io/src/output/schemas.rs::costs_schema_field_count_and_names`, `crates/cobre-io/src/output/schemas.rs::rank_timing_schema_field_count`
@@ -2982,6 +3058,7 @@ The redundant surface is the count-only per-schema tests (thermals_schema_field_
 
 **TD-023 · Sev B · duplication · effort M · confidence high**
 parquet_helpers.rs has zero #[cfg(test)] module (166 lines, all non-test), so the six extractors' missing-column and wrong-type SchemaError message contract is pinned by no owner-level test; the narrower residue drops 'all twelve reachable transitively' — consumer paths like scenarios/inflow_history.rs intercept the missing-column case as a legacy-layout error before the helper's arm, so transitive coverage is partial, not uniform.
+
 - **Station:** cobre-core + cobre-io (sub-station D)
 - **Baseline:** `a136840d4f2ea137f685f0af6dac04254b983b60`
 - **Anchors:** `crates/cobre-io/src/parquet_helpers.rs::extract_required_int32`, `crates/cobre-io/src/parquet_helpers.rs::extract_required_date32`, `crates/cobre-io/src/parquet_helpers.rs::extract_optional_float64`
@@ -3051,7 +3128,23 @@ The two out-of-station Part-I item-7 anchors (`crates/cobre-sddp/src/setup/param
 
 ### Owner gate — decisions
 
-_Empty; filled by the station ratification gate._
+**Ratified 2026-09-08 (baseline `a136840d`).** Decisions taken in the main session over
+the station digest stations/core-io/gate.md. Severity shows as
+`new (reviewer: original)` wherever the owner downgraded.
+
+**Gate: RETURNED 2026-09-08 · baseline `a136840d4f2ea137f685f0af6dac04254b983b60` · accepted 76 / downgraded 1 / rejected 0 / deferred 0 / overridden 0.**
+
+| ID                                 | Decision  | Severity        | Alignment   | Rationale (owner)                                                                                                                                                                                                                                                                     | Trigger / override |
+| ---------------------------------- | --------- | --------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| CD-046                             | downgrade | C (reviewer: B) | neutral     | Byte-level wire-payload reproducibility is a non-goal: Cobre determinism is result-level (bit-for-bit results, run-to-run, declaration-order invariance), so the six unguarded HashMaps are not a latent bug and the residue is a doc-accuracy nit on the System serde(skip) comment. | —                  |
+| _(the other 76 confirmed entries)_ | accept    | as calibrated   | as recorded | Ratified as the attacker→defender→calibration pipeline recorded them; no conflicts holds, no rejects, no defers.                                                                                                                                                                      | —                  |
+
+**Needs-human resolved (from the E02-4 defender pass):** is byte-level wire-payload
+reproducibility an actual contract? → **Non-goal** — CD-046 downgraded B→C accordingly;
+no other entry affected.
+
+No entry was rejected, so the Cleared list above is unchanged; no entry was tagged
+`conflicts`, so nothing was held or overridden.
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — stochastic
 

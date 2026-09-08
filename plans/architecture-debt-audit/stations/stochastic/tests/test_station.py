@@ -33,9 +33,20 @@ ANCHOR_TOKEN = re.compile(
 )
 
 LENSES = {"architecture", "over-engineering", "performance", "test-bloat"}
+LENS_ORDER = ("architecture", "over-engineering", "performance", "test-bloat")
+SUB_ORDER = ("par", "sampling", "tree-noise", "seam")
 SEV = {"A", "B", "C"}
 ALIGN = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
 SCOPE = "crates/cobre-stochastic/"
+INGEST_DISPOSITIONS = {
+    "defended",
+    "anchor-missing",
+    "sanctioned",
+    "dup-of",
+    "re-raise",
+    "out-of-station",
+}
+VERDICTS = {"confirmed", "dismissed", None}
 
 
 def load_validate_envelope() -> types.ModuleType:
@@ -59,6 +70,27 @@ def anchor_resolves(anchor: dict) -> bool:
     ):
         return True
     return False
+
+
+def candidate_refs() -> dict[str, dict]:
+    """Re-derive the ingest `<sub>-<lens>-<nn>` key of every candidate in candidates-*.json.
+
+    Numbering is per (subStation, lens) in file/array order — the same rule the ingest used to
+    key verdicts.json, so a drift between the source files and the verdict ledger fails loudly
+    here rather than silently dropping a candidate.
+    """
+    import collections
+
+    out: dict[str, dict] = {}
+    per: dict[tuple[str, str], int] = collections.defaultdict(int)
+    for sub in SUB_ORDER:
+        doc = sc.load_json(sc.STATIONS / "stochastic" / f"candidates-{sub}.json")
+        for cand in doc["candidates"]:
+            lens = cand["lens"]
+            nn = per[(sub, lens)]
+            per[(sub, lens)] += 1
+            out[f"{sub}-{lens}-{nn:02d}"] = cand
+    return out
 
 
 def raw_lines(rel: str) -> int:
@@ -473,6 +505,152 @@ class CandidateEnvelopeTests(sc.StationCase):
             "sto-test-bloat-seam-01",
         ):
             self.assertIn(ref, text, f"attacker-log.md screen omits adjudicated {ref}")
+
+
+class IngestTests(sc.StationCase):
+    """The defender pass merged into verdicts.json + ingest-log.md + anchor-probe.md."""
+
+    SLUG = "stochastic"
+
+    def setUp(self):
+        self.verdicts = sc.load_json(self.artifact("verdicts.json"))
+        self.candidates = candidate_refs()
+
+    def test_one_verdict_per_candidate(self):
+        vkeys = set(self.verdicts["verdicts"])
+        ckeys = set(self.candidates)
+        self.assertEqual(
+            vkeys,
+            ckeys,
+            f"verdicts != candidates: missing {ckeys - vkeys}, extra {vkeys - ckeys}",
+        )
+        self.assertEqual(len(self.verdicts["verdicts"]), len(self.candidates))
+        self.assertEqual(self.verdicts["counts"]["received"], len(self.candidates))
+
+    def test_disposition_and_verdict_vocabulary(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            self.assertIn(
+                e["disposition"],
+                INGEST_DISPOSITIONS,
+                f"{ref}: bad disposition {e['disposition']!r}",
+            )
+            self.assertIn(
+                e.get("verdict"), VERDICTS, f"{ref}: bad verdict {e.get('verdict')!r}"
+            )
+            if e["disposition"] == "defended":
+                self.assertIn(
+                    e["verdict"],
+                    ("confirmed", "dismissed"),
+                    f"{ref}: defended must carry a verdict",
+                )
+
+    def test_confirmed_carries_narrower_surviving_claim(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            if e.get("verdict") == "confirmed":
+                claim = (e.get("survivingClaim") or "").strip()
+                self.assertTrue(claim, f"{ref}: confirmed without survivingClaim")
+                self.assertNotEqual(
+                    claim,
+                    self.candidates[ref]["title"].strip(),
+                    f"{ref}: survivingClaim is not narrower than the candidate title",
+                )
+
+    def test_dismissed_carries_argument(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            if e.get("verdict") == "dismissed":
+                self.assertTrue(
+                    (e.get("argument") or "").strip(),
+                    f"{ref}: dismissed without argument",
+                )
+
+    def test_every_verdict_carries_reasoning_and_alignment(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            self.assertGreaterEqual(
+                len((e.get("argument") or "").strip()),
+                120,
+                f"{ref}: argument is too short to be defender reasoning",
+            )
+            self.assertIn(
+                e.get("alignmentHint"),
+                ALIGN,
+                f"{ref}: bad alignmentHint {e.get('alignmentHint')!r}",
+            )
+
+    def test_accepted_candidate_anchors_resolve(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            if e["disposition"] == "defended" and e.get("verdict") == "confirmed":
+                for anchor in self.candidates[ref]["anchors"]:
+                    self.assertTrue(
+                        anchor_resolves(anchor),
+                        f"{ref}: anchor does not resolve through anchor_exists: {anchor}",
+                    )
+
+    def test_part_i_refs_are_preserved_from_the_candidates(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            cand_ref = self.candidates[ref].get("partIRef")
+            if cand_ref:
+                self.assertEqual(
+                    e.get("partIRef"),
+                    cand_ref,
+                    f"{ref}: partIRef dropped or changed at ingest",
+                )
+
+    def test_sanctioned_cites_mirror_entry(self):
+        mirror = (
+            sc.REPO / "docs" / "design" / "reserved-seams-and-deferred-debt.md"
+        ).read_text(encoding="utf-8")
+        for ref, e in self.verdicts["verdicts"].items():
+            if e["disposition"] == "sanctioned":
+                cite = e.get("sanctionedBy") or ""
+                self.assertTrue(cite, f"{ref}: sanctioned without sanctionedBy")
+                self.assertIn(
+                    "reserved-seams-and-deferred-debt.md",
+                    cite,
+                    f"{ref}: sanctionedBy must cite the mirror",
+                )
+                self.assertIn("LipschitzConfig", mirror)
+
+    def test_merged_names_surviving_candidate(self):
+        for ref, e in self.verdicts["verdicts"].items():
+            if e["disposition"] == "dup-of":
+                self.assertIn(
+                    e.get("mergedInto"),
+                    self.verdicts["verdicts"],
+                    f"{ref}: dup-of must name a surviving candidate id",
+                )
+
+    def test_ingest_log_has_one_row_per_candidate(self):
+        text = self.artifact("ingest-log.md").read_text(encoding="utf-8")
+        marker = "## Per-candidate roster"
+        self.assertIn(marker, text, "ingest-log.md has no per-candidate roster")
+        roster = text[text.index(marker) :]
+        for ref in self.candidates:
+            self.assertEqual(
+                roster.count(f"| {ref} |"),
+                1,
+                f"{ref}: expected exactly one roster row in ingest-log.md",
+            )
+
+    def test_anchor_probe_has_one_block_per_candidate(self):
+        text = self.artifact("anchor-probe.md").read_text(encoding="utf-8")
+        for ref in self.candidates:
+            self.assertEqual(
+                text.count(f"### {ref} "), 1, f"{ref}: expected one anchor-probe block"
+            )
+
+    def test_counts_are_consistent(self):
+        counts = self.verdicts["counts"]
+        vals = list(self.verdicts["verdicts"].values())
+        self.assertEqual(
+            counts["confirmed"], sum(1 for v in vals if v.get("verdict") == "confirmed")
+        )
+        self.assertEqual(
+            counts["dismissed"], sum(1 for v in vals if v.get("verdict") == "dismissed")
+        )
+        self.assertEqual(
+            counts["defended"], sum(1 for v in vals if v["disposition"] == "defended")
+        )
+        self.assertEqual(counts["received"], len(vals))
 
 
 if __name__ == "__main__":

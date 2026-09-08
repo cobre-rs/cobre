@@ -1,0 +1,1032 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "ingestedAt": "2026-09",
+  "counts": {
+    "received": 35,
+    "defended": 35,
+    "confirmed": 35,
+    "dismissed": 0,
+    "anchorRejected": 0,
+    "sanctionedCleared": 0,
+    "dupOf": 0,
+    "reRaiseRejected": 0,
+    "handedOff": 0,
+    "needsHuman": 0
+  },
+  "verdicts": {
+    "par-architecture-00": {
+      "candidateRef": "sto-architecture-par-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: precompute.rs:11 says the flat layout keeps a trajectory's data contiguous 'for the forward/backward passes'; lag_transition.rs:60 shares the fallback 'with the forward pass's own unwrap_or default'; :137 gates 'training/simulation lag transitions'; :160 says 'consumed read-only on the forward-pass hot path'. cobre-stochastic is an L1 shared kernel (per the brief) and the CLAUDE.md genericity rule forbids algorithm-specific references in its doc comments. check-infra-genericity.sh PATTERN (line 79 at baseline) bans only \\bSddp\\b|\\bBenders\\b|\\bCut\\b|\\bcut\\b|cut pool|cutting-plane|outer approximation|CutSync*|CutSelection*|MetadataCuts, and truncates each file at the first #[cfg(test)]; forward/backward-pass and training/simulation are the SDDP engine's two-pass phase structure but are not in that ERE, so they pass CI. The file imports only cobre_core+chrono+rayon and evaluate_par/PrecomputedPar are generic over f64 slices, so the leakage is doc-only and the fix is a bounded reword that REMOVES engine vocabulary (it does not introduce it, so rule-7 conflicts is not triggered) and changes no structure. Pure local doc cleanup, not a phase move, so alignment stays neutral.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "PrecomputedPar",
+          "line": 78
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "mod precompute (module doc)",
+          "line": 11
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "derive_downstream_par_order",
+          "line": 137
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "precompute_stage_lag_transitions",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "resolve_stage_lag_transition (referenced from UNIFORM_MONTHLY_TRANSITION doc)",
+          "line": 60
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed to the SDDP two-pass phase phrasing that genuinely encodes a single-engine assumption: 'forward/backward passes' (precompute.rs:11), 'forward pass' (lag_transition.rs:60), 'training/simulation lag transitions' (lag_transition.rs:137) and 'forward-pass hot path' (lag_transition.rs:160). I concede 'LP RHS patching' and 'consumed read-only during optimization' (precompute.rs:1,4; PrecomputedPar:78) are generic LP-solver phrasing any deterministic ED/OPF consumer would also use, not engine paradigm nouns, so those two phrases are over-reach."
+    },
+    "par-over-engineering-00": {
+      "candidateRef": "sto-over-engineering-par-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: estimate_ar_coefficients (ar_coefficients.rs:88), estimate_correlation (correlation.rs:115) and estimate_seasonal_stats (seasonal_stats.rs:221) are pure forwarding shims that call their _with_season_map twin with None. The three greps (\\bestimate_*\\( minus the _with_ forms) over crates/**/*.rs return only their own definitions, their own rustdoc doctests, and the crate's inline par/fitting/tests.rs \u2014 no production caller inside or outside cobre-stochastic; the one production PAR consumer (cobre-io scenarios/estimation.rs) does not appear, so it calls only the _with_season_map / _with_selection forms. lib.rs:46-47 re-exports two of the trio at the crate root. Reserved-is-not-dead cleared: absent from prior-register.md's 7 entries and the mirror; wired to tests so no dead_code seam fires; the CLAUDE.md reserved-config rule governs config, not functions \u2014 no sanction applies.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs",
+          "symbol": "estimate_ar_coefficients",
+          "line": 88
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "estimate_correlation",
+          "line": 115
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/seasonal_stats.rs",
+          "symbol": "estimate_seasonal_stats",
+          "line": 221
+        }
+      ],
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the confirmable residue is that all three bare forms have zero production callers (only crate tests + doctests exercise them) and estimate_ar_coefficients/estimate_seasonal_stats are additionally re-exported at the crate root (lib.rs:46-47) on top of the par::fitting:: path. I concede a single documented no-season-map convenience overload is a defensible public-API ergonomics choice for an L1 reusable kernel, so the defect is the unmarked, production-unconsumed redundancy of the trio (and its intent should be marked if kept), not that the functions are dead weight to delete outright."
+    },
+    "par-over-engineering-01": {
+      "candidateRef": "sto-over-engineering-par-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: ParWarning (validation.rs:54) has exactly one variant (LowResidualVariance) and ParValidationReport (validation.rs:39) is a one-field wrapper { warnings: Vec<ParWarning> } \u2014 a warning taxonomy with a single inhabitant. The sole production caller is context.rs:616, `let _report = validate_par_parameters(system.inflow_models())?;`, which binds the report to _report and discards it, so only the fatal `?` path (zero-std-with-ar_order>0 error at validation.rs:120) is consumed while the warnings branch (validation.rs:138 pushes LowResidualVariance) is computed then dropped. The ParWarning grep shows non-test consumers only at the definition, the lib.rs:46 / par/mod.rs:52 re-exports, and the internal producer; only validation.rs's own #[cfg(test)] module (157/256/308/338) inspects .warnings. The 'calling algorithm may inspect them' doc is speculative with no wiring. Reserved-is-not-dead cleared: absent from prior-register.md and the mirror, not config, no #[allow] anchor \u2014 no sanction. Fix introduces no engine noun or dependency, so neutral.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParWarning",
+          "line": 54
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParValidationReport",
+          "line": 39
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "validate_par_parameters",
+          "line": 117
+        }
+      ],
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the fatal check inside validate_par_parameters (validation.rs:120, the zero-std/ar_order>0 error propagated by `?`) is live and load-bearing at context.rs:616 and must stay. The confirmable residue is only the WARNING side \u2014 the single-variant ParWarning enum plus the warnings: Vec<ParWarning> field of ParValidationReport \u2014 which is computed at validation.rs:138 then discarded by the `let _report =` bind at the sole production caller, with no production reader. Any surfacing of the warning would trigger the Python-parity rule (an owner call)."
+    },
+    "par-performance-00": {
+      "candidateRef": "sto-performance-par-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline in correlation.rs: compute_seasonal_matrices (391) per season (a) clones each hydro's date-keyed residual map via `.cloned()` into season_residuals (line ~399), (b) computes min_pairs by walking all (i, i+1..n) pairs and intersecting the two date sets with contains_key (lines ~405-416), then (c) if min_pairs >= MIN_CORRELATION_PAIRS, calls compute_pearson_correlation_matrix (438) which re-walks the SAME pairs and re-intersects via r_j.get(&date) (lines ~448-453) and then pairs.sort_unstable_by date. Residuals are HashMap<NaiveDate,f64> built by compute_hydro_residuals (199), so each intersection re-hashes every date. So the pairwise date-overlap is computed twice per kept season and the layout pays a hash per element plus a per-pair sort. This is a real fitting-time redundancy. Per the brief's rayon-determinism mandate, any date-sorted-Vec fix MUST preserve compute_hydro_residuals' canonical hydro_ids-order collect (rationale at correlation.rs:205-208) and compute_pearson_correlation_matrix's NaiveDate-ordered accumulation (rationale at :434-438); NaiveDate is a total order within a series, so a sorted-Vec layout upholds both. Neutral: no engine noun, no dependency change.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_seasonal_matrices",
+          "line": 391
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_pearson_correlation_matrix",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_hydro_residuals",
+          "line": 199
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the double date-set intersection holds only for seasons that pass the MIN_CORRELATION_PAIRS gate \u2014 a rejected season intersects once (in min_pairs) then `continue`s (correlation.rs:418-420), so it pays the walk once, not twice. And this is fitting/setup-time work (one correlation build per solve), so the confirmable cost is bounded setup latency and allocation traffic scaling with n_hydros^2 * observation-length, NOT a per-scenario/per-stage runtime-hot-path regression. Any fix must keep the two documented determinism contracts (canonical hydro_ids-order collect; NaiveDate-ordered pair accumulation) so declaration-order invariance is preserved."
+    },
+    "par-performance-01": {
+      "candidateRef": "sto-performance-par-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline in estimation.rs: estimate_all_hydro_ar_coefficients (952, classical PACF path) fits every hydro under hydro_ids.par_iter().flat_map_iter(...).collect() (lines 952-965), while estimate_ar_with_pacf_annual (the PAR(p)-A path) does the identical per-hydro shape \u2014 fresh per-iteration local vectors (obs_by_season/annual_obs_by_season/stats via clone_from + get) then per-season FACP/extended-YW solves pushed to a shared `estimates` Vec \u2014 inside a plain serial `for &hydro_id in hydro_ids` (line 397). Each annual iteration reads only immutable lookups (group_obs, annual_group_obs, stats_map, annual_stats_map, group_z_year_starts, annual_group_year_starts) and touches only its own hydro's seasons, so it is embarrassingly parallel in exactly the shape the classical site already exploits. The asymmetry is structural (one parallel, its byte-identical sibling serial). Per the brief's mandate, lifting it into par_iter().flat_map_iter().collect() MUST preserve the canonical hydro_ids reassembly documented at estimation.rs:947-951 so the estimates vector is produced in the same order the serial push yields \u2014 order-invariant and bit-identical. Neutral: no engine noun, no dependency change.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 397
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 952
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the parallelizable region is specifically the INITIAL per-hydro estimation loop of estimate_ar_with_pacf_annual (the `for &hydro_id in hydro_ids { ... estimates.push(...) }` block starting estimation.rs:397), NOT the subsequent annual reduction (apply_annual_prepass_reductions / reduce_entity_orders_annual), which mutates `estimates` across hydro index sets and must remain serial in this change. It is a fitting/setup-time asymmetry (one fit per solve), and correctness requires the flat_map_iter/collect canonical hydro_ids-order reassembly (estimation.rs:947-951) so the result stays declaration-order-invariant."
+    },
+    "par-performance-02": {
+      "candidateRef": "sto-performance-par-02",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline in estimation.rs: group_obs is a HashMap<(EntityId,usize),Vec<f64>> already owning each hydro-season's observations. Four consumers rebuild a local obs_by_season: Vec<Vec<f64>> via obs_by_season[season].clone_from(obs) (a full deep copy): the classical parallel closure estimate_all_hydro_ar_coefficients (line ~957-959), the serial reduce_entity_orders (~1066-1068), and in the PAR-A path estimate_ar_with_pacf_annual (~406-408, cloning both group_obs and annual_group_obs) plus reduce_entity_orders_annual (~688-692, cloning both). Each then builds obs_refs: Vec<&[f64]> via .iter().map(Vec::as_slice).collect() and passes borrows into the FACP/YW primitives; the owned copy exists only to derive that borrow view. Total observation bytes copied are 2x raw history for the classical fit (estimate + reduce) and up to 4x for PAR-A (Z + A across estimate + reduce). Constructing the borrow view directly from group_obs (which outlives every pass) removes the intermediate copy without changing any numeric result and leaves the classical closure's canonical hydro_ids-order collect untouched. Neutral: no engine noun, no dependency change.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 959
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders",
+          "line": 1067
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders_annual",
+          "line": 689
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 407
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the borrow-view substitution is valid only where the consumer never mutates the owned vector \u2014 verified true at the two reduction loops and the PAR-A initial estimate, which build obs_refs: Vec<&[f64]> and only read (e.g. the classical closure's `obs_by_season[season].len() < 2` guard reads, never writes). It is setup-time memory-traffic debt (one fit per solve), so the confirmable defect is bounded allocation/copy volume (2x classical / up to 4x PAR-A of raw history), NOT a per-iteration hot-path regression; and the classical par_iter closure's canonical hydro_ids-order collect (estimation.rs:947-951) is unaffected by swapping clone_from for a shared-immutable borrow."
+    },
+    "par-test-bloat-00": {
+      "candidateRef": "sto-test-bloat-par-03",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: `diff` of tests.rs:1157-1168 (pop_mean_std) against tests.rs:2354-2365 (pop_mean_std_ann) yields a single differing line \u2014 the function name (`fn pop_mean_std` vs `fn pop_mean_std_ann`). The 11-line bodies are byte-identical: n<1 -> (0,0); mean = sum/n; n<2 -> (mean,0); population variance sum((x-mean)^2)/n; return (mean, var.sqrt()). Both live inside the same par/fitting/tests.rs #[cfg(test)] module and the `_ann` suffix carries no annual-specific behavior. This is pure duplication with zero divergence \u2014 one helper serves both call sites. Not a sanctioned analytical/oracle test tier (the positives carve out those); it is a helper, not a test case, so no coverage is at stake. Neutral to layering (test-only).",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std",
+          "line": 1157
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std_ann",
+          "line": 2354
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the confirmable residue is the byte-identical 11-line population mean/std helper duplicated within a single file \u2014 pop_mean_std (tests.rs:1157) and pop_mean_std_ann (tests.rs:2354) \u2014 both inside the crate's own inline #[cfg(test)] module. It is a minor (severity-C) in-file test-hygiene dedup with zero behavior divergence, no coverage change, and no production or public-API impact; the fix is a trivial single-file edit repointing the `_ann` call sites at pop_mean_std."
+    },
+    "par-test-bloat-01": {
+      "candidateRef": "sto-test-bloat-par-02",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: `diff` of tests.rs:2032-2066 against estimation/tests.rs:149-183 (both `fn simulate_two_season_par2`) shows the two 35-line bodies differ only by the LCG state variable name (`lcg_state` in tests.rs vs `lcg` in estimation/tests.rs). Both use the same LCG multiplier/increment, burnin, >>11/(1u64<<53) uniform, Box-Muller (-2*ln u1).sqrt()*cos(2*PI*u2), and phi_1*values[i-1]+phi_2*values[i-2]+noise recurrence, returning the identical two-season split. Both are the sibling par/fitting test files. A non-trivial deterministic PAR(2) generator \u2014 the shared seed source for the roundtrip and PACF analytical tests in both files \u2014 is maintained in two places, so a change to one silently diverges from the other and breaks the shared-seed contract both rely on. This is duplication of a test fixture, distinct from the sanctioned analytical/oracle tiers. Neutral to layering (test-only).",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 2032
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 149
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the confirmable residue is the maintenance/drift hazard of a duplicated 35-line deterministic PAR(2) generator across two sibling files (tests.rs:2032 and estimation/tests.rs:149), whose fix hoists one copy to a shared #[cfg(test)] par/fitting helper. I concede the divergence is currently latent, not actual: at the baseline the two bodies are byte-identical modulo the cosmetic lcg/lcg_state rename, so no golden or assertion discrepancy exists today \u2014 the surviving claim is the drift risk, not a present numeric bug."
+    },
+    "par-test-bloat-02": {
+      "candidateRef": "sto-test-bloat-par-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: `diff` of precompute.rs:653-669 (make_model) against evaluate.rs:515-531 is EMPTY \u2014 the 6-arg InflowModel builder (annual: None) is byte-identical. `diff` of make_stage precompute.rs:628 vs evaluate.rs:490 differs only in NaiveDate::from_ymd_opt(...).unwrap() vs a local dummy_date(...) wrapper of the same call. My census of `fn make_stage|fn make_model|fn make_inflow_model` across par modules totals ~9 definitions (precompute 3, evaluate 2, validation 2, aggregate 1, lag_transition 1), so every par unit-test module rebuilds the same cobre-core structs from scratch; no shared O(1)-field-add Stage/InflowModel builder exists in this crate (it lives only in cobre-sddp/tests/common), so a field added to Stage or InflowModel must be edited in every copy. This is genuine fixture fragmentation, distinct from the tests/-binary prelude finding (candidate 00). Neutral: test infra, no production abstraction added.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_model",
+          "line": 653
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_model",
+          "line": 515
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_stage",
+          "line": 628
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_stage",
+          "line": 490
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "make_model",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/aggregate.rs",
+          "symbol": "make_stage",
+          "line": 169
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the provable byte-identical duplication is specifically the make_model pair (precompute.rs:653 == evaluate.rs:515, empty diff) and the make_stage pair (precompute.rs:628 vs evaluate.rs:490) differing only by the dummy_date wrapper. The broader '~9 par test sites' fragmentation claim is softer: the validation.rs:160 make_model hardcodes mean_m3s:100.0 and aggregate.rs:169 make_stage uses duration 720.0/branching_factor 1 vs precompute/evaluate's 744.0/10, so those copies are structurally-similar-but-divergent (different default literals), not byte-identical dupes \u2014 the field-add-fragmentation cost is real but the strictly-identical residue is the precompute<->evaluate make_model/make_stage pair."
+    },
+    "par-test-bloat-03": {
+      "candidateRef": "sto-test-bloat-par-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: `diff` of forward_sampler.rs:74-122 (make_hydro) against conformance.rs:61-109 is EMPTY, and `diff` of forward_sampler.rs:61-72 (make_bus) against conformance.rs:23-34 is EMPTY \u2014 both ~49-line Hydro and ~11-line Bus literals are byte-identical. `git ls-tree -r` confirms tests/ holds 8 flat *.rs binaries (conformance, forward_sampler, halton_integration, lhs_integration, par_a_historical_replay, reproducibility, saa_golden_value, sobol_integration) with NO common/ module, and Cargo.toml [features] declares only slow-tests = [] (no test-support feature). So the two in-scope par integration binaries re-declare the same entity-construction prelude verbatim; a field added to Hydro/Bus must be hand-propagated to every copy. Neutral: test infra only, introduces no production abstraction. Cross-references prior-register.md 'Oracle test-harness duplication' rather than restating it.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_hydro",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_bus",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "identity_correlation",
+          "line": 161
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_hydro",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_bus",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "identity_correlation",
+          "line": 130
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the confirmable byte-identical duplication is make_bus (forward_sampler.rs:61 == conformance.rs:23) and make_hydro (forward_sampler.rs:74 == conformance.rs:61) across the two in-scope binaries, with no tests/common module and no test-support feature to home them. I concede identity_correlation (forward_sampler.rs:161 vs conformance.rs:130) is a near-duplicate differing by the `ids` vs `entity_ids` param name, not byte-identical; and the wider halton/sobol/lhs/reproducibility/saa_golden_value prelude spread and the crate-wide integration-binary total are out of this sub-station (owned by tree-noise and the test-corpus station per the scope walls and the prior-register Oracle cross-reference), so the surviving claim is scoped to the forward_sampler<->conformance make_bus/make_hydro pair."
+    },
+    "sampling-architecture-00": {
+      "candidateRef": "sto-architecture-sampling-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "ClassSamplerParams.class_name is a bare &str (mod.rs:297) and build_class_sampler gates the Historical-only-for-inflow correctness rule on `if class_name != \"inflow\"` (mod.rs:436) \u2014 not merely diagnostics. Verified ClassSchemes (context.rs:17-23) already carries typed inflow/load/ncs fields, and the three build sites in build_forward_sampler pass hard-coded literals \"inflow\"/\"load\"/\"ncs\". The doc comment claiming class_name \"is used only in error messages\" is false: it also gates a real rule, so a literal typo at one of the three call sites compiles and silently mis-gates. The class set is closed/small; an enum discriminant with as_str/Display would be L1-pure. Concede the two format!(\"historical_{class_name}\")/format!(\"external_{class_name}\") diagnostics and the broader entity_type string-matching in correlation/resolve.rs::apply_correlation_for_class are legitimate label/scan uses out of this candidate's scope.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 360
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ClassSamplerParams",
+          "line": 297
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Only the single `class_name != \"inflow\"` Historical gate at mod.rs:436 is a correctness rule (not a diagnostic) riding on the &str class identity, contradicting the \"used only in error messages\" doc comment; the two format! diagnostics and the correlation-side entity_type matching are legitimate and not indicted."
+    },
+    "sampling-architecture-01": {
+      "candidateRef": "sto-architecture-sampling-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at mod.rs:263-289: ForwardSamplerConfig is one flat #[derive(Copy)] bundle holding ctx: &StochasticContext (a persistent store whose own doc says it provides tree/seeds/correlation/entity-order \u2014 all generation-side artifacts) alongside four Option<&\u2026Library> realized-value refs plus per-run class_schemes/stages/dims. build_forward_sampler (mod.rs:403) reads ONLY generation-side accessors off ctx (forward_seed/base_seed/entity_order/tree_view/correlation) while the four libraries are the realized-value inputs, so this is the single public sampling type spanning the generation/realized boundary with no type-level marker separating the two concerns. Concede that aggregating factory inputs behind one Copy struct is idiomatic and not a correctness bug, and that the scheme->library validity-coupling collapse is sibling oe-00's concern, not this one.",
+      "alignmentHint": "advances-1",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_forward_sampler",
+          "line": 403
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "The structural residue only: the four realized-value Option<&Library> fields share one flat Copy bundle with the &StochasticContext store handle and no type-level separation of the two concerns/lifetimes, so a reader of the seam cannot tell store from per-run input without reading build_forward_sampler's body \u2014 the store/param split the alignment epic should reshape (the shape that survives the Part IV/V Switchable<T> unification), not a runtime defect.",
+      "partIRef": "I.3-1"
+    },
+    "sampling-over-engineering-00": {
+      "candidateRef": "sto-over-engineering-sampling-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified the derived-seed 4-tuple (derived_lag_values, l_state, derived_accum, derived_weight) is re-declared verbatim as positional params in standardize_external_inflow (external.rs:262), run_eta_inversion (eta_inversion.rs:37), standardize_historical_windows (historical.rs:296), and threaded further through build_external_inflow_library/build_historical_inflow_library/build_scenario_libraries in cobre-sddp (setup/scenario_libraries.rs, setup/mod.rs:1838). run_eta_inversion resets lag_state (from derived_lag_values), lag_accum (from derived_accum) and lag_weight_accum (from derived_weight) TOGETHER at every outer boundary (eta_inversion.rs:94-102), so they are operationally one seed \u2014 rebutting the #[allow] rationale's \"no natural sub-grouping exists\". I concede the rationale's \"would just relocate the arity\" clause: after bundling, standardize_external_inflow (11->8 args), standardize_historical_windows (13->10) and run_eta_inversion (13->10) all remain above clippy's 7-arg threshold, so #[allow(too_many_arguments)] is NOT eliminated and the candidate's \"allow can be dropped\" over-reaches.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "standardize_external_inflow",
+          "line": 262
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/eta_inversion.rs",
+          "symbol": "run_eta_inversion",
+          "line": 37
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "standardize_historical_windows",
+          "line": 296
+        }
+      ],
+      "lens": "over-engineering",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "The rationale's \"no natural sub-grouping exists\" clause is false \u2014 the four are a documented atomic seed reset together at each outer boundary and re-threaded verbatim through >=6 signatures; the defensible residue is the silent same-typed transposition hazard between derived_accum and derived_weight (both &[f64], both length n_hydros, adjacent positional args) plus the reset-together invariant restated across >=3 doc blocks, which a by-ref DerivedSeed aggregate removes. The #[allow] itself stays (all three functions remain >7 args), so this is not an eliminate-the-lint finding."
+    },
+    "sampling-over-engineering-01": {
+      "candidateRef": "sto-over-engineering-sampling-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at mod.rs:263-289 and build_class_sampler (mod.rs:317-388): the four Option<&Library> fields plus ClassSchemes' three scheme selectors encode a (3 class x scheme) validity matrix enforced only at runtime via StochasticError::MissingScenarioSource. build_forward_sampler hard-wires historical_library: None for both the load and ncs build sites, direct evidence the four Options are not independent knobs. The type admits scheme=External/Historical with the required Option None (a runtime-only error) and a library Some while the class scheme never reads it (silently-dead input), and the doc comments restate the coupling the type does not encode. Concede the runtime check is correct and emits a helpful diagnostic, so there is no live wrong-result bug \u2014 this is a representability / parse-don't-validate finding, not a correctness one.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 317
+        }
+      ],
+      "lens": "over-engineering",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Representability only: the config permits exactly two invalid/redundant states \u2014 (a) a class scheme selects External/Historical but the paired Option is None (caught only at runtime), and (b) a library is Some while the class scheme never reads it (silent dead input) \u2014 and the hard-wired historical_library:None for load/ncs shows the four Options are not independent; folding each class's scheme+library into a per-class source enum makes both states unrepresentable. No claim of a runtime bug: the MissingScenarioSource check is correct today."
+    },
+    "sampling-performance-00": {
+      "candidateRef": "sto-performance-sampling-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified class_sampler.rs:311 (OutOfSample fill) and out_of_sample.rs:63 are the only two production callers of fill_uncorrelated and both pass None for sobol_ctx; the git grep confirms scrambled_sobol_point_precomputed/SobolPrecomputed are referenced outside qmc_sobol/mod.rs ONLY in out_of_sample.rs (import + the Some branch at line 120), so that Some branch is never taken in production. scrambled_sobol_point rebuilds build_direction_matrix(dim) (Vec<[u32;32]>) and derive_scramble_params(seed, dim) (Vec<(u32,u32)>) every call; the seed is derive_opening_seed(sampling_seed, iteration, stage_id) with NO scenario term, so both are scenario-invariant at fixed (seed, iteration, stage, dim). SobolPrecomputed::new derives from the identical seed and scrambled_sobol_point_precomputed's per-scenario XOR/scramble math is identical, so wiring it is bit-for-bit deterministic. This is a real per-scenario recompute+heap-alloc on the forward hot path (CLAUDE.md: never allocate on hot paths).",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 103
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 84
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/External are allocation-free per the positives): the direction matrix + scramble params are recomputed and heap-allocated per (iteration, scenario, stage) though invariant across the scenario axis, and the existing SobolPrecomputed/sobol_ctx seam already amortizes this bit-identically \u2014 so the residue is wiring an existing dormant hoist whose sole production caller hard-codes None, not new infrastructure and not a determinism risk."
+    },
+    "sampling-performance-01": {
+      "candidateRef": "sto-performance-sampling-02",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified sample_lhs_point (tree/lhs.rs): for each of `dim` output slots it re-initializes perm[0..n] (n = total_scenarios) and runs a full fisher_yates over n, then reads only perm[scenario_idx]. perm_rng is seeded from derive_opening_seed(sampling_seed, iteration, stage_id) with NO scenario term \u2014 the in-code comment 'perm_rng advances identically on all workers, so the permutation matches' confirms scenario-invariance \u2014 so the same `dim` permutations are recomputed for every scenario. Called once per scenario (class_sampler.rs:311 OutOfSample fill), per-stage cost is O(dim*total_scenarios^2) where O(dim*total_scenarios) suffices. draw_rng is per-(scenario,dimension) so stratified values stay distinct, and a per-(iteration,stage) permutation cache preserves bit-for-bit output because perm_seed is unchanged.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 92
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not allocation \u2014 perm_scratch is caller-owned): the scenario-invariant set of `dim` Fisher-Yates permutations of `total_scenarios` strata is reshuffled once per scenario, giving the quadratic-in-scenario O(dim*total_scenarios^2) per stage that a per-(iteration,stage) permutation cache (or the existing generate_lhs batch primitive) collapses to O(dim*total_scenarios), determinism preserved."
+    },
+    "sampling-performance-02": {
+      "candidateRef": "sto-performance-sampling-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified scrambled_halton_point (qmc_halton/mod.rs:261): per call it runs sieve_primes(spec.dim) (allocates a Vec sieve then collects a Vec<u32>) and build_scramble_tables(seed, &primes, total_scenarios) returning a nested Vec<Vec<Vec<u32>>>, then reads one point per dim. The seed is derive_opening_seed(sampling_seed, iteration, stage_id) with NO scenario term, so primes+tables are scenario-invariant at fixed (seed, iteration, stage, dim, total_scenarios) yet freshly heap-allocated and recomputed for every scenario draw (class_sampler.rs:311 OutOfSample fill). This is both a hot-path allocation storm (CLAUDE.md: never allocate on hot paths) and redundant table construction. Confirmed via grep there is no HaltonPrecomputed type or halton_ctx seam (unlike Sobol), so the primitive must be added in the tree-noise cell.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 125
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-sieve + nested Vec<Vec<Vec<u32>>> scramble-table allocation and recomputation is scenario-invariant and should be hoisted per (iteration, stage); because NO HaltonPrecomputed seam exists (unlike Sobol's dormant one), the precompute primitive is a cross-station dependency on the tree-noise cell and only the sampler-side wiring is this sub-station's part; determinism is preserved (tables are a pure function of the existing seed tuple)."
+    },
+    "sampling-test-bloat-00": {
+      "candidateRef": "sto-test-bloat-sampling-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified byte-identical at baseline: uniform_tree is identical across class_sampler.rs:446, mod.rs:791 and insample.rs:56 (7-line bodies, diff empty); make_hydro external.rs:2513 vs historical.rs:1902 differ on exactly one cosmetic line (operational_start_date: d(2020,1,1) vs NaiveDate::from_ymd_opt(2020,1,1).unwrap()); dated_stage external.rs:2482 vs historical.rs:2095 identical; monthly_season_map appears 3x (external/historical/window). Plus ~9 Stage struct literals across make_stage (external:944, mod:645), make_monthly_stage (historical:706), make_validate_stage (historical:1119), make_quarterly_stage (historical:1389), dated_stage x2. Adding a field to Hydro/HydroPenalties/Stage forces a synchronized edit across every copy \u2014 the fragmentation testing-architecture.md ranks (\u00a73 item 3) and \u00a75.2 addresses. Concede mod.rs:670 make_hydro is materially different (year 2024 + declare_mirror_unit_group(EntityId(0))), a divergent variant, not a byte-identical third copy.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "make_hydro",
+          "line": 2513
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "make_hydro",
+          "line": 1902
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "make_hydro",
+          "line": 670
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "uniform_tree",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "uniform_tree",
+          "line": 791
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/insample.rs",
+          "symbol": "uniform_tree",
+          "line": 56
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed to the verified mechanical duplications \u2014 the 3x byte-identical uniform_tree, the 2x one-cosmetic-line make_hydro (external/historical) and the 2x identical dated_stage \u2014 as the consolidation-worthy core; mod.rs's make_hydro is a divergent variant (2024 + mirror-unit-group) and the ~9 Stage builders take different parameter shapes, so the byte-identical claim holds only for the enumerated set and the broader hand-rolled-Stage boilerplate is a weaker structural-similarity claim."
+    },
+    "sampling-test-bloat-01": {
+      "candidateRef": "sto-test-bloat-sampling-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified: saa_golden_value.rs identity_correlation (lines 53-81, a 28-line body returning DecomposedCorrelation) is byte-identical (diff empty) to halton_integration.rs (105-133); the same fn also appears in sobol_integration.rs:105 and lhs_integration.rs:104. make_stage (saa_golden_value.rs:32, signature (index, id, branching_factor)) is a fourth hand-rolled Stage builder. The candidate anchors only saa_golden_value.rs and cross-references the QMC binaries (whose broader prelude approx_erf/norm_cdf/make_bus/make_hydro/make_inflow_model is the tree-noise cell's headline, and the cobre-sddp Oracle-harness duplication is a prior-register cross-reference at reserved-seams L285, not re-raised). Concede saa's own contribution is small and the GOLDEN_S0_* bit-exact constants/asserts are legitimate and untouched.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "identity_correlation",
+          "line": 53
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "make_stage",
+          "line": 32
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed to the single verified byte-identical duplication \u2014 saa_golden_value.rs's 28-line identity_correlation copy of the QMC binaries' fixture; 're-declares the integration-binary fixture prelude' over-reaches because saa carries only this one of the ~8 shared prelude helpers and its make_stage is a distinct 3-arg builder, so identity_correlation is the only byte-identical copy."
+    },
+    "seam-architecture-00": {
+      "candidateRef": "sto-architecture-seam-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "The struct at context.rs:258-275 splits exactly as claimed: par_lp/correlation/opening_tree/normal_lp/ncs_normal are the computed store; ncs_entity_ids/entity_order/dim/n_load_buses/n_stochastic_ncs are derived addressing metadata; base_seed/forward_seed are echoed straight from the builder args (the doctest at 253/255 shows base_seed()==42 pass-through) and are consumed as config at sampling/mod.rs:421-422; provenance is audit metadata. Every field is surfaced through a trivial &-returning getter (285-393) and the only behavior is set_solve_order (317, a two-phase-init mutation). The store is genuinely a many-reader established store (~30 consumers, so NOT a one-consumer abstraction), so this is not over-engineering; the real seam is that two RunParams-shaped config fields are fused into a computed store and echoed back through getters. The Q4 fix homes those two fields to the RunParams half of the Model/RunParams/PolicyState split and the payload to the Switchable<T> store: no engine noun, no L1->engine dependency, no inversion.",
+      "alignmentHint": "advances-1",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "StochasticContext",
+          "line": 258
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "set_solve_order",
+          "line": 317
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "The defect narrows to just the 2 pass-through seed fields (base_seed, forward_seed) being RunParams-shaped config echoed through the store's getters rather than computed payload; the struct is correctly shaped and correctly a many-reader store today, so the residue is only that these two fields mark the exact seam to unpick when the RunParams split lands, not that the store is malformed or over-abstracted now.",
+      "partIRef": "I.3-1"
+    },
+    "seam-architecture-01": {
+      "candidateRef": "sto-architecture-seam-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified context.rs is the L1 store constructor: under External it reads System's realized-value tables external_scenarios/external_load_scenarios/external_ncs_scenarios (cobre-core system/mod.rs:521-537) and synthesizes fitted InflowModel/LoadModel (external_ar0_inflow_models:492, external_derived_load_models:444, branched at build_stochastic_context 675-766). stage_id_to_index (406) is a genuine SECOND copy of the declared-id->study-index resolver: cobre-io's StageIdResolver (lib.rs:142) performs the same resolution at ~8 sites (pipeline.rs:131, resolution/*.rs, scenarios/noise_openings.rs, output/stochastic.rs), and cobre-stochastic (L1) cannot depend on cobre-io (L2), so it is re-implemented here. derive_external_sample_moments IS single-owner in cobre-stochastic and shared by cobre-io scenarios.rs:701 and cobre-sddp scenario_libraries.rs, so the moment logic is NOT duplicated. The fix homes the resolver at L0 cobre-core temporal so L1 and L2 consume one; the existing cobre-io->cobre-stochastic (L2->L1) edge is consistent with target layering and is not an inversion.",
+      "alignmentHint": "advances-1",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "stage_id_to_index",
+          "line": 406
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "resolve_row_stages",
+          "line": 419
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_derived_load_models",
+          "line": 444
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_ar0_inflow_models",
+          "line": 492
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "The confirmed defect is confined to (1) the second parallel copy of the declared-id->study-index resolver (stage_id_to_index at context.rs:406 duplicating cobre-io's StageIdResolver) as the sole drift risk, and (2) the placement observation that the L1 store constructor owns realized-value external-scenario adaptation; it is NOT a dispute of the ratified External-authoritative behavior or the sigma=0 rejection, and the sample-moment derivation itself is correctly single-owned (not duplicated).",
+      "partIRef": "I.3-1"
+    },
+    "seam-over-engineering-00": {
+      "candidateRef": "sto-over-engineering-seam-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "git grep at the baseline confirms all three variants have zero production construction site. SpectralDecompositionFailed: the only references are error.rs (decl 20, match arm 100, tests 128/179) plus the context.rs:593 doc bullet; spectral.rs actually returns InvalidCorrelation on failure (spectral.rs:83, 99), so the doc bullet promises a return no code path makes. SeedDerivationError: constructed only in error.rs tests (163/190) and cobre-sddp/src/error.rs:241 inside #[test] fn from_stochastic_error(); seed.rs derive_forward_seed/derive_stage_seed/derive_opening_seed all return u64 (infallible SipHash-1-3, no Result), so no producer exists. UnsupportedSamplingScheme: only error.rs (decl 74, arm 106, tests 203/245), zero producers. None of the three appears in the reserved-seam register (grep of docs/design/reserved-seams-and-deferred-debt.md returned nothing), none carries an #[allow(dead_code)] or reserving comment. Per the register's own L11-16 contract, a variant lacking both an owner and a consuming milestone is dead code, not a reserved seam.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "StochasticError",
+          "line": 5
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SpectralDecompositionFailed",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SeedDerivationError",
+          "line": 45
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "UnsupportedSamplingScheme",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "build_stochastic_context",
+          "line": 593
+        }
+      ],
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Confirmed as three pub StochasticError variants with zero production construction site (not compiler-dead: each is Display/Debug-exercised by inline tests and exhaustively matched); the sharper residue is that SpectralDecompositionFailed is additionally a live doc lie at context.rs:593 (promising a return spectral.rs never makes, since it maps failures to InvalidCorrelation), whereas SeedDerivationError and UnsupportedSamplingScheme are merely never-constructed variants removable with no match-arm edit."
+    },
+    "seam-performance-00": {
+      "candidateRef": "sto-performance-seam-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified the recompute-the-prefix structure. derive_inflow_seeds calls season_occurrence(k) at seeds.rs:95 (k=0) and in the loop at seeds.rs:104 (k=1..=l_state). season_occurrence (season_cast/mod.rs:622-624) recomputes the in-progress anchor and then calls nth_previous_occurrence(anchor, k), whose body (mod.rs:313-317) walks the backward chain k steps FROM the anchor every call, so steps 1..k-1 are re-walked for each k: total = l_state*(l_state+1)/2 vs l_state, each step doing three O(S) linear scans over season_map.seasons. Real and structural, deck-value-independent. But confined: both production call sites (cobre-sddp setup/mod.rs:515 and stochastic_pipeline.rs:253) are StudySetup::new, run once per study, and l_state is state_layout.max_par_order (PAR lag depth, a small bounded model parameter). DISTINCT from the Stage-calendar crate-home prior entry: it proposes an incremental single walk via a new StageCalendar/season_cast helper, not a relocation, and adds no L2->L1 relocation evidence, so reRaiseOf:null is correct.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 104
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "nth_previous_occurrence",
+          "line": 302
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "The quadratic is real but bounded to a single setup-time construction (StudySetup::new, once per study) and to l_state = max PAR lag order (a small bounded model parameter, not n_scenarios/n_stages/n_iterations), so the confirmed residue is a low-magnitude O(n_hydros*l_state^2*S) setup-time redundancy fixable by walking the occurrence chain once per hydro, never a hot-path or per-iteration cost."
+    },
+    "seam-performance-01": {
+      "candidateRef": "sto-performance-seam-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at seeds.rs:73-85: the per-hydro loop re-filters the full record and conditioning slices by row.hydro_id == hydro.id for every hydro, so each of the two slices is scanned n_hydros times, giving O(n_hydros*(|record|+|conditioning|)) where a single group-by-hydro_id pass built before the loop would be O(|record|+|conditioning|). record is inflow_history (every hydro's full study history), the larger input, so the overscan factor is the hydro count; the re-scan is structural and deck-value-independent. Confined to the same single production call sites as the sibling candidate (setup/mod.rs:515, stochastic_pipeline.rs:253 = StudySetup::new), run once per study, not per scenario/stage/iteration. The proposed fix (bucket rows by hydro_id in one pass, preserving within-bucket order so merge_layered_windows sees the same window sequence) is bit-identical and engine-neutral with a single existing consumer.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 73
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Real O(n_hydros*(|record|+|conditioning|)) re-scan, but confined to the one-per-study StudySetup::new construction (never a per-scenario/stage/iteration path); the confirmed residue is a setup-time overscan fixable by a single group-by-hydro_id pass, and any fix must preserve the returned canonical-order positional layout bit-for-bit."
+    },
+    "seam-test-bloat-00": {
+      "candidateRef": "sto-test-bloat-seam-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed byte-identical make_hydro across context.rs:852, provenance.rs:96 and tests/reproducibility.rs:68 (same operational_start_date 2024-01-01, same declare_mirror_unit_group(EntityId(0)), same 17-field HydroPenalties block ending inflow_nonnegativity_cost: 1000.0); make_bus/make_stage/identity_correlation are likewise duplicated across those three files. seeds.rs:198 make_hydro is a fourth near-copy differing only by operational_start_date d(2020,1,1) and the omitted declare_mirror_unit_group call. make_inflow_model is verbatim between provenance:146 and reproducibility:118, while context:902 is a parameterized superset (adds std/coeffs). This is genuine per-file fixture fragmentation with no shared test-support home. It is a DISTINCT instance from the prior-register 'Oracle test-harness duplication' entry (anchored in cobre-sddp/tests, disposition cross-reference): this candidate is anchored entirely in cobre-stochastic and adds no cobre-sddp evidence, so it is not a re-raise.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "make_hydro",
+          "line": 852
+        },
+        {
+          "path": "crates/cobre-stochastic/src/provenance.rs",
+          "symbol": "make_hydro",
+          "line": 96
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/reproducibility.rs",
+          "symbol": "make_hydro",
+          "line": 68
+        },
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "make_hydro",
+          "line": 198
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "The duplication narrows to the byte-identical make_bus/make_stage/make_hydro/identity_correlation across context.rs, provenance.rs and tests/reproducibility.rs plus the fourth date-differing make_hydro in seeds.rs; it does NOT extend to make_inflow_model (a legitimate parameterized-superset vs fixed-value split) nor to seeds.rs's make_stage/season-map builders (distinct signatures), so the defensible residue is one shared entity-builder surface owed for exactly those four builders, coverage-neutral with no test deleted."
+    },
+    "seam-test-bloat-01": {
+      "candidateRef": "sto-test-bloat-seam-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified season_occurrence (season_cast/mod.rs:615-626) is exactly the composition season_period_window(self.stages.first()) -> nth_previous_occurrence(k) -> cast(windows). The test (mod.rs:1271-1308) recomputes the identical composition (expected_in_progress = season_period_window(&season_map, season_def, &stages[0]); nth_previous_occurrence(..., k); cast(&windows, ...)) and asserts equality with season_occurrence(..., k) over k=0..=3, so both operands resolve to the same delegating call path (f(x)==f(x)), as the test's own #[allow(clippy::float_cmp)] rationale ('both paths run the identical arithmetic') admits. Helper-level tests already cover each composed piece: test_season_period_window_monthly_april_stage (687), test_nth_previous_occurrence_* (800, 846), test_cast_* (885, 900, 922, 986). DISTINCT from the Stage-calendar crate-home prior entry: this is a test-quality finding, not a relocation, and adds no L2->L1 evidence, so reRaiseOf:null is correct.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "test_season_occurrence_matches_pre_refactor_helper_sequence",
+          "line": 1271
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "The test adds zero behavioral coverage beyond the existing helper-level unit tests (season_period_window/nth_previous_occurrence/cast each already tested at 687-986); its only residual function is to pin season_occurrence's delegation to those three helpers, an implementation-detail change-detector rather than a contract, so the residue is remove-or-reduce (not that the test is wholly inert: it would fire if the wrapper stopped delegating)."
+    },
+    "tree-noise-architecture-00": {
+      "candidateRef": "sto-architecture-tree-noise-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Verified at baseline: `git grep '\\.apply_correlation('` over crates/*/src and crates/*/tests returns ZERO hits, and the only lexical caller of apply_correlation is sample_fresh (out_of_sample.rs:56), which sits under #[cfg(test)] at out_of_sample.rs:55; the generate.rs callers (1340/1456/1573/1682) are all in the #[cfg(test)] mod (boundary at 341). resolve_positions is called only from generate.rs test code (1311/1427/1549/1658). resolve_class_positions has ZERO callers workspace-wide (only its def at resolve.rs:277 + two doc refs), so gf.class_positions is written nowhere: build() sets both positions:None and class_positions:None (resolve.rs:207-208) and the sole Some-writers are the two unwired resolve_* methods. Thus DecomposedCorrelation carries two appliers, two resolvers, and two Option position caches (positions, class_positions on GroupFactor:29/33) while production runs exclusively through apply_correlation_for_class -> apply_group_scan. No #[allow(dead_code)] and no reserved-seams-and-deferred-debt.md entry exists for any of these (grep returns empty), so the reserved-not-dead rule does not cover them. Stays inside cobre-stochastic and introduces no engine noun, so no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 31
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_positions",
+          "line": 253
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation",
+          "line": 307
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "The narrow residue is that the full-vector applier trio (apply_correlation + resolve_positions + GroupFactor.positions) is pub production surface with NO production caller (kept alive only as the per-class path's differential-test oracle, test_per_class_tree_matches_full_vector_*) and the per-class precompute (resolve_class_positions + GroupFactor.class_positions) is wholly unwired (zero callers, class_positions never populated) -- so exactly one applier (apply_correlation_for_class) and zero precompute run in production; this is duplicated-but-tested surface plus a dead precompute, NOT literal unreferenced dead code, and its removal-vs-wiring is the open question candidate perf-00 pulls the other way on."
+    },
+    "tree-noise-architecture-01": {
+      "candidateRef": "sto-architecture-tree-noise-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: GroupFactor.entity_type is `pub entity_type: String` (resolve.rs:27-28) and the class is dispatched by String `!=` at resolve.rs:286 (resolve_class_positions) and resolve.rs:352 (apply_correlation_for_class), with producers being bare literals `\"inflow\"/\"load\"/\"ncs\"` at generate.rs:332-334 and sampling/mod.rs:227/236/245. The closed set is genuinely 3-valued, and CLAUDE.md mandates enum dispatch for closed variant sets. The concrete hazard is real: build()'s mixed-type group guard (resolve.rs:139) compares each entity's entity_type only to the group's first entity, never to a known-valid set, so a literal typo like \"inlfow\" passes that guard yet silently never matches the apply-time `!=` filter, leaving that class uncorrelated with no error. The fix parses cobre-core's source String into an in-crate enum at DecomposedCorrelation::build; cobre-stochastic already depends on cobre-core (L1->L0, consistent) so no inversion, no engine noun, >=2 consumers -- no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 28
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 338
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "The in-station residue is the in-crate GroupFactor.entity_type String field plus the two `!=` dispatch sites (resolve.rs:286, 352) that a boundary-parse to an in-crate EntityClass{Inflow,Load,Ncs} enum at build() would make compiler-checked; the source-of-truth String is cobre-core's CorrelationEntity.entity_type (scenario.rs:594) which is OUT of station (a cross-station note, not changed here), so the confirmed defect is the stochastic-side stringly-typed carrier + comparisons, not the cobre-core field."
+    },
+    "tree-noise-architecture-02": {
+      "candidateRef": "sto-architecture-tree-noise-02",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: LhsPointSpec (lhs.rs:89), HaltonPointSpec (qmc_halton/mod.rs:236) and SobolPointSpec (qmc_sobol/mod.rs:236) all carry the identical six-field block `sampling_seed:u64, iteration:u32, scenario:u32, stage_id:u32, total_scenarios:u32, dim:usize` under the identical `#[derive(Debug, Clone, Copy)]`; a diff of the Halton and Sobol field blocks differs only in the struct name line, and the Lhs block differs only in one doc line (`= N strata` on total_scenarios). out_of_sample.rs constructs all three from the same FreshNoiseSpec, so the point-sampling parameter contract is expressed in triplicate with no compiler link keeping them in step -- any new field or rename is an O(3-structs + call-sites) ripple. No shared type exists. These are live production types with no #[allow] and no reserved-seams entry, so this is a genuine de-duplication. A shared carrier stays inside cobre-stochastic with no engine noun, so no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/lhs.rs",
+          "symbol": "LhsPointSpec",
+          "line": 89
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs",
+          "symbol": "HaltonPointSpec",
+          "line": 236
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs",
+          "symbol": "SobolPointSpec",
+          "line": 236
+        }
+      ],
+      "lens": "architecture",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "The residue is strictly the missing shared parameter-carrier: the three structs are byte-identical in field set and types (differing only in name and one Lhs doc line), so the defect is purely a triplicated bag-of-parameters seam (Sev C); each struct is a live, exercised type (not a speculative one-consumer abstraction) and the three point generators legitimately keep distinct algorithms -- only the parameter carrier is duplicated, nothing about the generators themselves."
+    },
+    "tree-noise-over-engineering-00": {
+      "candidateRef": "sto-over-engineering-tree-noise-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: the SweepDirection census (git grep over crates/) shows SweepDirection::Ascending constructed only at opening_tree.rs:662 and :676, both above the sole #[cfg(test)] boundary at opening_tree.rs:438, hence unit-test-only; the comparator's Ascending arm (opening_tree.rs:168) is reached only by those tests. The single production caller of set_solve_order is cobre-sddp/src/setup/mod.rs:469 passing Descending (via the context.rs:317 pass-through wrapper), and cobre-sddp/tests/parity.rs:1574/1870 also pass Descending. So only Descending is ever selected outside tests. The doc at opening_tree.rs:10-12 ('Purely an ordering policy, with no algorithm-specific meaning') is a genericity/L1-purity rationale explaining the enum carries no engine noun -- NOT a reservation of the second variant; there is no #[allow(dead_code)] and no reserved-seams-and-deferred-debt.md entry (grep empty), so the reserved-not-dead rule does not cover it. Removing generality stays inside cobre-stochastic with no engine noun -- no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "SweepDirection",
+          "line": 14
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "set_solve_order",
+          "line": 120
+        }
+      ],
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the defensible residue is only that SweepDirection::Ascending and its comparator arm (opening_tree.rs:168) have ZERO non-test constructors while every production path passes Descending -- an unwired second variant exercised solely by opening_tree.rs's own tests. I concede this does NOT establish the enum must be deleted: SweepDirection is a minimal, engine-neutral two-variant sort-direction API (not a speculative multi-variant fan-out), so keeping a two-way ordering knob on a generic L1 primitive is defensible; the finding is the unwired variant, not that the `direction` parameter is itself over-abstraction."
+    },
+    "tree-noise-performance-00": {
+      "candidateRef": "sto-performance-tree-noise-02",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: apply_correlation_for_class (resolve.rs:338) opens with `profile_for_stage(stage_id)` (a HashMap<i32,String>::get, resolve.rs ~232/344) then `self.factors.get(profile_name)` (a BTreeMap<String,_>::get that walks the tree with String comparisons, resolve.rs:346). generate_opening_tree calls it three times per opening -- inflow/load/ncs at generate.rs:332-334 -- inside `for opening_idx in 0..n_openings` (loop opens at generate.rs:327), and stage.id is the enclosing `for (stage_idx, stage) in stages.iter().enumerate()` loop variable, constant for the whole inner loop. So the same profile probe + group-factor slice resolution runs 3 * n_openings per stage when it need run once per stage. The fix hoists a per-stage &[GroupFactor] accessor before the opening loop and stays inside cobre-stochastic with no engine noun -- no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 345
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "The eliminable cost is precisely the stage-constant profile+slice resolution (the profile_for_stage HashMap probe plus the factors.get BTreeMap<String> string-keyed walk) repeated 3 x n_openings per stage; I concede the per-group entity_type filter and the spectral transform must stay per-call/per-group -- only the profile-name and group-factor-slice lookup is hoistable to once per stage, so the defect is repeated map traversal, not the per-opening application itself."
+    },
+    "tree-noise-performance-01": {
+      "candidateRef": "sto-performance-tree-noise-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: MAX_STACK_DIM is 64 (resolve.rs:17). apply_group_scan takes the stack fast-path only for entity_count <= 64; its n>64 else-branch allocates a fresh `positions: Vec<usize>` plus `gathered: Vec<f64>` plus `correlated = vec![0.0; n]` (resolve.rs:426, 436-437) on every call, and it is the live production path (called once per opening per class from generate.rs:332-334, since class_positions is never populated -- see perf-00). apply_group_precomputed's n>64 branch likewise allocates gathered + correlated Vecs (resolve.rs:380-381). Large interconnected hydro systems routinely place >64 inflow stations in one correlation group, so the heap branch is reachable deck-independently and the Vecs are pure scratch reused nowhere. The fix threads caller-owned reusable scratch sized to the max group dim; numerics untouched, stays inside cobre-stochastic, no engine noun -- no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_precomputed",
+          "line": 379
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 425
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed to the live path: at baseline only apply_group_scan's n>64 branch (resolve.rs:426/436-437, three transient Vecs) is actually reached from the tree loop -- apply_group_precomputed is unreachable in production because class_positions stays None (per perf-00), so its n>64 allocation (resolve.rs:380-381) is latent, not currently on any production path; the confirmed residue is the per-opening transient scratch allocation in apply_group_scan for any correlation group exceeding MAX_STACK_DIM=64."
+    },
+    "tree-noise-performance-02": {
+      "candidateRef": "sto-performance-tree-noise-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: resolve_class_positions (resolve.rs:277) is the ONLY writer of GroupFactor.class_positions, and git grep finds nothing but its definition + two doc refs crate-wide -- no call site. So in production gf.class_positions is always None, and apply_correlation_for_class (resolve.rs:338), invoked three times per opening from generate_opening_tree's `for opening_idx in 0..n_openings` (generate.rs:327, calls at 332-334), always takes the apply_group_scan fallback. apply_group_scan re-runs `entity_order.iter().position(|e| e == eid)` (resolve.rs:428) -- an O(class_size) linear scan per group entity -- on every opening, recomputing a mapping invariant across the whole tree (entity_order and groups do not change per opening). The allocation-free precomputed path built for exactly this (apply_group_precomputed) is unreachable. generate_opening_tree takes `correlation: &'a DecomposedCorrelation` by shared reference (generate.rs:249), so it structurally cannot call the &mut resolve_class_positions to hoist. Fix keeps the seam a generic position cache, stays in cobre-stochastic, no engine noun -- no L1 guardrail trip.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 327
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 390
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        }
+      ],
+      "lens": "performance",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the confirmed defect is a pure eliminable-work perf issue -- the stage-invariant per-entity position resolution (entity_order.iter().position at resolve.rs:428) recomputed n_openings x n_groups times per stage because resolve_class_positions has zero callers so class_positions stays None; I concede the scan output is numerically correct and bit-identical to the precomputed/full-vector path (proven by test_per_class_tree_matches_full_vector_*), so this is not a correctness defect, and the fix requires either &mut DecomposedCorrelation plumbing into generate_opening_tree or build-time resolution."
+    },
+    "tree-noise-test-bloat-00": {
+      "candidateRef": "sto-test-bloat-tree-noise-01",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: within cobre-stochastic the unit-test homing form is inconsistent -- tree/generate.rs holds ~2030 inline test-LOC (total 2370, #[cfg(test)]@341), correlation/resolve.rs ~531 and normal/precompute.rs ~400 inline, while par/fitting extracts its tests into sibling files (par/fitting/tests.rs and par/fitting/estimation/tests.rs both present via git ls-tree). The same crate holds both forms with no rule deciding which applies. testing-architecture.md itself records this exact item: section 3.2 ('The homing rule is a coin-flip', line 149). This is a navigability/uniformity smell, not a coverage/volume complaint. The fix is pure relocation (yardstick section 7 forbids deleting tests), count-neutral, test-only -- no L1 guardrail relevance.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "tests",
+          "line": 341
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "tests",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/normal/precompute.rs",
+          "symbol": "tests",
+          "line": 299
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "tests",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/spectral.rs",
+          "symbol": "tests",
+          "line": 286
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: no RATIFIED homing threshold exists at baseline -- testing-architecture.md section 5 is a 'Proposed standard' and section 5.1's ~500-test-LOC/~40-fn line is explicitly a 'proposal' -- so the surviving claim asserts only (a) the verified intra-crate inconsistency (inline vs extracted sibling coexist with no deciding rule) and (b) the extreme outlier tree/generate.rs at ~2030 inline test-LOC versus the already-extracted par/fitting form; it is a Sev C uniformity/navigability smell resolvable by relocation, NOT evidence that any specific numeric threshold is the correct cut nor a coverage/bloat defect."
+    },
+    "tree-noise-test-bloat-01": {
+      "candidateRef": "sto-test-bloat-tree-noise-00",
+      "disposition": "defended",
+      "verdict": "confirmed",
+      "argument": "Confirmed at baseline: a diff of the halton_integration.rs and sobol_integration.rs fixture blocks (lines 41-55 and 105-267) returns empty (HELPERS_HALTON_EQ_SOBOL), so the eight helpers (approx_erf, norm_cdf, identity_correlation, correlated_correlation, identity_correlation_model, make_bus, make_hydro, make_inflow_model) are byte-identical across halton/sobol/lhs; make_hydro is additionally byte-identical to reproducibility.rs (MAKE_HYDRO_EQ_REPRO). git ls-tree shows NO tests/common/ (grep -c common = 0), so every tests/*.rs is standalone. The copy is already DRIFTING: identity_correlation has forked into two incompatible return types -- DecomposedCorrelation in halton/sobol/lhs/saa_golden_value versus CorrelationModel in conformance/forward_sampler/reproducibility -- and forward_sampler renamed the param entity_ids->ids. This is a fresh in-station instance (crates/cobre-stochastic/tests), NOT the mirror's Oracle-harness entry which anchors in crates/cobre-sddp/tests, so it is not a re-raise. Fix is a test-only fixture hoist -- no L1 guardrail relevance.",
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/sobol_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/lhs_integration.rs",
+          "symbol": "make_hydro",
+          "line": 206
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "approx_erf",
+          "line": 43
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "identity_correlation",
+          "line": 105
+        }
+      ],
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "_needsHuman": [],
+      "survivingClaim": "Narrowed: the confirmed residue is strictly the byte-identical eight-helper fixture prelude physically copied across the QMC trio (halton/sobol/lhs), with make_hydro also copied into reproducibility (verified) and no tests/common/ home, already drifting into two identity_correlation return types; I concede the ~50 genuinely per-family lines (make_stage_<family> and build_<family>_context, differing only in NoiseMethod variant / block presence / panic-string) are legitimate and must survive any consolidation as thin per-family wrappers -- the finding is the shared prelude only, not the whole file, and it is distinct from (cites, does not restate) the cobre-sddp Oracle-harness mirror entry."
+    }
+  }
+}

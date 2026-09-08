@@ -15,6 +15,8 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "tools"))
 
+import station_verify  # noqa: E402
+
 from lib import backlog_parse  # noqa: E402
 from lib import station_checks as sc  # noqa: E402
 
@@ -317,10 +319,10 @@ class PriorRegisterTests(sc.StationCase):
         self.assertNotIn(
             "\n## ", tail, "the do-not-re-raise list must be the final section"
         )
-        bullets = [l for l in tail.strip().splitlines() if l.startswith("- ")]
+        bullets = [ln for ln in tail.strip().splitlines() if ln.startswith("- ")]
         self.assertGreaterEqual(len(bullets), 8)
         self.assertEqual(
-            len(bullets), len([l for l in tail.strip().splitlines() if l.strip()])
+            len(bullets), len([ln for ln in tail.strip().splitlines() if ln.strip()])
         )
         for b in bullets:
             self.assertRegex(
@@ -826,6 +828,158 @@ class CalibrationTests(sc.StationCase):
             self.assertIn(
                 row["id"], td_ids, f"{row['id']}: not a TD id from this section"
             )
+
+
+class SectionVerifyTests(sc.StationCase):
+    """Executable proof of the station verification.
+
+    The three harness checkers and the four station_verify subcommands all pass over
+    this station, and each bespoke check bites on a tampered input — so a regression in
+    a check cannot pass silently for the six later stations that reuse verify-station.sh.
+    """
+
+    SLUG = "core-io"
+
+    def _entry(self, idn: str, fields: dict[str, str], body: list[str] | None = None):
+        return backlog_parse.Entry(
+            id=idn,
+            heading=f"{idn} · Sev B · x · effort S · confidence high",
+            fields=fields,
+            body=body or [],
+            lineno=1,
+        )
+
+    # -- the verifier passes over the real station --
+
+    def test_harness_checkers_exit_zero_over_slug(self):
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            self.assertEqual(
+                sc.run_checker(tool, self.SLUG),
+                0,
+                f"{tool} must exit 0 over {self.SLUG}",
+            )
+
+    def test_station_verify_subcommands_exit_zero(self):
+        base = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+        cmds = {
+            "register": [str(sc.AUDIT), self.SLUG],
+            "inventory": [str(self.artifact("inventory.json")), str(sc.REPO)],
+            "genericity": [str(sc.REPO), str(self.artifact("partI-handoff.json"))],
+            "readonly": [str(sc.REPO), base],
+        }
+        for sub, args in cmds.items():
+            proc = subprocess.run(
+                [sys.executable, str(sc.TOOLS / "station_verify.py"), sub, *args],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                proc.returncode, 0, f"station_verify {sub}:\n{proc.stdout}"
+            )
+
+    def test_inventory_census_reconstructs_the_tree(self):
+        inv = sc.load_json(self.artifact("inventory.json"))
+        listed = station_verify.reconstruct_listed(inv)
+        roots = station_verify.crate_src_roots(inv)
+        tree = subprocess.run(
+            ["git", "ls-files", "--", *(f"{r}/*.rs" for r in roots)],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        expected = sum(c["srcFiles"] for c in inv["crates"].values())
+        self.assertEqual(
+            len(tree), expected, "tree .rs count drifted from inventory srcFiles"
+        )
+        self.assertEqual(station_verify.inventory_diff(listed, tree), ([], []))
+
+    def test_tracked_tree_is_read_only(self):
+        self.assertEqual(sc.tracked_modifications(), [])
+
+    # -- each bespoke check bites on a tampered input --
+
+    def test_alignment_check_rejects_off_vocabulary(self):
+        bad = station_verify.alignment_violations(
+            [
+                self._entry("CD-900", {"Alignment": "maybe (x)"}),
+                self._entry("CD-901", {}),
+            ]
+        )
+        self.assertEqual({b[0] for b in bad}, {"CD-900", "CD-901"})
+
+    def test_empty_section_is_a_failure(self):
+        bad = station_verify.register_violations([], {}, frozenset(), frozenset())
+        self.assertTrue(any(kind == "empty" for _, kind, _ in bad))
+
+    def test_denylist_flags_hard_retired_reraise_unless_justified(self):
+        deny = {"CD-008": "retracted"}
+        raised = self._entry(
+            "CD-902", {"Anchors": ""}, ["unlike CD-008 which is retracted"]
+        )
+        self.assertTrue(
+            station_verify.denylist_violations([raised], deny, frozenset(), frozenset())
+        )
+        justified = self._entry(
+            "CD-903",
+            {"Anchors": "", "Re-raise-of": "CD-008, not a re-raise"},
+            ["mentions CD-008"],
+        )
+        self.assertEqual(
+            station_verify.denylist_violations(
+                [justified], deny, frozenset(), frozenset()
+            ),
+            [],
+        )
+
+    def test_denylist_flags_reserved_seam_anchor_unless_cited(self):
+        seam = frozenset({"crates/cobre-io/src/config/training.rs"})
+        anchor = {"Anchors": "`crates/cobre-io/src/config/training.rs:531`"}
+        raised = self._entry("CD-904", anchor, ["remove it"])
+        self.assertTrue(
+            station_verify.denylist_violations([raised], {}, seam, frozenset())
+        )
+        cited = self._entry("CD-905", anchor, ["this is a sanctioned reserved seam"])
+        self.assertEqual(
+            station_verify.denylist_violations([cited], {}, seam, frozenset()), []
+        )
+
+    def test_inventory_diff_reports_both_directions(self):
+        self.assertEqual(
+            station_verify.inventory_diff(["a.rs", "gone.rs"], ["a.rs", "new.rs"]),
+            (["gone.rs"], ["new.rs"]),
+        )
+
+    def test_genericity_premises_fail_on_each_broken_premise(self):
+        self.assertEqual(
+            station_verify.genericity_premises(0, "EXCLUDED_FILES=()", "sharpen"), []
+        )
+        self.assertTrue(
+            station_verify.genericity_premises(1, "EXCLUDED_FILES=()", "sharpen")
+        )
+        self.assertTrue(
+            station_verify.genericity_premises(0, "EXCLUDED_FILES=(x)", "sharpen")
+        )
+        self.assertTrue(
+            station_verify.genericity_premises(0, "EXCLUDED_FILES=()", "keep")
+        )
+
+    def test_readonly_exempts_gitignore_and_plans_but_flags_surfaces(self):
+        wt, cm = station_verify.readonly_offenders(
+            [
+                " M crates/cobre-io/src/x.rs",
+                " M .gitignore",
+                " M plans/architecture-debt-audit/x.md",
+            ],
+            ["docs/design/y.md"],
+        )
+        self.assertEqual(len(wt), 1)
+        self.assertIn("crates/cobre-io/src/x.rs", wt[0])
+        self.assertEqual(cm, ["docs/design/y.md"])
+        self.assertEqual(
+            station_verify.readonly_offenders([" M .gitignore"], []), ([], [])
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,87 @@
+{
+  "station": "stochastic",
+  "subStation": "seam",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "performance",
+  "candidates": [
+    {
+      "title": "Backward season-occurrence walk is quadratic in l_state: derive_inflow_seeds restarts nth_previous_occurrence from the anchor for every k",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 104
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "nth_previous_occurrence",
+          "line": 302
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/seeds.rs | sed -n '104,111p'; git show a136840d:crates/cobre-stochastic/src/season_cast/mod.rs | sed -n '615,626p;313,319p'",
+        "output": "seeds.rs:104  for k in 1..=l_state {\n            let Some(projection) = calendar.season_occurrence(season_map, season_def, &merged, k) else { continue; };\n            seeds.lag_values[pos * l_state + (k - 1)] = projection.value;\n        }\n---\nseason_cast/mod.rs:615  pub fn season_occurrence(&self, season_map, season_def, windows, k) -> Option<Projection> {\n        let anchor_stage = self.stages.first()?;\n        let in_progress = season_period_window(season_map, season_def, anchor_stage);\n        let occurrence = nth_previous_occurrence(season_map, season_def, &in_progress, k)?;\n        Some(cast(windows, &occurrence))\n    }\n---\nnth_previous_occurrence:313  for _ in 0..k {\n        let current_def = season_map.seasons.iter().find(|s| s.id == current_id)?;\n        window = previous_season_period_window(season_map, current_def, &window)?;\n        current_id = season_map.season_for_date(window.start)?;\n    }",
+        "reading": "derive_inflow_seeds calls season_occurrence(k) for k = 0..=l_state (seeds.rs:95 and the k-loop at seeds.rs:104). Each season_occurrence(k) recomputes the in_progress anchor and then calls nth_previous_occurrence(anchor, k), whose body (season_cast/mod.rs:313) walks the backward occurrence chain k steps FROM THE ANCHOR every time. So step 1..k-1 are re-walked once for every k: total walk steps are Sum(k, k=1..l_state) = l_state*(l_state+1)/2 instead of l_state. Each walk step performs three O(S) linear scans over season_map.seasons: seasons.iter().find (season_cast/mod.rs:314), previous_season_period_window's Custom-arm seasons.iter().position (season_cast/mod.rs:275+), and season_for_date (cobre-core temporal.rs:450, itself a seasons.iter().find). The redundancy is purely structural (recompute-the-prefix), independent of deck values."
+      },
+      "mechanism": "Recompute-the-prefix quadratic: season_occurrence(k) re-runs nth_previous_occurrence from the anchor for each k in the derive_inflow_seeds loop, so O(n_hydros * l_state^2 * S) backward-walk work is done where an incremental single walk (compute each occurrence once, cast at each) would be O(n_hydros * l_state * S). S is the season count (12 monthly / 52 weekly). Setup-time only: the sole production call site is StudySetup::new pre-study seeding (cobre-sddp setup/mod.rs:515, stochastic_pipeline.rs:253), run once per study, not per scenario/stage/iteration. No timing measured.",
+      "proposedSeverity": "C",
+      "fixShape": "Walk the backward season-occurrence chain once per hydro instead of restarting per k. Add a StageCalendar method (or a season_cast free helper) that, given the anchor and a max depth, yields the sequence of SeasonPeriodWindow occurrences 0..=l_state by advancing previous_season_period_window incrementally, so each occurrence and its O(S) season lookup is computed exactly once; derive_inflow_seeds then casts each returned window onto merged. This stays engine-neutral (no cut/state/Benders noun), introduces no one-consumer abstraction beyond the existing single caller, and preserves the exact walk semantics (same previous_season_period_window / season_for_date sequence) so seed values stay bit-identical.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "derive_inflow_seeds re-scans the entire record and conditioning slices once per hydro instead of grouping by hydro_id in one pass",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 73
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/seeds.rs | sed -n '73,92p'",
+        "output": "    for (pos, hydro) in hydros.iter().enumerate() {\n        let record_windows: Vec<RealizedWindow> = record\n            .iter()\n            .filter(|row| row.hydro_id == hydro.id)\n            .map(|row| RealizedWindow { start_date: row.start_date, end_date: row.end_date, value_m3s: row.value_m3s })\n            .collect();\n        let conditioning_windows: Vec<RealizedWindow> = conditioning\n            .iter()\n            .filter(|obs| obs.hydro_id == hydro.id)\n            .map(|obs| RealizedWindow { start_date: obs.start_date, end_date: obs.end_date, value_m3s: obs.value_m3s })\n            .collect();\n        let merged = merge_layered_windows(&record_windows, &conditioning_windows);",
+        "reading": "record (the whole-study inflow_history) and conditioning (recent_observations) hold rows for ALL hydros. The hydro loop (seeds.rs:73) filters each full slice by row.hydro_id == hydro.id (seeds.rs:76 and 85) for every hydro, so each of the two slices is scanned n_hydros times. This is O(n_hydros * (|record| + |conditioning|)); a single grouping pass keyed by hydro_id built before the loop would be O(|record| + |conditioning|). record is the larger input for a real deck (every hydro's full history), so the overscan factor is the hydro count. The re-scan is structural, independent of deck values."
+      },
+      "mechanism": "Repeated full linear scan: the per-hydro .filter over record and conditioning re-reads both slices in full for each of n_hydros hydros, giving O(n_hydros * (|record| + |conditioning|)) instead of the O(|record| + |conditioning|) of a single group-by-hydro_id pass. Setup-time only (same StudySetup::new call site as the sibling candidate); no timing measured.",
+      "proposedSeverity": "C",
+      "fixShape": "Before the hydro loop, do one pass over record and one over conditioning to bucket rows by hydro_id (e.g. a HashMap<EntityId, Vec<RealizedWindow>>), then index each hydro's bucket inside the loop. Keep the existing hydros-canonical-order iteration for the returned position, and preserve the row order within each bucket so merge_layered_windows sees the same window sequence and seeds stay bit-identical. Engine-neutral, no new cross-crate dependency, single existing consumer.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/context.rs StochasticContext accessors (par/correlation/opening_tree/base_seed/forward_seed/dim/n_load_buses/normal/ncs_normal/ncs_entity_ids/entity_order/n_stochastic_ncs/n_hydros/n_stages/provenance, ~L282-395)",
+      "why": "The read surface is allocation-free: every accessor returns a borrow (&PrecomputedPar, &[EntityId], &StochasticProvenance, OpeningTreeView borrow view) or copies/derives a scalar (dim, base_seed, n_hydros = dim - n_load_buses - n_stochastic_ncs). entity_order is materialized once into a Box<[EntityId]> at build (context.rs:265,783) and handed out as &[EntityId] (context.rs:368), so no per-call heap allocation on the hot read path. The only Vec-building free fn, NoiseEntityOrder::entity_order (context.rs:86), is called once inside build (context.rs:628), not from an accessor.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/context.rs build_stochastic_context (L601) and its helpers (stage_id_to_index L406, resolve_row_stages L419, external_derived_load_models L444, external_ar0_inflow_models L492)",
+      "why": "These allocate HashMaps and Vecs (stage_index, resolved_rows, external model vectors), but build_stochastic_context is a one-time setup constructor: its sole production call sites are StudySetup::new via cobre-sddp setup/mod.rs and stochastic_pipeline.rs:253, run once per study. The allocations are amortized once per study construction, not per scenario/stage/iteration, so they are not a hot-path allocation concern.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/lib.rs, error.rs, provenance.rs",
+      "why": "No runtime loops or per-call allocation. lib.rs is module declarations plus re-exports; error.rs is the StochasticError enum with Display impls whose only format!/allocation sites are inside #[cfg(test)]; provenance.rs is Copy metadata (ComponentProvenance enum, StochasticProvenance struct) built once inside build_stochastic_context (context.rs:658). Perf-clean.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs StageCalendar::coverage (L565) invoked per-window by covers_exactly (L594) / resolve_window",
+      "why": "coverage allocates a fresh Vec<f64> of length n_stages per call, and covers_exactly calls it once per input window inside a loop, so a caller resolving N windows pays N throwaway n_stages Vec allocations. This is a real per-call allocation, but the wasteful invocation pattern is driven ENTIRELY by out-of-station callers (cobre-io validation/semantic/thermal.rs:665 covers_exactly in a k-loop, cobre-sddp setup), run at validation/setup time; the in-station season_cast caller (season_occurrence) does not touch coverage. Flagged here as a cross-reference for the core-io / sddp stations rather than raised as a stochastic candidate, per the scope wall.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": []
+}

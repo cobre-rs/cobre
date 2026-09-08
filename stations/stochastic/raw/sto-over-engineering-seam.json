@@ -1,0 +1,79 @@
+{
+  "station": "stochastic",
+  "subStation": "seam",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "Three StochasticError variants have no production producer \u2014 dead public error taxonomy (SpectralDecompositionFailed, SeedDerivationError, UnsupportedSamplingScheme)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "StochasticError",
+          "line": 5
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SpectralDecompositionFailed",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SeedDerivationError",
+          "line": 45
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "UnsupportedSamplingScheme",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "build_stochastic_context",
+          "line": 593
+        }
+      ],
+      "evidence": {
+        "command": "for v in SpectralDecompositionFailed SeedDerivationError UnsupportedSamplingScheme; do echo \"== $v ==\"; git grep -n \"$v\" a136840d -- crates/ | grep -v 'crates/cobre-stochastic/src/error.rs'; done",
+        "output": "== SpectralDecompositionFailed ==\ncrates/cobre-stochastic/src/context.rs:593:/// - [`StochasticError::SpectralDecompositionFailed`]: a correlation matrix\n== SeedDerivationError ==\ncrates/cobre-sddp/src/error.rs:241:        let inner = StochasticError::SeedDerivationError {   (inside `#[test] fn from_stochastic_error()`)\n== UnsupportedSamplingScheme ==\n(no output \u2014 zero references anywhere)",
+        "reading": "Of the 9 StochasticError variants, three have zero production construction sites workspace-wide. SpectralDecompositionFailed is never returned \u2014 every spectral-decomposition failure in correlation/spectral.rs returns InvalidCorrelation (spectral.rs:83, spectral.rs:99), yet context.rs:593 documents build_stochastic_context as returning SpectralDecompositionFailed, a promise no code path keeps. SeedDerivationError is constructed only inside cobre-sddp/src/error.rs:241's `#[test] fn from_stochastic_error()`; seed derivation (noise/seed.rs) is infallible SipHash with no failure branch. UnsupportedSamplingScheme has zero references of any kind (no producer, no doc, no test); unsupported-scheme handling uses UnsupportedNoiseMethod / MissingScenarioSource instead. None of the three is in the reserved-seam register, none carries an #[allow(dead_code)] or a reserving comment (public enum variants do not trip dead_code). By the reserved-seam register's own contract (reserved-seams-and-deferred-debt.md L11-16: a seam without an owner AND a consuming milestone 'is dead code to remove, not a seam to reserve'), these unregistered variants are dead public surface, not reserved seams.",
+        "verifyCommands": [
+          "git grep -n 'Err(StochasticError::InvalidCorrelation' a136840d -- crates/cobre-stochastic/src/correlation/spectral.rs  # spectral failures map to InvalidCorrelation, never SpectralDecompositionFailed",
+          "git show a136840d:crates/cobre-sddp/src/error.rs | sed -n '239,247p'  # confirms SeedDerivationError only in from_stochastic_error test"
+        ]
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Two roads, owner's pick. (a) Delete the three never-produced variants from the pub StochasticError enum, delete the context.rs:593 doc bullet that promises SpectralDecompositionFailed, and retarget the cobre-sddp from_stochastic_error test (cobre-sddp/src/error.rs:241, out of station \u2014 cross-reference only) to a live variant such as InsufficientData. (b) If a producer is genuinely planned for any of them, enter that variant in the reserved-seam register with an owner and a consuming milestone, which the register's own contract requires and which none of the three currently has. Blast radius is bounded: error.rs enum + one context.rs doc line + one cobre-sddp test. Removing variants is a breaking change to the pub StochasticError (re-exported at lib.rs `pub use error::StochasticError`), so it rides the same 'licensed public-API break' gate the mirror applies to the superseded cut-sync public methods; the match/From surface needs no edit because no arm can match an unconstructible variant.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/lib.rs \u2014 the #[allow(deprecated)] re-export block (checklist item 3)",
+      "why": "It is a compatibility shim, and it is already scheduled for removal under a sanctioned owner \u2014 so it is a positive here, not a candidate. Only three of the block's symbols are genuinely #[deprecated]: par/evaluate.rs's evaluate_par_inflow (use evaluate_par), evaluate_par_inflows (use evaluate_par_batch), and solve_par_noises (use solve_par_noise_batch) \u2014 each a pure alias with a named non-deprecated replacement and ZERO workspace consumers outside the re-export chain (par/mod.rs:29-30 -> lib.rs). Observation, NOT raised as a separate finding because it lives on the same sanctioned surface: lib.rs applies one block-level #[allow(deprecated)] across all 15 par re-exports (evaluate + fitting + precompute + validation), whereas par/mod.rs:27 scopes its allow to only the 7-symbol evaluate:: block; narrowing lib.rs to match par/mod.rs's precision falls out naturally when the clean-break ticket removes the three aliases.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md ~L1097-1100: the #[allow(deprecated)] sites at {lib.rs, par/mod.rs, par/evaluate.rs} are a fourth, narrower class tied to the deprecated-with-fallback surface, out of scope for this sweep \u2014 a dedicated ticket owns the clean-break gate."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/provenance.rs \u2014 ComponentProvenance, StochasticProvenance",
+      "why": "No forwarding-only newtype and no zero-consumer surface. Both are plain, minimal data records with live cross-crate consumers: StochasticProvenance is read by cobre-sddp/src/policy/provenance.rs:197 and (via ctx) stochastic/stochastic_summary.rs; ComponentProvenance is matched by cobre-cli run/setup.rs:271, cobre-sddp policy/provenance.rs's component_to_source, and stochastic_summary.rs. Correctly shaped."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/seeds.rs \u2014 DerivedInflowSeeds, derive_inflow_seeds",
+      "why": "Not a shim: the single-owner PAR-lag/accumulator derivation, consumed at cobre-sddp setup/mod.rs:515 and setup/stochastic_pipeline.rs (four call sites) and cross-referenced by cobre-io validation/semantic/inflow_seeding.rs. The zero() constructor and the entity-major positional layout are load-bearing (the canonical-order staggered-commissioning regression test pins them). No speculative generality."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/context.rs \u2014 StochasticContext accessor surface",
+      "why": "No zero-consumer public accessor: base_seed() and forward_seed() are consumed at sampling/mod.rs:421-422, set_solve_order at cobre-sddp setup/mod.rs:469, and the count/normal accessors across cobre-sddp. The 'store vs bag-of-parameters' seam-shape question (13 private fields behind accessors + the build_stochastic_context arity) is the ARCHITECTURE lens's cell (architecture Q3) \u2014 cross-referenced here, deliberately not re-raised under over-engineering."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs \u2014 public calendar surface",
+      "why": "No one-consumer or forwarding abstraction: post_study_calendar_stages (cobre-sddp lp/builder/template, policy_export, setup/mod.rs:1191), covers_exactly (cobre-io validation/semantic/thermal.rs:665), hour_window_shares (cobre-sddp setup/mod.rs:2756), next_season_period_window (cobre-io scenarios/estimation.rs:528, cobre-stochastic par/lag_transition.rs:106), and season_occurrence (seeds.rs) are all consumed cross-crate. The stage-calendar crate-home RELOCATION is prior-registered (do-not-re-raise) and is not touched here.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/stochastic/prior-register.md \u2014 'Stage-calendar crate home' (disposition: keep; relocation deferred, L2->L1 edge is consistent)."
+    }
+  ],
+  "_needsHuman": []
+}

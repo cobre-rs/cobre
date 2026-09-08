@@ -1,0 +1,107 @@
+{
+  "station": "stochastic",
+  "subStation": "seam",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "Entity-fixture prelude (make_bus/make_stage/make_hydro/make_inflow_model/identity_correlation) duplicated near-verbatim across two inline seam test modules and the seam integration binary",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "make_hydro",
+          "line": 852
+        },
+        {
+          "path": "crates/cobre-stochastic/src/provenance.rs",
+          "symbol": "make_hydro",
+          "line": 96
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/reproducibility.rs",
+          "symbol": "make_hydro",
+          "line": 68
+        },
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "make_hydro",
+          "line": 198
+        }
+      ],
+      "evidence": {
+        "command": "for f in src/context.rs src/provenance.rs src/seeds.rs tests/reproducibility.rs; do echo \"== $f\"; git show a136840d:crates/cobre-stochastic/$f | grep -nE '^\\s*fn (make_bus|make_stage|make_hydro|make_inflow_model|identity_correlation)\\b'; done",
+        "output": "== src/context.rs\n814:    fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {\n839:    fn make_bus(id: i32) -> Bus {\n852:    fn make_hydro(id: i32) -> Hydro {\n902:    fn make_inflow_model(hydro_id: i32, stage_id: i32, std: f64, coeffs: Vec<f64>) -> InflowModel {\n914:    fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\n== src/provenance.rs\n58:    fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {\n83:    fn make_bus(id: i32) -> Bus {\n96:    fn make_hydro(id: i32) -> Hydro {\n146:    fn make_inflow_model(hydro_id: i32, stage_id: i32) -> InflowModel {\n158:    fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\n== src/seeds.rs\n133:    fn make_stage(\n198:    fn make_hydro(id: i32) -> Hydro {\n== tests/reproducibility.rs\n30:fn make_bus(id: i32) -> Bus {\n43:fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {\n68:fn make_hydro(id: i32) -> Hydro {\n118:fn make_inflow_model(hydro_id: i32, stage_id: i32) -> InflowModel {\n130:fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {",
+        "reading": "Five entity builders recur across three seam test regions. Bodies were read in full at baseline (context.rs:793-960, provenance.rs:35-200, tests/reproducibility.rs:1-160): make_stage (context 814 / provenance 58 / reproducibility 43), make_bus (context 839 / provenance 83 / reproducibility 30), make_hydro (context 852 / provenance 96 / reproducibility 68) and identity_correlation (context 914 / provenance 158 / reproducibility 130) are BYTE-IDENTICAL across all three files \u2014 make_hydro is the same ~50-line Hydro struct literal ending in `hydro.declare_mirror_unit_group(EntityId(0))` and the full 17-field HydroPenalties block; make_stage is the same 2024-01-01..2024-02-01 single-block Stage; identity_correlation is the same BTreeMap/spectral CorrelationModel. make_inflow_model matches verbatim between provenance (146) and reproducibility (118); context (902) is a superset that only adds std/coeffs params. seeds.rs make_hydro (198) is a FOURTH near-copy of the same Hydro literal and identical HydroPenalties block, differing only by omitting the declare_mirror_unit_group call and returning the struct directly. This is per-file fixture fragmentation with no shared harness \u2014 exactly the 'A contributor to cobre-stochastic has no template to follow' fragmentation the yardstick names (docs/design/testing-architecture.md \u00a73.2 item 2/3 and \u00a75.2)."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Coverage-neutral de-duplication (no test deleted, per yardstick \u00a77): hoist the shared engine-neutral entity builders into a single test-support surface and have all three seam test regions consume it. Yardstick-canonical home (\u00a75.2 'helpers live with the type they build') is cobre-core's `test-support` feature, since make_bus/make_stage/make_hydro/make_inflow_model/identity_correlation construct cobre-core entities (Bus/Stage/Hydro/InflowModel/CorrelationModel) \u2014 the two inline `#[cfg(test)]` modules use them via `#[cfg(test)]` and the integration binary via a `test-support` dev-dependency feature. A lighter, L1-safe alternative that stays inside this crate is a crate-internal `#[cfg(any(test, feature = \"test-support\"))] mod test_support` in cobre-stochastic exposing the builders so tests/reproducibility.rs can reach them; it has 3+ consumers (both inline modules plus the integration binary) so it does not trip the single-consumer-abstraction guardrail, adds no engine dependency, and names no SDDP paradigm noun. Where a caller needs the extra-parameter form, keep context.rs's make_inflow_model signature (std/coeffs) as the canonical one and let the fixed-value call sites pass 30.0/vec![]. Reconcile the seeds.rs make_hydro variant (no mirror unit group) as an explicit builder option rather than a silent fourth copy.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "Tautological equivalence test: test_season_occurrence_matches_pre_refactor_helper_sequence recomputes the same delegating arithmetic on both sides",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "test_season_occurrence_matches_pre_refactor_helper_sequence",
+          "line": 1271
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/season_cast/mod.rs | sed -n '615,626p;1290,1308p'",
+        "output": "    pub fn season_occurrence(\n        &self,\n        season_map: &SeasonMap,\n        season_def: &SeasonDefinition,\n        windows: &[RealizedWindow],\n        k: usize,\n    ) -> Option<Projection> {\n        let anchor_stage = self.stages.first()?;\n        let in_progress = season_period_window(season_map, season_def, anchor_stage);\n        let occurrence = nth_previous_occurrence(season_map, season_def, &in_progress, k)?;\n        Some(cast(windows, &occurrence))\n    }\n---\n        let calendar = StageCalendar::new(&stages);\n        for k in 0..=3 {\n            let expected_in_progress = season_period_window(&season_map, season_def, &stages[0]);\n            let expected_occurrence =\n                nth_previous_occurrence(&season_map, season_def, &expected_in_progress, k).unwrap();\n            let expected = cast(&windows, &expected_occurrence);\n            let actual = calendar\n                .season_occurrence(&season_map, season_def, &windows, k)\n                .unwrap();\n            assert_eq!(actual.value, expected.value);\n            assert_eq!(actual.coverage, expected.coverage);\n        }",
+        "reading": "season_occurrence (615) IS the composition season_period_window -> nth_previous_occurrence -> cast over self.stages.first(). The test recomputes that exact same composition over the same inputs (expected_in_progress via season_period_window on stages[0]; the same &windows) and asserts it equals season_occurrence(...). Both sides invoke the identical delegating code path, so the assertion is f(x)==f(x); the test's own `#[allow(clippy::float_cmp)]` rationale states 'both paths run the identical arithmetic'. The 'pre-refactor helper sequence' it names is history \u2014 the refactor has landed and the helper-level tests (test_season_period_window_*, test_nth_previous_occurrence_*, test_cast_*) already cover each stage. It can only fail if someone reimplements the wrapper independently, i.e. it pins delegation as an implementation detail, adding no behavioral coverage."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Remove the test (not a coverage reduction per yardstick \u00a77: it asserts nothing the helper-level unit tests do not already prove, because the wrapper is a straight delegation). If the intent is to guard that the wrapper keeps delegating rather than growing an independent implementation, replace the redundant equivalence assertion with a one-line comment/pointer at season_occurrence stating that the helper-level tests are authoritative, or fold a single k-value smoke assertion into an existing calendar test. Do not keep a full 0..=3 loop whose two operands are the same call path.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/tests/reproducibility.rs \u2014 deterministic_reproducibility (200), declaration_order_invariance (285), seed_sensitivity (328), infrastructure_genericity_no_sddp_references (346), and the local build_fixture helper (159)",
+      "why": "These are the crate's core determinism/order-invariance gates and are exactly the correctness-depth the yardstick says to preserve, not prune (\u00a73.1 determinism discipline). infrastructure_genericity_no_sddp_references is the in-test mirror of scripts/ci/check-infra-genericity.sh (greps src for 'sddp', asserts exit 1). build_fixture is the O(1)-style single-entry fixture the yardstick praises (\u00a73.1 item 4); it is the right pattern and is the natural consumer of the hoisted builders in candidate 1.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a73.1 (determinism discipline at HPC grade; O(1) fixture builder)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs \u2014 cast_proptests and merge_proptests (proptest! blocks at the tail of the test module)",
+      "why": "Property tests over generated segment/window inputs (cast partition == day-weighted mean; merge of disjoint windows == concatenated cast). These are precisely the invariant-over-generated-inputs coverage the yardstick asks the suite to EXPAND toward (\u00a75.9 'expand proptest from 5 sites'), not shrink. Keep.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a75.9"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/error.rs (tests 91-264) and src/lib.rs (tests 66-93)",
+      "why": "Not bloat. error.rs per-variant Display tests pin a real contract (the interpolated id/reason/field must appear in the user-facing message); test_all_variants_debug's exhaustive match is a compile-time guard that forces a test update when a StochasticError variant is added. lib.rs's assert_send_sync_static and all_public_modules_accessible are cheap compile-time surface assertions. No tautology, no over-pinning.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "Over-pinned wire bytes: checked and clean across the seam surface",
+      "why": "The seam's public types \u2014 StochasticContext (context.rs), StochasticError (error.rs), StochasticProvenance/ComponentProvenance (provenance.rs), DerivedInflowSeeds (seeds.rs) \u2014 carry no serde/postcard/FlatBuffers representation, and their test regions contain zero to_bits/from_bits/0x-byte-array/from_slice/round-trip assertions (grep over context.rs:793-2310 returned nothing). The provenance tests assert enum-variant classification (Generated/UserSupplied/NotApplicable) via derived Eq, not a frozen wire layout. So the dispatch's 'over-pinned wire bytes' candidate class does not exist in this sub-station.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/seeds.rs \u2014 mod tests (derive_inflow_seeds suite, incl. test_seed_correct_under_staggered_commissioning_dates at 198+)",
+      "why": "Substantive: the staggered-commissioning regression pins the canonical-order/position-by-iteration contract (guards against a binary_search_by_key reintroduction that would misattribute records under id-descending order) \u2014 a documented bug-class guard, not bloat. Its season-domain builders (monthly_season_map/weekly_season_map/make_stage) have DISTINCT signatures from the candidate-1 entity trio, so they are not part of that duplication; its make_hydro is the one exception, folded into candidate 1 as a fourth near-copy.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "CROSS-REFERENCE \u2014 mirror 'Oracle test-harness duplication' (docs/design/reserved-seams-and-deferred-debt.md L285; prior-register.md)",
+      "why": "Candidate 1 is the SAME fixture-fragmentation class the yardstick \u00a75.2 resolves, but a DISTINCT instance: it is anchored inside crates/cobre-stochastic (context.rs, provenance.rs, seeds.rs, tests/reproducibility.rs), not in cobre-sddp/tests. I cite the Oracle entry per the lens instruction and do not restate the cobre-sddp harness duplication (that is the cobre-sddp test-corpus station's). Separately, the halton/sobol/lhs integration prelude the lens headline names (approx_erf/norm_cdf/make_bus/make_hydro at matching offsets) lives in tree-noise integration binaries and is sibling worker sto-tb-treenoise's cell, not seam's \u2014 no overlap with candidate 1.",
+      "sanctionedBy": "prior-register.md 'Oracle test-harness duplication' (disposition: cross-reference)"
+    }
+  ],
+  "_needsHuman": []
+}

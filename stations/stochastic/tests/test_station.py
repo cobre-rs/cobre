@@ -8,9 +8,11 @@ verification runs the module.
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
 import re
 import sys
+import types
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "tools"))
@@ -29,6 +31,34 @@ ANCHOR_TOKEN = re.compile(
     r"(?:\.(?:rs|toml|md|json|fbs|sh|py|yml|yaml|txt|csv|lock))?)"
     r"(?:::(?P<sym>[A-Za-z_]\w*)|:(?P<line>\d+))?`"
 )
+
+LENSES = {"architecture", "over-engineering", "performance", "test-bloat"}
+SEV = {"A", "B", "C"}
+ALIGN = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
+SCOPE = "crates/cobre-stochastic/"
+
+
+def load_validate_envelope() -> types.ModuleType:
+    path = (
+        pathlib.Path(__file__).resolve().parents[3] / "tools" / "validate-envelope.py"
+    )
+    spec = importlib.util.spec_from_file_location("validate_envelope", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def anchor_resolves(anchor: dict) -> bool:
+    """Resolve an anchor by symbol OR line (core-io semantics) against HEAD == baseline."""
+    path = anchor["path"]
+    if anchor.get("symbol") and sc.anchor_exists(f"`{path}::{anchor['symbol']}`"):
+        return True
+    if anchor.get("line") is not None and sc.anchor_exists(
+        f"`{path}:{anchor['line']}`"
+    ):
+        return True
+    return False
 
 
 def raw_lines(rel: str) -> int:
@@ -257,6 +287,192 @@ class PriorRegisterTests(sc.StationCase):
                     r"(?mi)^-\s+\*\*Owning station",
                     f"{e['title']}: not-ours without an owning station",
                 )
+
+
+class CandidateEnvelopeTests(sc.StationCase):
+    """The attacker fan-out: 16 raw cells merged into four candidates-<sub>.json files."""
+
+    SLUG = "stochastic"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = cls.STATION_DIR or sc.STATIONS / cls.SLUG
+        cls.ve = load_validate_envelope()
+        cls.docs = {
+            sub: sc.load_json(cls.dir / f"candidates-{sub}.json") for sub in SUB_IDS
+        }
+        cls.raw = {
+            (lens, sub): sc.load_json(cls.dir / "raw" / f"sto-{lens}-{sub}.json")
+            for lens in LENSES
+            for sub in SUB_IDS
+        }
+
+    def test_four_files_carry_the_merged_envelope_and_the_pinned_baseline(self):
+        pin = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+        for sub, doc in self.docs.items():
+            for key in (
+                "station",
+                "subStation",
+                "baseline",
+                "candidates",
+                "positives",
+                "_needsHuman",
+                "lenses",
+            ):
+                self.assertIn(key, doc, f"candidates-{sub}.json missing {key}")
+            self.assertEqual(doc["station"], "stochastic")
+            self.assertEqual(
+                doc["subStation"], sub, f"candidates-{sub}.json subStation"
+            )
+            self.assertTrue(doc["baseline"].startswith(pin[:8]))
+            self.assertTrue(
+                backlog_parse.baseline_matches_head(doc["baseline"]),
+                f"candidates-{sub}.json baseline drifted from HEAD's evaluated surfaces",
+            )
+
+    def test_candidate_refs_are_unique_and_lens_sub_consistent(self):
+        seen: set[str] = set()
+        pat = re.compile(
+            r"sto-(?P<lens>[a-z-]+)-(?P<sub>par|sampling|tree-noise|seam)-\d{2}$"
+        )
+        for sub, doc in self.docs.items():
+            for c in doc["candidates"]:
+                ref = c["candidateRef"]
+                self.assertNotIn(ref, seen, f"duplicate candidateRef {ref}")
+                seen.add(ref)
+                m = pat.match(ref)
+                self.assertIsNotNone(m, f"malformed candidateRef {ref}")
+                self.assertEqual(m.group("sub"), sub, f"{ref}: sub != file {sub}")
+                self.assertEqual(m.group("lens"), c["lens"], f"{ref}: lens mismatch")
+                self.assertIn(
+                    c["lens"], LENSES, f"{ref}: lens {c['lens']!r} not in set"
+                )
+
+    def test_each_lens_group_passes_the_single_lens_validator(self):
+        for sub, doc in self.docs.items():
+            for lens in LENSES:
+                group = [c for c in doc["candidates"] if c["lens"] == lens]
+                env = {
+                    "station": "stochastic",
+                    "subStation": sub,
+                    "baseline": doc["baseline"],
+                    "lens": lens,
+                    "candidates": group,
+                    "positives": [],
+                    "_needsHuman": [],
+                }
+                errs: list[str] = []
+                self.ve.validate_attacker(env, errs, "stochastic")
+                self.assertEqual(
+                    errs, [], f"{lens}/{sub} candidates fail shape: {errs}"
+                )
+
+    def test_every_anchor_is_in_scope_and_resolves_at_baseline(self):
+        for doc in self.docs.values():
+            for c in doc["candidates"]:
+                self.assertTrue(c["anchors"], f"{c['candidateRef']}: no anchors")
+                for a in c["anchors"]:
+                    self.assertTrue(
+                        a["path"].startswith(SCOPE),
+                        f"{c['candidateRef']}: out-of-scope anchor {a['path']}",
+                    )
+                    self.assertTrue(
+                        anchor_resolves(a),
+                        f"{c['candidateRef']}: anchor does not resolve: {a}",
+                    )
+
+    def test_lenses_map_reconciles_with_candidate_counts(self):
+        for sub, doc in self.docs.items():
+            lens_map = doc["lenses"]
+            self.assertEqual(
+                set(lens_map),
+                {f"sto-{lens}-{sub}" for lens in LENSES},
+                f"candidates-{sub}.json lenses map keys",
+            )
+            for lens in LENSES:
+                got = sum(1 for c in doc["candidates"] if c["lens"] == lens)
+                self.assertEqual(
+                    lens_map[f"sto-{lens}-{sub}"],
+                    got,
+                    f"candidates-{sub}.json lenses[{lens}] != candidate count",
+                )
+            self.assertEqual(sum(lens_map.values()), len(doc["candidates"]))
+
+    def test_raw_cells_present_and_content_preserved_in_merge(self):
+        pin = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+        for (lens, sub), raw in self.raw.items():
+            self.assertTrue(
+                raw["baseline"].startswith(pin[:8]), f"sto-{lens}-{sub} baseline"
+            )
+            merged = {
+                c["candidateRef"]: c
+                for c in self.docs[sub]["candidates"]
+                if c["lens"] == lens
+            }
+            self.assertEqual(
+                len(raw.get("candidates") or []),
+                self.docs[sub]["lenses"][f"sto-{lens}-{sub}"],
+                f"sto-{lens}-{sub}: raw count != lenses map",
+            )
+            for i, rc in enumerate(raw.get("candidates") or []):
+                ref = f"sto-{lens}-{sub}-{i:02d}"
+                self.assertIn(ref, merged, f"{ref} absent from candidates-{sub}.json")
+                mc = merged[ref]
+                self.assertEqual(
+                    rc["title"], mc["title"], f"{ref}: title changed in merge"
+                )
+                self.assertEqual(
+                    rc["anchors"], mc["anchors"], f"{ref}: anchors changed in merge"
+                )
+
+    def test_positives_and_needs_human_are_lens_stamped(self):
+        for sub, doc in self.docs.items():
+            for p in doc["positives"]:
+                self.assertIn(
+                    p.get("lens"), LENSES, f"{sub}: positive without lens stamp"
+                )
+                self.assertTrue(
+                    str(p.get("subject", "")).strip(), f"{sub}: positive subject"
+                )
+            for h in doc["_needsHuman"]:
+                self.assertIn(
+                    h.get("lens"), LENSES, f"{sub}: _needsHuman without lens stamp"
+                )
+
+    def test_no_candidate_claims_an_unadjudicated_reraise(self):
+        for doc in self.docs.values():
+            for c in doc["candidates"]:
+                if "reRaiseOf" in c:
+                    self.assertIsNone(
+                        c["reRaiseOf"],
+                        f"{c['candidateRef']}: a non-null reRaiseOf must be screened at ingest",
+                    )
+
+    def test_attacker_log_records_the_matrix_and_the_prior_register_screen(self):
+        text = (self.dir / "attacker-log.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?i)prior-register screen")
+        for sub, doc in self.docs.items():
+            for lens in LENSES:
+                worker = f"sto-{lens}-{sub}"
+                row = re.search(
+                    rf"\|\s*{re.escape(worker)}\s*\|[^|]*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|",
+                    text,
+                )
+                self.assertIsNotNone(
+                    row, f"attacker-log.md has no Workers row for {worker}"
+                )
+                self.assertEqual(
+                    int(row.group(1)),
+                    doc["lenses"][worker],
+                    f"attacker-log.md {worker} count != candidates-{sub}.json",
+                )
+        for ref in (
+            "sto-architecture-par-00",
+            "sto-performance-seam-00",
+            "sto-over-engineering-seam-00",
+            "sto-test-bloat-seam-01",
+        ):
+            self.assertIn(ref, text, f"attacker-log.md screen omits adjudicated {ref}")
 
 
 if __name__ == "__main__":

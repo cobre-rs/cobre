@@ -1,0 +1,184 @@
+{
+  "station": "stochastic",
+  "subStation": "par",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "Integration-binary fixture prelude (make_bus / make_hydro / identity_correlation) re-authored byte-for-byte across the par integration binaries with no shared tests/common",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_hydro",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_bus",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "identity_correlation",
+          "line": 161
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_hydro",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_bus",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "identity_correlation",
+          "line": 130
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/tests/forward_sampler.rs | sed -n '74,122p') <(git show a136840d:crates/cobre-stochastic/tests/conformance.rs | sed -n '61,109p'); diff <(git show a136840d:.../forward_sampler.rs | sed -n '61,72p') <(git show a136840d:.../conformance.rs | sed -n '23,34p'); git ls-tree a136840d -- crates/cobre-stochastic/tests; git show a136840d:crates/cobre-stochastic/Cargo.toml | grep -nA4 '[features]'",
+        "output": "make_hydro diff: EMPTY (byte-identical ~49-line Hydro literal, 16 HydroPenalties fields all 0.0 + inflow_nonnegativity_cost:1000.0, declare_mirror_unit_group(EntityId(0))). make_bus diff: EMPTY (byte-identical 11-line Bus literal). identity_correlation diff: only param name `ids` vs `entity_ids` (29-line CorrelationModel literal otherwise identical). tests/ dir has 8 flat *.rs binaries and NO common/ module. Cargo.toml [features] declares only `slow-tests = []` (no test-support feature). Spread map: make_bus/make_hydro/make_inflow_model/identity_correlation present in forward_sampler, conformance, halton_integration, sobol_integration, lhs_integration, reproducibility (6 binaries); identity_correlation also in saa_golden_value (7).",
+        "reading": "The two par integration binaries in scope re-declare the same entity-construction prelude verbatim; make_stage is the only per-family divergence (forward_sampler `(index,id,bf,method)` vs conformance `(index,id,branching_factor)`), matching the yardstick's observation that only make_stage_* differs per family. There is no crate-local tests/common and no test-support feature, so the prelude is copy-pasted per file. A field added to Hydro/Bus/CorrelationModel must be hand-propagated to every copy; the yardstick \u00a73.1.4 praises exactly the O(1) field-add builder that today lives only in cobre-sddp/tests/common."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Introduce a single shared fixture surface for the crate's cobre-core entity builders and mod-declare it once per binary, so make_bus/make_hydro/make_inflow_model/identity_correlation are authored once. Roadmap-consistent options: (a) low-risk interim \u2014 a crate-local `tests/common/` module (the yardstick \u00a75.1 interim state before test-support collapse), each binary `mod common;` then `use crate::common::*`; (b) the yardstick's target \u2014 hoist the cobre-core entity builders behind a `test-support` cargo feature so the builders live with the type they build (\u00a75.2). Because these construct cobre-core types (Hydro/Bus/InflowModel/CorrelationModel), cobre-core's test-support surface is the durable home; the crate-local tests/common is the safe first step. Keep the per-family make_stage variants as thin overrides. Neutral to the layering (test infra only); introduces no new production abstraction, so no one-consumer-abstraction conflict. Cross-reference the mirror `Oracle test-harness duplication` entry rather than restating it, and note the wider halton/sobol/lhs/reproducibility/saa spread is owned by the tree-noise substation and the crate-wide total by the test-corpus station.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    },
+    {
+      "title": "Inline/sibling unit-test fixture builders (Stage / InflowModel) re-authored across ~9 par test sites with make_model byte-identical between precompute.rs and evaluate.rs",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_model",
+          "line": 653
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_model",
+          "line": 515
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_stage",
+          "line": 628
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_stage",
+          "line": 490
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "make_model",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/aggregate.rs",
+          "symbol": "make_stage",
+          "line": 169
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/src/par/precompute.rs | sed -n '653,669p') <(git show a136840d:crates/cobre-stochastic/src/par/evaluate.rs | sed -n '515,531p'); for f in aggregate closure contribution evaluate lag_kernel lag_transition precompute validation; do grep -c 'fn make_stage\\|fn make_model\\|fn make_inflow_model' <(git show a136840d:crates/cobre-stochastic/src/par/$f.rs); done",
+        "output": "make_model precompute.rs:653 vs evaluate.rs:515 diff: EMPTY (byte-identical 6-arg InflowModel builder, `annual: None`). make_stage precompute.rs:628 vs evaluate.rs:490: identical except `NaiveDate::from_ymd_opt(...).unwrap()` vs local `dummy_date(...)` wrapper of the same call. Per-file builder census in par/: precompute(make_stage x3, make_model x2), evaluate(make_stage x1, make_model x1), validation(make_model x2 incl make_model_with_annual), aggregate(make_stage x1). validation make_model hardcodes mean_m3s:100.0; aggregate make_stage uses duration 720.0/branching_factor 1 vs precompute/evaluate 744.0/10 \u2014 same Stage struct, same StageStateConfig/block_mode/risk_config/ScenarioSourceConfig boilerplate, differing only in a couple of default literals.",
+        "reading": "Every par unit-test module rebuilds the same two cobre-core structs from scratch. precompute and evaluate carry a genuinely identical make_model; the make_stage copies differ only in default constants, not shape. There is no shared O(1)-field-add Stage/InflowModel builder in this crate (it exists only in cobre-sddp/tests/common), so a field added to Stage or InflowModel must be edited in every copy \u2014 the fixture-fragmentation cost the yardstick \u00a73.2.3 names. Distinct location from the integration-prelude finding (src/ unit tests vs tests/ binaries), same root cause and same fix surface."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Provide one parameterized builder each for Stage and InflowModel (the O(1) field-add builder pattern the yardstick \u00a73.1.4 credits to cobre-sddp/tests/common/builders.rs), reachable from both the inline unit tests and the integration binaries via the crate test-support surface proposed in the companion finding; each existing make_stage/make_model becomes a thin wrapper that overrides only the defaults it cares about (duration, branching_factor, mean). Delete the byte-identical make_model copy pair outright. Keeps every test body and assertion unchanged (a refactor, not a coverage change); neutral to layering; no new production abstraction.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    },
+    {
+      "title": "simulate_two_season_par2 PAR(2) Box-Muller scenario simulator duplicated byte-for-byte across the two par/fitting sibling test files",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 2032
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 149
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/src/par/fitting/tests.rs | sed -n '2032,2066p') <(git show a136840d:crates/cobre-stochastic/src/par/fitting/estimation/tests.rs | sed -n '149,183p')",
+        "output": "The two 35-line bodies are identical except the LCG state variable is named `lcg_state` in tests.rs and `lcg` in estimation/tests.rs. Both use the same LCG multiplier 6_364_136_223_846_793_005 / increment 1_442_695_040_888_963_407, the same burnin=200, the same >>11 / (1u64<<53) uniform, the same Box-Muller `(-2*ln u1).sqrt()*cos(2*PI*u2)`, and the same `values[i] = phi_1*values[i-1] + phi_2*values[i-2] + noise` recurrence, returning the identical (obs_s0, obs_s1) two-season split. Both files are the sibling tests.rs for par/fitting.",
+        "reading": "A non-trivial deterministic PAR(2) generator (the seed source for the roundtrip and PACF analytical tests in both files) is maintained in two places that differ only by a cosmetic rename; a change to the noise generator in one silently diverges from the other, weakening the shared-seed contract both rely on."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Hoist the one simulator into a single shared par/fitting test helper that both sibling files import (a `#[cfg(test)]` helper module under par/fitting/, or the crate test-support surface if the companion findings introduce it), and delete the copy. Behavior-neutral; the generated series is identical by construction so no golden/assertion changes. Neutral to layering.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    },
+    {
+      "title": "pop_mean_std and pop_mean_std_ann are identical population mean/std helpers declared twice in the same file (par/fitting/tests.rs)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std",
+          "line": 1157
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std_ann",
+          "line": 2354
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/src/par/fitting/tests.rs | sed -n '1157,1168p') <(git show a136840d:crates/cobre-stochastic/src/par/fitting/tests.rs | sed -n '2354,2365p')",
+        "output": "Diff is a single line: `fn pop_mean_std(...)` vs `fn pop_mean_std_ann(...)`. The 11-line bodies are byte-identical: n<1 -> (0,0); mean = sum/n; n<2 -> (mean,0); population variance sum((x-mean)^2)/n; return (mean, var.sqrt()).",
+        "reading": "Two identically-bodied helpers coexist in one file, separated only by an `_ann` suffix on the name; the `_ann` copy adds no annual-specific behavior. Pure duplication with zero divergence \u2014 one helper serves both call sites."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Delete pop_mean_std_ann and point its call sites at the single pop_mean_std (or, if these move under the consolidated par/fitting test helper, keep one copy there). Behavior-neutral; identical output. Neutral to layering.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/tests.rs \u2014 analytical (MMS-style) tier: *_hand_computed, *_analytical_verification, YW-matrix residual/roundtrip and rhs-matches-extended checks (e.g. build_periodic_yw_matrix_forward_prediction_two_season_ar2:1452, periodic_pacf_two_season_par2_analytical_verification:2077, build_extended_periodic_yw_matrix_hand_computed_3x3:2596, assemble_partitioned_covariance_three_season_k3_hand_computed:3265)",
+      "why": "These prove correctness against a hand-derived truth, not 'same as last time' \u2014 exactly the analytical/Method-of-Manufactured-Solutions tier the yardstick \u00a73.1.1 says to preserve and name. Not bloat; the depth is the suite's best asset and must not be collapsed by any consolidation.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a73.1.1 (analytical-derivation tier)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/lag_kernel.rs test module \u2014 independent-oracle differential tests: oracle_shift_lag_major (line offset 30 in test mod), oracle_shift_entity_major, oracle_scalar_weight_finalize, lag_kernel_downstream_ring_rebuild_matches_oracle",
+      "why": "The kernel is checked against a separately-written reference implementation (an oracle) across layouts and weightings \u2014 property/differential testing, the yardstick's ideal for sort/reduction/canonicalization invariants (\u00a73.2.7). Legitimate coverage, not duplication.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a73.1.5 / \u00a73.2.7 (property + oracle testing)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/{estimation.rs:1283, mod.rs, estimation/tests.rs, tests.rs} \u2014 extracted sibling `tests.rs` form via `#[cfg(test)] mod tests;`",
+      "why": "par/fitting already uses the extracted-sibling homing the yardstick \u00a75.1 prescribes (rather than a multi-thousand-line inline module), so it is on the correct side of the inline-giant-vs-extracted-sibling asymmetry the yardstick \u00a73.2.4 flags elsewhere. The `#[cfg(test)] thread_local! BUILD_PERIODIC_YW_MATRIX_CALL_COUNT` spy in yw_matrices.rs:607 is legitimate test instrumentation (proves build-once-per-order), not dead/bloat code.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a75.1 (extracted-sibling homing)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/tests/par_a_historical_replay.rs \u2014 self-contained fixtures monthly_stage:35, row:61, uniform_monthly_transition:73, advance_lag_state_uniform:88",
+      "why": "This third par integration binary does NOT share the make_bus/make_hydro prelude; its fixtures are purpose-built for the historical-replay roundtrip, so it is correctly excluded from the prelude-duplication finding (which is anchored only to forward_sampler + conformance).",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "Cross-reference \u2014 wider fixture-prelude spread and oracle-harness duplication (NOT restated here)",
+      "why": "The same make_bus/make_hydro/identity_correlation prelude also appears in halton_integration/sobol_integration/lhs_integration (tree-noise substation headline) and reproducibility/saa_golden_value; the crate-wide integration-binary total (8 binaries, 4096 lines) and any workspace test-support consolidation are owned by the test-corpus station. The extensive-form/branching value oracle-harness duplication is the mirror's cobre-sddp entry \u2014 cited, not raised here.",
+      "sanctionedBy": "prior-register.md 'Oracle test-harness duplication' (cross-reference); attacker-prompt scope walls (crate-wide totals -> test-corpus station)"
+    }
+  ],
+  "_needsHuman": []
+}

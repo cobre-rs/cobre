@@ -1,0 +1,107 @@
+{
+  "station": "stochastic",
+  "subStation": "sampling",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "Per-file test fixtures re-declared across the sampling inline test modules: make_hydro x3, uniform_tree x3 (byte-identical), monthly_season_map x3 (2 byte-identical), dated_stage x2 (byte-identical), plus ~9 hand-rolled Stage struct literals",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "make_hydro",
+          "line": 2513
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "make_hydro",
+          "line": 1902
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "make_hydro",
+          "line": 670
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "uniform_tree",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "uniform_tree",
+          "line": 791
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/insample.rs",
+          "symbol": "uniform_tree",
+          "line": 56
+        }
+      ],
+      "evidence": {
+        "command": "for f in external historical class_sampler mod window insample; do git show a136840d:crates/cobre-stochastic/src/sampling/$f.rs | grep -nE '^\\s+fn (make_hydro|uniform_tree|monthly_season_map|dated_stage)\\b' | sed \"s|^|$f.rs:|\"; done ; then diff the bodies pairwise",
+        "output": "external.rs:2465 monthly_season_map | external.rs:2482 dated_stage | external.rs:2513 make_hydro | historical.rs:1277 monthly_season_map | historical.rs:1902 make_hydro | historical.rs:2095 dated_stage | class_sampler.rs:446 uniform_tree | mod.rs:670 make_hydro | mod.rs:791 uniform_tree | window.rs:491 monthly_season_map | insample.rs:56 uniform_tree. Pairwise diffs: uniform_tree class_sampler==mod==insample IDENTICAL (7 lines each); monthly_season_map historical==window IDENTICAL (16 lines); make_hydro external vs historical differs on ONE cosmetic line only (operational_start_date: d(2020,1,1) vs NaiveDate::from_ymd_opt(2020,1,1).unwrap()) across a 46-line Hydro literal; dated_stage external(2482) vs historical(2095) IDENTICAL (30 lines).",
+        "reading": "Three genuinely-shared fixtures are re-authored per file inside one sub-station. uniform_tree (builds a cobre_stochastic OpeningTree) is copied verbatim 3x; monthly_season_map (builds a cobre_core SeasonMap) 3x with 2 byte-identical; make_hydro (a 46-line cobre_core Hydro literal that spells out all 15 HydroPenalties fields) 3x differing only cosmetically; dated_stage 2x verbatim. Beyond these named helpers, the Stage struct literal boilerplate (block_mode: Parallel / state_config / risk_config / scenario_config: {branching_factor, noise_method}) is hand-rolled in ~9 places across make_stage (external, mod), dated_stage (external, historical), and make_monthly_stage/make_validate_stage/make_quarterly_stage (historical). Adding one field to Hydro, HydroPenalties, Stage, StageStateConfig or ScenarioSourceConfig forces a synchronized edit across every copy - the O(1)-field-add fixture builder the yardstick praises for cobre-sddp (testing-architecture.md 3.1.4) is exactly what this sub-station lacks, and testing-architecture.md 3.2.3 names this Fixture / test-support fragmentation as a ranked sustainability problem."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Hoist each shared builder to the crate that owns the type it constructs, behind a test-support feature, per testing-architecture.md 5.2 (helpers live with the type they build). The cobre_core entities - make_hydro (Hydro/HydroPenalties), the Stage builders and dated_stage (Stage/StageStateConfig/ScenarioSourceConfig), monthly_season_map (SeasonMap) - belong in cobre-core's test-support surface (the universal base dependency), parameterized so a caller overrides only the field it cares about (an O(1)-field-add builder), which collapses the ~9 Stage literals and the 46-line Hydro literal to one definition each. uniform_tree builds a cobre_stochastic OpeningTree and has three in-crate consumers, so it homes in cobre-stochastic's own test-support surface (three consumers, so not the single-consumer abstraction the L1 purity guardrail forbids). No SDDP paradigm noun and no engine-crate dependency is introduced; this is behavior-neutral test-infrastructure consolidation, not a coverage change.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "saa_golden_value.rs re-declares the integration-binary fixture prelude: identity_correlation is byte-identical to the halton/sobol/lhs copies and make_stage is a fourth hand-rolled Stage builder",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "identity_correlation",
+          "line": 53
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "make_stage",
+          "line": 32
+        }
+      ],
+      "evidence": {
+        "command": "for f in saa_golden_value halton_integration sobol_integration lhs_integration; do echo --- $f; git show a136840d:crates/cobre-stochastic/tests/$f.rs | grep -nE 'fn (identity_correlation|make_stage)\\b'; done ; diff <(git show a136840d:crates/cobre-stochastic/tests/saa_golden_value.rs | sed -n '53,81p') <(git show a136840d:crates/cobre-stochastic/tests/halton_integration.rs | sed -n '105,133p')",
+        "output": "saa_golden_value.rs: make_stage@32, identity_correlation@53. halton_integration.rs / sobol_integration.rs / lhs_integration.rs each: identity_correlation@105 (lhs@104). diff saa(53-81) vs halton(105-133): no output -> IDENTICAL (28-line identity_correlation returning DecomposedCorrelation). saa's make_stage(index,id,branching_factor) is a fourth hand-rolled Stage literal alongside the src-side make_stage copies in candidate 1.",
+        "reading": "saa_golden_value.rs (my thematically-sampling integration binary, 139 lines) carries a verbatim copy of the same identity_correlation fixture the tree-noise QMC integration binaries (halton/sobol/lhs_integration.rs) each declare, plus its own Stage builder. This is the integration-binary layer of the same fixture-fragmentation smell as candidate 1: the near-verbatim prelude the station test-bloat lens names for halton/sobol/lhs (approx_erf, norm_cdf, identity_correlation, correlated_correlation, identity_correlation_model, make_bus, make_hydro, make_inflow_model) is owned by the tree-noise cell; I anchor ONLY saa_golden_value.rs's copy here and cross-reference the QMC binaries as the duplication counterpart."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "When the shared integration prelude is consolidated (testing-architecture.md 5.2/5.1 - a per-crate test-support surface plus the single integration binary), saa_golden_value.rs drops its private identity_correlation and make_stage and pulls both from cobre-stochastic's test-support fixtures alongside the QMC binaries. saa's own contribution is small (one 28-line duplicate + one Stage builder); the bulk of the integration-prelude debt is the tree-noise QMC-prelude headline, so this candidate is scoped to the saa binary and defers the cross-binary consolidation to that cell's finding. No behavior change: the six pinned golden constants and their assertions are untouched.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/tests/saa_golden_value.rs GOLDEN_S0_* constants (lines 25-30) and their assert_eq guards in saa_golden_value_regression",
+      "why": "Six f64 constants pinning the base_seed=42 SAA opening-tree output, asserted bit-exact - a legitimate golden bit-exact regression guard, not a wire-byte pin duplicating a const. This is the only const-pin in the sampling test/integration surface, so the lens's 'wire-byte pins a const already pins' question resolves clean here. Do not trim.",
+      "sanctionedBy": "docs/design/testing-architecture.md 3.1 (golden bit-exact tier) and 5.10 (keep SHA/bit-exact for the small deliberate golden set)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs mod sample_moment_reduction_proptests (line 3147; derive_external_sample_moments_is_declaration_order_invariant at 3157)",
+      "why": "A declaration-order-invariance property test over derive_external_sample_moments - exactly the proptest expansion the yardstick asks the suite to grow toward for its sort/reduction invariants, so it is worth protecting, not trimming.",
+      "sanctionedBy": "docs/design/testing-architecture.md 5.9 (expand proptest to cover declaration-order/reduction-order invariants)"
+    },
+    {
+      "subject": "The extensive-form / branching-value oracle harness under crates/cobre-sddp/tests (mirror entry)",
+      "why": "Cross-reference only: the integration-prelude duplication in candidate 2 is the cobre-stochastic analogue of the recorded oracle-harness duplication; cited here rather than restated, and my candidate 2 is anchored in cobre-stochastic/tests (not cobre-sddp/tests) so it is not a re-raise.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md L285 (Oracle test-harness duplication) / prior-register.md Oracle entry, disposition cross-reference"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs container tests: test_new_allocates_correct_sizes (1829), test_eta_roundtrip (1839), test_zero_initialized (1861), test_eta_roundtrip_multiple_cells (1874), test_clone_is_independent (1889), test_send_sync (1856)",
+      "why": "Examined for the lens's 'tautological assertions' question: these exercise real ExternalScenarioLibrary storage semantics (allocation sizing, write-then-read via copy_from_slice, zero-init, clone independence) and the Send+Sync marker - none assert a literal against itself, so the tautology question resolves clean. One minor redundancy (test_eta_roundtrip is subsumed by test_eta_roundtrip_multiple_cells) is noted but sits below the bloat bar and is left unraised to avoid a false positive.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": []
+}

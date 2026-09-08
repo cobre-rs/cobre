@@ -1,0 +1,412 @@
+{
+  "station": "stochastic",
+  "subStation": "sampling",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "candidates": [
+    {
+      "title": "Entity-class identity degrades to a stringly-typed &str at the build_class_sampler seam, where a correctness rule is gated by string equality",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 360
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ClassSamplerParams",
+          "line": 297
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '296,297p;359,362p;436,437p;449,450p;462,463p'",
+        "output": "struct ClassSamplerParams<'a, 'b> {\n    class_name: &'b str,\n...\n        SamplingScheme::Historical => {\n            if class_name != \"inflow\" {\n                return Err(StochasticError::MissingScenarioSource {\n                    scheme: format!(\"historical_{class_name}\"),\n...\n    let inflow = build_class_sampler(ClassSamplerParams {\n        class_name: \"inflow\",\n...\n    let load = build_class_sampler(ClassSamplerParams {\n        class_name: \"load\",\n...\n    let ncs = build_class_sampler(ClassSamplerParams {\n        class_name: \"ncs\",",
+        "reading": "`ClassSchemes` already carries the class identity as three typed fields (`inflow`/`load`/`ncs`, confirmed in context.rs:17-23), and `ClassDimensions` mirrors it. But `build_forward_sampler` flattens that typed identity back to bare string literals `\"inflow\"`/`\"load\"`/`\"ncs\"` passed via `ClassSamplerParams.class_name: &str`, and `build_class_sampler` then gates a real correctness rule \u2014 Historical replay is inflow-only \u2014 on `class_name != \"inflow\"` string comparison (not merely diagnostics; the diagnostic `format!(\"historical_{class_name}\")` is a separate, legitimate use). A class rename or a typo in one of the three literals compiles cleanly and silently mis-gates. The class set is closed and small (inflow/load/ncs are entity classes, not paradigm nouns), so a typed class discriminant would be L1-pure with three consumers, not one."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Introduce a small closed class discriminant (e.g. an entity-class enum with `Inflow|Load|Ncs`) carried on `ClassSamplerParams` in place of the `&str`, so the Historical-only-for-inflow gate becomes a match/`==` on a typed value the compiler checks, and the three build sites pass the variant instead of a literal. Keep the human-readable label for diagnostics as a `Display`/`as_str` off that enum so error messages are unchanged. Purely local type-safety; advances no roadmap phase and introduces no engine vocabulary.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-sampling-01"
+    },
+    {
+      "title": "ForwardSamplerConfig is both a store handle and a parameter bag, and is the point where the generation-side and realized-value halves straddle",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_forward_sampler",
+          "line": 403
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '262,289p'; echo ---; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '421,434p'",
+        "output": "#[derive(Debug, Clone, Copy)]\npub struct ForwardSamplerConfig<'a> {\n    pub class_schemes: ClassSchemes,\n    /// Stochastic context providing tree, seeds, correlation, and entity order.\n    pub ctx: &'a StochasticContext,\n    pub stages: &'a [Stage],\n    pub dims: ClassDimensions,\n    pub historical_library: Option<&'a HistoricalScenarioLibrary>,\n    pub external_inflow_library: Option<&'a ExternalScenarioLibrary>,\n    pub external_load_library: Option<&'a ExternalScenarioLibrary>,\n    pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,\n}\n---\n    let forward_seed = ctx.forward_seed();\n    let base_seed = ctx.base_seed();\n    ...\n    let entity_order = ctx.entity_order();\n    ...\n    let correlation = ctx.correlation();",
+        "reading": "The single #[derive(Copy)] seam type carries, in one flat bundle, a persistent store handle (`ctx: &StochasticContext`, whose own doc says it provides `tree, seeds, correlation, and entity order` \u2014 all generation-side artifacts: the fitted-PAR opening tree, the base/forward seeds, the pre-decomposed correlation) alongside four realized-value `Option<&\u2026Library>` references plus per-run `class_schemes`/`stages`/`dims`. `build_forward_sampler` (line 403) unpacks the config and reads ONLY generation-side accessors off `ctx` (`forward_seed()`, `base_seed()`, `entity_order()`, `tree_view()`, `correlation()`), while the library options are the realized-value inputs. So the answer to seam-shape Q3 is `both` \u2014 a store handle AND a parameter bag \u2014 and this is also the Q2 straddle: `ForwardSamplerConfig` is the one public sampling type that spans the generation-only / realized-value boundary. The validity coupling (which of the four libraries must be `Some`) is not encoded in the type; it is discovered at runtime in `build_class_sampler` against `class_schemes`."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Split the one flat bundle into two clearly-named halves at the seam: a persistent store handle (today `&StochasticContext`; the generation-side tree/seeds/correlation/entity-order the sampler consumes read-only) and a transient per-run realized-value source selection (the four library references plus the per-class schemes that pick and require them). The source-selection half is where the four-way validity coupling lives and should own a constructor/validation that makes the `scheme -> required library` pairing a type-level fact rather than a runtime check in `build_class_sampler`; leave the coupling-collapse mechanics themselves to the over-engineering sibling lens. This keeps the store as a store and the source-selection as a bag, so a reader of the seam sees two concerns, not eight peer fields. Roadmap note only (not executed here): under Part IV/V the realized-value libraries and the generation tree both fold into a single `Switchable<T>` uncertainty store, at which point the store half and most of the source bag collapse into one owner \u2014 the split proposed now is the shape that survives that move. Must stay L1-pure: no engine/paradigm noun enters the type, no dependency on an engine crate, and the source-selection type has multiple consumers (every cobre-sddp `ForwardSamplerConfig` construction site), so it is not a one-consumer abstraction.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1",
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-sampling-00"
+    },
+    {
+      "title": "standardize_external_inflow's #[allow(too_many_arguments)] rationale ('no natural sub-grouping exists') is contradicted by the derived-seed 4-tuple being re-threaded verbatim through four signatures across two crates",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "standardize_external_inflow",
+          "line": 262
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/eta_inversion.rs",
+          "symbol": "run_eta_inversion",
+          "line": 37
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "standardize_historical_windows",
+          "line": 296
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/external.rs | sed -n '256,273p'",
+        "output": "// Rationale: the accumulator seed pair joins the lag-values seed pair; no // natural sub-grouping exists that would not just relocate the arity into a // literal struct. #[allow(clippy::too_many_arguments)] pub fn standardize_external_inflow(library, external_rows, hydro_ids, stages, par, derived_lag_values: &[f64], l_state: usize, derived_accum: &[f64], derived_weight: &[f64], stage_lag_transitions, downstream_par_order: usize)",
+        "reading": "The rationale asserts the four seed inputs (derived_lag_values, l_state, derived_accum, derived_weight) have 'no natural sub-grouping'. The code contradicts that: the same 4-tuple is re-declared verbatim as positional parameters in run_eta_inversion (eta_inversion.rs:37, passed straight through) and in standardize_historical_windows (historical.rs:296, whose own comment at line 292 says it 'mirrors standardize_external_inflow's inputs'), and in the caller build_external_inflow_library (cobre-sddp setup/scenario_libraries.rs:110, whose comment at line 103 again claims 'a context struct would just relocate the arity, not reduce it'). run_eta_inversion resets lag_state (from derived_lag_values), lag_accum (from derived_accum) and lag_weight_accum (from derived_weight) TOGETHER at every outer-loop boundary, i.e. they are operationally one seed. A 4-tuple re-declared across four signatures in two crates is a natural aggregate by construction. 'Would just relocate the arity' is false: the struct is built ONCE where the seed is computed and passed by reference to all four consumers, so arity is reduced at four sites, not relocated; and because derived_lag_values / derived_accum / derived_weight are all &[f64] of equal length, the positional form admits a silent transposition at each of the four call sites that a named struct eliminates."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Introduce a by-reference aggregate for the stage-0 derived seed, e.g. DerivedSeed<'a> { lag_values: &'a [f64], l_state: usize, accum: &'a [f64], weight: &'a [f64] }, constructed once where the seed is computed and passed as a single argument through standardize_external_inflow, run_eta_inversion, standardize_historical_windows, and the caller build_external_inflow_library. The shared per-hydro canonical-position ordering and 'empty accum means reset-to-zero' invariant, currently restated in three near-identical doc-comment blocks, attaches to the type once. This shrinks the 11-arg / 14-arg / 12-arg signatures and removes the same-typed &[f64] transposition hazard. This does NOT dispute the mirror's blanket sanction of allow-with-rationale as a load-bearing lint class; it disputes only the factual claim of this specific rationale. Once the seed is a struct the #[allow(too_many_arguments)] can be dropped from these functions. Multiple consumers (four), so not a one-consumer abstraction; no engine or paradigm noun, so no L1-purity conflict. Blast radius: three functions in this crate plus build_external_inflow_library in cobre-sddp (cited, not anchored).",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "over-engineering",
+      "candidateRef": "sto-over-engineering-sampling-01"
+    },
+    {
+      "title": "ForwardSamplerConfig encodes a per-class scheme x library validity matrix as four independent Option<&Library> fields, so invalid scheme/library pairings are representable and caught only at runtime",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 317
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '263,289p;359,388p'",
+        "output": "pub struct ForwardSamplerConfig<'a> { class_schemes: ClassSchemes, ctx, stages, dims, historical_library: Option<&'a HistoricalScenarioLibrary> (Required when class_schemes.inflow == Some(Historical)), external_inflow_library: Option<&'a ExternalScenarioLibrary> (Required when inflow == Some(External)), external_load_library (Required when load == Some(External)), external_ncs_library (Required when ncs == Some(External)) } ... build_class_sampler: Historical => historical_library.ok_or_else(|| MissingScenarioSource{reason: historical replay scheme selected but no historical library was loaded}); External => external_library.ok_or_else(|| MissingScenarioSource{reason: external scenario scheme selected but no external library was loaded})",
+        "reading": "The four Options are not four independent knobs. build_forward_sampler pairs class_schemes.inflow with EITHER historical_library OR external_inflow_library (mutually exclusive by inflow scheme), and hard-wires historical_library: None for the load and ncs classes so they read only external_load_library / external_ncs_library. Validity is a (3 class x scheme) matrix flattened into 4 loosely-typed Options: each field is required-iff a corresponding class_schemes.<class> value, and the requirement is enforced only at runtime via StochasticError::MissingScenarioSource. The type therefore admits inflow==Some(External) with external_inflow_library==None (a runtime error) and inflow==InSample with a library Some (silently ignored dead input). The doc comments themselves restate the four-way coupling ('Required when class_schemes.inflow == Some(Historical)' etc.), which is the coupling that the type does not encode."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Fold each class's scheme selector and its required library into one per-class source enum whose data-bearing variants carry the borrow: e.g. InflowSource { InSample, OutOfSample, Historical(&HistoricalScenarioLibrary), External(&ExternalScenarioLibrary) } and a LoadSource / NcsSource with only { InSample, OutOfSample, External(&ExternalScenarioLibrary) } (load and ncs never take a historical library, so the hard-wired historical_library: None disappears). build_forward_sampler then matches per-class variants instead of pairing a scheme with a maybe-present Option, so the scheme-to-library requirement becomes a compile-time consequence, the InSample-with-library silent-ignore state stops being representable, and the two mutually-exclusive inflow libraries can no longer both be Some. The MissingScenarioSource diagnostics move up to the config-construction boundary (where a library is or is not built), preserving the 'provide the external scenario file' / 'set a seed in stages.json' guidance. Not a one-consumer abstraction (three consumers: inflow, load, ncs); introduces no engine or paradigm noun, so no L1-purity conflict. Blast radius: ForwardSamplerConfig, build_forward_sampler, build_class_sampler, ClassSamplerParams in this crate, plus the ForwardSamplerConfig construction sites in cobre-sddp (simulation/state.rs, training/forward/sampler.rs, training/forward_pass_state.rs) cited as ripple, not anchored here.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "over-engineering",
+      "candidateRef": "sto-over-engineering-sampling-00"
+    },
+    {
+      "title": "OutOfSample QmcSobol forward draws re-derive the Sobol direction matrix + scramble params per scenario; the dormant `SobolPrecomputed` hoist is never wired (its `Some` branch is dead in production)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 103
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 84
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/class_sampler.rs | sed -n '287,313p' ; git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '103,124p' ; git grep -nE 'scrambled_sobol_point_precomputed|SobolPrecomputed' a136840d -- crates | grep -v 'qmc_sobol/mod.rs'",
+        "output": "class_sampler.rs (OutOfSample fill arm): builds FreshNoiseSpec then `fill_uncorrelated(spec, None, output, perm_scratch)?;` (line 311) \u2014 always None for sobol_ctx. out_of_sample.rs QmcSobol arm: `if let Some(ctx) = sobol_ctx { scrambled_sobol_point_precomputed(&sobol_spec, ctx, output); } else { scrambled_sobol_point(&sobol_spec, output); }` (lines 119-123). Workspace grep for the precomputed API outside qmc_sobol/mod.rs returns ONLY the out_of_sample.rs import+the Some-branch call at line 120 \u2014 no non-test producer of SobolPrecomputed exists, so the Some branch is never taken. scrambled_sobol_point (qmc_sobol/mod.rs:257) per call runs `build_direction_matrix(spec.dim)` (`let mut result: Vec<[u32;32]> = Vec::with_capacity(dim)` + Joe-Kuo recurrence, qmc_sobol/mod.rs:51) and `derive_scramble_params(seed, spec.dim)` (`(0..dim).map(...).collect()` Vec<(u32,u32)> + rng draws, qmc_sobol/mod.rs:99).",
+        "reading": "The composite ForwardSampler::sample -> ClassSampler::fill is documented as called for every (iteration, scenario, stage) triple. On the OutOfSample QmcSobol path each such call reaches fill_uncorrelated with sobol_ctx == None, so scrambled_sobol_point rebuilds the direction matrix (dim x [u32;32]) and the scramble-params vector every draw. Direction matrix and scramble params depend only on (forward_seed, iteration, noise_group_id, dim) \u2014 invariant across the entire scenario axis at a fixed stage. SobolPrecomputed (qmc_sobol/mod.rs:169) exists precisely to build these once per (seed,iteration,stage,dim) and reuse across scenarios, and fill_uncorrelated already carries the `sobol_ctx: Option<&SobolPrecomputed>` seam (line 84) \u2014 but the sole production caller hard-codes None, leaving the hoist unused and its Some branch dead."
+      },
+      "mechanism": "Per (iteration, scenario, stage) forward draw, scrambled_sobol_point heap-allocates a Vec<[u32;32]> of `dim` direction vectors (running the Joe-Kuo polynomial recurrence, O(dim*32*degree)) plus a Vec<(u32,u32)> of scramble params (seeding an RNG and drawing 2*dim u32). Both are constant across the scenario axis at a fixed (iteration, stage), so the work is redone n_scenarios times per stage per iteration instead of once. The SobolPrecomputed hoist and the `sobol_ctx` seam already exist to amortize it but are never wired from the forward sampler.",
+      "proposedSeverity": "B",
+      "fixShape": "Give the OutOfSample class sampler (or the caller that owns the per-(iteration,stage) loop) a per-stage SobolPrecomputed cache keyed on (forward_seed, iteration, noise_group_id, dim), built once when the stage/iteration first appears and reused across every scenario draw, then pass Some(&ctx) into the already-present `sobol_ctx` parameter of fill_uncorrelated so the precomputed branch (currently dead) is taken. No change to the generator body is needed (SobolPrecomputed / scrambled_sobol_point_precomputed already exist in the tree-noise crate). Determinism is preserved bit-for-bit because SobolPrecomputed::new derives its seed from the same derive_opening_seed(sampling_seed, iteration, stage_id) the point function uses, and the per-scenario XOR/scramble math is identical. The cache lifetime/ownership decision is a sampler-side concern in this sub-station; the tree-noise crate ships the primitive unchanged.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-sampling-00"
+    },
+    {
+      "title": "OutOfSample LHS forward draws regenerate a full Fisher-Yates permutation of `total_scenarios` per dimension per scenario, giving O(dim * total_scenarios^2) work per stage across the scenario axis",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 92
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '92,102p' ; git show a136840d:crates/cobre-stochastic/src/tree/lhs.rs | sed -n '/pub fn sample_lhs_point/,/^}/p'",
+        "output": "out_of_sample.rs Lhs arm: `sample_lhs_point(&lhs_spec, output, perm_scratch);` (line 101). sample_lhs_point (tree/lhs.rs): `let perm = &mut perm_scratch[..n];` (n = total_scenarios) then `for slot in output.iter_mut().take(spec.dim) { for (i,p) in perm.iter_mut().enumerate() { *p = i; } fisher_yates(perm, &mut perm_rng); let stratum = perm[scenario_idx]; ... }`. The full 0..n permutation is re-initialized and fully shuffled once per output slot (per entity/dimension), and only perm[scenario_idx] is read from each.",
+        "reading": "For a single (iteration, scenario, stage) point of `dim` entities, sample_lhs_point performs `dim` complete Fisher-Yates shuffles over `n = total_scenarios` elements \u2014 O(dim * total_scenarios) per point \u2014 but extracts only one stratum index per dimension. Called once per scenario across the whole forward set, the per-stage cost is O(dim * total_scenarios^2). The permutation for a given dimension is identical for every scenario at a fixed (iteration, stage) (perm_rng is reseeded from derive_opening_seed(sampling_seed, iteration, stage_id), independent of scenario) \u2014 the in-code comment 'perm_rng advances identically on all workers, so the permutation matches' confirms it is scenario-invariant \u2014 so the entire shuffle is recomputed n_scenarios times to read n_scenarios different indices out of the same permutation."
+      },
+      "mechanism": "The point-wise LHS generator recomputes, for every scenario, the same per-dimension stratification permutation of all `total_scenarios` strata (a full Fisher-Yates each), reading a single index. Because the permutation is scenario-invariant at a fixed (iteration, stage), the forward pass pays O(dim * total_scenarios^2) per stage where O(dim * total_scenarios) suffices \u2014 a quadratic-in-scenario recompute (not an allocation, perm_scratch is caller-owned; the cost is redundant shuffling) on the forward hot path.",
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the per-(iteration,stage) LHS permutation set across the scenario axis: build the `dim` stratification permutations once per (forward_seed, iteration, noise_group_id, total_scenarios) into a per-stage cache (a stride-dim*n usize buffer, or a batch already produced by the tree-noise `generate_lhs` batch path), then each scenario reads its stratum column with no reshuffle. The draw RNG stays per-(scenario,dimension) so stratified values remain distinct. Owning the permutation cache is a sampler-side concern in this sub-station; the batch permutation primitive lives in tree-noise (cross-reference the existing generate_lhs batch generator). Determinism preserved: perm_rng seeding is unchanged, so the same permutation and the same stratum-per-scenario are produced bit-for-bit.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-sampling-02"
+    },
+    {
+      "title": "OutOfSample QmcHalton forward draws rebuild the prime sieve and a `total_scenarios`-sized Vec<Vec<Vec<u32>>> scramble table on every scenario; no precompute hoist exists",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 125
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '125,135p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_halton/mod.rs | sed -n '261,290p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_halton/mod.rs | grep -nE 'fn build_scramble_tables|Vec<Vec<Vec<u32>>>|fn sieve_primes'",
+        "output": "out_of_sample.rs QmcHalton arm: `scrambled_halton_point(&halton_spec, output);` (line 134). scrambled_halton_point (qmc_halton/mod.rs:261) per call: `let primes = sieve_primes(spec.dim); let tables = build_scramble_tables(seed, &primes, spec.total_scenarios as usize);` then a per-dim loop. build_scramble_tables (qmc_halton/mod.rs:119) returns `Vec<Vec<Vec<u32>>>` (`let mut tables = Vec::with_capacity(primes.len())`, per-dim `Vec<Vec<u32>>` of max_digits entries, each a `Vec<u32>` permutation of the prime base). sieve_primes allocates `vec![false; upper_bound+1]` then collects.",
+        "reading": "Same per-(iteration,scenario,stage) call site as candidate 1 (fill_uncorrelated with sobol_ctx None; the Halton arm has no ctx parameter at all). Every forward draw re-runs a prime sieve and rebuilds a three-level nested Vec of scramble permutation tables whose outer extent scales with dim and whose inner permutations are sized by the prime bases; the digit depth is derived from spec.total_scenarios. These tables depend only on (forward_seed, iteration, noise_group_id, dim, total_scenarios) and are identical for every scenario at a stage, yet are freshly heap-allocated and recomputed for each scenario draw. Unlike Sobol there is no HaltonPrecomputed type, so even the seam is absent."
+      },
+      "mechanism": "Per forward draw, scrambled_halton_point allocates a fresh prime sieve (Vec<bool> of upper_bound) and a nested Vec<Vec<Vec<u32>>> of Owen/Faure-style scramble permutation tables (outer length dim, middle length ~digit-depth(total_scenarios), inner length prime-base), then reads a single point out of it. All of this is invariant across the scenario axis, so at a stage with n_scenarios forward passes the sieve and the nested-Vec table are built n_scenarios times instead of once \u2014 a per-scenario allocation storm plus redundant table construction on the forward hot path.",
+      "proposedSeverity": "B",
+      "fixShape": "Mirror the Sobol hoist: introduce a per-(iteration,stage) precomputed Halton context (a HaltonPrecomputed holding the prime list and the scramble tables) built once per (forward_seed, iteration, noise_group_id, dim, total_scenarios) and reused across every scenario draw. This requires a new precompute type + `_precomputed` point entry in the tree-noise crate (qmc_halton), consumed here via a `halton_ctx: Option<&HaltonPrecomputed>` parameter on fill_uncorrelated symmetric to the existing sobol_ctx \u2014 flag as a cross-station dependency on the tree-noise sub-station for the primitive; the sampler-side wiring (cache ownership + threading) is this sub-station's part. Determinism preserved: the tables depend only on the seed tuple already used, so the precomputed and per-call results are bit-identical.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-sampling-01"
+    },
+    {
+      "title": "Per-file test fixtures re-declared across the sampling inline test modules: make_hydro x3, uniform_tree x3 (byte-identical), monthly_season_map x3 (2 byte-identical), dated_stage x2 (byte-identical), plus ~9 hand-rolled Stage struct literals",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "make_hydro",
+          "line": 2513
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "make_hydro",
+          "line": 1902
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "make_hydro",
+          "line": 670
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "uniform_tree",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "uniform_tree",
+          "line": 791
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/insample.rs",
+          "symbol": "uniform_tree",
+          "line": 56
+        }
+      ],
+      "evidence": {
+        "command": "for f in external historical class_sampler mod window insample; do git show a136840d:crates/cobre-stochastic/src/sampling/$f.rs | grep -nE '^\\s+fn (make_hydro|uniform_tree|monthly_season_map|dated_stage)\\b' | sed \"s|^|$f.rs:|\"; done ; then diff the bodies pairwise",
+        "output": "external.rs:2465 monthly_season_map | external.rs:2482 dated_stage | external.rs:2513 make_hydro | historical.rs:1277 monthly_season_map | historical.rs:1902 make_hydro | historical.rs:2095 dated_stage | class_sampler.rs:446 uniform_tree | mod.rs:670 make_hydro | mod.rs:791 uniform_tree | window.rs:491 monthly_season_map | insample.rs:56 uniform_tree. Pairwise diffs: uniform_tree class_sampler==mod==insample IDENTICAL (7 lines each); monthly_season_map historical==window IDENTICAL (16 lines); make_hydro external vs historical differs on ONE cosmetic line only (operational_start_date: d(2020,1,1) vs NaiveDate::from_ymd_opt(2020,1,1).unwrap()) across a 46-line Hydro literal; dated_stage external(2482) vs historical(2095) IDENTICAL (30 lines).",
+        "reading": "Three genuinely-shared fixtures are re-authored per file inside one sub-station. uniform_tree (builds a cobre_stochastic OpeningTree) is copied verbatim 3x; monthly_season_map (builds a cobre_core SeasonMap) 3x with 2 byte-identical; make_hydro (a 46-line cobre_core Hydro literal that spells out all 15 HydroPenalties fields) 3x differing only cosmetically; dated_stage 2x verbatim. Beyond these named helpers, the Stage struct literal boilerplate (block_mode: Parallel / state_config / risk_config / scenario_config: {branching_factor, noise_method}) is hand-rolled in ~9 places across make_stage (external, mod), dated_stage (external, historical), and make_monthly_stage/make_validate_stage/make_quarterly_stage (historical). Adding one field to Hydro, HydroPenalties, Stage, StageStateConfig or ScenarioSourceConfig forces a synchronized edit across every copy - the O(1)-field-add fixture builder the yardstick praises for cobre-sddp (testing-architecture.md 3.1.4) is exactly what this sub-station lacks, and testing-architecture.md 3.2.3 names this Fixture / test-support fragmentation as a ranked sustainability problem."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Hoist each shared builder to the crate that owns the type it constructs, behind a test-support feature, per testing-architecture.md 5.2 (helpers live with the type they build). The cobre_core entities - make_hydro (Hydro/HydroPenalties), the Stage builders and dated_stage (Stage/StageStateConfig/ScenarioSourceConfig), monthly_season_map (SeasonMap) - belong in cobre-core's test-support surface (the universal base dependency), parameterized so a caller overrides only the field it cares about (an O(1)-field-add builder), which collapses the ~9 Stage literals and the 46-line Hydro literal to one definition each. uniform_tree builds a cobre_stochastic OpeningTree and has three in-crate consumers, so it homes in cobre-stochastic's own test-support surface (three consumers, so not the single-consumer abstraction the L1 purity guardrail forbids). No SDDP paradigm noun and no engine-crate dependency is introduced; this is behavior-neutral test-infrastructure consolidation, not a coverage change.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-sampling-00"
+    },
+    {
+      "title": "saa_golden_value.rs re-declares the integration-binary fixture prelude: identity_correlation is byte-identical to the halton/sobol/lhs copies and make_stage is a fourth hand-rolled Stage builder",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "identity_correlation",
+          "line": 53
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+          "symbol": "make_stage",
+          "line": 32
+        }
+      ],
+      "evidence": {
+        "command": "for f in saa_golden_value halton_integration sobol_integration lhs_integration; do echo --- $f; git show a136840d:crates/cobre-stochastic/tests/$f.rs | grep -nE 'fn (identity_correlation|make_stage)\\b'; done ; diff <(git show a136840d:crates/cobre-stochastic/tests/saa_golden_value.rs | sed -n '53,81p') <(git show a136840d:crates/cobre-stochastic/tests/halton_integration.rs | sed -n '105,133p')",
+        "output": "saa_golden_value.rs: make_stage@32, identity_correlation@53. halton_integration.rs / sobol_integration.rs / lhs_integration.rs each: identity_correlation@105 (lhs@104). diff saa(53-81) vs halton(105-133): no output -> IDENTICAL (28-line identity_correlation returning DecomposedCorrelation). saa's make_stage(index,id,branching_factor) is a fourth hand-rolled Stage literal alongside the src-side make_stage copies in candidate 1.",
+        "reading": "saa_golden_value.rs (my thematically-sampling integration binary, 139 lines) carries a verbatim copy of the same identity_correlation fixture the tree-noise QMC integration binaries (halton/sobol/lhs_integration.rs) each declare, plus its own Stage builder. This is the integration-binary layer of the same fixture-fragmentation smell as candidate 1: the near-verbatim prelude the station test-bloat lens names for halton/sobol/lhs (approx_erf, norm_cdf, identity_correlation, correlated_correlation, identity_correlation_model, make_bus, make_hydro, make_inflow_model) is owned by the tree-noise cell; I anchor ONLY saa_golden_value.rs's copy here and cross-reference the QMC binaries as the duplication counterpart."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "When the shared integration prelude is consolidated (testing-architecture.md 5.2/5.1 - a per-crate test-support surface plus the single integration binary), saa_golden_value.rs drops its private identity_correlation and make_stage and pulls both from cobre-stochastic's test-support fixtures alongside the QMC binaries. saa's own contribution is small (one 28-line duplicate + one Stage builder); the bulk of the integration-prelude debt is the tree-noise QMC-prelude headline, so this candidate is scoped to the saa binary and defers the cross-binary consolidation to that cell's finding. No behavior change: the six pinned golden constants and their assertions are untouched.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-sampling-01"
+    }
+  ],
+  "positives": [
+    {
+      "lens": "architecture",
+      "subject": "sampling/mod.rs, external.rs, historical.rs, class_sampler.rs, window.rs, out_of_sample.rs, insample.rs, eta_inversion.rs (paradigm-leakage grep, architecture Q1)",
+      "why": "`git grep -niE '(sddp|benders|cut|cost.to.go|state.space)'` over the whole sampling manifest at the baseline returns exactly one hit \u2014 the substring `cut` inside `consecutive` in a test assertion string at insample.rs:116 (`expected at least 10 of 20 consecutive scenario pairs to differ`). No type, fn, field, or doc comment assumes a decomposition engine; the realized-value sampling half is genericity-clean. No GATE failure, no _needsHuman entry.",
+      "sanctionedBy": "architecture lens Q1 / scripts/ci/check-infra-genericity.sh (L1 purity)"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/sampling/class_sampler.rs::ClassSampler (enum, line 63) and its fill/apply_initial_state",
+      "why": "The per-class noise source is a closed-variant `enum` (InSample/OutOfSample/Historical/External) with `match` dispatch \u2014 exactly the CLAUDE.md-mandated enum dispatch over `Box<dyn Trait>` for a closed set. The correlation contract (only OutOfSample writes uncorrelated N(0,1); InSample/Historical/External write pre-correlated eta) is stated as a module invariant and enforced consistently by the composite `ForwardSampler`. Correct and worth protecting; not a straddle.",
+      "sanctionedBy": "CLAUDE.md hard rule (never Box<dyn Trait>; enum dispatch for closed variant sets)"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs::ExternalScenarioLibrary (line 57) and historical.rs::HistoricalScenarioLibrary (line 92)",
+      "why": "Both are cleanly-classified realized-value data containers ('pure data container', 'no sampling logic') with documented stage-major / window-major eta layouts and bounds-checked accessors. They hold standardized eta only; selection and correlation live elsewhere. Neither straddles the generation/realized split, so Q2 finds no straddle in the library types themselves \u2014 the straddle is isolated to the config bundle (candidate 1).",
+      "sanctionedBy": "architecture lens Q2 classification"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs::standardize_external_simple (line 399)",
+      "why": "The `\u03b7 = (value - mean)/std` standardization shared by non-PAR external classes is factored into one generic body that 'carries no entity vocabulary' \u2014 per-class field access is injected via two closures, and `standardize_external_load`/`_ncs` are thin wrappers. This is correct L1-generic factoring. The `#[allow(clippy::too_many_arguments)]` builders (`standardize_external_inflow`, `standardize_historical_windows`) and the four parallel `Option<&\u2026Library>` coupling are the over-engineering sibling lens's targets \u2014 cross-referenced, not restated here.",
+      "sanctionedBy": "in-code rationale at external.rs:258-261, 697-700 and historical.rs:292-294 (arity justified); over-engineering lens owns the too_many_arguments / four-Option items"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/context.rs::StochasticContext / build_stochastic_context (seam sub-station) and the cobre-sddp ForwardSamplerConfig construction sites (simulation/state.rs:552, training/forward/sampler.rs:23, training/forward_pass_state.rs:368/1685)",
+      "why": "Cross-reference only. Candidate 1 cites `StochasticContext` as the store handle but does NOT anchor there \u2014 the store type and its 7-arg `build_stochastic_context` constructor belong to the `seam` sub-station (and CD-001 is RESOLVED per prior-register). The blast radius of the candidate-1 seam reshape lands in cobre-sddp (other station); those call sites are named as the bounded blast radius, not raised as stochastic candidates.",
+      "sanctionedBy": "prior-register.md CD-001 (resolved); scope walls (cobre-sddp anchors are other stations)"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "docs/design/reserved-seams-and-deferred-debt.md audit-evidence #[allow(...)] census vs the sampling too_many_arguments sites (external.rs:261, historical.rs:295, eta_inversion.rs:36)",
+      "why": "Each of the three #[allow(clippy::too_many_arguments)] sites in the sampling manifest carries a // Rationale: comment and falls in the mirror-sanctioned 'Load-bearing / refactor-decision lint' class, so none is plan-dead or accidental. My item-(4) candidate disputes only the factual correctness of one rationale (rebutted by the 4-fold recurrence of the derived-seed tuple), never the legitimacy of the allow-with-rationale pattern the mirror ratifies.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md audit-evidence section, '#[allow(...)] census', Load-bearing class (too_many_arguments / too_many_lines with a // Rationale:)"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs standardize_external_simple (line 399), derive_external_sample_moments (line 513), standardize_external_load (597), standardize_external_ncs (627)",
+      "why": "The load and ncs standardization is factored well: a single generic standardize_external_simple<R,M,FM,FR> owns the eta=(value-mean)/std path with closure-injected per-class field access, so the load/ncs callers carry no entity vocabulary and no arity bloat. This shows the crate factors shared logic correctly when a natural closure seam exists; the arity/coupling smell is confined to the PAR(p) inflow+historical seed-threading path, not crate-wide over-parameterization.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/sampling/class_sampler.rs ClassSampler enum (line 63) and run_eta_inversion as a shared driver",
+      "why": "Enum census within sampling is clean: ClassSampler is genuinely four-valued (InSample/OutOfSample/Historical/External), one variant per SamplingScheme each with distinct data, not an effectively-one-valued enum with an unconstructed variant. run_eta_inversion (eta_inversion.rs:37) is a real shared driver with two in-crate consumers (external + historical), which is the correct amount of abstraction, not speculative generality.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/sampling/{window.rs, out_of_sample.rs, insample.rs, eta_inversion.rs}",
+      "why": "Swept for over-engineering shapes (one-consumer traits, speculative generics, dead abstractions, one-valued enums): none found. No pub trait exists in the sampling manifest; the only generic functions (select_transition_child over an iterator, standardize_external_simple / derive_external_sample_moments over closures) each abstract over real multiplicity, and no seam has a single present consumer.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/sampling/eta_inversion.rs (run_eta_inversion) and the named standardization chain (external.rs standardize_external_inflow:262, standardize_external_simple:399, standardize_external_load:597, standardize_external_ncs:627, pad_library_to_uniform:852; historical.rs standardize_historical_windows:296; window.rs discover_historical_windows:142)",
+      "why": "The perf hot spot the dispatch pointed at is clean w.r.t. per-scenario/per-stage allocation. run_eta_inversion pre-allocates every scratch buffer (past_lag_buf, lag_state, lag_buf, lag_accum, lag_weight_accum, raw_rate_buf, incoming_scratch, downstream_accumulator/completed_lags) ONCE before the (outer x stage x hydro) loop nest and reuses them via copy_from_slice/fill across outer iterations \u2014 the canonical reuse-buffers pattern, zero allocation inside the loops. standardize_external_inflow / _simple build their EntityId->idx HashMap and the raw_values / mean_std flat buffers exactly once per call (outside the row/stage loops); standardize_historical_windows builds obs_table, stage_index (sorted once), the hydro-id HashMap, and full_sequence once per call; discover_historical_windows builds all_years, the lookup HashSet, required_sequence and candidate_years once, and is_window_complete does only HashSet lookups (no allocation) in its hydro x sequence loop. No Vec/HashMap is constructed inside a per-scenario or per-stage loop anywhere in this chain.",
+      "sanctionedBy": "in-code rationale in eta_inversion.rs run_eta_inversion doc comment ('this driver owns only the scratch buffers and the loop nest') and out_of_sample.rs fill_uncorrelated doc comment ('No heap allocation.')"
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/sampling/mod.rs ForwardSampler::sample (line 213) and class_sampler.rs ClassSampler::fill (InSample/Historical/External/SAA arms)",
+      "why": "The composite forward draw is allocation-free on the hot path for every scheme except the QMC/LHS OutOfSample arms flagged above: sample() only split_at_mut()s the caller-owned noise_buf and hands per-class segments down; InSample/Historical/External fill() arms are pure copy_from_slice out of pre-standardized libraries/tree, and SAA draws in place into `output`. build_forward_sampler builds noise_methods Box<[NoiseMethod]> once per run (not per draw). This confirms the per-scenario recompute is isolated to the QmcSobol/QmcHalton/Lhs methods and does not contaminate the common paths.",
+      "sanctionedBy": "in-code rationale on ForwardSampler ('reused across all (iteration, scenario, stage) calls without per-call allocation')"
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs and correlation.rs rayon sites (out of the sampling sub-station manifest)",
+      "why": "The crate's only two rayon sites carry a canonical-hydro_ids-order reassembly determinism rationale that any fix-shape must preserve byte-for-byte. None of the three candidates above touch par/fitting or any rayon site \u2014 all fixes are confined to the single-process forward-sampler scenario axis (SAA/QMC/LHS point generation) and to per-stage caches keyed on the same seed tuples already in use \u2014 so the parallel-fitting determinism contract is untouched.",
+      "sanctionedBy": "cross-reference to the par sub-station manifest (par/fitting/estimation.rs, correlation.rs); out of scope for this cell"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/tests/saa_golden_value.rs GOLDEN_S0_* constants (lines 25-30) and their assert_eq guards in saa_golden_value_regression",
+      "why": "Six f64 constants pinning the base_seed=42 SAA opening-tree output, asserted bit-exact - a legitimate golden bit-exact regression guard, not a wire-byte pin duplicating a const. This is the only const-pin in the sampling test/integration surface, so the lens's 'wire-byte pins a const already pins' question resolves clean here. Do not trim.",
+      "sanctionedBy": "docs/design/testing-architecture.md 3.1 (golden bit-exact tier) and 5.10 (keep SHA/bit-exact for the small deliberate golden set)"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs mod sample_moment_reduction_proptests (line 3147; derive_external_sample_moments_is_declaration_order_invariant at 3157)",
+      "why": "A declaration-order-invariance property test over derive_external_sample_moments - exactly the proptest expansion the yardstick asks the suite to grow toward for its sort/reduction invariants, so it is worth protecting, not trimming.",
+      "sanctionedBy": "docs/design/testing-architecture.md 5.9 (expand proptest to cover declaration-order/reduction-order invariants)"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "The extensive-form / branching-value oracle harness under crates/cobre-sddp/tests (mirror entry)",
+      "why": "Cross-reference only: the integration-prelude duplication in candidate 2 is the cobre-stochastic analogue of the recorded oracle-harness duplication; cited here rather than restated, and my candidate 2 is anchored in cobre-stochastic/tests (not cobre-sddp/tests) so it is not a re-raise.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md L285 (Oracle test-harness duplication) / prior-register.md Oracle entry, disposition cross-reference"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs container tests: test_new_allocates_correct_sizes (1829), test_eta_roundtrip (1839), test_zero_initialized (1861), test_eta_roundtrip_multiple_cells (1874), test_clone_is_independent (1889), test_send_sync (1856)",
+      "why": "Examined for the lens's 'tautological assertions' question: these exercise real ExternalScenarioLibrary storage semantics (allocation sizing, write-then-read via copy_from_slice, zero-init, clone independence) and the Send+Sync marker - none assert a literal against itself, so the tautology question resolves clean. One minor redundancy (test_eta_roundtrip is subsumed by test_eta_roundtrip_multiple_cells) is noted but sits below the bloat bar and is left unraised to avoid a false positive.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [],
+  "lenses": {
+    "sto-architecture-sampling": 2,
+    "sto-over-engineering-sampling": 2,
+    "sto-performance-sampling": 3,
+    "sto-test-bloat-sampling": 2
+  }
+}

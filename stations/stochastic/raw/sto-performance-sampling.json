@@ -1,0 +1,115 @@
+{
+  "station": "stochastic",
+  "subStation": "sampling",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "performance",
+  "candidates": [
+    {
+      "title": "OutOfSample QmcSobol forward draws re-derive the Sobol direction matrix + scramble params per scenario; the dormant `SobolPrecomputed` hoist is never wired (its `Some` branch is dead in production)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 103
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 84
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/class_sampler.rs | sed -n '287,313p' ; git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '103,124p' ; git grep -nE 'scrambled_sobol_point_precomputed|SobolPrecomputed' a136840d -- crates | grep -v 'qmc_sobol/mod.rs'",
+        "output": "class_sampler.rs (OutOfSample fill arm): builds FreshNoiseSpec then `fill_uncorrelated(spec, None, output, perm_scratch)?;` (line 311) \u2014 always None for sobol_ctx. out_of_sample.rs QmcSobol arm: `if let Some(ctx) = sobol_ctx { scrambled_sobol_point_precomputed(&sobol_spec, ctx, output); } else { scrambled_sobol_point(&sobol_spec, output); }` (lines 119-123). Workspace grep for the precomputed API outside qmc_sobol/mod.rs returns ONLY the out_of_sample.rs import+the Some-branch call at line 120 \u2014 no non-test producer of SobolPrecomputed exists, so the Some branch is never taken. scrambled_sobol_point (qmc_sobol/mod.rs:257) per call runs `build_direction_matrix(spec.dim)` (`let mut result: Vec<[u32;32]> = Vec::with_capacity(dim)` + Joe-Kuo recurrence, qmc_sobol/mod.rs:51) and `derive_scramble_params(seed, spec.dim)` (`(0..dim).map(...).collect()` Vec<(u32,u32)> + rng draws, qmc_sobol/mod.rs:99).",
+        "reading": "The composite ForwardSampler::sample -> ClassSampler::fill is documented as called for every (iteration, scenario, stage) triple. On the OutOfSample QmcSobol path each such call reaches fill_uncorrelated with sobol_ctx == None, so scrambled_sobol_point rebuilds the direction matrix (dim x [u32;32]) and the scramble-params vector every draw. Direction matrix and scramble params depend only on (forward_seed, iteration, noise_group_id, dim) \u2014 invariant across the entire scenario axis at a fixed stage. SobolPrecomputed (qmc_sobol/mod.rs:169) exists precisely to build these once per (seed,iteration,stage,dim) and reuse across scenarios, and fill_uncorrelated already carries the `sobol_ctx: Option<&SobolPrecomputed>` seam (line 84) \u2014 but the sole production caller hard-codes None, leaving the hoist unused and its Some branch dead."
+      },
+      "mechanism": "Per (iteration, scenario, stage) forward draw, scrambled_sobol_point heap-allocates a Vec<[u32;32]> of `dim` direction vectors (running the Joe-Kuo polynomial recurrence, O(dim*32*degree)) plus a Vec<(u32,u32)> of scramble params (seeding an RNG and drawing 2*dim u32). Both are constant across the scenario axis at a fixed (iteration, stage), so the work is redone n_scenarios times per stage per iteration instead of once. The SobolPrecomputed hoist and the `sobol_ctx` seam already exist to amortize it but are never wired from the forward sampler.",
+      "proposedSeverity": "B",
+      "fixShape": "Give the OutOfSample class sampler (or the caller that owns the per-(iteration,stage) loop) a per-stage SobolPrecomputed cache keyed on (forward_seed, iteration, noise_group_id, dim), built once when the stage/iteration first appears and reused across every scenario draw, then pass Some(&ctx) into the already-present `sobol_ctx` parameter of fill_uncorrelated so the precomputed branch (currently dead) is taken. No change to the generator body is needed (SobolPrecomputed / scrambled_sobol_point_precomputed already exist in the tree-noise crate). Determinism is preserved bit-for-bit because SobolPrecomputed::new derives its seed from the same derive_opening_seed(sampling_seed, iteration, stage_id) the point function uses, and the per-scenario XOR/scramble math is identical. The cache lifetime/ownership decision is a sampler-side concern in this sub-station; the tree-noise crate ships the primitive unchanged.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null
+    },
+    {
+      "title": "OutOfSample QmcHalton forward draws rebuild the prime sieve and a `total_scenarios`-sized Vec<Vec<Vec<u32>>> scramble table on every scenario; no precompute hoist exists",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 125
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '125,135p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_halton/mod.rs | sed -n '261,290p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_halton/mod.rs | grep -nE 'fn build_scramble_tables|Vec<Vec<Vec<u32>>>|fn sieve_primes'",
+        "output": "out_of_sample.rs QmcHalton arm: `scrambled_halton_point(&halton_spec, output);` (line 134). scrambled_halton_point (qmc_halton/mod.rs:261) per call: `let primes = sieve_primes(spec.dim); let tables = build_scramble_tables(seed, &primes, spec.total_scenarios as usize);` then a per-dim loop. build_scramble_tables (qmc_halton/mod.rs:119) returns `Vec<Vec<Vec<u32>>>` (`let mut tables = Vec::with_capacity(primes.len())`, per-dim `Vec<Vec<u32>>` of max_digits entries, each a `Vec<u32>` permutation of the prime base). sieve_primes allocates `vec![false; upper_bound+1]` then collects.",
+        "reading": "Same per-(iteration,scenario,stage) call site as candidate 1 (fill_uncorrelated with sobol_ctx None; the Halton arm has no ctx parameter at all). Every forward draw re-runs a prime sieve and rebuilds a three-level nested Vec of scramble permutation tables whose outer extent scales with dim and whose inner permutations are sized by the prime bases; the digit depth is derived from spec.total_scenarios. These tables depend only on (forward_seed, iteration, noise_group_id, dim, total_scenarios) and are identical for every scenario at a stage, yet are freshly heap-allocated and recomputed for each scenario draw. Unlike Sobol there is no HaltonPrecomputed type, so even the seam is absent."
+      },
+      "mechanism": "Per forward draw, scrambled_halton_point allocates a fresh prime sieve (Vec<bool> of upper_bound) and a nested Vec<Vec<Vec<u32>>> of Owen/Faure-style scramble permutation tables (outer length dim, middle length ~digit-depth(total_scenarios), inner length prime-base), then reads a single point out of it. All of this is invariant across the scenario axis, so at a stage with n_scenarios forward passes the sieve and the nested-Vec table are built n_scenarios times instead of once \u2014 a per-scenario allocation storm plus redundant table construction on the forward hot path.",
+      "proposedSeverity": "B",
+      "fixShape": "Mirror the Sobol hoist: introduce a per-(iteration,stage) precomputed Halton context (a HaltonPrecomputed holding the prime list and the scramble tables) built once per (forward_seed, iteration, noise_group_id, dim, total_scenarios) and reused across every scenario draw. This requires a new precompute type + `_precomputed` point entry in the tree-noise crate (qmc_halton), consumed here via a `halton_ctx: Option<&HaltonPrecomputed>` parameter on fill_uncorrelated symmetric to the existing sobol_ctx \u2014 flag as a cross-station dependency on the tree-noise sub-station for the primitive; the sampler-side wiring (cache ownership + threading) is this sub-station's part. Determinism preserved: the tables depend only on the seed tuple already used, so the precomputed and per-call results are bit-identical.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null
+    },
+    {
+      "title": "OutOfSample LHS forward draws regenerate a full Fisher-Yates permutation of `total_scenarios` per dimension per scenario, giving O(dim * total_scenarios^2) work per stage across the scenario axis",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+          "symbol": "fill_uncorrelated",
+          "line": 92
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+          "symbol": "ClassSampler::fill",
+          "line": 311
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '92,102p' ; git show a136840d:crates/cobre-stochastic/src/tree/lhs.rs | sed -n '/pub fn sample_lhs_point/,/^}/p'",
+        "output": "out_of_sample.rs Lhs arm: `sample_lhs_point(&lhs_spec, output, perm_scratch);` (line 101). sample_lhs_point (tree/lhs.rs): `let perm = &mut perm_scratch[..n];` (n = total_scenarios) then `for slot in output.iter_mut().take(spec.dim) { for (i,p) in perm.iter_mut().enumerate() { *p = i; } fisher_yates(perm, &mut perm_rng); let stratum = perm[scenario_idx]; ... }`. The full 0..n permutation is re-initialized and fully shuffled once per output slot (per entity/dimension), and only perm[scenario_idx] is read from each.",
+        "reading": "For a single (iteration, scenario, stage) point of `dim` entities, sample_lhs_point performs `dim` complete Fisher-Yates shuffles over `n = total_scenarios` elements \u2014 O(dim * total_scenarios) per point \u2014 but extracts only one stratum index per dimension. Called once per scenario across the whole forward set, the per-stage cost is O(dim * total_scenarios^2). The permutation for a given dimension is identical for every scenario at a fixed (iteration, stage) (perm_rng is reseeded from derive_opening_seed(sampling_seed, iteration, stage_id), independent of scenario) \u2014 the in-code comment 'perm_rng advances identically on all workers, so the permutation matches' confirms it is scenario-invariant \u2014 so the entire shuffle is recomputed n_scenarios times to read n_scenarios different indices out of the same permutation."
+      },
+      "mechanism": "The point-wise LHS generator recomputes, for every scenario, the same per-dimension stratification permutation of all `total_scenarios` strata (a full Fisher-Yates each), reading a single index. Because the permutation is scenario-invariant at a fixed (iteration, stage), the forward pass pays O(dim * total_scenarios^2) per stage where O(dim * total_scenarios) suffices \u2014 a quadratic-in-scenario recompute (not an allocation, perm_scratch is caller-owned; the cost is redundant shuffling) on the forward hot path.",
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the per-(iteration,stage) LHS permutation set across the scenario axis: build the `dim` stratification permutations once per (forward_seed, iteration, noise_group_id, total_scenarios) into a per-stage cache (a stride-dim*n usize buffer, or a batch already produced by the tree-noise `generate_lhs` batch path), then each scenario reads its stratum column with no reshuffle. The draw RNG stays per-(scenario,dimension) so stratified values remain distinct. Owning the permutation cache is a sampler-side concern in this sub-station; the batch permutation primitive lives in tree-noise (cross-reference the existing generate_lhs batch generator). Determinism preserved: perm_rng seeding is unchanged, so the same permutation and the same stratum-per-scenario are produced bit-for-bit.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/eta_inversion.rs (run_eta_inversion) and the named standardization chain (external.rs standardize_external_inflow:262, standardize_external_simple:399, standardize_external_load:597, standardize_external_ncs:627, pad_library_to_uniform:852; historical.rs standardize_historical_windows:296; window.rs discover_historical_windows:142)",
+      "why": "The perf hot spot the dispatch pointed at is clean w.r.t. per-scenario/per-stage allocation. run_eta_inversion pre-allocates every scratch buffer (past_lag_buf, lag_state, lag_buf, lag_accum, lag_weight_accum, raw_rate_buf, incoming_scratch, downstream_accumulator/completed_lags) ONCE before the (outer x stage x hydro) loop nest and reuses them via copy_from_slice/fill across outer iterations \u2014 the canonical reuse-buffers pattern, zero allocation inside the loops. standardize_external_inflow / _simple build their EntityId->idx HashMap and the raw_values / mean_std flat buffers exactly once per call (outside the row/stage loops); standardize_historical_windows builds obs_table, stage_index (sorted once), the hydro-id HashMap, and full_sequence once per call; discover_historical_windows builds all_years, the lookup HashSet, required_sequence and candidate_years once, and is_window_complete does only HashSet lookups (no allocation) in its hydro x sequence loop. No Vec/HashMap is constructed inside a per-scenario or per-stage loop anywhere in this chain.",
+      "sanctionedBy": "in-code rationale in eta_inversion.rs run_eta_inversion doc comment ('this driver owns only the scratch buffers and the loop nest') and out_of_sample.rs fill_uncorrelated doc comment ('No heap allocation.')"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/mod.rs ForwardSampler::sample (line 213) and class_sampler.rs ClassSampler::fill (InSample/Historical/External/SAA arms)",
+      "why": "The composite forward draw is allocation-free on the hot path for every scheme except the QMC/LHS OutOfSample arms flagged above: sample() only split_at_mut()s the caller-owned noise_buf and hands per-class segments down; InSample/Historical/External fill() arms are pure copy_from_slice out of pre-standardized libraries/tree, and SAA draws in place into `output`. build_forward_sampler builds noise_methods Box<[NoiseMethod]> once per run (not per draw). This confirms the per-scenario recompute is isolated to the QmcSobol/QmcHalton/Lhs methods and does not contaminate the common paths.",
+      "sanctionedBy": "in-code rationale on ForwardSampler ('reused across all (iteration, scenario, stage) calls without per-call allocation')"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs and correlation.rs rayon sites (out of the sampling sub-station manifest)",
+      "why": "The crate's only two rayon sites carry a canonical-hydro_ids-order reassembly determinism rationale that any fix-shape must preserve byte-for-byte. None of the three candidates above touch par/fitting or any rayon site \u2014 all fixes are confined to the single-process forward-sampler scenario axis (SAA/QMC/LHS point generation) and to per-stage caches keyed on the same seed tuples already in use \u2014 so the parallel-fitting determinism contract is untouched.",
+      "sanctionedBy": "cross-reference to the par sub-station manifest (par/fitting/estimation.rs, correlation.rs); out of scope for this cell"
+    }
+  ],
+  "_needsHuman": []
+}

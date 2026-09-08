@@ -1,0 +1,92 @@
+{
+  "station": "stochastic",
+  "subStation": "sampling",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "ForwardSamplerConfig encodes a per-class scheme x library validity matrix as four independent Option<&Library> fields, so invalid scheme/library pairings are representable and caught only at runtime",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 317
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '263,289p;359,388p'",
+        "output": "pub struct ForwardSamplerConfig<'a> { class_schemes: ClassSchemes, ctx, stages, dims, historical_library: Option<&'a HistoricalScenarioLibrary> (Required when class_schemes.inflow == Some(Historical)), external_inflow_library: Option<&'a ExternalScenarioLibrary> (Required when inflow == Some(External)), external_load_library (Required when load == Some(External)), external_ncs_library (Required when ncs == Some(External)) } ... build_class_sampler: Historical => historical_library.ok_or_else(|| MissingScenarioSource{reason: historical replay scheme selected but no historical library was loaded}); External => external_library.ok_or_else(|| MissingScenarioSource{reason: external scenario scheme selected but no external library was loaded})",
+        "reading": "The four Options are not four independent knobs. build_forward_sampler pairs class_schemes.inflow with EITHER historical_library OR external_inflow_library (mutually exclusive by inflow scheme), and hard-wires historical_library: None for the load and ncs classes so they read only external_load_library / external_ncs_library. Validity is a (3 class x scheme) matrix flattened into 4 loosely-typed Options: each field is required-iff a corresponding class_schemes.<class> value, and the requirement is enforced only at runtime via StochasticError::MissingScenarioSource. The type therefore admits inflow==Some(External) with external_inflow_library==None (a runtime error) and inflow==InSample with a library Some (silently ignored dead input). The doc comments themselves restate the four-way coupling ('Required when class_schemes.inflow == Some(Historical)' etc.), which is the coupling that the type does not encode."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Fold each class's scheme selector and its required library into one per-class source enum whose data-bearing variants carry the borrow: e.g. InflowSource { InSample, OutOfSample, Historical(&HistoricalScenarioLibrary), External(&ExternalScenarioLibrary) } and a LoadSource / NcsSource with only { InSample, OutOfSample, External(&ExternalScenarioLibrary) } (load and ncs never take a historical library, so the hard-wired historical_library: None disappears). build_forward_sampler then matches per-class variants instead of pairing a scheme with a maybe-present Option, so the scheme-to-library requirement becomes a compile-time consequence, the InSample-with-library silent-ignore state stops being representable, and the two mutually-exclusive inflow libraries can no longer both be Some. The MissingScenarioSource diagnostics move up to the config-construction boundary (where a library is or is not built), preserving the 'provide the external scenario file' / 'set a seed in stages.json' guidance. Not a one-consumer abstraction (three consumers: inflow, load, ncs); introduces no engine or paradigm noun, so no L1-purity conflict. Blast radius: ForwardSamplerConfig, build_forward_sampler, build_class_sampler, ClassSamplerParams in this crate, plus the ForwardSamplerConfig construction sites in cobre-sddp (simulation/state.rs, training/forward/sampler.rs, training/forward_pass_state.rs) cited as ripple, not anchored here.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "standardize_external_inflow's #[allow(too_many_arguments)] rationale ('no natural sub-grouping exists') is contradicted by the derived-seed 4-tuple being re-threaded verbatim through four signatures across two crates",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/external.rs",
+          "symbol": "standardize_external_inflow",
+          "line": 262
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/eta_inversion.rs",
+          "symbol": "run_eta_inversion",
+          "line": 37
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+          "symbol": "standardize_historical_windows",
+          "line": 296
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/sampling/external.rs | sed -n '256,273p'",
+        "output": "// Rationale: the accumulator seed pair joins the lag-values seed pair; no // natural sub-grouping exists that would not just relocate the arity into a // literal struct. #[allow(clippy::too_many_arguments)] pub fn standardize_external_inflow(library, external_rows, hydro_ids, stages, par, derived_lag_values: &[f64], l_state: usize, derived_accum: &[f64], derived_weight: &[f64], stage_lag_transitions, downstream_par_order: usize)",
+        "reading": "The rationale asserts the four seed inputs (derived_lag_values, l_state, derived_accum, derived_weight) have 'no natural sub-grouping'. The code contradicts that: the same 4-tuple is re-declared verbatim as positional parameters in run_eta_inversion (eta_inversion.rs:37, passed straight through) and in standardize_historical_windows (historical.rs:296, whose own comment at line 292 says it 'mirrors standardize_external_inflow's inputs'), and in the caller build_external_inflow_library (cobre-sddp setup/scenario_libraries.rs:110, whose comment at line 103 again claims 'a context struct would just relocate the arity, not reduce it'). run_eta_inversion resets lag_state (from derived_lag_values), lag_accum (from derived_accum) and lag_weight_accum (from derived_weight) TOGETHER at every outer-loop boundary, i.e. they are operationally one seed. A 4-tuple re-declared across four signatures in two crates is a natural aggregate by construction. 'Would just relocate the arity' is false: the struct is built ONCE where the seed is computed and passed by reference to all four consumers, so arity is reduced at four sites, not relocated; and because derived_lag_values / derived_accum / derived_weight are all &[f64] of equal length, the positional form admits a silent transposition at each of the four call sites that a named struct eliminates."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Introduce a by-reference aggregate for the stage-0 derived seed, e.g. DerivedSeed<'a> { lag_values: &'a [f64], l_state: usize, accum: &'a [f64], weight: &'a [f64] }, constructed once where the seed is computed and passed as a single argument through standardize_external_inflow, run_eta_inversion, standardize_historical_windows, and the caller build_external_inflow_library. The shared per-hydro canonical-position ordering and 'empty accum means reset-to-zero' invariant, currently restated in three near-identical doc-comment blocks, attaches to the type once. This shrinks the 11-arg / 14-arg / 12-arg signatures and removes the same-typed &[f64] transposition hazard. This does NOT dispute the mirror's blanket sanction of allow-with-rationale as a load-bearing lint class; it disputes only the factual claim of this specific rationale. Once the seed is a struct the #[allow(too_many_arguments)] can be dropped from these functions. Multiple consumers (four), so not a one-consumer abstraction; no engine or paradigm noun, so no L1-purity conflict. Blast radius: three functions in this crate plus build_external_inflow_library in cobre-sddp (cited, not anchored).",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "docs/design/reserved-seams-and-deferred-debt.md audit-evidence #[allow(...)] census vs the sampling too_many_arguments sites (external.rs:261, historical.rs:295, eta_inversion.rs:36)",
+      "why": "Each of the three #[allow(clippy::too_many_arguments)] sites in the sampling manifest carries a // Rationale: comment and falls in the mirror-sanctioned 'Load-bearing / refactor-decision lint' class, so none is plan-dead or accidental. My item-(4) candidate disputes only the factual correctness of one rationale (rebutted by the 4-fold recurrence of the derived-seed tuple), never the legitimacy of the allow-with-rationale pattern the mirror ratifies.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md audit-evidence section, '#[allow(...)] census', Load-bearing class (too_many_arguments / too_many_lines with a // Rationale:)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs standardize_external_simple (line 399), derive_external_sample_moments (line 513), standardize_external_load (597), standardize_external_ncs (627)",
+      "why": "The load and ncs standardization is factored well: a single generic standardize_external_simple<R,M,FM,FR> owns the eta=(value-mean)/std path with closure-injected per-class field access, so the load/ncs callers carry no entity vocabulary and no arity bloat. This shows the crate factors shared logic correctly when a natural closure seam exists; the arity/coupling smell is confined to the PAR(p) inflow+historical seed-threading path, not crate-wide over-parameterization.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/class_sampler.rs ClassSampler enum (line 63) and run_eta_inversion as a shared driver",
+      "why": "Enum census within sampling is clean: ClassSampler is genuinely four-valued (InSample/OutOfSample/Historical/External), one variant per SamplingScheme each with distinct data, not an effectively-one-valued enum with an unconstructed variant. run_eta_inversion (eta_inversion.rs:37) is a real shared driver with two in-crate consumers (external + historical), which is the correct amount of abstraction, not speculative generality.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/{window.rs, out_of_sample.rs, insample.rs, eta_inversion.rs}",
+      "why": "Swept for over-engineering shapes (one-consumer traits, speculative generics, dead abstractions, one-valued enums): none found. No pub trait exists in the sampling manifest; the only generic functions (select_transition_child over an iterator, standardize_external_simple / derive_external_sample_moments over closures) each abstract over real multiplicity, and no seam has a single present consumer.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": []
+}

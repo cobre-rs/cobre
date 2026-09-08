@@ -1,0 +1,115 @@
+{
+  "station": "stochastic",
+  "subStation": "tree-noise",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "Near-verbatim ~230-line fixture prelude copied across the QMC integration binaries (halton/sobol/lhs) with eight byte-identical helpers and no test_support home; the copy is already drifting",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/sobol_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/lhs_integration.rs",
+          "symbol": "make_hydro",
+          "line": 206
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "approx_erf",
+          "line": 43
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "identity_correlation",
+          "line": 105
+        }
+      ],
+      "evidence": {
+        "command": "bash -c 'diff <(git show a136840d:crates/cobre-stochastic/tests/halton_integration.rs | sed -n \"41,55p;105,267p\") <(git show a136840d:crates/cobre-stochastic/tests/sobol_integration.rs | sed -n \"41,55p;105,267p\") && echo HELPERS_HALTON_EQ_SOBOL; diff <(git show a136840d:crates/cobre-stochastic/tests/halton_integration.rs | sed -n \"207,255p\") <(git show a136840d:crates/cobre-stochastic/tests/reproducibility.rs | sed -n \"68,116p\") && echo MAKE_HYDRO_EQ_REPRO; for f in halton_integration sobol_integration lhs_integration conformance forward_sampler reproducibility saa_golden_value; do echo -n \"$f: \"; git show a136840d:crates/cobre-stochastic/tests/$f.rs | grep -E \"fn identity_correlation\\(\" | head -1; done; git ls-tree -r --name-only a136840d -- crates/cobre-stochastic/tests/ | grep -c common'",
+        "output": "HELPERS_HALTON_EQ_SOBOL\nMAKE_HYDRO_EQ_REPRO\nhalton_integration: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\nsobol_integration: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\nlhs_integration: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\nconformance: fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\nforward_sampler: fn identity_correlation(ids: &[i32]) -> CorrelationModel {\nreproducibility: fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\nsaa_golden_value: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\n0",
+        "reading": "The two diffs return empty (exit 0), so the eight fixture helpers -- approx_erf (h/s/lhs L43-51), norm_cdf (L53-55), identity_correlation (h/s L105-133, lhs L104-132), correlated_correlation (h/s L135-163, lhs L134-162), identity_correlation_model (h/s L165-192, lhs L164-191), make_bus (h/s L194-205, lhs L193-204), make_hydro (h/s L207-255, lhs L206-254; a single 49-line copy), make_inflow_model (h/s L257-267, lhs L256-266) -- are BYTE-IDENTICAL across halton/sobol/lhs, and make_hydro is additionally byte-identical to reproducibility.rs (and, verified separately, conformance.rs) so a single fixture block is physically copied into 5-6 of the crate's 8 integration binaries. The imports/allow block (L1-35) is identical bar the doc line and the one point-type import (tree::qmc_halton vs qmc_sobol vs lhs). The final `grep -c common` = 0 proves there is NO tests/common/ shared module: every tests/*.rs is standalone. The identity_correlation listing shows the copy is ALREADY DRIFTING -- it has forked into two incompatible return types (DecomposedCorrelation in the QMC trio + saa_golden_value; CorrelationModel in conformance/forward_sampler/reproducibility) and forward_sampler even renamed the param entity_ids->ids -- the exact silent-divergence hazard consolidation removes. Only make_stage_<family> and build_<family>_context genuinely vary per binary (fn name + NoiseMethod variant + block presence + panic-string), ~50 lines; those are the legitimate per-family remainder, recorded as a positive, not part of this smell."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the shared fixture prelude out of the per-binary copies into one home. The crate already dev-depends on cobre-core with its `test-support` feature but exposes NO `test-support` feature of its own and has NO tests/common/. Two roadmap-consistent shapes: (a) interim -- add crates/cobre-stochastic/tests/common/mod.rs holding make_bus/make_hydro/make_inflow_model/identity_correlation/correlated_correlation/identity_correlation_model plus the numeric approx_erf/norm_cdf, and `mod common;` it once from each integration binary (mirrors cobre-sddp/tests/common/); (b) end-state per the yardstick \u00a75.2 -- expose the entity/InflowModel/correlation builders behind a cobre-stochastic `test-support` feature gated `#[cfg(any(test, feature = \"test-support\"))]`, and push the deck-agnostic numeric helpers (approx_erf/norm_cdf) into cobre-core's `test-support` surface (the yardstick's rule that generic scaffolding lives in cobre-core, and the same hoist that \u00a75.2 says resolves the mirror's oracle-harness close/tolerance duplication). Reconcile the two forked identity_correlation return types into one canonical builder during the hoist. Keep make_stage_<family>/build_<family>_context as thin per-family wrappers (parameterize by NoiseMethod / block presence) rather than deleting them. No test body, assertion, or tier changes -- a pure fixture relocation, count-neutral.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    },
+    {
+      "title": "Inline-giant vs extracted-sibling unit-test homing coin-flip inside cobre-stochastic: tree/generate.rs carries ~2030 inline test-LOC while par/fitting uses extracted tests.rs siblings",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "tests",
+          "line": 341
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "tests",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/normal/precompute.rs",
+          "symbol": "tests",
+          "line": 299
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "tests",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/spectral.rs",
+          "symbol": "tests",
+          "line": 286
+        }
+      ],
+      "evidence": {
+        "command": "bash -c 'for f in tree/generate.rs tree/opening_tree.rs correlation/resolve.rs normal/precompute.rs correlation/spectral.rs noise/rng.rs noise/seed.rs; do b=$(git show a136840d:crates/cobre-stochastic/src/$f); t=$(echo \"$b\" | wc -l); c=$(echo \"$b\" | grep -nE \"#\\[cfg\\(test\\)\\]\" | head -1 | cut -d: -f1); echo \"$f total=$t cfg(test)@=$c inline_test_LOC=~$((t-c+1))\"; done; git ls-tree -r --name-only a136840d -- crates/cobre-stochastic/src/par/fitting/ | grep tests.rs'",
+        "output": "tree/generate.rs total=2370 cfg(test)@=341 inline_test_LOC=~2030\ntree/opening_tree.rs total=739 cfg(test)@=438 inline_test_LOC=~302\ncorrelation/resolve.rs total=976 cfg(test)@=446 inline_test_LOC=~531\nnormal/precompute.rs total=698 cfg(test)@=299 inline_test_LOC=~400\ncorrelation/spectral.rs total=568 cfg(test)@=286 inline_test_LOC=~283\nnoise/rng.rs total=73 cfg(test)@=34 inline_test_LOC=~40\nnoise/seed.rs total=246 cfg(test)@=74 inline_test_LOC=~173\ncrates/cobre-stochastic/src/par/fitting/estimation/tests.rs\ncrates/cobre-stochastic/src/par/fitting/tests.rs",
+        "reading": "Within this one crate the unit-test homing rule is a coin-flip -- exactly the yardstick's \u00a73.2.4 (inline-giant vs extracted-sibling asymmetry) and \u00a75.1 (a single deterministic homing threshold, proposal ~500 test-LOC / ~40 test fns). tree/generate.rs keeps ~2030 test-LOC INLINE (4x over the proposed threshold), correlation/resolve.rs ~531 and normal/precompute.rs ~400 inline, while par/fitting extracts its tests to sibling tests.rs files. There is no rule deciding which form applies; the same directory can hold either. This is a navigability/uniformity smell, not a volume complaint -- the yardstick \u00a77 explicitly forbids deleting tests to shrink the suite. par/fitting/tests.rs and estimation/tests.rs are in the 'par' sub-station and are cited only as the contrasting extracted form; the candidate anchors are all in tree-noise src."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Adopt the yardstick \u00a75.1 deterministic homing rule as a crate-wide lint: unit tests stay inline below a fixed threshold (the proposal is ~500 test-LOC or ~40 test fns), extracted to a sibling `tests.rs` above it. Under that rule tree/generate.rs (~2030), correlation/resolve.rs (~531) move to `<module>/tests.rs` siblings (matching the already-extracted par/fitting form), while small modules (noise/rng.rs ~40, noise/seed.rs) stay inline. Pure relocation, no test body/assertion/tier/gate change, count-neutral -- resolves the intra-crate coin-flip without touching coverage.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "Cross-reference: mirror 'Oracle test-harness duplication' (docs/design/reserved-seams-and-deferred-debt.md L285; prior-register disposition = cross-reference)",
+      "why": "The QMC fixture-prelude duplication (candidate 1) is the same class of integration test-harness duplication the mirror already records for the SDDP oracle harness, but this instance is freshly anchored inside crates/cobre-stochastic/tests (in-station) whereas the oracle harness lives in crates/cobre-sddp/tests. Per the register I cite the mirror entry and do NOT restate the oracle-harness duplication as a finding; the yardstick \u00a75.2 hoist that resolves the oracle close/tolerance helpers into cobre-core's test-support surface is the same mechanism candidate 1's fix rides on.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md 'Oracle test-harness duplication' (L285); prior-register.md cross-reference disposition"
+    },
+    {
+      "subject": "crates/cobre-stochastic/tests/{halton,sobol,lhs}_integration.rs -- make_stage_<family> (halton L58-77 + _with_block L80-103; sobol L58-103; lhs make_stage_lhs L57-80 + make_stage_lhs_no_block L83-102) and build_<family>_context (halton/sobol L269-316, lhs L268-315)",
+      "why": "These are the genuinely per-family ~50 lines: they differ only in the NoiseMethod variant (QmcHalton/QmcSobol/Lhs), block presence, and panic-string wording. They are NOT part of the duplication smell and must survive any consolidation as thin per-family wrappers -- protecting them from over-consolidation is why candidate 1's fix parameterizes rather than deletes.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/tests/par_a_historical_replay.rs (617 lines) and saa_golden_value.rs (139 lines)",
+      "why": "Examined and clean of the prelude smell: par_a_historical_replay.rs declares none of the eight shared helpers (constructs its own fixtures), and saa_golden_value.rs shares only identity_correlation (in the DecomposedCorrelation form). Neither copies the make_bus/make_hydro/make_inflow_model block, so they are not part of candidate 1's blast radius.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/noise/{rng,quantile,seed}.rs inline #[cfg(test)] modules",
+      "why": "Examined for the homing asymmetry (candidate 2) and found correctly homed: rng.rs (~40 inline test-LOC), quantile.rs (~100), seed.rs (~173) all sit at or below the yardstick \u00a75.1 proposed threshold, so keeping them inline is the correct form, not bloat. They are the counter-examples that make the tree/generate.rs giant-inline case a genuine asymmetry rather than a blanket 'everything should extract' claim.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a75.1 (homing threshold)"
+    }
+  ],
+  "_needsHuman": []
+}

@@ -1,0 +1,398 @@
+{
+  "station": "stochastic",
+  "subStation": "seam",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "candidates": [
+    {
+      "title": "StochasticContext is both a computed store and a config/layout echo: 5 precomputed components + 5 derived-layout scalars + 2 pass-through seeds + 1 metadata field, each exposed via a 1:1 &-getter (the nascent Switchable<T> uncertainty store)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "StochasticContext",
+          "line": 258
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "set_solve_order",
+          "line": 317
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/context.rs | sed -n '257,275p'",
+        "output": "257: #[derive(Debug)] 258: pub struct StochasticContext { 259:     par_lp: PrecomputedPar, 260:     correlation: DecomposedCorrelation, 261:     opening_tree: OpeningTree, 262:     normal_lp: PrecomputedNormal, 263:     ncs_normal: PrecomputedNormal, 264:     ncs_entity_ids: Vec<EntityId>, 265:     entity_order: Box<[EntityId]>, 266:     base_seed: u64, 270:     forward_seed: Option<u64>, 271:     dim: usize, 272:     n_load_buses: usize, 273:     n_stochastic_ncs: usize, 274:     provenance: StochasticProvenance, 275: }",
+        "reading": "The 13 private fields split into four roles: 5 precomputed components (par_lp, correlation, opening_tree, normal_lp, ncs_normal) that ARE the store; 5 derived-layout values (ncs_entity_ids, entity_order, dim, n_load_buses, n_stochastic_ncs) that are addressing metadata recomputable from noise_entity_order; 2 pass-through config values (base_seed, forward_seed) echoed straight from the builder args; and 1 metadata field (provenance). Every field is surfaced through a trivial &-returning getter (par()/correlation()/opening_tree()/normal()/ncs_normal()/entity_order()/... at 285-393); the only real behavior is set_solve_order (line 317), a post-construction mutation of the opening tree (two-phase init). So the Q3 answer is BOTH: a store (the precomputed infra, read by ~30 downstream files across cobre-sddp/cli, so NOT a one-consumer abstraction) fused with a parameter/layout bag (config echoed back through getters). Q4 hint: the precomputed-component group is the Switchable<T> store payload; the derived-layout group is its addressing metadata; base_seed/forward_seed are RunParams-shaped and separate from the store under the input-data-lifecycle split."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Phase-1 destination note, NOT executed by this spec (lens Q4 is alignmentHint-only). When Part IV/V introduces the Switchable<T> uncertainty store, the precomputed-component fields become the store payload and the entity_order/dim/n_* fields its addressing metadata, while base_seed/forward_seed migrate to the RunParams half of the Model/RunParams/PolicyState split rather than being echoed through the store. No restructuring here; recorded so the alignment epic knows this struct is the carve target and the config-echo/store fusion is the seam to unpick.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1",
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-seam-01"
+    },
+    {
+      "title": "generation seam ingests realized external-scenario tables: external_ar0_inflow_models/external_derived_load_models synthesize fitted models from System::external_*_scenarios() and re-derive cobre-io's stage-id resolution inside the L1 store constructor module",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "stage_id_to_index",
+          "line": 406
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "resolve_row_stages",
+          "line": 419
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_derived_load_models",
+          "line": 444
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_ar0_inflow_models",
+          "line": 492
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/context.rs | sed -n '397,412p;475,505p'",
+        "output": "397: /// Map each study stage's declared `Stage.id` to its 0-based position in ... 399: /// resolution `cobre-io`'s `StageIdResolver` performs for the sigma=0 validator 400: /// (rule 47), replicated here because `cobre-stochastic` cannot depend on 401: /// `cobre-io` (`cobre-io` depends on `cobre-stochastic`). ... 406: fn stage_id_to_index(study_stages: &[Stage]) -> HashMap<i32, usize> {  ||  477: /// Under `External`, override each AR(0) hydro's study-stage [`InflowModel`] 478: /// mean/std with sample moments derived from `system.external_scenarios()`; ... 492: fn external_ar0_inflow_models( 493:     system: &System, ... 502:         system.external_scenarios(),",
+        "reading": "context.rs is the L1 generation store's constructor module. Under the External scheme (build_stochastic_context branches at lines 675-681, 717-740, 747-766) it reaches into System's realized-value external-scenario tables (external_scenarios / external_load_scenarios / external_ncs_scenarios) and synthesizes fitted InflowModel/LoadModel from their sample moments, and it reimplements cobre-io's declared-id->study-index resolver (StageIdResolver, verified live at crates/cobre-io/src/lib.rs:142 + ~8 call sites) because the L1 crate cannot depend on the L2 crate. This is the Q2 generation-vs-realized straddle: the fitted-process seam owns realized-value adaptation and a second copy of stage-id resolution. Not a dispute of the ratified External-authoritative behavior (mirror L983) nor the sigma=0 rejection; strictly a placement/coupling observation. The moment derivation itself is single-owner (derive_external_sample_moments, sampling/external.rs) and correctly shared, so drift risk is confined to stage_id_to_index vs StageIdResolver and to the ingestion glue's home."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Roadmap-aligned: under Part-1 purification the external-scenario tables leave `System` for the cobre-stochastic uncertainty store; the External-ingestion adaptation (sample-moment -> fitted-model synthesis) then moves WITH those tables into the store rather than living in the context constructor, and the paradigm-neutral declared-id->study-index resolver homes once at L0 (cobre-core temporal, the same destination the mirror already registers for the season_cast relocation) so this crate (L1) and cobre-io (L2) consume one resolver instead of two parallel implementations. No engine noun and no L1->engine dependency is introduced. As a bounded interim step short of purification, extract the four External-ingestion helpers (stage_id_to_index, resolve_row_stages, external_derived_load_models, external_ar0_inflow_models) into their own submodule so the store constructor is not the owner of realized-value adaptation.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1",
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-seam-00"
+    },
+    {
+      "title": "Three StochasticError variants have no production producer \u2014 dead public error taxonomy (SpectralDecompositionFailed, SeedDerivationError, UnsupportedSamplingScheme)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "StochasticError",
+          "line": 5
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SpectralDecompositionFailed",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "SeedDerivationError",
+          "line": 45
+        },
+        {
+          "path": "crates/cobre-stochastic/src/error.rs",
+          "symbol": "UnsupportedSamplingScheme",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "build_stochastic_context",
+          "line": 593
+        }
+      ],
+      "evidence": {
+        "command": "for v in SpectralDecompositionFailed SeedDerivationError UnsupportedSamplingScheme; do echo \"== $v ==\"; git grep -n \"$v\" a136840d -- crates/ | grep -v 'crates/cobre-stochastic/src/error.rs'; done",
+        "output": "== SpectralDecompositionFailed ==\ncrates/cobre-stochastic/src/context.rs:593:/// - [`StochasticError::SpectralDecompositionFailed`]: a correlation matrix\n== SeedDerivationError ==\ncrates/cobre-sddp/src/error.rs:241:        let inner = StochasticError::SeedDerivationError {   (inside `#[test] fn from_stochastic_error()`)\n== UnsupportedSamplingScheme ==\n(no output \u2014 zero references anywhere)",
+        "reading": "Of the 9 StochasticError variants, three have zero production construction sites workspace-wide. SpectralDecompositionFailed is never returned \u2014 every spectral-decomposition failure in correlation/spectral.rs returns InvalidCorrelation (spectral.rs:83, spectral.rs:99), yet context.rs:593 documents build_stochastic_context as returning SpectralDecompositionFailed, a promise no code path keeps. SeedDerivationError is constructed only inside cobre-sddp/src/error.rs:241's `#[test] fn from_stochastic_error()`; seed derivation (noise/seed.rs) is infallible SipHash with no failure branch. UnsupportedSamplingScheme has zero references of any kind (no producer, no doc, no test); unsupported-scheme handling uses UnsupportedNoiseMethod / MissingScenarioSource instead. None of the three is in the reserved-seam register, none carries an #[allow(dead_code)] or a reserving comment (public enum variants do not trip dead_code). By the reserved-seam register's own contract (reserved-seams-and-deferred-debt.md L11-16: a seam without an owner AND a consuming milestone 'is dead code to remove, not a seam to reserve'), these unregistered variants are dead public surface, not reserved seams.",
+        "verifyCommands": [
+          "git grep -n 'Err(StochasticError::InvalidCorrelation' a136840d -- crates/cobre-stochastic/src/correlation/spectral.rs  # spectral failures map to InvalidCorrelation, never SpectralDecompositionFailed",
+          "git show a136840d:crates/cobre-sddp/src/error.rs | sed -n '239,247p'  # confirms SeedDerivationError only in from_stochastic_error test"
+        ]
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Two roads, owner's pick. (a) Delete the three never-produced variants from the pub StochasticError enum, delete the context.rs:593 doc bullet that promises SpectralDecompositionFailed, and retarget the cobre-sddp from_stochastic_error test (cobre-sddp/src/error.rs:241, out of station \u2014 cross-reference only) to a live variant such as InsufficientData. (b) If a producer is genuinely planned for any of them, enter that variant in the reserved-seam register with an owner and a consuming milestone, which the register's own contract requires and which none of the three currently has. Blast radius is bounded: error.rs enum + one context.rs doc line + one cobre-sddp test. Removing variants is a breaking change to the pub StochasticError (re-exported at lib.rs `pub use error::StochasticError`), so it rides the same 'licensed public-API break' gate the mirror applies to the superseded cut-sync public methods; the match/From surface needs no edit because no arm can match an unconstructible variant.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "over-engineering",
+      "candidateRef": "sto-over-engineering-seam-00"
+    },
+    {
+      "title": "Backward season-occurrence walk is quadratic in l_state: derive_inflow_seeds restarts nth_previous_occurrence from the anchor for every k",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 104
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "nth_previous_occurrence",
+          "line": 302
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/seeds.rs | sed -n '104,111p'; git show a136840d:crates/cobre-stochastic/src/season_cast/mod.rs | sed -n '615,626p;313,319p'",
+        "output": "seeds.rs:104  for k in 1..=l_state {\n            let Some(projection) = calendar.season_occurrence(season_map, season_def, &merged, k) else { continue; };\n            seeds.lag_values[pos * l_state + (k - 1)] = projection.value;\n        }\n---\nseason_cast/mod.rs:615  pub fn season_occurrence(&self, season_map, season_def, windows, k) -> Option<Projection> {\n        let anchor_stage = self.stages.first()?;\n        let in_progress = season_period_window(season_map, season_def, anchor_stage);\n        let occurrence = nth_previous_occurrence(season_map, season_def, &in_progress, k)?;\n        Some(cast(windows, &occurrence))\n    }\n---\nnth_previous_occurrence:313  for _ in 0..k {\n        let current_def = season_map.seasons.iter().find(|s| s.id == current_id)?;\n        window = previous_season_period_window(season_map, current_def, &window)?;\n        current_id = season_map.season_for_date(window.start)?;\n    }",
+        "reading": "derive_inflow_seeds calls season_occurrence(k) for k = 0..=l_state (seeds.rs:95 and the k-loop at seeds.rs:104). Each season_occurrence(k) recomputes the in_progress anchor and then calls nth_previous_occurrence(anchor, k), whose body (season_cast/mod.rs:313) walks the backward occurrence chain k steps FROM THE ANCHOR every time. So step 1..k-1 are re-walked once for every k: total walk steps are Sum(k, k=1..l_state) = l_state*(l_state+1)/2 instead of l_state. Each walk step performs three O(S) linear scans over season_map.seasons: seasons.iter().find (season_cast/mod.rs:314), previous_season_period_window's Custom-arm seasons.iter().position (season_cast/mod.rs:275+), and season_for_date (cobre-core temporal.rs:450, itself a seasons.iter().find). The redundancy is purely structural (recompute-the-prefix), independent of deck values."
+      },
+      "mechanism": "Recompute-the-prefix quadratic: season_occurrence(k) re-runs nth_previous_occurrence from the anchor for each k in the derive_inflow_seeds loop, so O(n_hydros * l_state^2 * S) backward-walk work is done where an incremental single walk (compute each occurrence once, cast at each) would be O(n_hydros * l_state * S). S is the season count (12 monthly / 52 weekly). Setup-time only: the sole production call site is StudySetup::new pre-study seeding (cobre-sddp setup/mod.rs:515, stochastic_pipeline.rs:253), run once per study, not per scenario/stage/iteration. No timing measured.",
+      "proposedSeverity": "C",
+      "fixShape": "Walk the backward season-occurrence chain once per hydro instead of restarting per k. Add a StageCalendar method (or a season_cast free helper) that, given the anchor and a max depth, yields the sequence of SeasonPeriodWindow occurrences 0..=l_state by advancing previous_season_period_window incrementally, so each occurrence and its O(S) season lookup is computed exactly once; derive_inflow_seeds then casts each returned window onto merged. This stays engine-neutral (no cut/state/Benders noun), introduces no one-consumer abstraction beyond the existing single caller, and preserves the exact walk semantics (same previous_season_period_window / season_for_date sequence) so seed values stay bit-identical.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-seam-00"
+    },
+    {
+      "title": "derive_inflow_seeds re-scans the entire record and conditioning slices once per hydro instead of grouping by hydro_id in one pass",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "derive_inflow_seeds",
+          "line": 73
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/seeds.rs | sed -n '73,92p'",
+        "output": "    for (pos, hydro) in hydros.iter().enumerate() {\n        let record_windows: Vec<RealizedWindow> = record\n            .iter()\n            .filter(|row| row.hydro_id == hydro.id)\n            .map(|row| RealizedWindow { start_date: row.start_date, end_date: row.end_date, value_m3s: row.value_m3s })\n            .collect();\n        let conditioning_windows: Vec<RealizedWindow> = conditioning\n            .iter()\n            .filter(|obs| obs.hydro_id == hydro.id)\n            .map(|obs| RealizedWindow { start_date: obs.start_date, end_date: obs.end_date, value_m3s: obs.value_m3s })\n            .collect();\n        let merged = merge_layered_windows(&record_windows, &conditioning_windows);",
+        "reading": "record (the whole-study inflow_history) and conditioning (recent_observations) hold rows for ALL hydros. The hydro loop (seeds.rs:73) filters each full slice by row.hydro_id == hydro.id (seeds.rs:76 and 85) for every hydro, so each of the two slices is scanned n_hydros times. This is O(n_hydros * (|record| + |conditioning|)); a single grouping pass keyed by hydro_id built before the loop would be O(|record| + |conditioning|). record is the larger input for a real deck (every hydro's full history), so the overscan factor is the hydro count. The re-scan is structural, independent of deck values."
+      },
+      "mechanism": "Repeated full linear scan: the per-hydro .filter over record and conditioning re-reads both slices in full for each of n_hydros hydros, giving O(n_hydros * (|record| + |conditioning|)) instead of the O(|record| + |conditioning|) of a single group-by-hydro_id pass. Setup-time only (same StudySetup::new call site as the sibling candidate); no timing measured.",
+      "proposedSeverity": "C",
+      "fixShape": "Before the hydro loop, do one pass over record and one over conditioning to bucket rows by hydro_id (e.g. a HashMap<EntityId, Vec<RealizedWindow>>), then index each hydro's bucket inside the loop. Keep the existing hydros-canonical-order iteration for the returned position, and preserve the row order within each bucket so merge_layered_windows sees the same window sequence and seeds stay bit-identical. Engine-neutral, no new cross-crate dependency, single existing consumer.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-seam-01"
+    },
+    {
+      "title": "Entity-fixture prelude (make_bus/make_stage/make_hydro/make_inflow_model/identity_correlation) duplicated near-verbatim across two inline seam test modules and the seam integration binary",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "make_hydro",
+          "line": 852
+        },
+        {
+          "path": "crates/cobre-stochastic/src/provenance.rs",
+          "symbol": "make_hydro",
+          "line": 96
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/reproducibility.rs",
+          "symbol": "make_hydro",
+          "line": 68
+        },
+        {
+          "path": "crates/cobre-stochastic/src/seeds.rs",
+          "symbol": "make_hydro",
+          "line": 198
+        }
+      ],
+      "evidence": {
+        "command": "for f in src/context.rs src/provenance.rs src/seeds.rs tests/reproducibility.rs; do echo \"== $f\"; git show a136840d:crates/cobre-stochastic/$f | grep -nE '^\\s*fn (make_bus|make_stage|make_hydro|make_inflow_model|identity_correlation)\\b'; done",
+        "output": "== src/context.rs\n814:    fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {\n839:    fn make_bus(id: i32) -> Bus {\n852:    fn make_hydro(id: i32) -> Hydro {\n902:    fn make_inflow_model(hydro_id: i32, stage_id: i32, std: f64, coeffs: Vec<f64>) -> InflowModel {\n914:    fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\n== src/provenance.rs\n58:    fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {\n83:    fn make_bus(id: i32) -> Bus {\n96:    fn make_hydro(id: i32) -> Hydro {\n146:    fn make_inflow_model(hydro_id: i32, stage_id: i32) -> InflowModel {\n158:    fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\n== src/seeds.rs\n133:    fn make_stage(\n198:    fn make_hydro(id: i32) -> Hydro {\n== tests/reproducibility.rs\n30:fn make_bus(id: i32) -> Bus {\n43:fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {\n68:fn make_hydro(id: i32) -> Hydro {\n118:fn make_inflow_model(hydro_id: i32, stage_id: i32) -> InflowModel {\n130:fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {",
+        "reading": "Five entity builders recur across three seam test regions. Bodies were read in full at baseline (context.rs:793-960, provenance.rs:35-200, tests/reproducibility.rs:1-160): make_stage (context 814 / provenance 58 / reproducibility 43), make_bus (context 839 / provenance 83 / reproducibility 30), make_hydro (context 852 / provenance 96 / reproducibility 68) and identity_correlation (context 914 / provenance 158 / reproducibility 130) are BYTE-IDENTICAL across all three files \u2014 make_hydro is the same ~50-line Hydro struct literal ending in `hydro.declare_mirror_unit_group(EntityId(0))` and the full 17-field HydroPenalties block; make_stage is the same 2024-01-01..2024-02-01 single-block Stage; identity_correlation is the same BTreeMap/spectral CorrelationModel. make_inflow_model matches verbatim between provenance (146) and reproducibility (118); context (902) is a superset that only adds std/coeffs params. seeds.rs make_hydro (198) is a FOURTH near-copy of the same Hydro literal and identical HydroPenalties block, differing only by omitting the declare_mirror_unit_group call and returning the struct directly. This is per-file fixture fragmentation with no shared harness \u2014 exactly the 'A contributor to cobre-stochastic has no template to follow' fragmentation the yardstick names (docs/design/testing-architecture.md \u00a73.2 item 2/3 and \u00a75.2)."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Coverage-neutral de-duplication (no test deleted, per yardstick \u00a77): hoist the shared engine-neutral entity builders into a single test-support surface and have all three seam test regions consume it. Yardstick-canonical home (\u00a75.2 'helpers live with the type they build') is cobre-core's `test-support` feature, since make_bus/make_stage/make_hydro/make_inflow_model/identity_correlation construct cobre-core entities (Bus/Stage/Hydro/InflowModel/CorrelationModel) \u2014 the two inline `#[cfg(test)]` modules use them via `#[cfg(test)]` and the integration binary via a `test-support` dev-dependency feature. A lighter, L1-safe alternative that stays inside this crate is a crate-internal `#[cfg(any(test, feature = \"test-support\"))] mod test_support` in cobre-stochastic exposing the builders so tests/reproducibility.rs can reach them; it has 3+ consumers (both inline modules plus the integration binary) so it does not trip the single-consumer-abstraction guardrail, adds no engine dependency, and names no SDDP paradigm noun. Where a caller needs the extra-parameter form, keep context.rs's make_inflow_model signature (std/coeffs) as the canonical one and let the fixed-value call sites pass 30.0/vec![]. Reconcile the seeds.rs make_hydro variant (no mirror unit group) as an explicit builder option rather than a silent fourth copy.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-seam-00"
+    },
+    {
+      "title": "Tautological equivalence test: test_season_occurrence_matches_pre_refactor_helper_sequence recomputes the same delegating arithmetic on both sides",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "test_season_occurrence_matches_pre_refactor_helper_sequence",
+          "line": 1271
+        },
+        {
+          "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+          "symbol": "season_occurrence",
+          "line": 615
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/season_cast/mod.rs | sed -n '615,626p;1290,1308p'",
+        "output": "    pub fn season_occurrence(\n        &self,\n        season_map: &SeasonMap,\n        season_def: &SeasonDefinition,\n        windows: &[RealizedWindow],\n        k: usize,\n    ) -> Option<Projection> {\n        let anchor_stage = self.stages.first()?;\n        let in_progress = season_period_window(season_map, season_def, anchor_stage);\n        let occurrence = nth_previous_occurrence(season_map, season_def, &in_progress, k)?;\n        Some(cast(windows, &occurrence))\n    }\n---\n        let calendar = StageCalendar::new(&stages);\n        for k in 0..=3 {\n            let expected_in_progress = season_period_window(&season_map, season_def, &stages[0]);\n            let expected_occurrence =\n                nth_previous_occurrence(&season_map, season_def, &expected_in_progress, k).unwrap();\n            let expected = cast(&windows, &expected_occurrence);\n            let actual = calendar\n                .season_occurrence(&season_map, season_def, &windows, k)\n                .unwrap();\n            assert_eq!(actual.value, expected.value);\n            assert_eq!(actual.coverage, expected.coverage);\n        }",
+        "reading": "season_occurrence (615) IS the composition season_period_window -> nth_previous_occurrence -> cast over self.stages.first(). The test recomputes that exact same composition over the same inputs (expected_in_progress via season_period_window on stages[0]; the same &windows) and asserts it equals season_occurrence(...). Both sides invoke the identical delegating code path, so the assertion is f(x)==f(x); the test's own `#[allow(clippy::float_cmp)]` rationale states 'both paths run the identical arithmetic'. The 'pre-refactor helper sequence' it names is history \u2014 the refactor has landed and the helper-level tests (test_season_period_window_*, test_nth_previous_occurrence_*, test_cast_*) already cover each stage. It can only fail if someone reimplements the wrapper independently, i.e. it pins delegation as an implementation detail, adding no behavioral coverage."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Remove the test (not a coverage reduction per yardstick \u00a77: it asserts nothing the helper-level unit tests do not already prove, because the wrapper is a straight delegation). If the intent is to guard that the wrapper keeps delegating rather than growing an independent implementation, replace the redundant equivalence assertion with a one-line comment/pointer at season_occurrence stating that the helper-level tests are authoritative, or fold a single k-value smoke assertion into an existing calendar test. Do not keep a full 0..=3 loop whose two operands are the same call path.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-seam-01"
+    }
+  ],
+  "positives": [
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/lib.rs (public surface; #[allow(deprecated)] PAR re-export block at line 44)",
+      "why": "Clean, engine-neutral crate surface (no paradigm noun). The ~14-symbol #[allow(deprecated)] PAR re-export block is the over-engineering lens's checklist item #3, not an architecture finding; cross-referenced here, not raised.",
+      "sanctionedBy": "over-engineering lens checklist item 3 (attacker-prompt.md)"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/error.rs (StochasticError)",
+      "why": "Clean thiserror enum: 9 variants, all Display/Debug-exercised by inline tests, Send+Sync+'static asserted at lib.rs. Engine-neutral (method/scheme names are strings, no SDDP/Benders type). No architecture defect.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/seeds.rs (derive_inflow_seeds, DerivedInflowSeeds)",
+      "why": "Generation-only seed derivation; resolves hydro position by iterating `hydros` directly (never binary_search_by_key), so it is correct under id-descending canonical order. Protected by test_seed_correct_under_staggered_commissioning_dates. Worth protecting against the canonical-order/chain-blind bug class.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/provenance.rs (StochasticProvenance; inflow_scheme/load_scheme/ncs_scheme at 28/30/32)",
+      "why": "Clean generation metadata. The three *_scheme fields are a deliberate snapshot of the builder's ClassSchemes input (copied at context.rs:662-664) for audit/output provenance, not a generation/realized straddle; recorded as sanctioned rather than raised as a DRY finding.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs (StageCalendar, season_period_window, cast, merge_layered_windows)",
+      "why": "Crate-home relocation is DO-NOT-RAISE. The recorded L2->L1 evidence (cobre-io -> cobre-stochastic at 4 sites: estimation.rs:70, inflow_seeding.rs:22, thermal.rs:17, scenarios.rs:12) is already captured in the inventory/prior-register and is consistent with target layering, so this is a core-vs-stochastic homing question, not a layering violation. I add NO new L2->L1 evidence, so the relocation is not re-raised. Module itself is cycle-generic calendar arithmetic, engine-neutral.",
+      "sanctionedBy": "mirror reserved-seams L449 'Stage-calendar crate home'; prior-register 'Stage-calendar crate home' (keep); inventory layeringEvidence"
+    },
+    {
+      "lens": "architecture",
+      "subject": "Q1 paradigm-leakage sweep over all six seam files",
+      "why": "Zero engine/paradigm nouns. The unanchored lens grep's only hit is `cut_points` (season_cast/mod.rs:439, a day-boundary variable for window merging). The authoritative CI gate scripts/ci/check-infra-genericity.sh matches `\\bcut\\b` (word-boundary anchored), which does NOT match `cut_points` (the trailing `_` is a word char, so no boundary). Not a genericity gate failure.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh word-boundary pattern"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/context.rs (StochasticContext as a many-reader store)",
+      "why": "StochasticContext is consumed by ~30 files across cobre-sddp and cobre-cli (git grep StochasticContext), so it is a genuine established store, NOT a one-consumer abstraction; the L1-purity guardrail #4 (one-consumer abstraction) is clear for this seam.",
+      "sanctionedBy": "L1 purity guardrail #4 (attacker-prompt.md)"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/lib.rs \u2014 the #[allow(deprecated)] re-export block (checklist item 3)",
+      "why": "It is a compatibility shim, and it is already scheduled for removal under a sanctioned owner \u2014 so it is a positive here, not a candidate. Only three of the block's symbols are genuinely #[deprecated]: par/evaluate.rs's evaluate_par_inflow (use evaluate_par), evaluate_par_inflows (use evaluate_par_batch), and solve_par_noises (use solve_par_noise_batch) \u2014 each a pure alias with a named non-deprecated replacement and ZERO workspace consumers outside the re-export chain (par/mod.rs:29-30 -> lib.rs). Observation, NOT raised as a separate finding because it lives on the same sanctioned surface: lib.rs applies one block-level #[allow(deprecated)] across all 15 par re-exports (evaluate + fitting + precompute + validation), whereas par/mod.rs:27 scopes its allow to only the 7-symbol evaluate:: block; narrowing lib.rs to match par/mod.rs's precision falls out naturally when the clean-break ticket removes the three aliases.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md ~L1097-1100: the #[allow(deprecated)] sites at {lib.rs, par/mod.rs, par/evaluate.rs} are a fourth, narrower class tied to the deprecated-with-fallback surface, out of scope for this sweep \u2014 a dedicated ticket owns the clean-break gate."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/provenance.rs \u2014 ComponentProvenance, StochasticProvenance",
+      "why": "No forwarding-only newtype and no zero-consumer surface. Both are plain, minimal data records with live cross-crate consumers: StochasticProvenance is read by cobre-sddp/src/policy/provenance.rs:197 and (via ctx) stochastic/stochastic_summary.rs; ComponentProvenance is matched by cobre-cli run/setup.rs:271, cobre-sddp policy/provenance.rs's component_to_source, and stochastic_summary.rs. Correctly shaped."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/seeds.rs \u2014 DerivedInflowSeeds, derive_inflow_seeds",
+      "why": "Not a shim: the single-owner PAR-lag/accumulator derivation, consumed at cobre-sddp setup/mod.rs:515 and setup/stochastic_pipeline.rs (four call sites) and cross-referenced by cobre-io validation/semantic/inflow_seeding.rs. The zero() constructor and the entity-major positional layout are load-bearing (the canonical-order staggered-commissioning regression test pins them). No speculative generality."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/context.rs \u2014 StochasticContext accessor surface",
+      "why": "No zero-consumer public accessor: base_seed() and forward_seed() are consumed at sampling/mod.rs:421-422, set_solve_order at cobre-sddp setup/mod.rs:469, and the count/normal accessors across cobre-sddp. The 'store vs bag-of-parameters' seam-shape question (13 private fields behind accessors + the build_stochastic_context arity) is the ARCHITECTURE lens's cell (architecture Q3) \u2014 cross-referenced here, deliberately not re-raised under over-engineering."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs \u2014 public calendar surface",
+      "why": "No one-consumer or forwarding abstraction: post_study_calendar_stages (cobre-sddp lp/builder/template, policy_export, setup/mod.rs:1191), covers_exactly (cobre-io validation/semantic/thermal.rs:665), hour_window_shares (cobre-sddp setup/mod.rs:2756), next_season_period_window (cobre-io scenarios/estimation.rs:528, cobre-stochastic par/lag_transition.rs:106), and season_occurrence (seeds.rs) are all consumed cross-crate. The stage-calendar crate-home RELOCATION is prior-registered (do-not-re-raise) and is not touched here.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/stochastic/prior-register.md \u2014 'Stage-calendar crate home' (disposition: keep; relocation deferred, L2->L1 edge is consistent)."
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/context.rs StochasticContext accessors (par/correlation/opening_tree/base_seed/forward_seed/dim/n_load_buses/normal/ncs_normal/ncs_entity_ids/entity_order/n_stochastic_ncs/n_hydros/n_stages/provenance, ~L282-395)",
+      "why": "The read surface is allocation-free: every accessor returns a borrow (&PrecomputedPar, &[EntityId], &StochasticProvenance, OpeningTreeView borrow view) or copies/derives a scalar (dim, base_seed, n_hydros = dim - n_load_buses - n_stochastic_ncs). entity_order is materialized once into a Box<[EntityId]> at build (context.rs:265,783) and handed out as &[EntityId] (context.rs:368), so no per-call heap allocation on the hot read path. The only Vec-building free fn, NoiseEntityOrder::entity_order (context.rs:86), is called once inside build (context.rs:628), not from an accessor.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/context.rs build_stochastic_context (L601) and its helpers (stage_id_to_index L406, resolve_row_stages L419, external_derived_load_models L444, external_ar0_inflow_models L492)",
+      "why": "These allocate HashMaps and Vecs (stage_index, resolved_rows, external model vectors), but build_stochastic_context is a one-time setup constructor: its sole production call sites are StudySetup::new via cobre-sddp setup/mod.rs and stochastic_pipeline.rs:253, run once per study. The allocations are amortized once per study construction, not per scenario/stage/iteration, so they are not a hot-path allocation concern.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/lib.rs, error.rs, provenance.rs",
+      "why": "No runtime loops or per-call allocation. lib.rs is module declarations plus re-exports; error.rs is the StochasticError enum with Display impls whose only format!/allocation sites are inside #[cfg(test)]; provenance.rs is Copy metadata (ComponentProvenance enum, StochasticProvenance struct) built once inside build_stochastic_context (context.rs:658). Perf-clean.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs StageCalendar::coverage (L565) invoked per-window by covers_exactly (L594) / resolve_window",
+      "why": "coverage allocates a fresh Vec<f64> of length n_stages per call, and covers_exactly calls it once per input window inside a loop, so a caller resolving N windows pays N throwaway n_stages Vec allocations. This is a real per-call allocation, but the wasteful invocation pattern is driven ENTIRELY by out-of-station callers (cobre-io validation/semantic/thermal.rs:665 covers_exactly in a k-loop, cobre-sddp setup), run at validation/setup time; the in-station season_cast caller (season_occurrence) does not touch coverage. Flagged here as a cross-reference for the core-io / sddp stations rather than raised as a stochastic candidate, per the scope wall.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/tests/reproducibility.rs \u2014 deterministic_reproducibility (200), declaration_order_invariance (285), seed_sensitivity (328), infrastructure_genericity_no_sddp_references (346), and the local build_fixture helper (159)",
+      "why": "These are the crate's core determinism/order-invariance gates and are exactly the correctness-depth the yardstick says to preserve, not prune (\u00a73.1 determinism discipline). infrastructure_genericity_no_sddp_references is the in-test mirror of scripts/ci/check-infra-genericity.sh (greps src for 'sddp', asserts exit 1). build_fixture is the O(1)-style single-entry fixture the yardstick praises (\u00a73.1 item 4); it is the right pattern and is the natural consumer of the hoisted builders in candidate 1.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a73.1 (determinism discipline at HPC grade; O(1) fixture builder)"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs \u2014 cast_proptests and merge_proptests (proptest! blocks at the tail of the test module)",
+      "why": "Property tests over generated segment/window inputs (cast partition == day-weighted mean; merge of disjoint windows == concatenated cast). These are precisely the invariant-over-generated-inputs coverage the yardstick asks the suite to EXPAND toward (\u00a75.9 'expand proptest from 5 sites'), not shrink. Keep.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a75.9"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/error.rs (tests 91-264) and src/lib.rs (tests 66-93)",
+      "why": "Not bloat. error.rs per-variant Display tests pin a real contract (the interpolated id/reason/field must appear in the user-facing message); test_all_variants_debug's exhaustive match is a compile-time guard that forces a test update when a StochasticError variant is added. lib.rs's assert_send_sync_static and all_public_modules_accessible are cheap compile-time surface assertions. No tautology, no over-pinning.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "Over-pinned wire bytes: checked and clean across the seam surface",
+      "why": "The seam's public types \u2014 StochasticContext (context.rs), StochasticError (error.rs), StochasticProvenance/ComponentProvenance (provenance.rs), DerivedInflowSeeds (seeds.rs) \u2014 carry no serde/postcard/FlatBuffers representation, and their test regions contain zero to_bits/from_bits/0x-byte-array/from_slice/round-trip assertions (grep over context.rs:793-2310 returned nothing). The provenance tests assert enum-variant classification (Generated/UserSupplied/NotApplicable) via derived Eq, not a frozen wire layout. So the dispatch's 'over-pinned wire bytes' candidate class does not exist in this sub-station.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/seeds.rs \u2014 mod tests (derive_inflow_seeds suite, incl. test_seed_correct_under_staggered_commissioning_dates at 198+)",
+      "why": "Substantive: the staggered-commissioning regression pins the canonical-order/position-by-iteration contract (guards against a binary_search_by_key reintroduction that would misattribute records under id-descending order) \u2014 a documented bug-class guard, not bloat. Its season-domain builders (monthly_season_map/weekly_season_map/make_stage) have DISTINCT signatures from the candidate-1 entity trio, so they are not part of that duplication; its make_hydro is the one exception, folded into candidate 1 as a fourth near-copy.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "CROSS-REFERENCE \u2014 mirror 'Oracle test-harness duplication' (docs/design/reserved-seams-and-deferred-debt.md L285; prior-register.md)",
+      "why": "Candidate 1 is the SAME fixture-fragmentation class the yardstick \u00a75.2 resolves, but a DISTINCT instance: it is anchored inside crates/cobre-stochastic (context.rs, provenance.rs, seeds.rs, tests/reproducibility.rs), not in cobre-sddp/tests. I cite the Oracle entry per the lens instruction and do not restate the cobre-sddp harness duplication (that is the cobre-sddp test-corpus station's). Separately, the halton/sobol/lhs integration prelude the lens headline names (approx_erf/norm_cdf/make_bus/make_hydro at matching offsets) lives in tree-noise integration binaries and is sibling worker sto-tb-treenoise's cell, not seam's \u2014 no overlap with candidate 1.",
+      "sanctionedBy": "prior-register.md 'Oracle test-harness duplication' (disposition: cross-reference)"
+    }
+  ],
+  "_needsHuman": [
+    {
+      "lens": "architecture",
+      "note": "Genericity substring confirmation: the lens's unanchored grep `(sddp|benders|cut|...)` matched `cut_points` at crates/cobre-stochastic/src/season_cast/mod.rs:439 (and its uses at 440,442). This is a benign day-boundary variable; the authoritative gate scripts/ci/check-infra-genericity.sh uses `\\bcut\\b`, which does not match `cut_points`. Recorded per the attacker-prompt rule that any token match be flagged, but it is a proven false positive, not a gate failure."
+    }
+  ],
+  "lenses": {
+    "sto-architecture-seam": 2,
+    "sto-over-engineering-seam": 1,
+    "sto-performance-seam": 2,
+    "sto-test-bloat-seam": 2
+  }
+}

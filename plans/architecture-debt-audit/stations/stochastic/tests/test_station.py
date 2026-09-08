@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import re
+import subprocess
 import sys
 import types
 import unittest
@@ -47,6 +48,13 @@ INGEST_DISPOSITIONS = {
     "out-of-station",
 }
 VERDICTS = {"confirmed", "dismissed", None}
+
+# E03-4 calibration: this station's assigned-id ranges (contiguous from the next-free id
+# after every prior evaluation section) and the H2 heading the register tools resolve by.
+CALIB_ID_RE = re.compile(r"^(CD|PD|OD|TD)-\d{3}$")
+CALIB_FLOOR = {"CD": 64, "PD": 20, "OD": 26, "TD": 24}
+STATION_SECTION = "★ QUALITY EVALUATION (2026-09, baseline a136840d) — stochastic"
+ROADMAP = "plans/generalizing/beyond-sddp-generalization.md"
 
 
 def load_validate_envelope() -> types.ModuleType:
@@ -651,6 +659,219 @@ class IngestTests(sc.StationCase):
             counts["defended"], sum(1 for v in vals if v["disposition"] == "defended")
         )
         self.assertEqual(counts["received"], len(vals))
+
+
+class CalibrationTests(sc.StationCase):
+    """E03-4 calibration: id assignment, severity/alignment, and the three hand-off queues.
+
+    perf-queue is the actionable profiling queue and is Sev-A/B-gated (a Sev-C perf finding
+    is recorded debt with `queuedTo: null`, below the sweep threshold); td-queue and
+    alignment-queue are not severity-gated — every TD, and every `advances-1` finding, travels.
+    """
+
+    SLUG = "stochastic"
+
+    def setUp(self):
+        self.cal = sc.load_json(self.artifact("calibration.json"))
+        self.assigned = self.cal["assigned"]
+        self.reg_lines = backlog_parse.read_register(sc.BACKLOG)
+        self.section = backlog_parse.find_section(self.reg_lines, STATION_SECTION)
+        self.section_entries = {
+            e.id: e for e in backlog_parse.iter_entries(self.section)
+        }
+
+    def test_envelope(self):
+        self.assertEqual(self.cal["station"], "stochastic")
+        pin = backlog_parse.parse_baseline(self.reg_lines)
+        self.assertTrue(self.cal["baseline"].startswith(pin[:8]))
+        self.assertEqual(len(self.assigned), 35)
+        self.assertEqual(self.cal["cleared"], [])
+        self.assertEqual(self.cal["merged"], [])
+
+    def test_ids_well_formed_and_in_range(self):
+        for a in self.assigned:
+            idn = a["id"]
+            self.assertRegex(idn, CALIB_ID_RE, f"{idn}: malformed id")
+            cls, num = idn.split("-")
+            self.assertEqual(cls, a["class"], f"{idn}: class prefix != class field")
+            self.assertGreaterEqual(
+                int(num), CALIB_FLOOR[cls], f"{idn}: below the class floor"
+            )
+
+    def test_ids_unique_across_whole_register(self):
+        heading_ids = [
+            e.id
+            for section in backlog_parse.all_evaluation_sections(self.reg_lines)
+            for e in backlog_parse.iter_entries(section)
+        ]
+        dupes = {i for i in heading_ids if heading_ids.count(i) > 1}
+        self.assertEqual(
+            dupes, set(), f"duplicate entry-heading ids in BACKLOG.md: {dupes}"
+        )
+        mine = {a["id"] for a in self.assigned}
+        self.assertLessEqual(
+            mine, set(heading_ids), "every assigned id must head exactly one entry"
+        )
+
+    def test_ids_contiguous_from_floor_per_class(self):
+        for cls, floor in CALIB_FLOOR.items():
+            nums = sorted(
+                int(a["id"].split("-")[1]) for a in self.assigned if a["class"] == cls
+            )
+            self.assertTrue(nums, f"{cls}: no assigned ids")
+            self.assertEqual(
+                nums,
+                list(range(floor, floor + len(nums))),
+                f"{cls}: not contiguous from {floor}",
+            )
+
+    def test_severity_and_alignment(self):
+        for a in self.assigned:
+            self.assertIn(
+                a["severity"][0], SEV, f"{a['id']}: severity {a['severity']!r}"
+            )
+            self.assertIn(
+                a["alignmentHint"],
+                ALIGN,
+                f"{a['id']}: alignment {a['alignmentHint']!r}",
+            )
+
+    def test_downgrade_records_reviewer_rating(self):
+        graded = 0
+        for a in self.assigned:
+            if a.get("reviewerRating"):
+                graded += 1
+                self.assertNotEqual(
+                    a["reviewerRating"],
+                    a["severity"][0],
+                    f"{a['id']}: reviewer rating equals the house severity head",
+                )
+                self.assertTrue(
+                    (a.get("downgradeReason") or "").strip(),
+                    f"{a['id']}: reviewer rating without a recalibration reason",
+                )
+        self.assertEqual(graded, 1, "exactly one reviewer-rating delta this station")
+
+    def test_every_assigned_entry_in_section(self):
+        for a in self.assigned:
+            self.assertIn(
+                a["id"],
+                self.section_entries,
+                f"{a['id']}: not rendered in the station section",
+            )
+
+    def test_fields_check_exits_zero_over_section(self):
+        code = subprocess.run(
+            [sys.executable, str(sc.TOOLS / "fields-check.py"), STATION_SECTION],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        ).returncode
+        self.assertEqual(
+            code, 0, "fields-check.py must exit 0 over the station section"
+        )
+
+    def test_alignment_field_carries_roadmap_citation(self):
+        for a in self.assigned:
+            self.assertTrue(
+                (a.get("alignmentCites") or "").strip(),
+                f"{a['id']}: no alignmentCites",
+            )
+            align = self.section_entries[a["id"]].fields.get("Alignment", "")
+            self.assertIn(
+                ROADMAP, align, f"{a['id']}: Alignment bullet cites no roadmap"
+            )
+            self.assertIn(
+                align.split("(")[0].strip(),
+                ALIGN,
+                f"{a['id']}: Alignment head {align.split('(')[0]!r} not in vocab",
+            )
+        for a in self.assigned:
+            if a["alignmentHint"] == "advances-1":
+                self.assertEqual(
+                    a.get("partIRef"), "I.3-1", f"{a['id']}: advances-1 without I.3-1"
+                )
+                self.assertRegex(
+                    a["alignmentCites"],
+                    r"Part V",
+                    f"{a['id']}: advances-1 cites no Phase-1 roadmap part",
+                )
+
+    def test_perf_queue_only_sev_ab_pd_ids(self):
+        q = sc.load_json(self.artifact("perf-queue.json"))
+        self.assertTrue(q["targetStation"].startswith("perf-sweep"), q["targetStation"])
+        pd_ab = {
+            a["id"]
+            for a in self.assigned
+            if a["class"] == "PD" and a["severity"][0] in ("A", "B")
+        }
+        seen: set[str] = set()
+        for row in q["queue"]:
+            self.assertIn(
+                row["id"], pd_ab, f"{row['id']}: not a Sev-A/B PD id from this section"
+            )
+            seen.add(row["id"])
+            self.assertIn(row["layout"], {"4t", "2x2"}, f"{row['id']}: bad layout")
+            self.assertIn(
+                row["claimType"],
+                {"single-process", "collective"},
+                f"{row['id']}: bad claimType",
+            )
+            self.assertIs(row["measured"], False, f"{row['id']}: perf claim measured")
+        self.assertEqual(
+            seen, pd_ab, "every Sev-A/B PD id must be queued for the perf sweep"
+        )
+        for a in self.assigned:
+            if a["class"] == "PD":
+                queued = a["severity"][0] in ("A", "B")
+                self.assertEqual(
+                    bool(a.get("queuedTo")),
+                    queued,
+                    f"{a['id']}: queuedTo must be set iff Sev-A/B",
+                )
+
+    def test_td_queue_targets_the_test_corpus(self):
+        q = sc.load_json(self.artifact("td-queue.json"))
+        self.assertTrue(
+            q["targetStation"].startswith("test-corpus"), q["targetStation"]
+        )
+        td_ids = {a["id"] for a in self.assigned if a["class"] == "TD"}
+        seen = {row["id"] for row in q["queue"]}
+        self.assertEqual(seen, td_ids, "every TD id travels to the test corpus")
+        for row in q["queue"]:
+            self.assertTrue(
+                row["targetStation"].startswith("test-corpus"),
+                f"{row['id']}: wrong target station",
+            )
+
+    def test_alignment_queue_carries_the_advances_1_findings(self):
+        q = sc.load_json(self.artifact("alignment-queue.json"))
+        self.assertTrue(q["targetStation"].startswith("alignment"), q["targetStation"])
+        adv1 = {a["id"] for a in self.assigned if a["alignmentHint"] == "advances-1"}
+        queued = {row["id"] for row in q["alignment"] if row.get("id")}
+        self.assertEqual(
+            queued, adv1, "every advances-1 finding reaches the alignment epic"
+        )
+        for row in q["alignment"]:
+            if row.get("id"):
+                self.assertEqual(
+                    row.get("partIRef"),
+                    "I.3-1",
+                    f"{row['id']}: alignment row lacks I.3-1",
+                )
+
+    def test_over_engineering_reserved_seam_entries_carry_register_id(self):
+        register_id = re.compile(r"\b(?:CD|PD|OD|TD)-\d{3}\b|reserved-seam-census")
+        for a in self.assigned:
+            if a["class"] != "OD":
+                continue
+            body = "\n".join(self.section_entries[a["id"]].body)
+            if "reserved-seams-and-deferred-debt.md" in body:
+                self.assertRegex(
+                    body,
+                    register_id,
+                    f"{a['id']}: reserved-seam OD entry carries no register id",
+                )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,42 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "targetStation": "alignment (Epic 9)",
+  "alignment": [
+    {
+      "id": "CD-065",
+      "candidateRef": "sto-architecture-sampling-00",
+      "hint": "advances-1",
+      "cites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "partIRef": "I.3-1",
+      "held": false,
+      "alternative": null
+    },
+    {
+      "id": "CD-070",
+      "candidateRef": "sto-architecture-seam-00",
+      "hint": "advances-1",
+      "cites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "partIRef": "I.3-1",
+      "held": false,
+      "alternative": null
+    },
+    {
+      "id": "CD-071",
+      "candidateRef": "sto-architecture-seam-01",
+      "hint": "advances-1",
+      "cites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "partIRef": "I.3-1",
+      "held": false,
+      "alternative": null
+    },
+    {
+      "id": null,
+      "question": "does an engine-neutral context constructor belong at L1 beside build_stochastic_context (context.rs:601)?",
+      "source": "CD-001 resolved disposition",
+      "partIRef": null,
+      "held": false,
+      "alternative": null
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "station": "stochastic",
+  "subStation": "par",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "performance",
+  "candidates": [
+    {
+      "title": "PAR-A initial per-hydro AR estimation runs single-threaded while the byte-identical classical path already parallelizes the same per-hydro shape",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 397
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 952
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/estimation.rs | sed -n '395,427p'; echo ---; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/estimation.rs | sed -n '946,954p'",
+        "output": "let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();\n\n    for &hydro_id in hydro_ids {\n        let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];\n        ... (per-season FACP + extended-YW solve, pushes this hydro's seasons) ...\n---\n) -> Vec<ArCoefficientEstimate> {\n    // Determinism: `flat_map_iter`/`collect` reassembles the per-hydro blocks in\n    // canonical `hydro_ids` order, ... thread scheduling cannot change the output.\n    hydro_ids\n        .par_iter()\n        .flat_map_iter(|&hydro_id| {",
+        "reading": "estimate_all_hydro_ar_coefficients (classical PACF path) fits every hydro under hydro_ids.par_iter().flat_map_iter(...).collect(); estimate_ar_with_pacf_annual (the PAR(p)-A path) does the identical per-hydro work \u2014 conditional_facp_partitioned + estimate_periodic_ar_annual_coefficients per season, pushed to `estimates` \u2014 inside a plain serial `for &hydro_id in hydro_ids`. Each annual iteration reads only immutable lookups (group_obs, annual_group_obs, stats_map, annual_stats_map, group_z_year_starts, annual_group_year_starts) and touches only its own hydro's seasons, so it is embarrassingly parallel in exactly the shape the classical site already exploits."
+      },
+      "mechanism": "Suspected cost: the PAR-A initial fit is O(n_hydros) independent per-hydro solves (each is n_seasons partitioned-covariance FACP builds + one extended-Yule-Walker Gaussian solve) executed on a single core, whereas the classical fit divides the same n_hydros solves across the rayon pool. As hydro count grows the annual-model fit's wall time stays proportional to n_hydros x per-hydro-solve on one thread while the classical fit is roughly that over the thread count. Deck-independent: the asymmetry is structural (one call parallel, its sibling serial), not tied to any particular deck size. Symbol to profile: estimate_ar_with_pacf_annual (compare against estimate_all_hydro_ar_coefficients on the same hydro set with use_annual_component toggled).",
+      "proposedSeverity": "B",
+      "fixShape": "Lift the initial per-hydro block of estimate_ar_with_pacf_annual (the `for &hydro_id in hydro_ids { ... estimates.push(...) }` region) into the same hydro_ids.par_iter().flat_map_iter(|&hydro_id| { build this hydro's Vec<ArCoefficientEstimate> }).collect() shape the classical estimate_all_hydro_ar_coefficients already uses, so each hydro's seasons are produced in its closure and collect reassembles them. The in-code determinism rationale MUST be preserved byte-for-byte: the classical site states 'flat_map_iter/collect reassembles the per-hydro blocks in canonical hydro_ids order, and the inner per-season PACF -> Yule-Walker solve is bit-identical to a single-threaded pass -- thread scheduling cannot change the output. flat_map_iter (not flat_map): each hydro's Vec is small (n_seasons), so nesting work-stealing over it would gain nothing.' The annual closure has the identical property (immutable shared lookups, per-hydro-disjoint output), so canonical-order collect yields the estimates vector in exactly the order the current serial push produces -- apply_annual_prepass_reductions (which rebuilds hydro_indices by EntityId) and build_estimation_report (which sorts by hydro/season) are order-agnostic downstream. Leave the subsequent reduction serial in this change (it mutates `estimates` across hydro index sets). No SDDP paradigm noun, no engine dependency, no new abstraction is introduced.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t"
+    },
+    {
+      "title": "Per-season correlation matrices recompute every hydro-pair date-set intersection twice and clone the full residual map per (hydro, season)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_seasonal_matrices",
+          "line": 391
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_pearson_correlation_matrix",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_hydro_residuals",
+          "line": 199
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/correlation.rs | sed -n '396,427p'; echo ---; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/correlation.rs | sed -n '447,465p'",
+        "output": "for season_id in 0..n_seasons {\n    let season_residuals: Vec<HashMap<NaiveDate, f64>> = per_season_residuals\n        .iter().map(|hydro_seasons| hydro_seasons.get(&season_id).cloned().unwrap_or_default()).collect();\n    let min_pairs = ... (0..n_hydros).flat_map(|i| (i+1..n_hydros)...).map(|(i,j)| season_residuals[i].keys().filter(|d| season_residuals[j].contains_key(*d)).count()).min()...;\n    if min_pairs < MIN_CORRELATION_PAIRS { continue; }\n    result.insert(season_id, compute_pearson_correlation_matrix(&season_residuals));\n}\n---\nfor j in (i + 1)..n {\n    let r_i = &hydro_residuals[i]; let r_j = &hydro_residuals[j];\n    let mut pairs: Vec<(NaiveDate, f64, f64)> = r_i.iter().filter_map(|(&date,&ei)| r_j.get(&date).map(|&ej| (date,ei,ej))).collect();\n    ... pairs.sort_unstable_by(|a,b| a.0.cmp(&b.0)); ...",
+        "reading": "compute_seasonal_matrices, per season, (a) clones every hydro's date-keyed residual map into season_residuals via `.cloned()`, (b) computes min_pairs by walking all O(n_hydros^2) pairs and intersecting the two date sets with contains_key hashes, then (c) if kept, calls compute_pearson_correlation_matrix which walks the SAME O(n_hydros^2) pairs and re-intersects the same date sets via r_j.get(&date). Residuals are produced by compute_hydro_residuals as nested HashMap<usize, HashMap<NaiveDate,f64>>, so each intersection re-hashes every NaiveDate rather than merge-walking a sorted list."
+      },
+      "mechanism": "Suspected cost: two multiplied redundancies in the fitting-time correlation build. (1) The per-hydro-pair date-set overlap is computed twice for every kept season -- once as min_pairs, once inside compute_pearson_correlation_matrix -- so the O(n_hydros^2 x observations) intersection work is doubled. (2) Residuals live in HashMap<NaiveDate,f64>, so each of the O(n_hydros^2) pairwise intersections pays a NaiveDate hash per element instead of a linear merge of two date-sorted arrays; compute_pearson_correlation_matrix already sorts the intersected pairs by date afterward, so the hashed layout adds both the hashing and that per-pair sort. (3) `.cloned()` allocates n_hydros x n_seasons fresh HashMaps purely to reshape per-hydro-then-season into per-season-then-hydro. Deck-independent: scales with hydro count squared and residual-series length regardless of deck values. Symbols to profile: compute_seasonal_matrices and compute_pearson_correlation_matrix.",
+      "proposedSeverity": "B",
+      "fixShape": "Two independent, fitting-local reductions with no cross-crate blast radius. (i) Compute each pair's overlap count once: have compute_pearson_correlation_matrix (or a shared helper it calls) return the min pair count alongside the matrix, and drop compute_seasonal_matrices' separate min_pairs pre-walk -- or gate the season on the count the matrix build already derives. (ii) Store per-(hydro, season) residuals as a date-sorted Vec<(NaiveDate, f64)> (or one flat sorted buffer) instead of HashMap<NaiveDate,f64>, so the pairwise intersection is a linear merge-walk of two sorted date lists rather than n contains_key/get hashes; this also removes compute_pearson_correlation_matrix's per-pair sort_unstable since the inputs arrive sorted, and lets compute_seasonal_matrices borrow rather than `.cloned()` each hydro's season map. Both the parallel producer and the matrix accumulator carry determinism contracts the fix MUST preserve: compute_hydro_residuals states 'collect() reassembles per-hydro maps in canonical hydro_ids order, and the sequential ar_sum lag accumulation is bit-identical to a single-threaded pass', and compute_pearson_correlation_matrix states 'pairs are summed in NaiveDate order, making every partial sum independent of both HashMap traversal order and which series is row vs column -- so the result is invariant to the declaration order of the input series.' A date-sorted-Vec residual layout upholds both (NaiveDate is a total order within a series; accumulation stays date-ordered).",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t"
+    },
+    {
+      "title": "Per-hydro observation vectors are deep-copied out of group_obs on every estimate/reduce pass (2x classical, 4x PAR-A) though the consumers only read them",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 959
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders",
+          "line": 1067
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders_annual",
+          "line": 689
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 407
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/estimation.rs | sed -n '1063,1073p'",
+        "output": "let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];\n    let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];\n    for season in 0..n_seasons {\n        if let Some(obs) = group_obs.get(&(hydro_id, season)) {\n            obs_by_season[season].clone_from(obs);\n        }\n        ...\n    }",
+        "reading": "group_obs is a HashMap<(EntityId,usize),Vec<f64>> already owning each hydro-season's observation vector. Every consumer -- the parallel estimate_all_hydro_ar_coefficients closure, the serial reduce_entity_orders, and in the PAR-A path estimate_ar_with_pacf_annual plus reduce_entity_orders_annual -- rebuilds a local obs_by_season: Vec<Vec<f64>> via clone_from(obs), a full deep copy. The reduction and annual-estimate consumers then only read obs (through obs_refs: Vec<&[f64]>)."
+      },
+      "mechanism": "Suspected cost: the raw observation history is deep-copied out of group_obs (and annual_group_obs) once per pass per hydro -- twice for the classical fit (estimate then reduce) and up to four times for the PAR-A fit (estimate + reduce, each for both Z and A series). Total observation bytes copied is 2x-4x the raw history per fit, all of it discarded after building a Vec<&[f64]> view the solve actually consumes. Deck-independent: copy volume scales with history length x hydro count regardless of deck values. Setup-time (one fit per solve), so it is memory-traffic debt rather than a per-iteration hot path. Symbol to profile: reduce_entity_orders / reduce_entity_orders_annual (allocation volume).",
+      "proposedSeverity": "C",
+      "fixShape": "Where the consumer only reads observations (the two reduction loops and the PAR-A initial estimate all build obs_refs: Vec<&[f64]> and pass borrows into the FACP/YW primitives), construct that borrow view directly from group_obs -- e.g. (0..n_seasons).map(|s| group_obs.get(&(hydro_id, s)).map_or(&[][..], Vec::as_slice)).collect() -- instead of clone_from into an owned Vec<Vec<f64>>. group_obs outlives every pass within the fitter, so the borrows are valid. This keeps the classical parallel closure's canonical-order determinism unchanged (it still returns per-hydro results in hydro_ids order) and does not alter any numeric result; it only removes the intermediate owned copies. No paradigm noun, engine dependency, or new abstraction.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/par/evaluate.rs (evaluate_par_batch, solve_par_noise_batch)",
+      "why": "The runtime-hot PAR evaluation path is allocation-free: both batch functions write into a caller-supplied &mut [f64] output with debug_assert length checks and no per-call Vec/HashMap, reading psi via PrecomputedPar::psi_slice into the stage-major flat buffer. Nothing to optimize here.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/precompute.rs (PrecomputedPar) and par/lag_kernel.rs (advance_lag_chain, LagIndex)",
+      "why": "PrecomputedPar is built once at setup into flat Box<[f64]> arrays with a documented stage-major, series-minor, lag-innermost layout keeping a scenario trajectory's per-stage data contiguous for the forward/backward passes; advance_lag_chain is allocation-free, static-dispatched over the LagIndex trait (no Box<dyn>), and operates entirely on caller buffers. Both are cache-conscious and hot-path-clean.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/{yw_matrices.rs,periodic_ar.rs,partitioned_covariance.rs}",
+      "why": "The Yule-Walker / FACP primitives are already allocation-conscious: build_periodic_yw_matrix_into writes into caller buffers reused across the increasing-order solves of estimate_periodic_ar_coefficients (matrix_buf/rhs_buf), and conditional_facp_partitioned reuses matrix_buf/rhs_col across its per-lag solves, each with an in-code rationale. solve_linear_system is sized for the small (n<=10) YW systems where the O(n^3) cost is negligible. No per-lag allocation debt to raise.",
+      "sanctionedBy": "in-code allocation-reuse rationale in periodic_ar.rs and partitioned_covariance.rs"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs:952 and correlation.rs:210 (the crate's only two rayon sites)",
+      "why": "Both rayon regions carry a correct, load-bearing determinism rationale (canonical hydro_ids reassembly via flat_map_iter/collect and map/collect; inner per-season solve / ar_sum accumulation bit-identical to single-threaded). These are Voice-1/D5 determinism contracts protecting the declaration-order hard rule; any perf fix-shape above preserves them verbatim rather than weakening them.",
+      "sanctionedBy": "in-code Determinism rationale (estimation.rs 947-951, correlation.rs 205-208)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/{lag_transition.rs,aggregate.rs,contribution.rs,validation.rs,closure.rs,mod.rs} and fitting/{mod,annual,ar_coefficients,order_selection,seasonal_stats}.rs",
+      "why": "Swept for per-scenario/per-stage allocation and additional parallel regions: no rayon sites outside the two named (grep par_iter|rayon|par_bridge|into_par returns 0 for all of these), and their allocations are setup-time one-shot builds (precompute_stage_lag_transitions is explicitly 'runs once at setup; consumed read-only on the hot path'; aggregate groups observations once). No hot-loop Vec/HashMap allocation found.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": []
+}

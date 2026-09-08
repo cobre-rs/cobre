@@ -1,0 +1,114 @@
+{
+  "station": "stochastic",
+  "subStation": "seam",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "generation seam ingests realized external-scenario tables: external_ar0_inflow_models/external_derived_load_models synthesize fitted models from System::external_*_scenarios() and re-derive cobre-io's stage-id resolution inside the L1 store constructor module",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "stage_id_to_index",
+          "line": 406
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "resolve_row_stages",
+          "line": 419
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_derived_load_models",
+          "line": 444
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "external_ar0_inflow_models",
+          "line": 492
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/context.rs | sed -n '397,412p;475,505p'",
+        "output": "397: /// Map each study stage's declared `Stage.id` to its 0-based position in ... 399: /// resolution `cobre-io`'s `StageIdResolver` performs for the sigma=0 validator 400: /// (rule 47), replicated here because `cobre-stochastic` cannot depend on 401: /// `cobre-io` (`cobre-io` depends on `cobre-stochastic`). ... 406: fn stage_id_to_index(study_stages: &[Stage]) -> HashMap<i32, usize> {  ||  477: /// Under `External`, override each AR(0) hydro's study-stage [`InflowModel`] 478: /// mean/std with sample moments derived from `system.external_scenarios()`; ... 492: fn external_ar0_inflow_models( 493:     system: &System, ... 502:         system.external_scenarios(),",
+        "reading": "context.rs is the L1 generation store's constructor module. Under the External scheme (build_stochastic_context branches at lines 675-681, 717-740, 747-766) it reaches into System's realized-value external-scenario tables (external_scenarios / external_load_scenarios / external_ncs_scenarios) and synthesizes fitted InflowModel/LoadModel from their sample moments, and it reimplements cobre-io's declared-id->study-index resolver (StageIdResolver, verified live at crates/cobre-io/src/lib.rs:142 + ~8 call sites) because the L1 crate cannot depend on the L2 crate. This is the Q2 generation-vs-realized straddle: the fitted-process seam owns realized-value adaptation and a second copy of stage-id resolution. Not a dispute of the ratified External-authoritative behavior (mirror L983) nor the sigma=0 rejection; strictly a placement/coupling observation. The moment derivation itself is single-owner (derive_external_sample_moments, sampling/external.rs) and correctly shared, so drift risk is confined to stage_id_to_index vs StageIdResolver and to the ingestion glue's home."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Roadmap-aligned: under Part-1 purification the external-scenario tables leave `System` for the cobre-stochastic uncertainty store; the External-ingestion adaptation (sample-moment -> fitted-model synthesis) then moves WITH those tables into the store rather than living in the context constructor, and the paradigm-neutral declared-id->study-index resolver homes once at L0 (cobre-core temporal, the same destination the mirror already registers for the season_cast relocation) so this crate (L1) and cobre-io (L2) consume one resolver instead of two parallel implementations. No engine noun and no L1->engine dependency is introduced. As a bounded interim step short of purification, extract the four External-ingestion helpers (stage_id_to_index, resolve_row_stages, external_derived_load_models, external_ar0_inflow_models) into their own submodule so the store constructor is not the owner of realized-value adaptation.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1",
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "StochasticContext is both a computed store and a config/layout echo: 5 precomputed components + 5 derived-layout scalars + 2 pass-through seeds + 1 metadata field, each exposed via a 1:1 &-getter (the nascent Switchable<T> uncertainty store)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "StochasticContext",
+          "line": 258
+        },
+        {
+          "path": "crates/cobre-stochastic/src/context.rs",
+          "symbol": "set_solve_order",
+          "line": 317
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/context.rs | sed -n '257,275p'",
+        "output": "257: #[derive(Debug)] 258: pub struct StochasticContext { 259:     par_lp: PrecomputedPar, 260:     correlation: DecomposedCorrelation, 261:     opening_tree: OpeningTree, 262:     normal_lp: PrecomputedNormal, 263:     ncs_normal: PrecomputedNormal, 264:     ncs_entity_ids: Vec<EntityId>, 265:     entity_order: Box<[EntityId]>, 266:     base_seed: u64, 270:     forward_seed: Option<u64>, 271:     dim: usize, 272:     n_load_buses: usize, 273:     n_stochastic_ncs: usize, 274:     provenance: StochasticProvenance, 275: }",
+        "reading": "The 13 private fields split into four roles: 5 precomputed components (par_lp, correlation, opening_tree, normal_lp, ncs_normal) that ARE the store; 5 derived-layout values (ncs_entity_ids, entity_order, dim, n_load_buses, n_stochastic_ncs) that are addressing metadata recomputable from noise_entity_order; 2 pass-through config values (base_seed, forward_seed) echoed straight from the builder args; and 1 metadata field (provenance). Every field is surfaced through a trivial &-returning getter (par()/correlation()/opening_tree()/normal()/ncs_normal()/entity_order()/... at 285-393); the only real behavior is set_solve_order (line 317), a post-construction mutation of the opening tree (two-phase init). So the Q3 answer is BOTH: a store (the precomputed infra, read by ~30 downstream files across cobre-sddp/cli, so NOT a one-consumer abstraction) fused with a parameter/layout bag (config echoed back through getters). Q4 hint: the precomputed-component group is the Switchable<T> store payload; the derived-layout group is its addressing metadata; base_seed/forward_seed are RunParams-shaped and separate from the store under the input-data-lifecycle split."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Phase-1 destination note, NOT executed by this spec (lens Q4 is alignmentHint-only). When Part IV/V introduces the Switchable<T> uncertainty store, the precomputed-component fields become the store payload and the entity_order/dim/n_* fields its addressing metadata, while base_seed/forward_seed migrate to the RunParams half of the Model/RunParams/PolicyState split rather than being echoed through the store. No restructuring here; recorded so the alignment epic knows this struct is the carve target and the config-echo/store fusion is the seam to unpick.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1",
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/lib.rs (public surface; #[allow(deprecated)] PAR re-export block at line 44)",
+      "why": "Clean, engine-neutral crate surface (no paradigm noun). The ~14-symbol #[allow(deprecated)] PAR re-export block is the over-engineering lens's checklist item #3, not an architecture finding; cross-referenced here, not raised.",
+      "sanctionedBy": "over-engineering lens checklist item 3 (attacker-prompt.md)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/error.rs (StochasticError)",
+      "why": "Clean thiserror enum: 9 variants, all Display/Debug-exercised by inline tests, Send+Sync+'static asserted at lib.rs. Engine-neutral (method/scheme names are strings, no SDDP/Benders type). No architecture defect.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/seeds.rs (derive_inflow_seeds, DerivedInflowSeeds)",
+      "why": "Generation-only seed derivation; resolves hydro position by iterating `hydros` directly (never binary_search_by_key), so it is correct under id-descending canonical order. Protected by test_seed_correct_under_staggered_commissioning_dates. Worth protecting against the canonical-order/chain-blind bug class.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/provenance.rs (StochasticProvenance; inflow_scheme/load_scheme/ncs_scheme at 28/30/32)",
+      "why": "Clean generation metadata. The three *_scheme fields are a deliberate snapshot of the builder's ClassSchemes input (copied at context.rs:662-664) for audit/output provenance, not a generation/realized straddle; recorded as sanctioned rather than raised as a DRY finding.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/season_cast/mod.rs (StageCalendar, season_period_window, cast, merge_layered_windows)",
+      "why": "Crate-home relocation is DO-NOT-RAISE. The recorded L2->L1 evidence (cobre-io -> cobre-stochastic at 4 sites: estimation.rs:70, inflow_seeding.rs:22, thermal.rs:17, scenarios.rs:12) is already captured in the inventory/prior-register and is consistent with target layering, so this is a core-vs-stochastic homing question, not a layering violation. I add NO new L2->L1 evidence, so the relocation is not re-raised. Module itself is cycle-generic calendar arithmetic, engine-neutral.",
+      "sanctionedBy": "mirror reserved-seams L449 'Stage-calendar crate home'; prior-register 'Stage-calendar crate home' (keep); inventory layeringEvidence"
+    },
+    {
+      "subject": "Q1 paradigm-leakage sweep over all six seam files",
+      "why": "Zero engine/paradigm nouns. The unanchored lens grep's only hit is `cut_points` (season_cast/mod.rs:439, a day-boundary variable for window merging). The authoritative CI gate scripts/ci/check-infra-genericity.sh matches `\\bcut\\b` (word-boundary anchored), which does NOT match `cut_points` (the trailing `_` is a word char, so no boundary). Not a genericity gate failure.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh word-boundary pattern"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/context.rs (StochasticContext as a many-reader store)",
+      "why": "StochasticContext is consumed by ~30 files across cobre-sddp and cobre-cli (git grep StochasticContext), so it is a genuine established store, NOT a one-consumer abstraction; the L1-purity guardrail #4 (one-consumer abstraction) is clear for this seam.",
+      "sanctionedBy": "L1 purity guardrail #4 (attacker-prompt.md)"
+    }
+  ],
+  "_needsHuman": [
+    "Genericity substring confirmation: the lens's unanchored grep `(sddp|benders|cut|...)` matched `cut_points` at crates/cobre-stochastic/src/season_cast/mod.rs:439 (and its uses at 440,442). This is a benign day-boundary variable; the authoritative gate scripts/ci/check-infra-genericity.sh uses `\\bcut\\b`, which does not match `cut_points`. Recorded per the attacker-prompt rule that any token match be flagged, but it is a proven false positive, not a gate failure."
+  ]
+}

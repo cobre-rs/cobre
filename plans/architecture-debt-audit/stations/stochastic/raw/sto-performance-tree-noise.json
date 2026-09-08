@@ -1,0 +1,130 @@
+{
+  "station": "stochastic",
+  "subStation": "tree-noise",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "performance",
+  "candidates": [
+    {
+      "title": "generate_opening_tree pays a per-opening O(group*class) linear position scan because the per-class precomputed fast path (resolve_class_positions) has zero call sites",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 327
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 390
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'resolve_class_positions' a136840d4f2ea137f685f0af6dac04254b983b60 -- '*.rs'",
+        "output": "resolve.rs:277:    pub fn resolve_class_positions(&mut self, class_entity_order: &[EntityId], entity_type: &str) {\nresolve.rs:333:    /// Call [`resolve_class_positions`] once per class before the hot loop ...\nresolve.rs:337:    /// [`resolve_class_positions`]: Self::resolve_class_positions",
+        "reading": "resolve_class_positions is the ONLY writer of GroupFactor.class_positions, and git grep finds nothing but its definition and two doc-comment references crate-wide -- no call site. So in production gf.class_positions is always None, and apply_correlation_for_class (resolve.rs:338), called three times per opening from generate_opening_tree's inner loop (generate.rs:332-334, inside `for opening_idx in 0..n_openings` at 327), always takes the apply_group_scan fallback. apply_group_scan re-runs `entity_order.iter().position(|e| e == eid)` (resolve.rs:428) -- an O(class_size) linear scan per group entity -- on every opening, recomputing a position mapping that is invariant across the entire tree (entity_order and the correlation groups do not change per opening). resolve_positions (the full-vector twin) is likewise called only in generate.rs test code (1311/1427/1549/1658), never in production. generate_opening_tree also takes `correlation: &DecomposedCorrelation` by shared reference (generate.rs:251), so it structurally cannot hoist the resolution itself."
+      },
+      "mechanism": "The stage-invariant entity-position resolution is recomputed inside the per-opening loop. Work that should run once per (class, tree) instead runs n_openings * n_stages * n_groups times; the allocation-free precomputed path built for exactly this (apply_group_precomputed at resolve.rs:363) is unreachable because its position store is never populated.",
+      "proposedSeverity": "B",
+      "fixShape": "Hoist entity-position resolution to once per tree. Either give generate_opening_tree a &mut DecomposedCorrelation and call resolve_class_positions once per class (inflow_order/load_order/ncs_order) before the stage loop so every opening lands on apply_group_precomputed; or resolve positions at correlation/context build time so the DecomposedCorrelation arrives pre-resolved. Preserve the existing per-class reassembly and declaration order exactly -- the output must stay bit-for-bit identical. Do not name any engine paradigm noun; the seam stays a generic position cache on the correlation type.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null
+    },
+    {
+      "title": "apply_group_precomputed and apply_group_scan heap-allocate gathered/correlated (and positions) scratch per call for correlation groups larger than MAX_STACK_DIM=64, invoked once per opening from the tree loop",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_precomputed",
+          "line": 379
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 425
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '379,387p;424,438p'",
+        "output": "        } else {\n            let gathered: Vec<f64> = positions.iter().map(|&pos| noise[pos]).collect();\n            let mut correlated = vec![0.0_f64; n];\n            factor.transform(&gathered, &mut correlated);\n            ...\n        } else {\n            let positions: Vec<usize> = entity_ids.iter().filter_map(...).collect();\n            ...\n            let gathered: Vec<f64> = positions.iter().map(|&pos| noise[pos]).collect();\n            let mut correlated = vec![0.0_f64; n];",
+        "reading": "MAX_STACK_DIM is 64 (resolve.rs:18). Both application paths take a stack fast-path only for n <= 64; for any group whose dimension exceeds 64 they fall to a heap branch that allocates a fresh `gathered: Vec<f64>` plus `correlated = vec![0.0; n]` (apply_group_precomputed:380-381), and the scan path additionally allocates a `positions: Vec<usize>` (apply_group_scan:426,436-437). These functions are called once per opening per class from generate_opening_tree's inner loop (generate.rs:332-334). So for any correlation group with more than 64 entities, every opening allocates 2 (precomputed) or 3 (scan) transient Vecs -- n_openings * n_stages allocations of pure scratch. This is independent of candidate 1: even after resolve_class_positions is wired up, apply_group_precomputed still heap-allocates in the n>64 branch."
+      },
+      "mechanism": "Per-opening transient heap allocation on the tree-generation path whenever a single correlation group exceeds the 64-entity stack cap. Large interconnected hydro systems routinely place many inflow stations in one correlation group, so the >64 branch is reachable deck-independently; the allocations are pure scratch reused nowhere.",
+      "proposedSeverity": "B",
+      "fixShape": "Give the apply functions caller-owned reusable scratch: allocate gathered/correlated (and, for the scan path, positions) once, sized to the maximum group dimension, in generate_opening_tree before the stage/opening loops and thread them in, or hold them on a per-tree workspace. Keep the small-group stack fast path unchanged. Numerics are untouched -- only the buffer lifetime changes.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null
+    },
+    {
+      "title": "apply_correlation_for_class re-resolves the active profile (HashMap<i32,String> + BTreeMap<String,_> string-keyed lookup) on every one of its three per-opening calls, though the profile is constant across a stage's openings",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 345
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '345,351p'",
+        "output": "        let profile_name = self.profile_for_stage(stage_id);\n        let Some(group_factors) = self.factors.get(profile_name) else {\n            // Missing profile leaves noise unchanged rather than erroring.\n            return;\n        };\n\n        for gf in group_factors {",
+        "reading": "profile_for_stage does a HashMap<i32,String>::get (resolve.rs:246), then factors.get(profile_name) is a BTreeMap<String,_>::get that walks the tree doing String comparisons. generate_opening_tree calls apply_correlation_for_class three times per opening (generate.rs:332-334, inflow/load/ncs) inside `for opening_idx in 0..n_openings`, with a stage_id that is constant for the whole inner loop. So the same profile + group-factor slice is looked up 3 * n_openings * n_stages times when it need be resolved once per stage."
+      },
+      "mechanism": "Stage-constant map lookups (one HashMap probe plus one string-keyed BTreeMap walk) executed inside the innermost per-opening loop. Distinct from candidates 1 and 2 (this fires on every call regardless of scan-vs-precomputed and regardless of group size); the eliminable cost is repeated map traversal, not scan or allocation.",
+      "proposedSeverity": "C",
+      "fixShape": "Resolve the &[GroupFactor] slice for the stage once, before the opening loop in generate_opening_tree (e.g. a per-stage accessor on DecomposedCorrelation that returns the group-factor slice for a stage_id), then iterate openings against that borrowed slice, filtering by entity_type in the loop. Folds naturally into candidate 1's once-per-stage/tree resolution.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/tree/generate.rs generate_stage_raw_noise + generate_saa + HistoricalResiduals branch",
+      "why": "Batch noise generation is dispatched once per stage (generate_stage_raw_noise), not per opening; the batch methods fill the whole stage slice in a single call. The per-opening fresh Pcg64 in generate_saa (rng_from_seed at generate.rs:217) and the per-opening derive_opening_seed in the HistoricalResiduals branch (generate.rs:194-203) are REQUIRED by the per-opening independent-seed determinism contract (each opening's stream must be reproducible/order-invariant), not an avoidable perf cost -- do not flag them.",
+      "sanctionedBy": "CLAUDE.md determinism contract (reproducibility + declaration-order invariance); noise/seed.rs and noise/rng.rs module docs (absolute-seed derivation, resume invariant)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs generate_qmc_sobol and crates/cobre-stochastic/src/tree/qmc_halton/mod.rs generate_qmc_halton",
+      "why": "Both batch QMC generators build their per-stage scratch once per call (Sobol: build_direction_matrix + derive_scramble_params + a single sobol_state Vec, then O(1) Gray-code recurrence per point; Halton: sieve_primes + build_scramble_tables once) and reuse it across all openings of the stage. No per-opening allocation. qmc_sobol/sobol_directions.rs is a generated constant table, excluded from perf scope."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/tree/lhs.rs generate_lhs",
+      "why": "Allocates its `samples` and `perm` scratch once and reuses them across all dimensions; Fisher-Yates is O(n) in place. No per-opening or per-dimension allocation on the batch path."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/noise/quantile.rs norm_quantile and crates/cobre-stochastic/src/correlation/spectral.rs SpectralFactor::transform",
+      "why": "norm_quantile is a pure scalar Horner evaluation, zero allocation. SpectralFactor::transform is an in-place dense mat-vec with no intermediate allocation (its doc states this). The allocating work in spectral.rs (decompose_with_diagnostics / jacobi_eigen) runs once per group at DecomposedCorrelation::build time, not on the opening loop."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/normal/precompute.rs PrecomputedNormal and crates/cobre-stochastic/src/tree/opening_tree.rs OpeningTree::from_parts",
+      "why": "PrecomputedNormal::build fills flat mean/std/factors arrays once at build time and its accessors are pure index arithmetic (no runtime allocation). OpeningTree::from_parts allocates the flat data/offset buffers exactly once at tree construction; the tree is read-only thereafter (module doc)."
+    },
+    {
+      "subject": "cross-reference (NOT this sub-station): crates/cobre-stochastic/src/sampling/mod.rs:227-245 and crates/cobre-stochastic/src/sampling/out_of_sample.rs:65",
+      "why": "These call apply_correlation_for_class / apply_correlation and are subject to the SAME dead-fast-path scan (candidate 1) and >64 heap alloc (candidate 2). Their anchors sit in the `sampling` sub-station, so they are recorded here as a cross-reference for the sampling-lens worker, not raised as candidates by tree-noise."
+    }
+  ],
+  "_needsHuman": []
+}

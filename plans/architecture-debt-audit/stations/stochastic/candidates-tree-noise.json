@@ -1,0 +1,457 @@
+{
+  "station": "stochastic",
+  "subStation": "tree-noise",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "candidates": [
+    {
+      "title": "DecomposedCorrelation ships a superseded full-vector correlation seam (test-only) beside the live per-class seam, and both position-precompute fast paths are unwired in production",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 31
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_positions",
+          "line": 253
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation",
+          "line": 307
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE 'apply_correlation\\b|\\.resolve_positions|resolve_class_positions' a136840d -- crates/cobre-stochastic/src crates/cobre-sddp/src ; git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '56,66p'",
+        "output": "apply_correlation callers: out_of_sample.rs:65 (inside fn sample_fresh, which is #[cfg(test)]), generate.rs:1340/1456/1573/1682 (test mod), resolve.rs test mod. NO non-test workspace caller.\napply_correlation_for_class callers: sampling/mod.rs:227/236/245 and generate.rs:332-334 (production).\n.resolve_positions callers: generate.rs:1311/1427/1549/1658 (all in #[cfg(test)] mod tests) only.\nresolve_class_positions: only its own definition (resolve.rs:277) + doc refs \u2014 ZERO callers.\nbuild() sets positions:None and class_positions:None (resolve.rs:208-209); the only Some-writers are inside resolve_positions (267) and resolve_class_positions (294).",
+        "reading": "Production correlation runs exclusively through apply_correlation_for_class on the linear-scan fallback: the per-class precompute resolve_class_positions is never called in any build, so GroupFactor.class_positions stays None and the apply_group_precomputed branch it feeds is unreachable. The entire full-vector twin (apply_correlation + resolve_positions + GroupFactor.positions) has no non-test workspace consumer \u2014 its only caller sample_fresh is #[cfg(test)]. So DecomposedCorrelation carries two parallel apply methods, two parallel resolve methods, and two Option position caches on GroupFactor, of which production uses exactly one applier and zero precompute. Neither the full-vector twin nor the class precompute carries an #[allow(dead_code)] Voice-4 rationale or a reserved-seam entry in the mirror (grep of reserved-seams-and-deferred-debt.md finds no match). The doubled seam is also a footgun: the doc warns class positions are segment-relative while full-vector positions index the whole noise vector, so a future maintainer wiring the wrong precompute onto the class path would gather on the wrong base."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Collapse to a single correlation applier. Preferred: since production uses only apply_correlation_for_class on the scan path, remove the full-vector twin (apply_correlation, resolve_positions, GroupFactor.positions) that only tests exercise and the never-called resolve_class_positions + GroupFactor.class_positions, leaving one applier over the shared apply_group_scan and one position-cache concept. Alternative, if the position-precompute is genuinely wanted for the forward-sampler hot loop: wire resolve_class_positions once at ForwardSampler/opening-tree setup and delete the redundant full-vector method rather than keeping both. Either way keep the spectral transform byte-identical and preserve the BTreeMap deterministic iteration order noted in-code; retire, not re-point, the segment-relative-vs-full-vector position-base distinction so the trap cannot be mis-merged.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-tree-noise-01"
+    },
+    {
+      "title": "Entity class (inflow/load/ncs) is a stringly-typed closed set matched by `==` across generate.rs and resolve.rs, with no compiler-checked enum",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 28
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 338
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '27,28p;351,353p' ; git show a136840d:crates/cobre-stochastic/src/tree/generate.rs | sed -n '332,334p'",
+        "output": "resolve.rs:28  pub entity_type: String,  (doc: shared by all entities: \"inflow\", \"load\", \"ncs\")\nresolve.rs:352  if gf.entity_type != entity_type { continue; }\ngenerate.rs:332  correlation.apply_correlation_for_class(stage.id, inflow_noise, inflow_order, \"inflow\");\ngenerate.rs:333  ... load_order, \"load\");\ngenerate.rs:334  ... ncs_order, \"ncs\");",
+        "reading": "The entity class is a closed 3-value set (inflow/load/ncs) but is carried as a String on GroupFactor and dispatched by `!=`/`==` at two sites in resolve.rs (apply_correlation_for_class L352, resolve_class_positions L286). The producers are bare string literals at generate.rs:332-334 and sampling/mod.rs:227/236/245. Nothing links the literal producer to the stored value at compile time: a typo (`\"inlfow\"`) or a vocabulary drift vs the cobre-core `CorrelationEntity.entity_type` source silently makes the filter never match, so that class's noise is left uncorrelated with no error. CLAUDE.md mandates enum dispatch for closed variant sets; this is the stringly-typed anti-pattern it forbids."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Introduce an in-crate closed enum EntityClass { Inflow, Load, Ncs }. Parse the cobre-core-sourced CorrelationEntity.entity_type String exactly once, at DecomposedCorrelation::build, into the enum stored on GroupFactor (replacing the String field). Type the apply_correlation_for_class and resolve_class_positions `entity_type` parameter and the generate.rs / sampling/mod.rs call-site literals on the enum, so every class comparison becomes an exhaustive compiler-checked match with a single String->enum boundary at build. The source String remains owned by cobre-core (a cross-station note, not a change here); the boundary-parse keeps this fix entirely inside cobre-stochastic. No paradigm noun and >=2 consumers, so it does not trip the L1 purity guardrail.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-tree-noise-00"
+    },
+    {
+      "title": "Three structurally identical point-sample parameter bundles (LhsPointSpec / HaltonPointSpec / SobolPointSpec) with no shared type",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/lhs.rs",
+          "symbol": "LhsPointSpec",
+          "line": 89
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs",
+          "symbol": "HaltonPointSpec",
+          "line": 236
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs",
+          "symbol": "SobolPointSpec",
+          "line": 236
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/tree/lhs.rs | sed -n '88,102p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_halton/mod.rs | sed -n '235,249p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs | sed -n '235,249p'",
+        "output": "All three: #[derive(Debug, Clone, Copy)] pub struct <X>PointSpec { pub sampling_seed: u64, pub iteration: u32, pub scenario: u32, pub stage_id: u32, pub total_scenarios: u32, pub dim: usize }. Field names/types identical; docs identical except total_scenarios (\"= N strata\" only on Lhs).",
+        "reading": "The three point-wise generators (sample_lhs_point, scrambled_halton_point, scrambled_sobol_point/_precomputed) each take a distinct spec struct whose field set is byte-for-byte the same six fields with the same types. out_of_sample.rs constructs all three from the same FreshNoiseSpec. There is no shared type, so the point-sampling parameter contract is expressed in triplicate and any new field (or a rename) is an O(3-structs + call-sites) ripple with no compiler link keeping them in step. This is the bag-of-parameters seam duplicated three ways."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Introduce one shared spec type (e.g. QmcPointSpec / PointSampleSpec) in a common noise or tree module carrying sampling_seed/iteration/scenario/stage_id/total_scenarios/dim, and have sample_lhs_point, scrambled_halton_point, scrambled_sobol_point and scrambled_sobol_point_precomputed all accept it. The three generators keep their distinct algorithms; only the parameter carrier is unified, so a future field is a one-line change. Three present consumers make this a real de-duplication, not a speculative one-consumer abstraction, so it does not trip the L1 purity guardrail.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-tree-noise-02"
+    },
+    {
+      "title": "SweepDirection is effectively one-valued in production: Ascending is constructed only inside opening_tree.rs's own #[cfg(test)] module; every production caller passes Descending",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "SweepDirection",
+          "line": 14
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "set_solve_order",
+          "line": 120
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'SweepDirection' a136840d4f2ea137f685f0af6dac04254b983b60 -- crates/ | grep -vE 'lib.rs|tree/mod.rs|context.rs:60'; echo '--- cfg(test) boundary in opening_tree.rs ---'; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/tree/opening_tree.rs | grep -nE '#\\[cfg\\(test\\)\\]'",
+        "output": "opening_tree.rs:14:pub enum SweepDirection {  ...  :123: direction: SweepDirection,  :168: SweepDirection::Ascending => ka.total_cmp(&kb),  :169: SweepDirection::Descending => kb.total_cmp(&ka),  :649/:673/:688/:693/:696/:707/:720 set_solve_order(..., SweepDirection::Descending)  :662 set_solve_order(&keys, SweepDirection::Ascending)  :676 set_solve_order(&keys, SweepDirection::Ascending). cobre-sddp/src/setup/mod.rs:469 set_solve_order(&solve_order_keys, SweepDirection::Descending). cobre-sddp/tests/parity.rs:1574/:1870 ... SweepDirection::Descending. --- cfg(test) boundary: opening_tree.rs:438:#[cfg(test)]",
+        "reading": "SweepDirection has two variants but only Descending is ever selected outside tests. The two Ascending constructions (opening_tree.rs:662,676) sit above the sole #[cfg(test)] boundary at line 438, so they are unit-test-only. The single production caller in cobre-sddp/src/setup/mod.rs:469 passes Descending, and the only other production reference (cobre-sddp/tests/parity.rs) is also test code passing Descending. The Ascending arm (opening_tree.rs:168) and the direction: SweepDirection parameter on set_solve_order (line 120/123) therefore exist only to be exercised by dedicated unit tests (solve_order_ascending_first_is_smallest_key at :659), never reached by any production path. The doc comment ('Purely an ordering policy, with no algorithm-specific meaning', :10-12) is a genericity/L1-purity rationale explaining why the enum carries no engine noun; it is not a reservation of the second variant for a planned feature, and there is no reserved-seam or #[allow] note sanctioning an unwired Ascending path.",
+        "extraChecks": "Enum census re-run at baseline: git grep -nE '^\\s*(pub )?enum ' a136840d..:crates/cobre-stochastic/src returns exactly 8 pub enum (StochasticError, ComponentProvenance, ClosureRejection, HistoryClass, ParWarning, ClassSampler, SweepDirection, ReductionReason); none is literally one-valued. SweepDirection is the effectively-one-valued case the census target points to."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the speculative generality: since every production caller sorts largest-key-first, drop the SweepDirection enum and the direction parameter on set_solve_order, making the primitive sort descending unconditionally, and remove the now-dead SweepDirection::Descending argument from the one production caller (cobre-sddp/src/setup/mod.rs:469) plus its test mirrors (cobre-sddp/tests/parity.rs). The Ascending-only unit tests then either delete or fold into a private test helper that exercises the comparator directly, so no production surface exists solely to be tested. If instead the ascending ordering is a deliberately reserved seam for a planned selection policy, keep it but add an owner-signed reservation note (the CLAUDE.md 'unwired config is reserved, not dead' pattern) at the enum so the unwired variant reads as reserved rather than as silent speculative generality. Either way keep the fix inside cobre-stochastic (the enum/parameter definition); the caller edit is the named, bounded blast radius. No engine noun and no new abstraction is introduced \u2014 this removes generality rather than adding it.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "over-engineering",
+      "candidateRef": "sto-over-engineering-tree-noise-00"
+    },
+    {
+      "title": "apply_correlation_for_class re-resolves the active profile (HashMap<i32,String> + BTreeMap<String,_> string-keyed lookup) on every one of its three per-opening calls, though the profile is constant across a stage's openings",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 345
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '345,351p'",
+        "output": "        let profile_name = self.profile_for_stage(stage_id);\n        let Some(group_factors) = self.factors.get(profile_name) else {\n            // Missing profile leaves noise unchanged rather than erroring.\n            return;\n        };\n\n        for gf in group_factors {",
+        "reading": "profile_for_stage does a HashMap<i32,String>::get (resolve.rs:246), then factors.get(profile_name) is a BTreeMap<String,_>::get that walks the tree doing String comparisons. generate_opening_tree calls apply_correlation_for_class three times per opening (generate.rs:332-334, inflow/load/ncs) inside `for opening_idx in 0..n_openings`, with a stage_id that is constant for the whole inner loop. So the same profile + group-factor slice is looked up 3 * n_openings * n_stages times when it need be resolved once per stage."
+      },
+      "mechanism": "Stage-constant map lookups (one HashMap probe plus one string-keyed BTreeMap walk) executed inside the innermost per-opening loop. Distinct from candidates 1 and 2 (this fires on every call regardless of scan-vs-precomputed and regardless of group size); the eliminable cost is repeated map traversal, not scan or allocation.",
+      "proposedSeverity": "C",
+      "fixShape": "Resolve the &[GroupFactor] slice for the stage once, before the opening loop in generate_opening_tree (e.g. a per-stage accessor on DecomposedCorrelation that returns the group-factor slice for a stage_id), then iterate openings against that borrowed slice, filtering by entity_type in the loop. Folds naturally into candidate 1's once-per-stage/tree resolution.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-tree-noise-02"
+    },
+    {
+      "title": "apply_group_precomputed and apply_group_scan heap-allocate gathered/correlated (and positions) scratch per call for correlation groups larger than MAX_STACK_DIM=64, invoked once per opening from the tree loop",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_precomputed",
+          "line": 379
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 425
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '379,387p;424,438p'",
+        "output": "        } else {\n            let gathered: Vec<f64> = positions.iter().map(|&pos| noise[pos]).collect();\n            let mut correlated = vec![0.0_f64; n];\n            factor.transform(&gathered, &mut correlated);\n            ...\n        } else {\n            let positions: Vec<usize> = entity_ids.iter().filter_map(...).collect();\n            ...\n            let gathered: Vec<f64> = positions.iter().map(|&pos| noise[pos]).collect();\n            let mut correlated = vec![0.0_f64; n];",
+        "reading": "MAX_STACK_DIM is 64 (resolve.rs:18). Both application paths take a stack fast-path only for n <= 64; for any group whose dimension exceeds 64 they fall to a heap branch that allocates a fresh `gathered: Vec<f64>` plus `correlated = vec![0.0; n]` (apply_group_precomputed:380-381), and the scan path additionally allocates a `positions: Vec<usize>` (apply_group_scan:426,436-437). These functions are called once per opening per class from generate_opening_tree's inner loop (generate.rs:332-334). So for any correlation group with more than 64 entities, every opening allocates 2 (precomputed) or 3 (scan) transient Vecs -- n_openings * n_stages allocations of pure scratch. This is independent of candidate 1: even after resolve_class_positions is wired up, apply_group_precomputed still heap-allocates in the n>64 branch."
+      },
+      "mechanism": "Per-opening transient heap allocation on the tree-generation path whenever a single correlation group exceeds the 64-entity stack cap. Large interconnected hydro systems routinely place many inflow stations in one correlation group, so the >64 branch is reachable deck-independently; the allocations are pure scratch reused nowhere.",
+      "proposedSeverity": "B",
+      "fixShape": "Give the apply functions caller-owned reusable scratch: allocate gathered/correlated (and, for the scan path, positions) once, sized to the maximum group dimension, in generate_opening_tree before the stage/opening loops and thread them in, or hold them on a per-tree workspace. Keep the small-group stack fast path unchanged. Numerics are untouched -- only the buffer lifetime changes.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-tree-noise-01"
+    },
+    {
+      "title": "generate_opening_tree pays a per-opening O(group*class) linear position scan because the per-class precomputed fast path (resolve_class_positions) has zero call sites",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 327
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_group_scan",
+          "line": 390
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'resolve_class_positions' a136840d4f2ea137f685f0af6dac04254b983b60 -- '*.rs'",
+        "output": "resolve.rs:277:    pub fn resolve_class_positions(&mut self, class_entity_order: &[EntityId], entity_type: &str) {\nresolve.rs:333:    /// Call [`resolve_class_positions`] once per class before the hot loop ...\nresolve.rs:337:    /// [`resolve_class_positions`]: Self::resolve_class_positions",
+        "reading": "resolve_class_positions is the ONLY writer of GroupFactor.class_positions, and git grep finds nothing but its definition and two doc-comment references crate-wide -- no call site. So in production gf.class_positions is always None, and apply_correlation_for_class (resolve.rs:338), called three times per opening from generate_opening_tree's inner loop (generate.rs:332-334, inside `for opening_idx in 0..n_openings` at 327), always takes the apply_group_scan fallback. apply_group_scan re-runs `entity_order.iter().position(|e| e == eid)` (resolve.rs:428) -- an O(class_size) linear scan per group entity -- on every opening, recomputing a position mapping that is invariant across the entire tree (entity_order and the correlation groups do not change per opening). resolve_positions (the full-vector twin) is likewise called only in generate.rs test code (1311/1427/1549/1658), never in production. generate_opening_tree also takes `correlation: &DecomposedCorrelation` by shared reference (generate.rs:251), so it structurally cannot hoist the resolution itself."
+      },
+      "mechanism": "The stage-invariant entity-position resolution is recomputed inside the per-opening loop. Work that should run once per (class, tree) instead runs n_openings * n_stages * n_groups times; the allocation-free precomputed path built for exactly this (apply_group_precomputed at resolve.rs:363) is unreachable because its position store is never populated.",
+      "proposedSeverity": "B",
+      "fixShape": "Hoist entity-position resolution to once per tree. Either give generate_opening_tree a &mut DecomposedCorrelation and call resolve_class_positions once per class (inflow_order/load_order/ncs_order) before the stage loop so every opening lands on apply_group_precomputed; or resolve positions at correlation/context build time so the DecomposedCorrelation arrives pre-resolved. Preserve the existing per-class reassembly and declaration order exactly -- the output must stay bit-for-bit identical. Do not name any engine paradigm noun; the seam stays a generic position cache on the correlation type.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "reRaiseOf": null,
+      "lens": "performance",
+      "candidateRef": "sto-performance-tree-noise-00"
+    },
+    {
+      "title": "Inline-giant vs extracted-sibling unit-test homing coin-flip inside cobre-stochastic: tree/generate.rs carries ~2030 inline test-LOC while par/fitting uses extracted tests.rs siblings",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "tests",
+          "line": 341
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "tests",
+          "line": 446
+        },
+        {
+          "path": "crates/cobre-stochastic/src/normal/precompute.rs",
+          "symbol": "tests",
+          "line": 299
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "tests",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/spectral.rs",
+          "symbol": "tests",
+          "line": 286
+        }
+      ],
+      "evidence": {
+        "command": "bash -c 'for f in tree/generate.rs tree/opening_tree.rs correlation/resolve.rs normal/precompute.rs correlation/spectral.rs noise/rng.rs noise/seed.rs; do b=$(git show a136840d:crates/cobre-stochastic/src/$f); t=$(echo \"$b\" | wc -l); c=$(echo \"$b\" | grep -nE \"#\\[cfg\\(test\\)\\]\" | head -1 | cut -d: -f1); echo \"$f total=$t cfg(test)@=$c inline_test_LOC=~$((t-c+1))\"; done; git ls-tree -r --name-only a136840d -- crates/cobre-stochastic/src/par/fitting/ | grep tests.rs'",
+        "output": "tree/generate.rs total=2370 cfg(test)@=341 inline_test_LOC=~2030\ntree/opening_tree.rs total=739 cfg(test)@=438 inline_test_LOC=~302\ncorrelation/resolve.rs total=976 cfg(test)@=446 inline_test_LOC=~531\nnormal/precompute.rs total=698 cfg(test)@=299 inline_test_LOC=~400\ncorrelation/spectral.rs total=568 cfg(test)@=286 inline_test_LOC=~283\nnoise/rng.rs total=73 cfg(test)@=34 inline_test_LOC=~40\nnoise/seed.rs total=246 cfg(test)@=74 inline_test_LOC=~173\ncrates/cobre-stochastic/src/par/fitting/estimation/tests.rs\ncrates/cobre-stochastic/src/par/fitting/tests.rs",
+        "reading": "Within this one crate the unit-test homing rule is a coin-flip -- exactly the yardstick's \u00a73.2.4 (inline-giant vs extracted-sibling asymmetry) and \u00a75.1 (a single deterministic homing threshold, proposal ~500 test-LOC / ~40 test fns). tree/generate.rs keeps ~2030 test-LOC INLINE (4x over the proposed threshold), correlation/resolve.rs ~531 and normal/precompute.rs ~400 inline, while par/fitting extracts its tests to sibling tests.rs files. There is no rule deciding which form applies; the same directory can hold either. This is a navigability/uniformity smell, not a volume complaint -- the yardstick \u00a77 explicitly forbids deleting tests to shrink the suite. par/fitting/tests.rs and estimation/tests.rs are in the 'par' sub-station and are cited only as the contrasting extracted form; the candidate anchors are all in tree-noise src."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Adopt the yardstick \u00a75.1 deterministic homing rule as a crate-wide lint: unit tests stay inline below a fixed threshold (the proposal is ~500 test-LOC or ~40 test fns), extracted to a sibling `tests.rs` above it. Under that rule tree/generate.rs (~2030), correlation/resolve.rs (~531) move to `<module>/tests.rs` siblings (matching the already-extracted par/fitting form), while small modules (noise/rng.rs ~40, noise/seed.rs) stay inline. Pure relocation, no test body/assertion/tier/gate change, count-neutral -- resolves the intra-crate coin-flip without touching coverage.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-tree-noise-01"
+    },
+    {
+      "title": "Near-verbatim ~230-line fixture prelude copied across the QMC integration binaries (halton/sobol/lhs) with eight byte-identical helpers and no test_support home; the copy is already drifting",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/sobol_integration.rs",
+          "symbol": "make_hydro",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/lhs_integration.rs",
+          "symbol": "make_hydro",
+          "line": 206
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "approx_erf",
+          "line": 43
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+          "symbol": "identity_correlation",
+          "line": 105
+        }
+      ],
+      "evidence": {
+        "command": "bash -c 'diff <(git show a136840d:crates/cobre-stochastic/tests/halton_integration.rs | sed -n \"41,55p;105,267p\") <(git show a136840d:crates/cobre-stochastic/tests/sobol_integration.rs | sed -n \"41,55p;105,267p\") && echo HELPERS_HALTON_EQ_SOBOL; diff <(git show a136840d:crates/cobre-stochastic/tests/halton_integration.rs | sed -n \"207,255p\") <(git show a136840d:crates/cobre-stochastic/tests/reproducibility.rs | sed -n \"68,116p\") && echo MAKE_HYDRO_EQ_REPRO; for f in halton_integration sobol_integration lhs_integration conformance forward_sampler reproducibility saa_golden_value; do echo -n \"$f: \"; git show a136840d:crates/cobre-stochastic/tests/$f.rs | grep -E \"fn identity_correlation\\(\" | head -1; done; git ls-tree -r --name-only a136840d -- crates/cobre-stochastic/tests/ | grep -c common'",
+        "output": "HELPERS_HALTON_EQ_SOBOL\nMAKE_HYDRO_EQ_REPRO\nhalton_integration: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\nsobol_integration: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\nlhs_integration: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\nconformance: fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\nforward_sampler: fn identity_correlation(ids: &[i32]) -> CorrelationModel {\nreproducibility: fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {\nsaa_golden_value: fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {\n0",
+        "reading": "The two diffs return empty (exit 0), so the eight fixture helpers -- approx_erf (h/s/lhs L43-51), norm_cdf (L53-55), identity_correlation (h/s L105-133, lhs L104-132), correlated_correlation (h/s L135-163, lhs L134-162), identity_correlation_model (h/s L165-192, lhs L164-191), make_bus (h/s L194-205, lhs L193-204), make_hydro (h/s L207-255, lhs L206-254; a single 49-line copy), make_inflow_model (h/s L257-267, lhs L256-266) -- are BYTE-IDENTICAL across halton/sobol/lhs, and make_hydro is additionally byte-identical to reproducibility.rs (and, verified separately, conformance.rs) so a single fixture block is physically copied into 5-6 of the crate's 8 integration binaries. The imports/allow block (L1-35) is identical bar the doc line and the one point-type import (tree::qmc_halton vs qmc_sobol vs lhs). The final `grep -c common` = 0 proves there is NO tests/common/ shared module: every tests/*.rs is standalone. The identity_correlation listing shows the copy is ALREADY DRIFTING -- it has forked into two incompatible return types (DecomposedCorrelation in the QMC trio + saa_golden_value; CorrelationModel in conformance/forward_sampler/reproducibility) and forward_sampler even renamed the param entity_ids->ids -- the exact silent-divergence hazard consolidation removes. Only make_stage_<family> and build_<family>_context genuinely vary per binary (fn name + NoiseMethod variant + block presence + panic-string), ~50 lines; those are the legitimate per-family remainder, recorded as a positive, not part of this smell."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the shared fixture prelude out of the per-binary copies into one home. The crate already dev-depends on cobre-core with its `test-support` feature but exposes NO `test-support` feature of its own and has NO tests/common/. Two roadmap-consistent shapes: (a) interim -- add crates/cobre-stochastic/tests/common/mod.rs holding make_bus/make_hydro/make_inflow_model/identity_correlation/correlated_correlation/identity_correlation_model plus the numeric approx_erf/norm_cdf, and `mod common;` it once from each integration binary (mirrors cobre-sddp/tests/common/); (b) end-state per the yardstick \u00a75.2 -- expose the entity/InflowModel/correlation builders behind a cobre-stochastic `test-support` feature gated `#[cfg(any(test, feature = \"test-support\"))]`, and push the deck-agnostic numeric helpers (approx_erf/norm_cdf) into cobre-core's `test-support` surface (the yardstick's rule that generic scaffolding lives in cobre-core, and the same hoist that \u00a75.2 says resolves the mirror's oracle-harness close/tolerance duplication). Reconcile the two forked identity_correlation return types into one canonical builder during the hoist. Keep make_stage_<family>/build_<family>_context as thin per-family wrappers (parameterize by NoiseMethod / block presence) rather than deleting them. No test body, assertion, or tier changes -- a pure fixture relocation, count-neutral.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-tree-noise-00"
+    }
+  ],
+  "positives": [
+    {
+      "lens": "architecture",
+      "subject": "All 15 non-generated tree-noise files (tree/{mod,generate,lhs,opening_tree,qmc_halton/mod,qmc_sobol/mod}.rs, noise/*, normal/*, correlation/*)",
+      "why": "Paradigm-leakage clean: git grep -niE '(sddp|benders|cut|cost.to.go|state.space)' over the full manifest yields a single hit, generate.rs:46, which is the substring 'cut' inside 'conseCUTive' \u2014 not an engine noun. No decomposition-engine type, fn, or doc comment leaks into this L1 crate; the genericity GATE is satisfied.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh (L1 purity guardrail)"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/noise/{seed,rng,quantile}.rs and normal/precompute.rs",
+      "why": "Engine-neutral numeric primitives (SipHash-1-3 seed derivation, Pcg64 wrapper, Beasley-Springer-Moro quantile, stage-major normal-parameter cache). Their determinism contracts are pinned by golden-value regression tests (seed.rs forward_seed_golden_value / stage_seed_golden_value; generate.rs saa_bitwise_compatible_with_pre_refactor_golden_values), upholding the reproducibility hard rule. Worth protecting as-is.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/normal/precompute.rs PrecomputedNormal::build typed on cobre_core::scenario::LoadModel",
+      "why": "The 'normal noise' precompute binds to LoadModel specifically; this is roadmap-consistent rather than a smell \u2014 the target layering has LoadModel leaving System for the cobre-stochastic uncertainty store (target-layering-brief Part-I item 1 / IV.5), and load is the system's normal-model entity (NCS uses NcsModel). LoadModel conflation itself is a not-ours cobre-core item per prior-register; cited as context, not raised.",
+      "sanctionedBy": "prior-register.md (LoadModel conflation = not-ours, cobre-core)"
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-stochastic/src/correlation/resolve.rs apply_correlation_for_class production path",
+      "why": "The live per-class correlation path (sampling/mod.rs:227/236/245 forward sampler, generate.rs:332-334 opening tree) is correct and deterministic: factors iterate in BTreeMap<String,...> order (explicitly documented as upholding declaration-order invariance), and each class segment is correlated independently with a block-diagonal spectral factor, proven byte-identical to the full-vector path by test_per_class_tree_matches_full_vector_* tests.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "architecture",
+      "subject": "tree/qmc_sobol/sobol_directions.rs (21229 lines, generated Joe-Kuo table)",
+      "why": "Excluded from any density / god-module / LOC-share claim over tree-noise per the inventory correction (60.3% of the crate's non-test lines, 88.3% of the tree-noise sweep). No architecture finding is raised against it; its size is the generated dataset, not a structural smell.",
+      "sanctionedBy": "inventory.json corrections[1]"
+    },
+    {
+      "lens": "architecture",
+      "subject": "Phase-1 (Switchable<T> uncertainty store) alignment note \u2014 OpeningTree (tree/opening_tree.rs), DecomposedCorrelation (correlation/resolve.rs), PrecomputedNormal (normal/precompute.rs)",
+      "why": "These read-only generation-side caches are the tree-noise pieces that would migrate into the Part IV/V Switchable<T> uncertainty store when the stochastic representation is lifted off System/Stage (target-layering-brief Part-I item 1). Recorded as an alignmentHint only; this spec executes no such move.",
+      "sanctionedBy": "target-layering-brief.md Part-I item 1 (advances-1)"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "Enum census over crates/cobre-stochastic/src (8 pub enum)",
+      "why": "Re-run at baseline returns exactly the expected 8 pub enum and none is literally single-variant, so there is no dead one-valued-enum smell across the crate; the only effectively-one-valued case is SweepDirection, raised as the sole candidate.",
+      "sanctionedBy": "attacker-prompt over-engineering checklist item (1) \u2014 enum census expectation of 8, none one-valued"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs radical_inverse (#[allow(dead_code)], line ~93)",
+      "why": "A pub(crate) module primitive marked #[allow(dead_code)] with an explicit in-code rationale that it is reached only from tests until a downstream caller wires it in. Under the reserved-is-not-dead precondition this is a sanctioned reserved seam, not an over-engineering finding.",
+      "sanctionedBy": "in-code rationale at qmc_halton/mod.rs:91-93 ('Module primitive ... reached only from tests until a downstream caller wires it in') + CLAUDE.md 'unwired config/seam is reserved, not dead'"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/noise/seed.rs \u2014 derive_forward_seed, derive_stage_seed, derive_opening_seed, derive_forward_seed_grouped",
+      "why": "The four seed-derivation functions each have real production consumers (class_sampler.rs, insample.rs, out_of_sample.rs, tree/{lhs,qmc_halton,qmc_sobol,generate}.rs), so the seed API is an exercised surface, not a speculative fan-out. Not an over-engineering finding.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "Out-of-cell over-engineering checklist items (2) ForwardSamplerConfig four parallel Option<&\u2026Library> (sampling/mod.rs), (3) #[allow(deprecated)] PAR re-export block (lib.rs), (4) 11-arg standardize_external_inflow (sampling/external.rs)",
+      "why": "Cross-reference only: checklist items 2 and 4 anchor in the sampling sub-station and item 3 in the seam sub-station (lib.rs/context.rs), all outside the tree-noise manifest. Left to the sto-oe-sampling / sto-oe-seam sibling workers; not raised here.",
+      "sanctionedBy": "scope walls \u2014 candidate anchors must sit in the tree-noise manifest; these anchor in sampling/ and lib.rs (seam)"
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/tree/generate.rs generate_stage_raw_noise + generate_saa + HistoricalResiduals branch",
+      "why": "Batch noise generation is dispatched once per stage (generate_stage_raw_noise), not per opening; the batch methods fill the whole stage slice in a single call. The per-opening fresh Pcg64 in generate_saa (rng_from_seed at generate.rs:217) and the per-opening derive_opening_seed in the HistoricalResiduals branch (generate.rs:194-203) are REQUIRED by the per-opening independent-seed determinism contract (each opening's stream must be reproducible/order-invariant), not an avoidable perf cost -- do not flag them.",
+      "sanctionedBy": "CLAUDE.md determinism contract (reproducibility + declaration-order invariance); noise/seed.rs and noise/rng.rs module docs (absolute-seed derivation, resume invariant)"
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs generate_qmc_sobol and crates/cobre-stochastic/src/tree/qmc_halton/mod.rs generate_qmc_halton",
+      "why": "Both batch QMC generators build their per-stage scratch once per call (Sobol: build_direction_matrix + derive_scramble_params + a single sobol_state Vec, then O(1) Gray-code recurrence per point; Halton: sieve_primes + build_scramble_tables once) and reuse it across all openings of the stage. No per-opening allocation. qmc_sobol/sobol_directions.rs is a generated constant table, excluded from perf scope."
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/tree/lhs.rs generate_lhs",
+      "why": "Allocates its `samples` and `perm` scratch once and reuses them across all dimensions; Fisher-Yates is O(n) in place. No per-opening or per-dimension allocation on the batch path."
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/noise/quantile.rs norm_quantile and crates/cobre-stochastic/src/correlation/spectral.rs SpectralFactor::transform",
+      "why": "norm_quantile is a pure scalar Horner evaluation, zero allocation. SpectralFactor::transform is an in-place dense mat-vec with no intermediate allocation (its doc states this). The allocating work in spectral.rs (decompose_with_diagnostics / jacobi_eigen) runs once per group at DecomposedCorrelation::build time, not on the opening loop."
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/normal/precompute.rs PrecomputedNormal and crates/cobre-stochastic/src/tree/opening_tree.rs OpeningTree::from_parts",
+      "why": "PrecomputedNormal::build fills flat mean/std/factors arrays once at build time and its accessors are pure index arithmetic (no runtime allocation). OpeningTree::from_parts allocates the flat data/offset buffers exactly once at tree construction; the tree is read-only thereafter (module doc)."
+    },
+    {
+      "lens": "performance",
+      "subject": "cross-reference (NOT this sub-station): crates/cobre-stochastic/src/sampling/mod.rs:227-245 and crates/cobre-stochastic/src/sampling/out_of_sample.rs:65",
+      "why": "These call apply_correlation_for_class / apply_correlation and are subject to the SAME dead-fast-path scan (candidate 1) and >64 heap alloc (candidate 2). Their anchors sit in the `sampling` sub-station, so they are recorded here as a cross-reference for the sampling-lens worker, not raised as candidates by tree-noise."
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "Cross-reference: mirror 'Oracle test-harness duplication' (docs/design/reserved-seams-and-deferred-debt.md L285; prior-register disposition = cross-reference)",
+      "why": "The QMC fixture-prelude duplication (candidate 1) is the same class of integration test-harness duplication the mirror already records for the SDDP oracle harness, but this instance is freshly anchored inside crates/cobre-stochastic/tests (in-station) whereas the oracle harness lives in crates/cobre-sddp/tests. Per the register I cite the mirror entry and do NOT restate the oracle-harness duplication as a finding; the yardstick \u00a75.2 hoist that resolves the oracle close/tolerance helpers into cobre-core's test-support surface is the same mechanism candidate 1's fix rides on.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md 'Oracle test-harness duplication' (L285); prior-register.md cross-reference disposition"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/tests/{halton,sobol,lhs}_integration.rs -- make_stage_<family> (halton L58-77 + _with_block L80-103; sobol L58-103; lhs make_stage_lhs L57-80 + make_stage_lhs_no_block L83-102) and build_<family>_context (halton/sobol L269-316, lhs L268-315)",
+      "why": "These are the genuinely per-family ~50 lines: they differ only in the NoiseMethod variant (QmcHalton/QmcSobol/Lhs), block presence, and panic-string wording. They are NOT part of the duplication smell and must survive any consolidation as thin per-family wrappers -- protecting them from over-consolidation is why candidate 1's fix parameterizes rather than deletes.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/tests/par_a_historical_replay.rs (617 lines) and saa_golden_value.rs (139 lines)",
+      "why": "Examined and clean of the prelude smell: par_a_historical_replay.rs declares none of the eight shared helpers (constructs its own fixtures), and saa_golden_value.rs shares only identity_correlation (in the DecomposedCorrelation form). Neither copies the make_bus/make_hydro/make_inflow_model block, so they are not part of candidate 1's blast radius.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/noise/{rng,quantile,seed}.rs inline #[cfg(test)] modules",
+      "why": "Examined for the homing asymmetry (candidate 2) and found correctly homed: rng.rs (~40 inline test-LOC), quantile.rs (~100), seed.rs (~173) all sit at or below the yardstick \u00a75.1 proposed threshold, so keeping them inline is the correct form, not bloat. They are the counter-examples that make the tree/generate.rs giant-inline case a genuine asymmetry rather than a blanket 'everything should extract' claim.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a75.1 (homing threshold)"
+    }
+  ],
+  "_needsHuman": [],
+  "lenses": {
+    "sto-architecture-tree-noise": 3,
+    "sto-over-engineering-tree-noise": 1,
+    "sto-performance-tree-noise": 3,
+    "sto-test-bloat-tree-noise": 2
+  }
+}

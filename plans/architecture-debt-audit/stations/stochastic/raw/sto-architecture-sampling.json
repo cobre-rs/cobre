@@ -1,0 +1,92 @@
+{
+  "station": "stochastic",
+  "subStation": "sampling",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "ForwardSamplerConfig is both a store handle and a parameter bag, and is the point where the generation-side and realized-value halves straddle",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ForwardSamplerConfig",
+          "line": 263
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_forward_sampler",
+          "line": 403
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '262,289p'; echo ---; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '421,434p'",
+        "output": "#[derive(Debug, Clone, Copy)]\npub struct ForwardSamplerConfig<'a> {\n    pub class_schemes: ClassSchemes,\n    /// Stochastic context providing tree, seeds, correlation, and entity order.\n    pub ctx: &'a StochasticContext,\n    pub stages: &'a [Stage],\n    pub dims: ClassDimensions,\n    pub historical_library: Option<&'a HistoricalScenarioLibrary>,\n    pub external_inflow_library: Option<&'a ExternalScenarioLibrary>,\n    pub external_load_library: Option<&'a ExternalScenarioLibrary>,\n    pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,\n}\n---\n    let forward_seed = ctx.forward_seed();\n    let base_seed = ctx.base_seed();\n    ...\n    let entity_order = ctx.entity_order();\n    ...\n    let correlation = ctx.correlation();",
+        "reading": "The single #[derive(Copy)] seam type carries, in one flat bundle, a persistent store handle (`ctx: &StochasticContext`, whose own doc says it provides `tree, seeds, correlation, and entity order` \u2014 all generation-side artifacts: the fitted-PAR opening tree, the base/forward seeds, the pre-decomposed correlation) alongside four realized-value `Option<&\u2026Library>` references plus per-run `class_schemes`/`stages`/`dims`. `build_forward_sampler` (line 403) unpacks the config and reads ONLY generation-side accessors off `ctx` (`forward_seed()`, `base_seed()`, `entity_order()`, `tree_view()`, `correlation()`), while the library options are the realized-value inputs. So the answer to seam-shape Q3 is `both` \u2014 a store handle AND a parameter bag \u2014 and this is also the Q2 straddle: `ForwardSamplerConfig` is the one public sampling type that spans the generation-only / realized-value boundary. The validity coupling (which of the four libraries must be `Some`) is not encoded in the type; it is discovered at runtime in `build_class_sampler` against `class_schemes`."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Split the one flat bundle into two clearly-named halves at the seam: a persistent store handle (today `&StochasticContext`; the generation-side tree/seeds/correlation/entity-order the sampler consumes read-only) and a transient per-run realized-value source selection (the four library references plus the per-class schemes that pick and require them). The source-selection half is where the four-way validity coupling lives and should own a constructor/validation that makes the `scheme -> required library` pairing a type-level fact rather than a runtime check in `build_class_sampler`; leave the coupling-collapse mechanics themselves to the over-engineering sibling lens. This keeps the store as a store and the source-selection as a bag, so a reader of the seam sees two concerns, not eight peer fields. Roadmap note only (not executed here): under Part IV/V the realized-value libraries and the generation tree both fold into a single `Switchable<T>` uncertainty store, at which point the store half and most of the source bag collapse into one owner \u2014 the split proposed now is the shape that survives that move. Must stay L1-pure: no engine/paradigm noun enters the type, no dependency on an engine crate, and the source-selection type has multiple consumers (every cobre-sddp `ForwardSamplerConfig` construction site), so it is not a one-consumer abstraction.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1",
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "Entity-class identity degrades to a stringly-typed &str at the build_class_sampler seam, where a correctness rule is gated by string equality",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "build_class_sampler",
+          "line": 360
+        },
+        {
+          "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+          "symbol": "ClassSamplerParams",
+          "line": 297
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '296,297p;359,362p;436,437p;449,450p;462,463p'",
+        "output": "struct ClassSamplerParams<'a, 'b> {\n    class_name: &'b str,\n...\n        SamplingScheme::Historical => {\n            if class_name != \"inflow\" {\n                return Err(StochasticError::MissingScenarioSource {\n                    scheme: format!(\"historical_{class_name}\"),\n...\n    let inflow = build_class_sampler(ClassSamplerParams {\n        class_name: \"inflow\",\n...\n    let load = build_class_sampler(ClassSamplerParams {\n        class_name: \"load\",\n...\n    let ncs = build_class_sampler(ClassSamplerParams {\n        class_name: \"ncs\",",
+        "reading": "`ClassSchemes` already carries the class identity as three typed fields (`inflow`/`load`/`ncs`, confirmed in context.rs:17-23), and `ClassDimensions` mirrors it. But `build_forward_sampler` flattens that typed identity back to bare string literals `\"inflow\"`/`\"load\"`/`\"ncs\"` passed via `ClassSamplerParams.class_name: &str`, and `build_class_sampler` then gates a real correctness rule \u2014 Historical replay is inflow-only \u2014 on `class_name != \"inflow\"` string comparison (not merely diagnostics; the diagnostic `format!(\"historical_{class_name}\")` is a separate, legitimate use). A class rename or a typo in one of the three literals compiles cleanly and silently mis-gates. The class set is closed and small (inflow/load/ncs are entity classes, not paradigm nouns), so a typed class discriminant would be L1-pure with three consumers, not one."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Introduce a small closed class discriminant (e.g. an entity-class enum with `Inflow|Load|Ncs`) carried on `ClassSamplerParams` in place of the `&str`, so the Historical-only-for-inflow gate becomes a match/`==` on a typed value the compiler checks, and the three build sites pass the variant instead of a literal. Keep the human-readable label for diagnostics as a `Display`/`as_str` off that enum so error messages are unchanged. Purely local type-safety; advances no roadmap phase and introduces no engine vocabulary.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "sampling/mod.rs, external.rs, historical.rs, class_sampler.rs, window.rs, out_of_sample.rs, insample.rs, eta_inversion.rs (paradigm-leakage grep, architecture Q1)",
+      "why": "`git grep -niE '(sddp|benders|cut|cost.to.go|state.space)'` over the whole sampling manifest at the baseline returns exactly one hit \u2014 the substring `cut` inside `consecutive` in a test assertion string at insample.rs:116 (`expected at least 10 of 20 consecutive scenario pairs to differ`). No type, fn, field, or doc comment assumes a decomposition engine; the realized-value sampling half is genericity-clean. No GATE failure, no _needsHuman entry.",
+      "sanctionedBy": "architecture lens Q1 / scripts/ci/check-infra-genericity.sh (L1 purity)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/class_sampler.rs::ClassSampler (enum, line 63) and its fill/apply_initial_state",
+      "why": "The per-class noise source is a closed-variant `enum` (InSample/OutOfSample/Historical/External) with `match` dispatch \u2014 exactly the CLAUDE.md-mandated enum dispatch over `Box<dyn Trait>` for a closed set. The correlation contract (only OutOfSample writes uncorrelated N(0,1); InSample/Historical/External write pre-correlated eta) is stated as a module invariant and enforced consistently by the composite `ForwardSampler`. Correct and worth protecting; not a straddle.",
+      "sanctionedBy": "CLAUDE.md hard rule (never Box<dyn Trait>; enum dispatch for closed variant sets)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs::ExternalScenarioLibrary (line 57) and historical.rs::HistoricalScenarioLibrary (line 92)",
+      "why": "Both are cleanly-classified realized-value data containers ('pure data container', 'no sampling logic') with documented stage-major / window-major eta layouts and bounds-checked accessors. They hold standardized eta only; selection and correlation live elsewhere. Neither straddles the generation/realized split, so Q2 finds no straddle in the library types themselves \u2014 the straddle is isolated to the config bundle (candidate 1).",
+      "sanctionedBy": "architecture lens Q2 classification"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/sampling/external.rs::standardize_external_simple (line 399)",
+      "why": "The `\u03b7 = (value - mean)/std` standardization shared by non-PAR external classes is factored into one generic body that 'carries no entity vocabulary' \u2014 per-class field access is injected via two closures, and `standardize_external_load`/`_ncs` are thin wrappers. This is correct L1-generic factoring. The `#[allow(clippy::too_many_arguments)]` builders (`standardize_external_inflow`, `standardize_historical_windows`) and the four parallel `Option<&\u2026Library>` coupling are the over-engineering sibling lens's targets \u2014 cross-referenced, not restated here.",
+      "sanctionedBy": "in-code rationale at external.rs:258-261, 697-700 and historical.rs:292-294 (arity justified); over-engineering lens owns the too_many_arguments / four-Option items"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/context.rs::StochasticContext / build_stochastic_context (seam sub-station) and the cobre-sddp ForwardSamplerConfig construction sites (simulation/state.rs:552, training/forward/sampler.rs:23, training/forward_pass_state.rs:368/1685)",
+      "why": "Cross-reference only. Candidate 1 cites `StochasticContext` as the store handle but does NOT anchor there \u2014 the store type and its 7-arg `build_stochastic_context` constructor belong to the `seam` sub-station (and CD-001 is RESOLVED per prior-register). The blast radius of the candidate-1 seam reshape lands in cobre-sddp (other station); those call sites are named as the bounded blast radius, not raised as stochastic candidates.",
+      "sanctionedBy": "prior-register.md CD-001 (resolved); scope walls (cobre-sddp anchors are other stations)"
+    }
+  ],
+  "_needsHuman": []
+}

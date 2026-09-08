@@ -1,0 +1,60 @@
+{
+  "station": "stochastic",
+  "subStation": "tree-noise",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "SweepDirection is effectively one-valued in production: Ascending is constructed only inside opening_tree.rs's own #[cfg(test)] module; every production caller passes Descending",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "SweepDirection",
+          "line": 14
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+          "symbol": "set_solve_order",
+          "line": 120
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'SweepDirection' a136840d4f2ea137f685f0af6dac04254b983b60 -- crates/ | grep -vE 'lib.rs|tree/mod.rs|context.rs:60'; echo '--- cfg(test) boundary in opening_tree.rs ---'; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/tree/opening_tree.rs | grep -nE '#\\[cfg\\(test\\)\\]'",
+        "output": "opening_tree.rs:14:pub enum SweepDirection {  ...  :123: direction: SweepDirection,  :168: SweepDirection::Ascending => ka.total_cmp(&kb),  :169: SweepDirection::Descending => kb.total_cmp(&ka),  :649/:673/:688/:693/:696/:707/:720 set_solve_order(..., SweepDirection::Descending)  :662 set_solve_order(&keys, SweepDirection::Ascending)  :676 set_solve_order(&keys, SweepDirection::Ascending). cobre-sddp/src/setup/mod.rs:469 set_solve_order(&solve_order_keys, SweepDirection::Descending). cobre-sddp/tests/parity.rs:1574/:1870 ... SweepDirection::Descending. --- cfg(test) boundary: opening_tree.rs:438:#[cfg(test)]",
+        "reading": "SweepDirection has two variants but only Descending is ever selected outside tests. The two Ascending constructions (opening_tree.rs:662,676) sit above the sole #[cfg(test)] boundary at line 438, so they are unit-test-only. The single production caller in cobre-sddp/src/setup/mod.rs:469 passes Descending, and the only other production reference (cobre-sddp/tests/parity.rs) is also test code passing Descending. The Ascending arm (opening_tree.rs:168) and the direction: SweepDirection parameter on set_solve_order (line 120/123) therefore exist only to be exercised by dedicated unit tests (solve_order_ascending_first_is_smallest_key at :659), never reached by any production path. The doc comment ('Purely an ordering policy, with no algorithm-specific meaning', :10-12) is a genericity/L1-purity rationale explaining why the enum carries no engine noun; it is not a reservation of the second variant for a planned feature, and there is no reserved-seam or #[allow] note sanctioning an unwired Ascending path.",
+        "extraChecks": "Enum census re-run at baseline: git grep -nE '^\\s*(pub )?enum ' a136840d..:crates/cobre-stochastic/src returns exactly 8 pub enum (StochasticError, ComponentProvenance, ClosureRejection, HistoryClass, ParWarning, ClassSampler, SweepDirection, ReductionReason); none is literally one-valued. SweepDirection is the effectively-one-valued case the census target points to."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the speculative generality: since every production caller sorts largest-key-first, drop the SweepDirection enum and the direction parameter on set_solve_order, making the primitive sort descending unconditionally, and remove the now-dead SweepDirection::Descending argument from the one production caller (cobre-sddp/src/setup/mod.rs:469) plus its test mirrors (cobre-sddp/tests/parity.rs). The Ascending-only unit tests then either delete or fold into a private test helper that exercises the comparator directly, so no production surface exists solely to be tested. If instead the ascending ordering is a deliberately reserved seam for a planned selection policy, keep it but add an owner-signed reservation note (the CLAUDE.md 'unwired config is reserved, not dead' pattern) at the enum so the unwired variant reads as reserved rather than as silent speculative generality. Either way keep the fix inside cobre-stochastic (the enum/parameter definition); the caller edit is the named, bounded blast radius. No engine noun and no new abstraction is introduced \u2014 this removes generality rather than adding it.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "Enum census over crates/cobre-stochastic/src (8 pub enum)",
+      "why": "Re-run at baseline returns exactly the expected 8 pub enum and none is literally single-variant, so there is no dead one-valued-enum smell across the crate; the only effectively-one-valued case is SweepDirection, raised as the sole candidate.",
+      "sanctionedBy": "attacker-prompt over-engineering checklist item (1) \u2014 enum census expectation of 8, none one-valued"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs radical_inverse (#[allow(dead_code)], line ~93)",
+      "why": "A pub(crate) module primitive marked #[allow(dead_code)] with an explicit in-code rationale that it is reached only from tests until a downstream caller wires it in. Under the reserved-is-not-dead precondition this is a sanctioned reserved seam, not an over-engineering finding.",
+      "sanctionedBy": "in-code rationale at qmc_halton/mod.rs:91-93 ('Module primitive ... reached only from tests until a downstream caller wires it in') + CLAUDE.md 'unwired config/seam is reserved, not dead'"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/noise/seed.rs \u2014 derive_forward_seed, derive_stage_seed, derive_opening_seed, derive_forward_seed_grouped",
+      "why": "The four seed-derivation functions each have real production consumers (class_sampler.rs, insample.rs, out_of_sample.rs, tree/{lhs,qmc_halton,qmc_sobol,generate}.rs), so the seed API is an exercised surface, not a speculative fan-out. Not an over-engineering finding.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "Out-of-cell over-engineering checklist items (2) ForwardSamplerConfig four parallel Option<&\u2026Library> (sampling/mod.rs), (3) #[allow(deprecated)] PAR re-export block (lib.rs), (4) 11-arg standardize_external_inflow (sampling/external.rs)",
+      "why": "Cross-reference only: checklist items 2 and 4 anchor in the sampling sub-station and item 3 in the seam sub-station (lib.rs/context.rs), all outside the tree-noise manifest. Left to the sto-oe-sampling / sto-oe-seam sibling workers; not raised here.",
+      "sanctionedBy": "scope walls \u2014 candidate anchors must sit in the tree-noise manifest; these anchor in sampling/ and lib.rs (seam)"
+    }
+  ],
+  "_needsHuman": []
+}

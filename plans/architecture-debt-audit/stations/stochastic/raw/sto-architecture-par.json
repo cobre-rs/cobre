@@ -1,0 +1,88 @@
+{
+  "station": "stochastic",
+  "subStation": "par",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "Decomposition-engine phase vocabulary in par L1-kernel doc comments (forward/backward passes, training/simulation, LP RHS patching) \u2014 paradigm leakage the genericity gate does not catch",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "PrecomputedPar",
+          "line": 78
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "mod precompute (module doc)",
+          "line": 11
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "derive_downstream_par_order",
+          "line": 137
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "precompute_stage_lag_transitions",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "resolve_stage_lag_transition (referenced from UNIFORM_MONTHLY_TRANSITION doc)",
+          "line": 60
+        }
+      ],
+      "evidence": {
+        "command": "for f in par/precompute.rs par/lag_transition.rs; do echo \"----- $f -----\"; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/$f | awk '/^#\\[cfg\\(test\\)\\]/{exit}{printf \"%d:%s\\n\",NR,$0}' | grep -niE 'forward/backward|forward.pass|training/simulation|LP RHS|during optimization'; done",
+        "output": "----- par/precompute.rs -----\n1://! Pre-computation of PAR model coefficient arrays for LP RHS patching.\n4://! parameters and consumed read-only during optimization.\n11://! a scenario trajectory's per-stage data contiguous for the forward/backward passes.\n78:/// Cache-friendly PAR(p) model data for LP RHS patching.\n----- par/lag_transition.rs -----\n60:/// [`resolve_stage_lag_transition`], shared with the forward pass's own\n137:/// call site that needs this gate \u2014 training/simulation lag transitions and\n160:/// and season definitions; consumed read-only on the forward-pass hot path.",
+        "reading": "cobre-stochastic is an L1 shared kernel whose declared scope is 'uncertainty store + scenario generation' and which the target layering forbids from carrying engine concepts; the crate exists to be reused by a second, non-decomposition engine (cobre-direct: ED/OPF/deterministic UC). These production doc comments describe the module's own data in terms of the SDDP engine's phase structure \u2014 'forward/backward passes', 'forward pass', 'forward-pass hot path', 'training/simulation lag transitions', and 'LP RHS patching' \u2014 none of which exist for a deterministic economic-dispatch consumer. The scripts/ci/check-infra-genericity.sh gate cannot catch this: its ERE only bans the literal tokens \\bSddp\\b|\\bBenders\\b|\\bCut\\b|cost.to.go|state.space (PATTERN on line 79 of that script), so 'forward/backward passes' and 'training/simulation' pass CI while still encoding a single-engine assumption into a purity-contracted kernel. The coupling is doc-only: the same file's imports are cobre_core (L0), chrono, rayon and nothing else, and evaluate_par/PrecomputedPar are fully generic over f64 slices \u2014 so the fix is a bounded reword, not a structural change. Lines re-resolved at the baseline blob, not the epic body's pre-baseline observations."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Reword the flagged doc comments to consumer-agnostic language that describes the layout/behaviour intrinsically rather than by the SDDP engine's phases. 'contiguous for the forward/backward passes' becomes 'contiguous for sequential per-stage traversal'; 'consumed read-only on the forward-pass hot path' becomes 'consumed read-only on the per-stage evaluation hot path'; 'training/simulation lag transitions' becomes 'both evaluation-phase lag-transition call sites' (or names the two functions); 'LP RHS patching' / 'during optimization' becomes 'downstream solver right-hand-side construction' or simply 'consumed read-only by the value-generation path'. No type, signature, or byte of behaviour changes. Do NOT introduce any SDDP paradigm noun (cut, cost-to-go, state space, ring, Benders) in the replacement text, and do not name an engine crate \u2014 this stays a pure L1 reword.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "Q1 paradigm-leakage grep over crates/cobre-stochastic/src/par (git grep -niE '(sddp|benders|cut|cost.to.go|state.space)' at baseline)",
+      "why": "No genericity GATE failure. Every literal hit is a false positive: the 'cut' hits are the substring inside 'conseCUTive' (estimation.rs:97/107/112/114, lag_transition.rs:308), and the only real \\bcut\\b token ('pre-cut record row', lag_transition.rs:1341) sits inside the tail #[cfg(test)] module. scripts/ci/check-infra-genericity.sh word-boundaries \\bcut\\b (so 'consecutive' never matches) and truncates each file at the first '#[cfg(test)]' line, so both classes are correctly out of production scope \u2014 nothing goes to _needsHuman.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh PATTERN (line 79) + tail-test-module truncation (awk '/^#[cfg(test)]/{exit}')"
+    },
+    {
+      "subject": "'ring' vocabulary in crates/cobre-stochastic/src/par/lag_kernel.rs (5,100,103,106,120-122,210) and lag_transition.rs (136,297)",
+      "why": "Not the SDDP anticipated-hold 'ring' paradigm noun. Every use is the circular-buffer data-structure sense \u2014 'Slot-major ring buffer (completed_lags[slot * entity_count + ...])', 'downstream ring', 'newest-first ring contents overwrite' \u2014 a generic ring buffer holding completed downstream lag periods. Preempts a phantom L1-purity finding on the word 'ring'."
+    },
+    {
+      "subject": "Q2 generation-vs-realized classification of every par public type",
+      "why": "No straddle. All fitting types (ReductionReason, ContributionReduction, HydroEstimationEntry, EstimationReport, StdRatioDivergence, ContributionValidationResult, ArCoefficientEstimate, ArEstimationConfig, SeasonalStats, AnnualSeasonalStats, PeriodicYwResult/AnnualResult, AicSelectionResult, PacfSelectionResult, closure::AnnualParams, ClosureRejection, ParValidationReport, ParWarning) are generation-only (fitted-process). PrecomputedPar is the single fitted-process cache consumed by BOTH the forward direction (evaluate_par family, generate a realized value from noise) and the inverse direction (solve_par_noise family, recover noise from a realized target); that is one owner of the fitted process serving two directions, the correct shape, not a concern-straddle. estimation.rs's own module doc states the clean boundary: the fitting core 'never touches case-loading or row types \u2014 that orchestration lives in the I/O shell' (estimation.rs:6-7)."
+    },
+    {
+      "subject": "Dependency direction of the par sub-station",
+      "why": "par imports only cobre_core (L0 \u2014 EntityId, InflowModel, Stage, SeasonMap, StageLagTransition, AnnualComponent), chrono, and rayon; no cobre-sddp / engine crate and no LP/solver crate appears in any production 'use'. The L1->L0 edge is layering-consistent, so the paradigm leakage above is doc-comment prose only, never a structural inversion \u2014 which is exactly why its fix is a bounded reword.",
+      "sanctionedBy": "target-layering-brief.md section 1 (L1 shared kernels depend downward on L0)"
+    },
+    {
+      "subject": "Q3 seam-shape question (StochasticContext src/context.rs 13-field accessor store; ForwardSamplerConfig src/sampling/mod.rs Copy borrow-bundle)",
+      "why": "Out of the par manifest \u2014 context.rs belongs to the 'seam' sub-station and sampling/mod.rs to the 'sampling' sub-station. Cross-reference only; the par seam itself (par/mod.rs + fitting/mod.rs re-exports) is a flat function+result-type surface, not a store/parameter-bag hybrid, so the Q3 concern does not reproduce inside par."
+    },
+    {
+      "subject": "Q4 Phase-1 (Switchable<T> uncertainty store) hint for par",
+      "why": "The fitted-process representation carried by PrecomputedPar (built from cobre_core::scenario::InflowModel parameters) is the piece that would migrate into the Part-IV/V Switchable<T> uncertainty store when the stochastic model is purified off cobre-core::System. This is Part-I item I.3-1 (System carries inflow_models/load_models/ncs_models as first-class fields, target-layering-brief.md table). Recorded as an alignment hint only; this spec executes no move here.",
+      "sanctionedBy": "target-layering-brief.md Part-I item 1 (I.3-1) and section 2 phase 1"
+    },
+    {
+      "subject": "cobre-core-owned types surfaced through par (StageLagTransition at crates/cobre-core/src/model/temporal.rs:175; Stage with StageRiskConfig/ScenarioSourceConfig/NoiseMethod fields exercised by the precompute.rs / evaluate_par_batch doctests)",
+      "why": "The SDDP-shaped Stage fields (risk_config, scenario_config, branching_factor, noise_method) that make the par doctests verbose live on the L0 Stage god-struct, and StageLagTransition itself is an L0 type. Both are Part-I item I.3-2 (Stage bakes in stochastic/risk config) and belong to the core+io station per the scope walls; cited here, not raised as a par candidate."
+    },
+    {
+      "subject": "par/mod.rs #[allow(deprecated)] evaluate re-export block (evaluate_par_inflow/_inflows, solve_par_noise legacy aliases) and the wide low-level fitting re-export surface (solve_linear_system, build_periodic_yw_matrix, periodic_autocorrelation, cross_correlation_z_a)",
+      "why": "The doubled deprecated public surface and the breadth of exposed low-level math primitives are over-engineering / API-surface concerns owned by the sibling over-engineering lens (its checklist item 3 targets the #[allow(deprecated)] re-export pattern). Flagged as examined and deliberately deferred to that lens rather than raised here as an architecture candidate."
+    }
+  ],
+  "_needsHuman": []
+}

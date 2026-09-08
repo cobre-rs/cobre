@@ -1,0 +1,142 @@
+{
+  "station": "stochastic",
+  "subStation": "tree-noise",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "Entity class (inflow/load/ncs) is a stringly-typed closed set matched by `==` across generate.rs and resolve.rs, with no compiler-checked enum",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 28
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation_for_class",
+          "line": 338
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/generate.rs",
+          "symbol": "generate_opening_tree",
+          "line": 332
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '27,28p;351,353p' ; git show a136840d:crates/cobre-stochastic/src/tree/generate.rs | sed -n '332,334p'",
+        "output": "resolve.rs:28  pub entity_type: String,  (doc: shared by all entities: \"inflow\", \"load\", \"ncs\")\nresolve.rs:352  if gf.entity_type != entity_type { continue; }\ngenerate.rs:332  correlation.apply_correlation_for_class(stage.id, inflow_noise, inflow_order, \"inflow\");\ngenerate.rs:333  ... load_order, \"load\");\ngenerate.rs:334  ... ncs_order, \"ncs\");",
+        "reading": "The entity class is a closed 3-value set (inflow/load/ncs) but is carried as a String on GroupFactor and dispatched by `!=`/`==` at two sites in resolve.rs (apply_correlation_for_class L352, resolve_class_positions L286). The producers are bare string literals at generate.rs:332-334 and sampling/mod.rs:227/236/245. Nothing links the literal producer to the stored value at compile time: a typo (`\"inlfow\"`) or a vocabulary drift vs the cobre-core `CorrelationEntity.entity_type` source silently makes the filter never match, so that class's noise is left uncorrelated with no error. CLAUDE.md mandates enum dispatch for closed variant sets; this is the stringly-typed anti-pattern it forbids."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Introduce an in-crate closed enum EntityClass { Inflow, Load, Ncs }. Parse the cobre-core-sourced CorrelationEntity.entity_type String exactly once, at DecomposedCorrelation::build, into the enum stored on GroupFactor (replacing the String field). Type the apply_correlation_for_class and resolve_class_positions `entity_type` parameter and the generate.rs / sampling/mod.rs call-site literals on the enum, so every class comparison becomes an exhaustive compiler-checked match with a single String->enum boundary at build. The source String remains owned by cobre-core (a cross-station note, not a change here); the boundary-parse keeps this fix entirely inside cobre-stochastic. No paradigm noun and >=2 consumers, so it does not trip the L1 purity guardrail.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    },
+    {
+      "title": "DecomposedCorrelation ships a superseded full-vector correlation seam (test-only) beside the live per-class seam, and both position-precompute fast paths are unwired in production",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "GroupFactor",
+          "line": 31
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_positions",
+          "line": 253
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "resolve_class_positions",
+          "line": 277
+        },
+        {
+          "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+          "symbol": "apply_correlation",
+          "line": 307
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE 'apply_correlation\\b|\\.resolve_positions|resolve_class_positions' a136840d -- crates/cobre-stochastic/src crates/cobre-sddp/src ; git show a136840d:crates/cobre-stochastic/src/sampling/out_of_sample.rs | sed -n '56,66p'",
+        "output": "apply_correlation callers: out_of_sample.rs:65 (inside fn sample_fresh, which is #[cfg(test)]), generate.rs:1340/1456/1573/1682 (test mod), resolve.rs test mod. NO non-test workspace caller.\napply_correlation_for_class callers: sampling/mod.rs:227/236/245 and generate.rs:332-334 (production).\n.resolve_positions callers: generate.rs:1311/1427/1549/1658 (all in #[cfg(test)] mod tests) only.\nresolve_class_positions: only its own definition (resolve.rs:277) + doc refs \u2014 ZERO callers.\nbuild() sets positions:None and class_positions:None (resolve.rs:208-209); the only Some-writers are inside resolve_positions (267) and resolve_class_positions (294).",
+        "reading": "Production correlation runs exclusively through apply_correlation_for_class on the linear-scan fallback: the per-class precompute resolve_class_positions is never called in any build, so GroupFactor.class_positions stays None and the apply_group_precomputed branch it feeds is unreachable. The entire full-vector twin (apply_correlation + resolve_positions + GroupFactor.positions) has no non-test workspace consumer \u2014 its only caller sample_fresh is #[cfg(test)]. So DecomposedCorrelation carries two parallel apply methods, two parallel resolve methods, and two Option position caches on GroupFactor, of which production uses exactly one applier and zero precompute. Neither the full-vector twin nor the class precompute carries an #[allow(dead_code)] Voice-4 rationale or a reserved-seam entry in the mirror (grep of reserved-seams-and-deferred-debt.md finds no match). The doubled seam is also a footgun: the doc warns class positions are segment-relative while full-vector positions index the whole noise vector, so a future maintainer wiring the wrong precompute onto the class path would gather on the wrong base."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Collapse to a single correlation applier. Preferred: since production uses only apply_correlation_for_class on the scan path, remove the full-vector twin (apply_correlation, resolve_positions, GroupFactor.positions) that only tests exercise and the never-called resolve_class_positions + GroupFactor.class_positions, leaving one applier over the shared apply_group_scan and one position-cache concept. Alternative, if the position-precompute is genuinely wanted for the forward-sampler hot loop: wire resolve_class_positions once at ForwardSampler/opening-tree setup and delete the redundant full-vector method rather than keeping both. Either way keep the spectral transform byte-identical and preserve the BTreeMap deterministic iteration order noted in-code; retire, not re-point, the segment-relative-vs-full-vector position-base distinction so the trap cannot be mis-merged.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    },
+    {
+      "title": "Three structurally identical point-sample parameter bundles (LhsPointSpec / HaltonPointSpec / SobolPointSpec) with no shared type",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/tree/lhs.rs",
+          "symbol": "LhsPointSpec",
+          "line": 89
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs",
+          "symbol": "HaltonPointSpec",
+          "line": 236
+        },
+        {
+          "path": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs",
+          "symbol": "SobolPointSpec",
+          "line": 236
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d:crates/cobre-stochastic/src/tree/lhs.rs | sed -n '88,102p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_halton/mod.rs | sed -n '235,249p' ; git show a136840d:crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs | sed -n '235,249p'",
+        "output": "All three: #[derive(Debug, Clone, Copy)] pub struct <X>PointSpec { pub sampling_seed: u64, pub iteration: u32, pub scenario: u32, pub stage_id: u32, pub total_scenarios: u32, pub dim: usize }. Field names/types identical; docs identical except total_scenarios (\"= N strata\" only on Lhs).",
+        "reading": "The three point-wise generators (sample_lhs_point, scrambled_halton_point, scrambled_sobol_point/_precomputed) each take a distinct spec struct whose field set is byte-for-byte the same six fields with the same types. out_of_sample.rs constructs all three from the same FreshNoiseSpec. There is no shared type, so the point-sampling parameter contract is expressed in triplicate and any new field (or a rename) is an O(3-structs + call-sites) ripple with no compiler link keeping them in step. This is the bag-of-parameters seam duplicated three ways."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Introduce one shared spec type (e.g. QmcPointSpec / PointSampleSpec) in a common noise or tree module carrying sampling_seed/iteration/scenario/stage_id/total_scenarios/dim, and have sample_lhs_point, scrambled_halton_point, scrambled_sobol_point and scrambled_sobol_point_precomputed all accept it. The three generators keep their distinct algorithms; only the parameter carrier is unified, so a future field is a one-line change. Three present consumers make this a real de-duplication, not a speculative one-consumer abstraction, so it does not trip the L1 purity guardrail.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "All 15 non-generated tree-noise files (tree/{mod,generate,lhs,opening_tree,qmc_halton/mod,qmc_sobol/mod}.rs, noise/*, normal/*, correlation/*)",
+      "why": "Paradigm-leakage clean: git grep -niE '(sddp|benders|cut|cost.to.go|state.space)' over the full manifest yields a single hit, generate.rs:46, which is the substring 'cut' inside 'conseCUTive' \u2014 not an engine noun. No decomposition-engine type, fn, or doc comment leaks into this L1 crate; the genericity GATE is satisfied.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh (L1 purity guardrail)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/noise/{seed,rng,quantile}.rs and normal/precompute.rs",
+      "why": "Engine-neutral numeric primitives (SipHash-1-3 seed derivation, Pcg64 wrapper, Beasley-Springer-Moro quantile, stage-major normal-parameter cache). Their determinism contracts are pinned by golden-value regression tests (seed.rs forward_seed_golden_value / stage_seed_golden_value; generate.rs saa_bitwise_compatible_with_pre_refactor_golden_values), upholding the reproducibility hard rule. Worth protecting as-is.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/normal/precompute.rs PrecomputedNormal::build typed on cobre_core::scenario::LoadModel",
+      "why": "The 'normal noise' precompute binds to LoadModel specifically; this is roadmap-consistent rather than a smell \u2014 the target layering has LoadModel leaving System for the cobre-stochastic uncertainty store (target-layering-brief Part-I item 1 / IV.5), and load is the system's normal-model entity (NCS uses NcsModel). LoadModel conflation itself is a not-ours cobre-core item per prior-register; cited as context, not raised.",
+      "sanctionedBy": "prior-register.md (LoadModel conflation = not-ours, cobre-core)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/correlation/resolve.rs apply_correlation_for_class production path",
+      "why": "The live per-class correlation path (sampling/mod.rs:227/236/245 forward sampler, generate.rs:332-334 opening tree) is correct and deterministic: factors iterate in BTreeMap<String,...> order (explicitly documented as upholding declaration-order invariance), and each class segment is correlated independently with a block-diagonal spectral factor, proven byte-identical to the full-vector path by test_per_class_tree_matches_full_vector_* tests.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "tree/qmc_sobol/sobol_directions.rs (21229 lines, generated Joe-Kuo table)",
+      "why": "Excluded from any density / god-module / LOC-share claim over tree-noise per the inventory correction (60.3% of the crate's non-test lines, 88.3% of the tree-noise sweep). No architecture finding is raised against it; its size is the generated dataset, not a structural smell.",
+      "sanctionedBy": "inventory.json corrections[1]"
+    },
+    {
+      "subject": "Phase-1 (Switchable<T> uncertainty store) alignment note \u2014 OpeningTree (tree/opening_tree.rs), DecomposedCorrelation (correlation/resolve.rs), PrecomputedNormal (normal/precompute.rs)",
+      "why": "These read-only generation-side caches are the tree-noise pieces that would migrate into the Part IV/V Switchable<T> uncertainty store when the stochastic representation is lifted off System/Stage (target-layering-brief Part-I item 1). Recorded as an alignmentHint only; this spec executes no such move.",
+      "sanctionedBy": "target-layering-brief.md Part-I item 1 (advances-1)"
+    }
+  ],
+  "_needsHuman": []
+}

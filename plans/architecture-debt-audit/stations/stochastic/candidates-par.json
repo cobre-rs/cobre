@@ -1,0 +1,526 @@
+{
+  "station": "stochastic",
+  "subStation": "par",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "candidates": [
+    {
+      "title": "Decomposition-engine phase vocabulary in par L1-kernel doc comments (forward/backward passes, training/simulation, LP RHS patching) \u2014 paradigm leakage the genericity gate does not catch",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "PrecomputedPar",
+          "line": 78
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "mod precompute (module doc)",
+          "line": 11
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "derive_downstream_par_order",
+          "line": 137
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "precompute_stage_lag_transitions",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+          "symbol": "resolve_stage_lag_transition (referenced from UNIFORM_MONTHLY_TRANSITION doc)",
+          "line": 60
+        }
+      ],
+      "evidence": {
+        "command": "for f in par/precompute.rs par/lag_transition.rs; do echo \"----- $f -----\"; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/$f | awk '/^#\\[cfg\\(test\\)\\]/{exit}{printf \"%d:%s\\n\",NR,$0}' | grep -niE 'forward/backward|forward.pass|training/simulation|LP RHS|during optimization'; done",
+        "output": "----- par/precompute.rs -----\n1://! Pre-computation of PAR model coefficient arrays for LP RHS patching.\n4://! parameters and consumed read-only during optimization.\n11://! a scenario trajectory's per-stage data contiguous for the forward/backward passes.\n78:/// Cache-friendly PAR(p) model data for LP RHS patching.\n----- par/lag_transition.rs -----\n60:/// [`resolve_stage_lag_transition`], shared with the forward pass's own\n137:/// call site that needs this gate \u2014 training/simulation lag transitions and\n160:/// and season definitions; consumed read-only on the forward-pass hot path.",
+        "reading": "cobre-stochastic is an L1 shared kernel whose declared scope is 'uncertainty store + scenario generation' and which the target layering forbids from carrying engine concepts; the crate exists to be reused by a second, non-decomposition engine (cobre-direct: ED/OPF/deterministic UC). These production doc comments describe the module's own data in terms of the SDDP engine's phase structure \u2014 'forward/backward passes', 'forward pass', 'forward-pass hot path', 'training/simulation lag transitions', and 'LP RHS patching' \u2014 none of which exist for a deterministic economic-dispatch consumer. The scripts/ci/check-infra-genericity.sh gate cannot catch this: its ERE only bans the literal tokens \\bSddp\\b|\\bBenders\\b|\\bCut\\b|cost.to.go|state.space (PATTERN on line 79 of that script), so 'forward/backward passes' and 'training/simulation' pass CI while still encoding a single-engine assumption into a purity-contracted kernel. The coupling is doc-only: the same file's imports are cobre_core (L0), chrono, rayon and nothing else, and evaluate_par/PrecomputedPar are fully generic over f64 slices \u2014 so the fix is a bounded reword, not a structural change. Lines re-resolved at the baseline blob, not the epic body's pre-baseline observations."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Reword the flagged doc comments to consumer-agnostic language that describes the layout/behaviour intrinsically rather than by the SDDP engine's phases. 'contiguous for the forward/backward passes' becomes 'contiguous for sequential per-stage traversal'; 'consumed read-only on the forward-pass hot path' becomes 'consumed read-only on the per-stage evaluation hot path'; 'training/simulation lag transitions' becomes 'both evaluation-phase lag-transition call sites' (or names the two functions); 'LP RHS patching' / 'during optimization' becomes 'downstream solver right-hand-side construction' or simply 'consumed read-only by the value-generation path'. No type, signature, or byte of behaviour changes. Do NOT introduce any SDDP paradigm noun (cut, cost-to-go, state space, ring, Benders) in the replacement text, and do not name an engine crate \u2014 this stays a pure L1 reword.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "architecture",
+      "candidateRef": "sto-architecture-par-00"
+    },
+    {
+      "title": "Bare `estimate_ar_coefficients` / `estimate_correlation` / `estimate_seasonal_stats` are pub forwarding shims over their `_with_season_map` twins with zero production consumers (only the crate's own tests + doctests)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs",
+          "symbol": "estimate_ar_coefficients",
+          "line": 88
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "estimate_correlation",
+          "line": 115
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/seasonal_stats.rs",
+          "symbol": "estimate_seasonal_stats",
+          "line": 221
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs | sed -n '88,101p'",
+        "output": "pub fn estimate_ar_coefficients(\n    observations: &[(EntityId, NaiveDate, f64)],\n    seasonal_stats: &[SeasonalStats],\n    stages: &[Stage],\n    hydro_ids: &[EntityId],\n    max_order: usize,\n) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {\n    estimate_ar_coefficients_with_season_map(\n        observations, seasonal_stats, stages, hydro_ids, max_order, None,\n    )\n}",
+        "reading": "Each bare form is a pure forwarding shim: `estimate_ar_coefficients` (ar_coefficients.rs:88) and `estimate_seasonal_stats` (seasonal_stats.rs:221 -> `estimate_seasonal_stats_with_season_map(.., None)`) and `estimate_correlation` (correlation.rs:115 -> `estimate_correlation_with_season_map(.., None)`) do nothing but call their `_with_season_map` twin with `None`. Two of the three are re-exported at the crate root (lib.rs:47: `estimate_ar_coefficients, estimate_seasonal_stats`) and all three at `par::fitting::`. `git grep -nE '\\bestimate_ar_coefficients\\(' a136840d -- 'crates/**/*.rs' | grep -vE 'estimate_ar_coefficients_with'` (and the analogous greps for the other two) returns only: their own definitions, their own doctests, and the crate's inline `par/fitting/tests.rs` \u2014 no production caller inside or outside cobre-stochastic. The one production PAR consumer, cobre-io `scenarios/estimation.rs:65-68`, imports and calls only the `_with_season_map` forms (`estimate_seasonal_stats_with_season_map`, `estimate_correlation_with_season_map`) plus `estimate_ar_coefficients_with_selection`/`ArEstimationConfig`. So the bare trio is public forwarding surface whose only exercisers are the crate's own tests/doctests \u2014 a zero-external-consumer forwarding abstraction on an L1 kernel. Reserved-is-not-dead check: none of the three appears in prior-register.md or the mirror; they are wired (to tests) so no `#[allow(dead_code)]` fires; the CLAUDE.md reserved-config rule does not apply (functions, not config). No sanction.",
+        "reserved_check": "cleared: absent from prior-register.md and the mirror; wired only to tests/doctests so no dead_code seam; not config"
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Remove the ergonomic overload asymmetry: since `_with_season_map` already takes `Option<&SeasonMap>` and is the sole production entry, either demote the three bare forwarders to `pub(crate)` (or delete them and have the inline tests/doctests call the `_with_season_map` form with `None` directly), and stop re-exporting `estimate_ar_coefficients`/`estimate_seasonal_stats` at the crate root. If the no-season-map convenience form is deliberately part of the crate's public API, mark that intent explicitly and keep exactly one such surface rather than a crate-root re-export plus a `par::fitting::` re-export of a test-only shim. Behaviour-neutral (the shims already delegate); blast radius is validation-free (the shim bodies and their test/doctest call sites).",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "over-engineering",
+      "candidateRef": "sto-over-engineering-par-01"
+    },
+    {
+      "title": "PAR validation warning apparatus (single-variant `ParWarning` enum + single-field `ParValidationReport`) is built then discarded at its only production caller",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParWarning",
+          "line": 54
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParValidationReport",
+          "line": 39
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "validate_par_parameters",
+          "line": 117
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/validation.rs | sed -n '38,66p'",
+        "output": "#[derive(Debug)]\npub struct ParValidationReport {\n    pub warnings: Vec<ParWarning>,\n}\n// ParWarning\n/// A non-fatal PAR validation warning.\n/// Warnings are accumulated in [`ParValidationReport`] ... The calling algorithm may inspect them ...\n#[derive(Debug, Clone)]\npub enum ParWarning {\n    LowResidualVariance { hydro_id: i32, stage_id: i32, explained_variance: f64 },\n}",
+        "reading": "`ParWarning` has exactly one variant (`LowResidualVariance`) and `ParValidationReport` is a one-field wrapper `{ warnings: Vec<ParWarning> }` \u2014 a structured warning taxonomy with a single inhabitant, the textbook wrapper-enum-with-one-inhabitant shape. The apparatus is production-unread: `git grep -nE '\\bvalidate_par_parameters\\b' a136840d -- 'crates/**/*.rs'` shows the sole production caller is `crates/cobre-stochastic/src/context.rs:616`, `let _report = validate_par_parameters(system.inflow_models())?;` \u2014 the return value is bound to `_report` and discarded, so only the fatal `?` path (the std==0 && ar_order>0 error at validation.rs:120) is used and the `warnings` branch (`warnings.push(ParWarning::LowResidualVariance {..})` at validation.rs:138) is computed then dropped. `git grep -nE '\\bParWarning\\b' a136840d` shows no non-test consumer anywhere except the definition, the `par/mod.rs`/`lib.rs` re-exports, and the internal producer; only `validation.rs`'s own inline `#[cfg(test)]` module inspects `.warnings`. The many `.warnings()` hits in cobre-cli/io/python/sddp are the unrelated `ValidationContext` diagnostic mechanism, not `ParValidationReport`. The doc comment 'The calling algorithm may inspect them ...' is speculative future-tense with no wiring. Reserved-is-not-dead check: not in prior-register.md, not in reserved-seams-and-deferred-debt.md, not covered by CLAUDE.md 'unwired config is reserved' (this is a warning apparatus, not config), and carries no `#[allow(dead_code)]` anchor (tests keep it live) \u2014 so no sanction applies.",
+        "reserved_check": "cleared: absent from prior-register.md and the mirror; not config (CLAUDE.md reserved-config rule N/A); no #[allow] rationale anchors it"
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the single-inhabitant taxonomy: either (a) if the low-residual-variance diagnostic has no intended reader, drop the `warnings` accumulation and return the fatal-check outcome directly (the sole caller already discards it), retiring `ParWarning`, `ParValidationReport`, and the two re-exports; or (b) if the warning is meant to surface, replace the one-variant enum with the bare `LowResidualVariance { hydro_id, stage_id, explained_variance }` struct and actually consume it at context.rs (which, under the Python-parity rule, would require mirroring the surfaced warning in cobre-python \u2014 an owner call, not a drive-by). Keep the enum form only if a second warning variant is genuinely imminent, in which case record it as an intended extension seam rather than leaving it as silent debt. No L1-purity conflict: the fix introduces no engine noun, no engine-crate dependency, and removes surface rather than adding a single-consumer abstraction.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null,
+      "lens": "over-engineering",
+      "candidateRef": "sto-over-engineering-par-00"
+    },
+    {
+      "title": "Per-season correlation matrices recompute every hydro-pair date-set intersection twice and clone the full residual map per (hydro, season)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_seasonal_matrices",
+          "line": 391
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_pearson_correlation_matrix",
+          "line": 438
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "compute_hydro_residuals",
+          "line": 199
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/correlation.rs | sed -n '396,427p'; echo ---; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/correlation.rs | sed -n '447,465p'",
+        "output": "for season_id in 0..n_seasons {\n    let season_residuals: Vec<HashMap<NaiveDate, f64>> = per_season_residuals\n        .iter().map(|hydro_seasons| hydro_seasons.get(&season_id).cloned().unwrap_or_default()).collect();\n    let min_pairs = ... (0..n_hydros).flat_map(|i| (i+1..n_hydros)...).map(|(i,j)| season_residuals[i].keys().filter(|d| season_residuals[j].contains_key(*d)).count()).min()...;\n    if min_pairs < MIN_CORRELATION_PAIRS { continue; }\n    result.insert(season_id, compute_pearson_correlation_matrix(&season_residuals));\n}\n---\nfor j in (i + 1)..n {\n    let r_i = &hydro_residuals[i]; let r_j = &hydro_residuals[j];\n    let mut pairs: Vec<(NaiveDate, f64, f64)> = r_i.iter().filter_map(|(&date,&ei)| r_j.get(&date).map(|&ej| (date,ei,ej))).collect();\n    ... pairs.sort_unstable_by(|a,b| a.0.cmp(&b.0)); ...",
+        "reading": "compute_seasonal_matrices, per season, (a) clones every hydro's date-keyed residual map into season_residuals via `.cloned()`, (b) computes min_pairs by walking all O(n_hydros^2) pairs and intersecting the two date sets with contains_key hashes, then (c) if kept, calls compute_pearson_correlation_matrix which walks the SAME O(n_hydros^2) pairs and re-intersects the same date sets via r_j.get(&date). Residuals are produced by compute_hydro_residuals as nested HashMap<usize, HashMap<NaiveDate,f64>>, so each intersection re-hashes every NaiveDate rather than merge-walking a sorted list."
+      },
+      "mechanism": "Suspected cost: two multiplied redundancies in the fitting-time correlation build. (1) The per-hydro-pair date-set overlap is computed twice for every kept season -- once as min_pairs, once inside compute_pearson_correlation_matrix -- so the O(n_hydros^2 x observations) intersection work is doubled. (2) Residuals live in HashMap<NaiveDate,f64>, so each of the O(n_hydros^2) pairwise intersections pays a NaiveDate hash per element instead of a linear merge of two date-sorted arrays; compute_pearson_correlation_matrix already sorts the intersected pairs by date afterward, so the hashed layout adds both the hashing and that per-pair sort. (3) `.cloned()` allocates n_hydros x n_seasons fresh HashMaps purely to reshape per-hydro-then-season into per-season-then-hydro. Deck-independent: scales with hydro count squared and residual-series length regardless of deck values. Symbols to profile: compute_seasonal_matrices and compute_pearson_correlation_matrix.",
+      "proposedSeverity": "B",
+      "fixShape": "Two independent, fitting-local reductions with no cross-crate blast radius. (i) Compute each pair's overlap count once: have compute_pearson_correlation_matrix (or a shared helper it calls) return the min pair count alongside the matrix, and drop compute_seasonal_matrices' separate min_pairs pre-walk -- or gate the season on the count the matrix build already derives. (ii) Store per-(hydro, season) residuals as a date-sorted Vec<(NaiveDate, f64)> (or one flat sorted buffer) instead of HashMap<NaiveDate,f64>, so the pairwise intersection is a linear merge-walk of two sorted date lists rather than n contains_key/get hashes; this also removes compute_pearson_correlation_matrix's per-pair sort_unstable since the inputs arrive sorted, and lets compute_seasonal_matrices borrow rather than `.cloned()` each hydro's season map. Both the parallel producer and the matrix accumulator carry determinism contracts the fix MUST preserve: compute_hydro_residuals states 'collect() reassembles per-hydro maps in canonical hydro_ids order, and the sequential ar_sum lag accumulation is bit-identical to a single-threaded pass', and compute_pearson_correlation_matrix states 'pairs are summed in NaiveDate order, making every partial sum independent of both HashMap traversal order and which series is row vs column -- so the result is invariant to the declaration order of the input series.' A date-sorted-Vec residual layout upholds both (NaiveDate is a total order within a series; accumulation stays date-ordered).",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "lens": "performance",
+      "candidateRef": "sto-performance-par-01"
+    },
+    {
+      "title": "PAR-A initial per-hydro AR estimation runs single-threaded while the byte-identical classical path already parallelizes the same per-hydro shape",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 397
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 952
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/estimation.rs | sed -n '395,427p'; echo ---; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/estimation.rs | sed -n '946,954p'",
+        "output": "let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();\n\n    for &hydro_id in hydro_ids {\n        let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];\n        ... (per-season FACP + extended-YW solve, pushes this hydro's seasons) ...\n---\n) -> Vec<ArCoefficientEstimate> {\n    // Determinism: `flat_map_iter`/`collect` reassembles the per-hydro blocks in\n    // canonical `hydro_ids` order, ... thread scheduling cannot change the output.\n    hydro_ids\n        .par_iter()\n        .flat_map_iter(|&hydro_id| {",
+        "reading": "estimate_all_hydro_ar_coefficients (classical PACF path) fits every hydro under hydro_ids.par_iter().flat_map_iter(...).collect(); estimate_ar_with_pacf_annual (the PAR(p)-A path) does the identical per-hydro work \u2014 conditional_facp_partitioned + estimate_periodic_ar_annual_coefficients per season, pushed to `estimates` \u2014 inside a plain serial `for &hydro_id in hydro_ids`. Each annual iteration reads only immutable lookups (group_obs, annual_group_obs, stats_map, annual_stats_map, group_z_year_starts, annual_group_year_starts) and touches only its own hydro's seasons, so it is embarrassingly parallel in exactly the shape the classical site already exploits."
+      },
+      "mechanism": "Suspected cost: the PAR-A initial fit is O(n_hydros) independent per-hydro solves (each is n_seasons partitioned-covariance FACP builds + one extended-Yule-Walker Gaussian solve) executed on a single core, whereas the classical fit divides the same n_hydros solves across the rayon pool. As hydro count grows the annual-model fit's wall time stays proportional to n_hydros x per-hydro-solve on one thread while the classical fit is roughly that over the thread count. Deck-independent: the asymmetry is structural (one call parallel, its sibling serial), not tied to any particular deck size. Symbol to profile: estimate_ar_with_pacf_annual (compare against estimate_all_hydro_ar_coefficients on the same hydro set with use_annual_component toggled).",
+      "proposedSeverity": "B",
+      "fixShape": "Lift the initial per-hydro block of estimate_ar_with_pacf_annual (the `for &hydro_id in hydro_ids { ... estimates.push(...) }` region) into the same hydro_ids.par_iter().flat_map_iter(|&hydro_id| { build this hydro's Vec<ArCoefficientEstimate> }).collect() shape the classical estimate_all_hydro_ar_coefficients already uses, so each hydro's seasons are produced in its closure and collect reassembles them. The in-code determinism rationale MUST be preserved byte-for-byte: the classical site states 'flat_map_iter/collect reassembles the per-hydro blocks in canonical hydro_ids order, and the inner per-season PACF -> Yule-Walker solve is bit-identical to a single-threaded pass -- thread scheduling cannot change the output. flat_map_iter (not flat_map): each hydro's Vec is small (n_seasons), so nesting work-stealing over it would gain nothing.' The annual closure has the identical property (immutable shared lookups, per-hydro-disjoint output), so canonical-order collect yields the estimates vector in exactly the order the current serial push produces -- apply_annual_prepass_reductions (which rebuilds hydro_indices by EntityId) and build_estimation_report (which sorts by hydro/season) are order-agnostic downstream. Leave the subsequent reduction serial in this change (it mutates `estimates` across hydro index sets). No SDDP paradigm noun, no engine dependency, no new abstraction is introduced.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "lens": "performance",
+      "candidateRef": "sto-performance-par-00"
+    },
+    {
+      "title": "Per-hydro observation vectors are deep-copied out of group_obs on every estimate/reduce pass (2x classical, 4x PAR-A) though the consumers only read them",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_all_hydro_ar_coefficients",
+          "line": 959
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders",
+          "line": 1067
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "reduce_entity_orders_annual",
+          "line": 689
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+          "symbol": "estimate_ar_with_pacf_annual",
+          "line": 407
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/estimation.rs | sed -n '1063,1073p'",
+        "output": "let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];\n    let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];\n    for season in 0..n_seasons {\n        if let Some(obs) = group_obs.get(&(hydro_id, season)) {\n            obs_by_season[season].clone_from(obs);\n        }\n        ...\n    }",
+        "reading": "group_obs is a HashMap<(EntityId,usize),Vec<f64>> already owning each hydro-season's observation vector. Every consumer -- the parallel estimate_all_hydro_ar_coefficients closure, the serial reduce_entity_orders, and in the PAR-A path estimate_ar_with_pacf_annual plus reduce_entity_orders_annual -- rebuilds a local obs_by_season: Vec<Vec<f64>> via clone_from(obs), a full deep copy. The reduction and annual-estimate consumers then only read obs (through obs_refs: Vec<&[f64]>)."
+      },
+      "mechanism": "Suspected cost: the raw observation history is deep-copied out of group_obs (and annual_group_obs) once per pass per hydro -- twice for the classical fit (estimate then reduce) and up to four times for the PAR-A fit (estimate + reduce, each for both Z and A series). Total observation bytes copied is 2x-4x the raw history per fit, all of it discarded after building a Vec<&[f64]> view the solve actually consumes. Deck-independent: copy volume scales with history length x hydro count regardless of deck values. Setup-time (one fit per solve), so it is memory-traffic debt rather than a per-iteration hot path. Symbol to profile: reduce_entity_orders / reduce_entity_orders_annual (allocation volume).",
+      "proposedSeverity": "C",
+      "fixShape": "Where the consumer only reads observations (the two reduction loops and the PAR-A initial estimate all build obs_refs: Vec<&[f64]> and pass borrows into the FACP/YW primitives), construct that borrow view directly from group_obs -- e.g. (0..n_seasons).map(|s| group_obs.get(&(hydro_id, s)).map_or(&[][..], Vec::as_slice)).collect() -- instead of clone_from into an owned Vec<Vec<f64>>. group_obs outlives every pass within the fitter, so the borrows are valid. This keeps the classical parallel closure's canonical-order determinism unchanged (it still returns per-hydro results in hydro_ids order) and does not alter any numeric result; it only removes the intermediate owned copies. No paradigm noun, engine dependency, or new abstraction.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "lens": "performance",
+      "candidateRef": "sto-performance-par-02"
+    },
+    {
+      "title": "pop_mean_std and pop_mean_std_ann are identical population mean/std helpers declared twice in the same file (par/fitting/tests.rs)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std",
+          "line": 1157
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "pop_mean_std_ann",
+          "line": 2354
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/src/par/fitting/tests.rs | sed -n '1157,1168p') <(git show a136840d:crates/cobre-stochastic/src/par/fitting/tests.rs | sed -n '2354,2365p')",
+        "output": "Diff is a single line: `fn pop_mean_std(...)` vs `fn pop_mean_std_ann(...)`. The 11-line bodies are byte-identical: n<1 -> (0,0); mean = sum/n; n<2 -> (mean,0); population variance sum((x-mean)^2)/n; return (mean, var.sqrt()).",
+        "reading": "Two identically-bodied helpers coexist in one file, separated only by an `_ann` suffix on the name; the `_ann` copy adds no annual-specific behavior. Pure duplication with zero divergence \u2014 one helper serves both call sites."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Delete pop_mean_std_ann and point its call sites at the single pop_mean_std (or, if these move under the consolidated par/fitting test helper, keep one copy there). Behavior-neutral; identical output. Neutral to layering.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-par-03"
+    },
+    {
+      "title": "simulate_two_season_par2 PAR(2) Box-Muller scenario simulator duplicated byte-for-byte across the two par/fitting sibling test files",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 2032
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs",
+          "symbol": "simulate_two_season_par2",
+          "line": 149
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/src/par/fitting/tests.rs | sed -n '2032,2066p') <(git show a136840d:crates/cobre-stochastic/src/par/fitting/estimation/tests.rs | sed -n '149,183p')",
+        "output": "The two 35-line bodies are identical except the LCG state variable is named `lcg_state` in tests.rs and `lcg` in estimation/tests.rs. Both use the same LCG multiplier 6_364_136_223_846_793_005 / increment 1_442_695_040_888_963_407, the same burnin=200, the same >>11 / (1u64<<53) uniform, the same Box-Muller `(-2*ln u1).sqrt()*cos(2*PI*u2)`, and the same `values[i] = phi_1*values[i-1] + phi_2*values[i-2] + noise` recurrence, returning the identical (obs_s0, obs_s1) two-season split. Both files are the sibling tests.rs for par/fitting.",
+        "reading": "A non-trivial deterministic PAR(2) generator (the seed source for the roundtrip and PACF analytical tests in both files) is maintained in two places that differ only by a cosmetic rename; a change to the noise generator in one silently diverges from the other, weakening the shared-seed contract both rely on."
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Hoist the one simulator into a single shared par/fitting test helper that both sibling files import (a `#[cfg(test)]` helper module under par/fitting/, or the crate test-support surface if the companion findings introduce it), and delete the copy. Behavior-neutral; the generated series is identical by construction so no golden/assertion changes. Neutral to layering.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-par-02"
+    },
+    {
+      "title": "Inline/sibling unit-test fixture builders (Stage / InflowModel) re-authored across ~9 par test sites with make_model byte-identical between precompute.rs and evaluate.rs",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_model",
+          "line": 653
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_model",
+          "line": 515
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/precompute.rs",
+          "symbol": "make_stage",
+          "line": 628
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+          "symbol": "make_stage",
+          "line": 490
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "make_model",
+          "line": 160
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/aggregate.rs",
+          "symbol": "make_stage",
+          "line": 169
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/src/par/precompute.rs | sed -n '653,669p') <(git show a136840d:crates/cobre-stochastic/src/par/evaluate.rs | sed -n '515,531p'); for f in aggregate closure contribution evaluate lag_kernel lag_transition precompute validation; do grep -c 'fn make_stage\\|fn make_model\\|fn make_inflow_model' <(git show a136840d:crates/cobre-stochastic/src/par/$f.rs); done",
+        "output": "make_model precompute.rs:653 vs evaluate.rs:515 diff: EMPTY (byte-identical 6-arg InflowModel builder, `annual: None`). make_stage precompute.rs:628 vs evaluate.rs:490: identical except `NaiveDate::from_ymd_opt(...).unwrap()` vs local `dummy_date(...)` wrapper of the same call. Per-file builder census in par/: precompute(make_stage x3, make_model x2), evaluate(make_stage x1, make_model x1), validation(make_model x2 incl make_model_with_annual), aggregate(make_stage x1). validation make_model hardcodes mean_m3s:100.0; aggregate make_stage uses duration 720.0/branching_factor 1 vs precompute/evaluate 744.0/10 \u2014 same Stage struct, same StageStateConfig/block_mode/risk_config/ScenarioSourceConfig boilerplate, differing only in a couple of default literals.",
+        "reading": "Every par unit-test module rebuilds the same two cobre-core structs from scratch. precompute and evaluate carry a genuinely identical make_model; the make_stage copies differ only in default constants, not shape. There is no shared O(1)-field-add Stage/InflowModel builder in this crate (it exists only in cobre-sddp/tests/common), so a field added to Stage or InflowModel must be edited in every copy \u2014 the fixture-fragmentation cost the yardstick \u00a73.2.3 names. Distinct location from the integration-prelude finding (src/ unit tests vs tests/ binaries), same root cause and same fix surface."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Provide one parameterized builder each for Stage and InflowModel (the O(1) field-add builder pattern the yardstick \u00a73.1.4 credits to cobre-sddp/tests/common/builders.rs), reachable from both the inline unit tests and the integration binaries via the crate test-support surface proposed in the companion finding; each existing make_stage/make_model becomes a thin wrapper that overrides only the defaults it cares about (duration, branching_factor, mean). Delete the byte-identical make_model copy pair outright. Keeps every test body and assertion unchanged (a refactor, not a coverage change); neutral to layering; no new production abstraction.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-par-01"
+    },
+    {
+      "title": "Integration-binary fixture prelude (make_bus / make_hydro / identity_correlation) re-authored byte-for-byte across the par integration binaries with no shared tests/common",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_hydro",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "make_bus",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+          "symbol": "identity_correlation",
+          "line": 161
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_hydro",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "make_bus",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/conformance.rs",
+          "symbol": "identity_correlation",
+          "line": 130
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show a136840d:crates/cobre-stochastic/tests/forward_sampler.rs | sed -n '74,122p') <(git show a136840d:crates/cobre-stochastic/tests/conformance.rs | sed -n '61,109p'); diff <(git show a136840d:.../forward_sampler.rs | sed -n '61,72p') <(git show a136840d:.../conformance.rs | sed -n '23,34p'); git ls-tree a136840d -- crates/cobre-stochastic/tests; git show a136840d:crates/cobre-stochastic/Cargo.toml | grep -nA4 '[features]'",
+        "output": "make_hydro diff: EMPTY (byte-identical ~49-line Hydro literal, 16 HydroPenalties fields all 0.0 + inflow_nonnegativity_cost:1000.0, declare_mirror_unit_group(EntityId(0))). make_bus diff: EMPTY (byte-identical 11-line Bus literal). identity_correlation diff: only param name `ids` vs `entity_ids` (29-line CorrelationModel literal otherwise identical). tests/ dir has 8 flat *.rs binaries and NO common/ module. Cargo.toml [features] declares only `slow-tests = []` (no test-support feature). Spread map: make_bus/make_hydro/make_inflow_model/identity_correlation present in forward_sampler, conformance, halton_integration, sobol_integration, lhs_integration, reproducibility (6 binaries); identity_correlation also in saa_golden_value (7).",
+        "reading": "The two par integration binaries in scope re-declare the same entity-construction prelude verbatim; make_stage is the only per-family divergence (forward_sampler `(index,id,bf,method)` vs conformance `(index,id,branching_factor)`), matching the yardstick's observation that only make_stage_* differs per family. There is no crate-local tests/common and no test-support feature, so the prelude is copy-pasted per file. A field added to Hydro/Bus/CorrelationModel must be hand-propagated to every copy; the yardstick \u00a73.1.4 praises exactly the O(1) field-add builder that today lives only in cobre-sddp/tests/common."
+      },
+      "mechanism": null,
+      "proposedSeverity": "B",
+      "fixShape": "Introduce a single shared fixture surface for the crate's cobre-core entity builders and mod-declare it once per binary, so make_bus/make_hydro/make_inflow_model/identity_correlation are authored once. Roadmap-consistent options: (a) low-risk interim \u2014 a crate-local `tests/common/` module (the yardstick \u00a75.1 interim state before test-support collapse), each binary `mod common;` then `use crate::common::*`; (b) the yardstick's target \u2014 hoist the cobre-core entity builders behind a `test-support` cargo feature so the builders live with the type they build (\u00a75.2). Because these construct cobre-core types (Hydro/Bus/InflowModel/CorrelationModel), cobre-core's test-support surface is the durable home; the crate-local tests/common is the safe first step. Keep the per-family make_stage variants as thin overrides. Neutral to the layering (test infra only); introduces no new production abstraction, so no one-consumer-abstraction conflict. Cross-reference the mirror `Oracle test-harness duplication` entry rather than restating it, and note the wider halton/sobol/lhs/reproducibility/saa spread is owned by the tree-noise substation and the crate-wide total by the test-corpus station.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "lens": "test-bloat",
+      "candidateRef": "sto-test-bloat-par-00"
+    }
+  ],
+  "positives": [
+    {
+      "lens": "architecture",
+      "subject": "Q1 paradigm-leakage grep over crates/cobre-stochastic/src/par (git grep -niE '(sddp|benders|cut|cost.to.go|state.space)' at baseline)",
+      "why": "No genericity GATE failure. Every literal hit is a false positive: the 'cut' hits are the substring inside 'conseCUTive' (estimation.rs:97/107/112/114, lag_transition.rs:308), and the only real \\bcut\\b token ('pre-cut record row', lag_transition.rs:1341) sits inside the tail #[cfg(test)] module. scripts/ci/check-infra-genericity.sh word-boundaries \\bcut\\b (so 'consecutive' never matches) and truncates each file at the first '#[cfg(test)]' line, so both classes are correctly out of production scope \u2014 nothing goes to _needsHuman.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh PATTERN (line 79) + tail-test-module truncation (awk '/^#[cfg(test)]/{exit}')"
+    },
+    {
+      "lens": "architecture",
+      "subject": "'ring' vocabulary in crates/cobre-stochastic/src/par/lag_kernel.rs (5,100,103,106,120-122,210) and lag_transition.rs (136,297)",
+      "why": "Not the SDDP anticipated-hold 'ring' paradigm noun. Every use is the circular-buffer data-structure sense \u2014 'Slot-major ring buffer (completed_lags[slot * entity_count + ...])', 'downstream ring', 'newest-first ring contents overwrite' \u2014 a generic ring buffer holding completed downstream lag periods. Preempts a phantom L1-purity finding on the word 'ring'."
+    },
+    {
+      "lens": "architecture",
+      "subject": "Q2 generation-vs-realized classification of every par public type",
+      "why": "No straddle. All fitting types (ReductionReason, ContributionReduction, HydroEstimationEntry, EstimationReport, StdRatioDivergence, ContributionValidationResult, ArCoefficientEstimate, ArEstimationConfig, SeasonalStats, AnnualSeasonalStats, PeriodicYwResult/AnnualResult, AicSelectionResult, PacfSelectionResult, closure::AnnualParams, ClosureRejection, ParValidationReport, ParWarning) are generation-only (fitted-process). PrecomputedPar is the single fitted-process cache consumed by BOTH the forward direction (evaluate_par family, generate a realized value from noise) and the inverse direction (solve_par_noise family, recover noise from a realized target); that is one owner of the fitted process serving two directions, the correct shape, not a concern-straddle. estimation.rs's own module doc states the clean boundary: the fitting core 'never touches case-loading or row types \u2014 that orchestration lives in the I/O shell' (estimation.rs:6-7)."
+    },
+    {
+      "lens": "architecture",
+      "subject": "Dependency direction of the par sub-station",
+      "why": "par imports only cobre_core (L0 \u2014 EntityId, InflowModel, Stage, SeasonMap, StageLagTransition, AnnualComponent), chrono, and rayon; no cobre-sddp / engine crate and no LP/solver crate appears in any production 'use'. The L1->L0 edge is layering-consistent, so the paradigm leakage above is doc-comment prose only, never a structural inversion \u2014 which is exactly why its fix is a bounded reword.",
+      "sanctionedBy": "target-layering-brief.md section 1 (L1 shared kernels depend downward on L0)"
+    },
+    {
+      "lens": "architecture",
+      "subject": "Q3 seam-shape question (StochasticContext src/context.rs 13-field accessor store; ForwardSamplerConfig src/sampling/mod.rs Copy borrow-bundle)",
+      "why": "Out of the par manifest \u2014 context.rs belongs to the 'seam' sub-station and sampling/mod.rs to the 'sampling' sub-station. Cross-reference only; the par seam itself (par/mod.rs + fitting/mod.rs re-exports) is a flat function+result-type surface, not a store/parameter-bag hybrid, so the Q3 concern does not reproduce inside par."
+    },
+    {
+      "lens": "architecture",
+      "subject": "Q4 Phase-1 (Switchable<T> uncertainty store) hint for par",
+      "why": "The fitted-process representation carried by PrecomputedPar (built from cobre_core::scenario::InflowModel parameters) is the piece that would migrate into the Part-IV/V Switchable<T> uncertainty store when the stochastic model is purified off cobre-core::System. This is Part-I item I.3-1 (System carries inflow_models/load_models/ncs_models as first-class fields, target-layering-brief.md table). Recorded as an alignment hint only; this spec executes no move here.",
+      "sanctionedBy": "target-layering-brief.md Part-I item 1 (I.3-1) and section 2 phase 1"
+    },
+    {
+      "lens": "architecture",
+      "subject": "cobre-core-owned types surfaced through par (StageLagTransition at crates/cobre-core/src/model/temporal.rs:175; Stage with StageRiskConfig/ScenarioSourceConfig/NoiseMethod fields exercised by the precompute.rs / evaluate_par_batch doctests)",
+      "why": "The SDDP-shaped Stage fields (risk_config, scenario_config, branching_factor, noise_method) that make the par doctests verbose live on the L0 Stage god-struct, and StageLagTransition itself is an L0 type. Both are Part-I item I.3-2 (Stage bakes in stochastic/risk config) and belong to the core+io station per the scope walls; cited here, not raised as a par candidate."
+    },
+    {
+      "lens": "architecture",
+      "subject": "par/mod.rs #[allow(deprecated)] evaluate re-export block (evaluate_par_inflow/_inflows, solve_par_noise legacy aliases) and the wide low-level fitting re-export surface (solve_linear_system, build_periodic_yw_matrix, periodic_autocorrelation, cross_correlation_z_a)",
+      "why": "The doubled deprecated public surface and the breadth of exposed low-level math primitives are over-engineering / API-surface concerns owned by the sibling over-engineering lens (its checklist item 3 targets the #[allow(deprecated)] re-export pattern). Flagged as examined and deliberately deferred to that lens rather than raised here as an architecture candidate."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/par/lag_kernel.rs \u2014 `LagIndex` trait with `LagMajor` and `EntityMajor` implementors driving the generic `advance_lag_chain<L: LagIndex>`",
+      "why": "Not speculative generality: both implementors have real production consumers, so the trait is a genuine two-consumer abstraction (satisfies the target-layering 'second consumer precedes the abstraction' rule). `LagMajor` is used in production by cobre-sddp `src/stochastic/noise.rs:250-251`; `EntityMajor` by cobre-stochastic `sampling/eta_inversion.rs:143`, `sampling/external.rs:2959,3033`, `sampling/historical.rs:2254,2327`, and `par/lag_transition.rs:1268`. Static-dispatched (`impl LagIndex`), never `Box<dyn>`, per the crate hard rule.",
+      "sanctionedBy": "target-layering-brief.md \u00a73.4 (a two-consumer abstraction is architecture, not a one-consumer smell)"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs \u2014 `ArEstimationConfig<'a>` (line 179) and `PacfReductionParams` (line 1002) parameter-bundle structs",
+      "why": "These are the sanctioned fix FOR argument-count pressure, not over-engineering: `ArEstimationConfig` bundles the four estimation knobs behind the single public `estimate_ar_coefficients_with_selection` entry that cobre-io actually calls (scenarios/estimation.rs:246,335), and `PacfReductionParams` bundles the reduction controls threaded into `iterative_pacf_reduction`. Collapsing them would re-introduce the too-many-arguments smell, not remove one."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs \u2014 private `#[allow(clippy::too_many_arguments)]` / `too_many_lines` fns `estimate_ar_with_pacf_annual` (line 300), `apply_annual_prepass_reductions` (line 523), `reduce_entity_orders_annual` (line 665)",
+      "why": "Each is a private fn (not a builder, not public surface) carrying a D4 `// Rationale:` clause explaining that its arguments are independently-sourced lookup/stat tables spanned by no context struct and that bundling them would just displace the arity to the call-site struct literal with no clarity gain \u2014 a considered decision, not accidental over-parameterization. Item 4 of the over-engineering checklist's real target (the 11-argument `standardize_external_inflow`) lives in the `sampling` sub-station, not here.",
+      "sanctionedBy": "CLAUDE.md comment rule D4 (rationale-above-suppression) + reserved-seams-and-deferred-debt.md '#[allow(...)] census' Load-bearing class"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/par/mod.rs:27-31 \u2014 the `#[allow(deprecated)]` re-export block over `evaluate.rs`'s `evaluate_par*` / `solve_par_noise*` surface (3 items carry `#[deprecated(since = 0.1.2)]` at evaluate.rs:109,240,452)",
+      "why": "Cleared, not raised: the deprecated-with-fallback surface and its `#[allow(deprecated)]` sites are explicitly declared out of scope for this sweep, with a dedicated clean-break ticket owning the disposition. Recorded here as a sanctioned omission rather than a silent one.",
+      "sanctionedBy": "reserved-seams-and-deferred-debt.md 'Audit-evidence -> #[allow(...)] census' (the `#[allow(deprecated)]` sites in cobre-stochastic `{lib.rs,par/mod.rs,par/evaluate.rs}` are a narrower class; verifying that surface is out of scope; a dedicated ticket owns the clean-break gate)"
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/par \u2014 enum census (over-engineering checklist item 1)",
+      "why": "Re-ran the census over the `par` manifest: `ClosureRejection` (closure.rs:119) has 4 variants, `ReductionReason` (estimation.rs:32) has 3, `HistoryClass` (seasonal_stats.rs:54) has 4 \u2014 all genuinely multi-valued and correct. The only effectively-one-valued enum flagged among the par enums is `ParWarning` (raised as candidate 1). The checklist's named census target `SweepDirection` sits in `tree/opening_tree.rs`, which is the tree-noise sub-station \u2014 cross-referenced, not swept here."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-stochastic/src/par \u2014 newtype / unused-generic census",
+      "why": "No forwarding tuple-struct newtypes exist in par (`git grep -nE 'pub struct [A-Za-z0-9_]+\\(' a136840d -- crates/cobre-stochastic/src/par/` returns empty). The only non-lifetime generic in par is `advance_lag_chain<L: LagIndex>`, and `L` is instantiated at both `LagMajor` and `EntityMajor` in production, so there is no unused generic parameter."
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/par/evaluate.rs (evaluate_par_batch, solve_par_noise_batch)",
+      "why": "The runtime-hot PAR evaluation path is allocation-free: both batch functions write into a caller-supplied &mut [f64] output with debug_assert length checks and no per-call Vec/HashMap, reading psi via PrecomputedPar::psi_slice into the stage-major flat buffer. Nothing to optimize here.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/par/precompute.rs (PrecomputedPar) and par/lag_kernel.rs (advance_lag_chain, LagIndex)",
+      "why": "PrecomputedPar is built once at setup into flat Box<[f64]> arrays with a documented stage-major, series-minor, lag-innermost layout keeping a scenario trajectory's per-stage data contiguous for the forward/backward passes; advance_lag_chain is allocation-free, static-dispatched over the LagIndex trait (no Box<dyn>), and operates entirely on caller buffers. Both are cache-conscious and hot-path-clean.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/par/fitting/{yw_matrices.rs,periodic_ar.rs,partitioned_covariance.rs}",
+      "why": "The Yule-Walker / FACP primitives are already allocation-conscious: build_periodic_yw_matrix_into writes into caller buffers reused across the increasing-order solves of estimate_periodic_ar_coefficients (matrix_buf/rhs_buf), and conditional_facp_partitioned reuses matrix_buf/rhs_col across its per-lag solves, each with an in-code rationale. solve_linear_system is sized for the small (n<=10) YW systems where the O(n^3) cost is negligible. No per-lag allocation debt to raise.",
+      "sanctionedBy": "in-code allocation-reuse rationale in periodic_ar.rs and partitioned_covariance.rs"
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs:952 and correlation.rs:210 (the crate's only two rayon sites)",
+      "why": "Both rayon regions carry a correct, load-bearing determinism rationale (canonical hydro_ids reassembly via flat_map_iter/collect and map/collect; inner per-season solve / ar_sum accumulation bit-identical to single-threaded). These are Voice-1/D5 determinism contracts protecting the declaration-order hard rule; any perf fix-shape above preserves them verbatim rather than weakening them.",
+      "sanctionedBy": "in-code Determinism rationale (estimation.rs 947-951, correlation.rs 205-208)"
+    },
+    {
+      "lens": "performance",
+      "subject": "crates/cobre-stochastic/src/par/{lag_transition.rs,aggregate.rs,contribution.rs,validation.rs,closure.rs,mod.rs} and fitting/{mod,annual,ar_coefficients,order_selection,seasonal_stats}.rs",
+      "why": "Swept for per-scenario/per-stage allocation and additional parallel regions: no rayon sites outside the two named (grep par_iter|rayon|par_bridge|into_par returns 0 for all of these), and their allocations are setup-time one-shot builds (precompute_stage_lag_transitions is explicitly 'runs once at setup; consumed read-only on the hot path'; aggregate groups observations once). No hot-loop Vec/HashMap allocation found.",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/par/fitting/tests.rs \u2014 analytical (MMS-style) tier: *_hand_computed, *_analytical_verification, YW-matrix residual/roundtrip and rhs-matches-extended checks (e.g. build_periodic_yw_matrix_forward_prediction_two_season_ar2:1452, periodic_pacf_two_season_par2_analytical_verification:2077, build_extended_periodic_yw_matrix_hand_computed_3x3:2596, assemble_partitioned_covariance_three_season_k3_hand_computed:3265)",
+      "why": "These prove correctness against a hand-derived truth, not 'same as last time' \u2014 exactly the analytical/Method-of-Manufactured-Solutions tier the yardstick \u00a73.1.1 says to preserve and name. Not bloat; the depth is the suite's best asset and must not be collapsed by any consolidation.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a73.1.1 (analytical-derivation tier)"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/par/lag_kernel.rs test module \u2014 independent-oracle differential tests: oracle_shift_lag_major (line offset 30 in test mod), oracle_shift_entity_major, oracle_scalar_weight_finalize, lag_kernel_downstream_ring_rebuild_matches_oracle",
+      "why": "The kernel is checked against a separately-written reference implementation (an oracle) across layouts and weightings \u2014 property/differential testing, the yardstick's ideal for sort/reduction/canonicalization invariants (\u00a73.2.7). Legitimate coverage, not duplication.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a73.1.5 / \u00a73.2.7 (property + oracle testing)"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/src/par/fitting/{estimation.rs:1283, mod.rs, estimation/tests.rs, tests.rs} \u2014 extracted sibling `tests.rs` form via `#[cfg(test)] mod tests;`",
+      "why": "par/fitting already uses the extracted-sibling homing the yardstick \u00a75.1 prescribes (rather than a multi-thousand-line inline module), so it is on the correct side of the inline-giant-vs-extracted-sibling asymmetry the yardstick \u00a73.2.4 flags elsewhere. The `#[cfg(test)] thread_local! BUILD_PERIODIC_YW_MATRIX_CALL_COUNT` spy in yw_matrices.rs:607 is legitimate test instrumentation (proves build-once-per-order), not dead/bloat code.",
+      "sanctionedBy": "docs/design/testing-architecture.md \u00a75.1 (extracted-sibling homing)"
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "crates/cobre-stochastic/tests/par_a_historical_replay.rs \u2014 self-contained fixtures monthly_stage:35, row:61, uniform_monthly_transition:73, advance_lag_state_uniform:88",
+      "why": "This third par integration binary does NOT share the make_bus/make_hydro prelude; its fixtures are purpose-built for the historical-replay roundtrip, so it is correctly excluded from the prelude-duplication finding (which is anchored only to forward_sampler + conformance).",
+      "sanctionedBy": null
+    },
+    {
+      "lens": "test-bloat",
+      "subject": "Cross-reference \u2014 wider fixture-prelude spread and oracle-harness duplication (NOT restated here)",
+      "why": "The same make_bus/make_hydro/identity_correlation prelude also appears in halton_integration/sobol_integration/lhs_integration (tree-noise substation headline) and reproducibility/saa_golden_value; the crate-wide integration-binary total (8 binaries, 4096 lines) and any workspace test-support consolidation are owned by the test-corpus station. The extensive-form/branching value oracle-harness duplication is the mirror's cobre-sddp entry \u2014 cited, not raised here.",
+      "sanctionedBy": "prior-register.md 'Oracle test-harness duplication' (cross-reference); attacker-prompt scope walls (crate-wide totals -> test-corpus station)"
+    }
+  ],
+  "_needsHuman": [],
+  "lenses": {
+    "sto-architecture-par": 1,
+    "sto-over-engineering-par": 2,
+    "sto-performance-par": 3,
+    "sto-test-bloat-par": 4
+  }
+}

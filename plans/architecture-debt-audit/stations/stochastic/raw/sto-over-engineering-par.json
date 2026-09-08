@@ -1,0 +1,106 @@
+{
+  "station": "stochastic",
+  "subStation": "par",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "PAR validation warning apparatus (single-variant `ParWarning` enum + single-field `ParValidationReport`) is built then discarded at its only production caller",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParWarning",
+          "line": 54
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "ParValidationReport",
+          "line": 39
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/validation.rs",
+          "symbol": "validate_par_parameters",
+          "line": 117
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/validation.rs | sed -n '38,66p'",
+        "output": "#[derive(Debug)]\npub struct ParValidationReport {\n    pub warnings: Vec<ParWarning>,\n}\n// ParWarning\n/// A non-fatal PAR validation warning.\n/// Warnings are accumulated in [`ParValidationReport`] ... The calling algorithm may inspect them ...\n#[derive(Debug, Clone)]\npub enum ParWarning {\n    LowResidualVariance { hydro_id: i32, stage_id: i32, explained_variance: f64 },\n}",
+        "reading": "`ParWarning` has exactly one variant (`LowResidualVariance`) and `ParValidationReport` is a one-field wrapper `{ warnings: Vec<ParWarning> }` \u2014 a structured warning taxonomy with a single inhabitant, the textbook wrapper-enum-with-one-inhabitant shape. The apparatus is production-unread: `git grep -nE '\\bvalidate_par_parameters\\b' a136840d -- 'crates/**/*.rs'` shows the sole production caller is `crates/cobre-stochastic/src/context.rs:616`, `let _report = validate_par_parameters(system.inflow_models())?;` \u2014 the return value is bound to `_report` and discarded, so only the fatal `?` path (the std==0 && ar_order>0 error at validation.rs:120) is used and the `warnings` branch (`warnings.push(ParWarning::LowResidualVariance {..})` at validation.rs:138) is computed then dropped. `git grep -nE '\\bParWarning\\b' a136840d` shows no non-test consumer anywhere except the definition, the `par/mod.rs`/`lib.rs` re-exports, and the internal producer; only `validation.rs`'s own inline `#[cfg(test)]` module inspects `.warnings`. The many `.warnings()` hits in cobre-cli/io/python/sddp are the unrelated `ValidationContext` diagnostic mechanism, not `ParValidationReport`. The doc comment 'The calling algorithm may inspect them ...' is speculative future-tense with no wiring. Reserved-is-not-dead check: not in prior-register.md, not in reserved-seams-and-deferred-debt.md, not covered by CLAUDE.md 'unwired config is reserved' (this is a warning apparatus, not config), and carries no `#[allow(dead_code)]` anchor (tests keep it live) \u2014 so no sanction applies.",
+        "reserved_check": "cleared: absent from prior-register.md and the mirror; not config (CLAUDE.md reserved-config rule N/A); no #[allow] rationale anchors it"
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the single-inhabitant taxonomy: either (a) if the low-residual-variance diagnostic has no intended reader, drop the `warnings` accumulation and return the fatal-check outcome directly (the sole caller already discards it), retiring `ParWarning`, `ParValidationReport`, and the two re-exports; or (b) if the warning is meant to surface, replace the one-variant enum with the bare `LowResidualVariance { hydro_id, stage_id, explained_variance }` struct and actually consume it at context.rs (which, under the Python-parity rule, would require mirroring the surfaced warning in cobre-python \u2014 an owner call, not a drive-by). Keep the enum form only if a second warning variant is genuinely imminent, in which case record it as an intended extension seam rather than leaving it as silent debt. No L1-purity conflict: the fix introduces no engine noun, no engine-crate dependency, and removes surface rather than adding a single-consumer abstraction.",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    },
+    {
+      "title": "Bare `estimate_ar_coefficients` / `estimate_correlation` / `estimate_seasonal_stats` are pub forwarding shims over their `_with_season_map` twins with zero production consumers (only the crate's own tests + doctests)",
+      "anchors": [
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs",
+          "symbol": "estimate_ar_coefficients",
+          "line": 88
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+          "symbol": "estimate_correlation",
+          "line": 115
+        },
+        {
+          "path": "crates/cobre-stochastic/src/par/fitting/seasonal_stats.rs",
+          "symbol": "estimate_seasonal_stats",
+          "line": 221
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs | sed -n '88,101p'",
+        "output": "pub fn estimate_ar_coefficients(\n    observations: &[(EntityId, NaiveDate, f64)],\n    seasonal_stats: &[SeasonalStats],\n    stages: &[Stage],\n    hydro_ids: &[EntityId],\n    max_order: usize,\n) -> Result<Vec<ArCoefficientEstimate>, StochasticError> {\n    estimate_ar_coefficients_with_season_map(\n        observations, seasonal_stats, stages, hydro_ids, max_order, None,\n    )\n}",
+        "reading": "Each bare form is a pure forwarding shim: `estimate_ar_coefficients` (ar_coefficients.rs:88) and `estimate_seasonal_stats` (seasonal_stats.rs:221 -> `estimate_seasonal_stats_with_season_map(.., None)`) and `estimate_correlation` (correlation.rs:115 -> `estimate_correlation_with_season_map(.., None)`) do nothing but call their `_with_season_map` twin with `None`. Two of the three are re-exported at the crate root (lib.rs:47: `estimate_ar_coefficients, estimate_seasonal_stats`) and all three at `par::fitting::`. `git grep -nE '\\bestimate_ar_coefficients\\(' a136840d -- 'crates/**/*.rs' | grep -vE 'estimate_ar_coefficients_with'` (and the analogous greps for the other two) returns only: their own definitions, their own doctests, and the crate's inline `par/fitting/tests.rs` \u2014 no production caller inside or outside cobre-stochastic. The one production PAR consumer, cobre-io `scenarios/estimation.rs:65-68`, imports and calls only the `_with_season_map` forms (`estimate_seasonal_stats_with_season_map`, `estimate_correlation_with_season_map`) plus `estimate_ar_coefficients_with_selection`/`ArEstimationConfig`. So the bare trio is public forwarding surface whose only exercisers are the crate's own tests/doctests \u2014 a zero-external-consumer forwarding abstraction on an L1 kernel. Reserved-is-not-dead check: none of the three appears in prior-register.md or the mirror; they are wired (to tests) so no `#[allow(dead_code)]` fires; the CLAUDE.md reserved-config rule does not apply (functions, not config). No sanction.",
+        "reserved_check": "cleared: absent from prior-register.md and the mirror; wired only to tests/doctests so no dead_code seam; not config"
+      },
+      "mechanism": null,
+      "proposedSeverity": "C",
+      "fixShape": "Remove the ergonomic overload asymmetry: since `_with_season_map` already takes `Option<&SeasonMap>` and is the sole production entry, either demote the three bare forwarders to `pub(crate)` (or delete them and have the inline tests/doctests call the `_with_season_map` form with `None` directly), and stop re-exporting `estimate_ar_coefficients`/`estimate_seasonal_stats` at the crate root. If the no-season-map convenience form is deliberately part of the crate's public API, mark that intent explicitly and keep exactly one such surface rather than a crate-root re-export plus a `par::fitting::` re-export of a test-only shim. Behaviour-neutral (the shims already delegate); blast radius is validation-free (the shim bodies and their test/doctest call sites).",
+      "alignmentHint": "neutral",
+      "partIRef": null,
+      "claimType": null,
+      "layout": null,
+      "reRaiseOf": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-stochastic/src/par/lag_kernel.rs \u2014 `LagIndex` trait with `LagMajor` and `EntityMajor` implementors driving the generic `advance_lag_chain<L: LagIndex>`",
+      "why": "Not speculative generality: both implementors have real production consumers, so the trait is a genuine two-consumer abstraction (satisfies the target-layering 'second consumer precedes the abstraction' rule). `LagMajor` is used in production by cobre-sddp `src/stochastic/noise.rs:250-251`; `EntityMajor` by cobre-stochastic `sampling/eta_inversion.rs:143`, `sampling/external.rs:2959,3033`, `sampling/historical.rs:2254,2327`, and `par/lag_transition.rs:1268`. Static-dispatched (`impl LagIndex`), never `Box<dyn>`, per the crate hard rule.",
+      "sanctionedBy": "target-layering-brief.md \u00a73.4 (a two-consumer abstraction is architecture, not a one-consumer smell)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs \u2014 `ArEstimationConfig<'a>` (line 179) and `PacfReductionParams` (line 1002) parameter-bundle structs",
+      "why": "These are the sanctioned fix FOR argument-count pressure, not over-engineering: `ArEstimationConfig` bundles the four estimation knobs behind the single public `estimate_ar_coefficients_with_selection` entry that cobre-io actually calls (scenarios/estimation.rs:246,335), and `PacfReductionParams` bundles the reduction controls threaded into `iterative_pacf_reduction`. Collapsing them would re-introduce the too-many-arguments smell, not remove one."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/fitting/estimation.rs \u2014 private `#[allow(clippy::too_many_arguments)]` / `too_many_lines` fns `estimate_ar_with_pacf_annual` (line 300), `apply_annual_prepass_reductions` (line 523), `reduce_entity_orders_annual` (line 665)",
+      "why": "Each is a private fn (not a builder, not public surface) carrying a D4 `// Rationale:` clause explaining that its arguments are independently-sourced lookup/stat tables spanned by no context struct and that bundling them would just displace the arity to the call-site struct literal with no clarity gain \u2014 a considered decision, not accidental over-parameterization. Item 4 of the over-engineering checklist's real target (the 11-argument `standardize_external_inflow`) lives in the `sampling` sub-station, not here.",
+      "sanctionedBy": "CLAUDE.md comment rule D4 (rationale-above-suppression) + reserved-seams-and-deferred-debt.md '#[allow(...)] census' Load-bearing class"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par/mod.rs:27-31 \u2014 the `#[allow(deprecated)]` re-export block over `evaluate.rs`'s `evaluate_par*` / `solve_par_noise*` surface (3 items carry `#[deprecated(since = 0.1.2)]` at evaluate.rs:109,240,452)",
+      "why": "Cleared, not raised: the deprecated-with-fallback surface and its `#[allow(deprecated)]` sites are explicitly declared out of scope for this sweep, with a dedicated clean-break ticket owning the disposition. Recorded here as a sanctioned omission rather than a silent one.",
+      "sanctionedBy": "reserved-seams-and-deferred-debt.md 'Audit-evidence -> #[allow(...)] census' (the `#[allow(deprecated)]` sites in cobre-stochastic `{lib.rs,par/mod.rs,par/evaluate.rs}` are a narrower class; verifying that surface is out of scope; a dedicated ticket owns the clean-break gate)"
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par \u2014 enum census (over-engineering checklist item 1)",
+      "why": "Re-ran the census over the `par` manifest: `ClosureRejection` (closure.rs:119) has 4 variants, `ReductionReason` (estimation.rs:32) has 3, `HistoryClass` (seasonal_stats.rs:54) has 4 \u2014 all genuinely multi-valued and correct. The only effectively-one-valued enum flagged among the par enums is `ParWarning` (raised as candidate 1). The checklist's named census target `SweepDirection` sits in `tree/opening_tree.rs`, which is the tree-noise sub-station \u2014 cross-referenced, not swept here."
+    },
+    {
+      "subject": "crates/cobre-stochastic/src/par \u2014 newtype / unused-generic census",
+      "why": "No forwarding tuple-struct newtypes exist in par (`git grep -nE 'pub struct [A-Za-z0-9_]+\\(' a136840d -- crates/cobre-stochastic/src/par/` returns empty). The only non-lifetime generic in par is `advance_lag_chain<L: LagIndex>`, and `L` is instantiated at both `LagMajor` and `EntityMajor` in production, so there is no unused generic parameter."
+    }
+  ],
+  "_needsHuman": []
+}

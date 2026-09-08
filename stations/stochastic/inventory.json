@@ -1,0 +1,629 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "crate": "cobre-stochastic",
+  "driftRule": "HEAD is the pin or a descendant whose evaluated surfaces (crates docs scripts .github schemas Cargo.toml Cargo.lock examples tests) are byte-identical to the pin; the naive HEAD == SHA check the epic snippet shows would abort every station after the first ledger commit, so the evaluated-surface rule is used, matching check-anchors and verify-station.",
+  "measuredAtHead": "8b5d8416bda70aa9818ada420fd4d10cf7b77ae0",
+  "totals": {
+    "srcFiles": 51,
+    "nonTestLines": 35198,
+    "inlineTestFiles": 35,
+    "siblingTestFiles": 2,
+    "siblingTestLines": 5466,
+    "integrationBinaries": 8,
+    "integrationLines": 4096,
+    "commands": {
+      "srcFiles": "find crates/cobre-stochastic/src -name '*.rs' | wc -l",
+      "nonTestLines": "find crates/cobre-stochastic/src -name '*.rs' ! -name 'tests.rs' -print0 | xargs -0 -I{} awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' {} | awk '{s+=$1} END{print s}'",
+      "inlineTestFiles": "grep -rl '^#\\[cfg(test)\\]' crates/cobre-stochastic/src | wc -l",
+      "siblingTestFiles": "find crates/cobre-stochastic/src -name 'tests.rs' | wc -l",
+      "integrationBinaries": "find crates/cobre-stochastic/tests -name '*.rs' | wc -l",
+      "integrationLines": "wc -l crates/cobre-stochastic/tests/*.rs"
+    }
+  },
+  "subStations": [
+    {
+      "id": "par",
+      "files": 21,
+      "nonTestLines": 6610,
+      "roots": [
+        "crates/cobre-stochastic/src/par/"
+      ]
+    },
+    {
+      "id": "sampling",
+      "files": 8,
+      "nonTestLines": 2873,
+      "roots": [
+        "crates/cobre-stochastic/src/sampling/"
+      ]
+    },
+    {
+      "id": "tree-noise",
+      "files": 16,
+      "nonTestLines": 24054,
+      "roots": [
+        "crates/cobre-stochastic/src/tree/",
+        "crates/cobre-stochastic/src/noise/",
+        "crates/cobre-stochastic/src/normal/",
+        "crates/cobre-stochastic/src/correlation/"
+      ]
+    },
+    {
+      "id": "seam",
+      "files": 6,
+      "nonTestLines": 1661,
+      "roots": [
+        "crates/cobre-stochastic/src/lib.rs",
+        "crates/cobre-stochastic/src/error.rs",
+        "crates/cobre-stochastic/src/context.rs",
+        "crates/cobre-stochastic/src/seeds.rs",
+        "crates/cobre-stochastic/src/provenance.rs",
+        "crates/cobre-stochastic/src/season_cast/"
+      ],
+      "note": "error.rs is assigned here as the crate's public error surface; it is not named in the epic body's seam list but is a top-level file and must fall inside exactly one sweep (goal G1)."
+    }
+  ],
+  "integration": [
+    {
+      "path": "crates/cobre-stochastic/tests/conformance.rs",
+      "lines": 460
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/forward_sampler.rs",
+      "lines": 836
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/halton_integration.rs",
+      "lines": 551
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/lhs_integration.rs",
+      "lines": 587
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/par_a_historical_replay.rs",
+      "lines": 617
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/reproducibility.rs",
+      "lines": 358
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/saa_golden_value.rs",
+      "lines": 139
+    },
+    {
+      "path": "crates/cobre-stochastic/tests/sobol_integration.rs",
+      "lines": 548
+    }
+  ],
+  "siblingTests": [
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs",
+      "lines": 1497,
+      "note": "only par/fitting uses the sibling tests.rs form; excluded from nonTestLines"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+      "lines": 3969,
+      "note": "only par/fitting uses the sibling tests.rs form; excluded from nonTestLines"
+    }
+  ],
+  "corrections": [
+    {
+      "claim": "src/sampling/external.rs is \"3200 lines, the crate's largest\"",
+      "recordedIn": "epic body (Station: cobre-stochastic)",
+      "measured": {
+        "rawLines": 3200,
+        "nonTestLines": 888,
+        "isLargest": false
+      },
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' crates/cobre-stochastic/src/sampling/external.rs",
+      "consumerNote": "3200 raw is right but only 888 lines are non-test, and it is NOT the largest file; the performance lens must target external.rs on its real 888-line body, not a phantom 3200-line god module."
+    },
+    {
+      "claim": "the crate's largest source file",
+      "recordedIn": "re-measurement (refutes the external.rs 'largest' claim)",
+      "measured": {
+        "path": "crates/cobre-stochastic/src/tree/qmc_sobol/sobol_directions.rs",
+        "rawLines": 21229,
+        "generated": true,
+        "shareOfCrateNonTestPct": 60.3,
+        "shareOfTreeNoiseSweepPct": 88.3
+      },
+      "command": "wc -l crates/cobre-stochastic/src/tree/qmc_sobol/sobol_directions.rs",
+      "consumerNote": "a generated Sobol direction-number table: 60.3% of the crate's non-test lines and 88.3% of the tree-noise sweep's 24054; any density, god-module or LOC-share claim over tree-noise must state whether this generated table is excluded or the arithmetic is noise."
+    }
+  ],
+  "layeringEvidence": [
+    {
+      "from": "cobre-io",
+      "to": "cobre-stochastic",
+      "symbol": "season_cast",
+      "direction": "L2->L1",
+      "verdict": "consistent",
+      "sites": [
+        "crates/cobre-io/src/scenarios/estimation.rs:70",
+        "crates/cobre-io/src/validation/semantic/inflow_seeding.rs:22",
+        "crates/cobre-io/src/validation/semantic/thermal.rs:17",
+        "crates/cobre-io/src/validation/semantic/scenarios.rs:12"
+      ],
+      "note": "L2 (cobre-io) -> L1 (cobre-stochastic) is consistent with the target layering, so the recorded stage-calendar relocation is a core-vs-stochastic homing question, not a layering violation; recording it stops an architecture attacker from raising a phantom inversion.",
+      "command": "grep -rn season_cast crates/cobre-io/src"
+    }
+  ],
+  "partitionCheck": {
+    "sum": 51,
+    "duplicates": [],
+    "unassigned": [],
+    "perSubStation": {
+      "par": 21,
+      "sampling": 8,
+      "tree-noise": 16,
+      "seam": 6
+    },
+    "command": "stamp subStation on each of the 51 files by root, then assert sum == 51, no duplicate path, no unassigned path (goal G1: total and disjoint)."
+  },
+  "files": [
+    {
+      "path": "crates/cobre-stochastic/src/context.rs",
+      "rawLines": 2310,
+      "nonTestLines": 792,
+      "hasInlineTests": true,
+      "subStation": "seam",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/correlation/mod.rs",
+      "rawLines": 12,
+      "nonTestLines": 12,
+      "hasInlineTests": false,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/correlation/resolve.rs",
+      "rawLines": 976,
+      "nonTestLines": 445,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/correlation/spectral.rs",
+      "rawLines": 568,
+      "nonTestLines": 285,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/error.rs",
+      "rawLines": 264,
+      "nonTestLines": 90,
+      "hasInlineTests": true,
+      "subStation": "seam",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/lib.rs",
+      "rawLines": 93,
+      "nonTestLines": 65,
+      "hasInlineTests": true,
+      "subStation": "seam",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/noise/mod.rs",
+      "rawLines": 10,
+      "nonTestLines": 10,
+      "hasInlineTests": false,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/noise/quantile.rs",
+      "rawLines": 225,
+      "nonTestLines": 124,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/noise/rng.rs",
+      "rawLines": 73,
+      "nonTestLines": 33,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/noise/seed.rs",
+      "rawLines": 246,
+      "nonTestLines": 73,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/normal/mod.rs",
+      "rawLines": 6,
+      "nonTestLines": 6,
+      "hasInlineTests": false,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/normal/precompute.rs",
+      "rawLines": 698,
+      "nonTestLines": 298,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/aggregate.rs",
+      "rawLines": 574,
+      "nonTestLines": 149,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/closure.rs",
+      "rawLines": 1118,
+      "nonTestLines": 484,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/contribution.rs",
+      "rawLines": 444,
+      "nonTestLines": 125,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/evaluate.rs",
+      "rawLines": 1166,
+      "nonTestLines": 466,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/annual.rs",
+      "rawLines": 143,
+      "nonTestLines": 143,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/ar_coefficients.rs",
+      "rawLines": 245,
+      "nonTestLines": 245,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/correlation.rs",
+      "rawLines": 584,
+      "nonTestLines": 584,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/estimation/tests.rs",
+      "rawLines": 1497,
+      "nonTestLines": 0,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": true,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/estimation.rs",
+      "rawLines": 1298,
+      "nonTestLines": 1282,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/mod.rs",
+      "rawLines": 68,
+      "nonTestLines": 48,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/order_selection.rs",
+      "rawLines": 292,
+      "nonTestLines": 292,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/partitioned_covariance.rs",
+      "rawLines": 255,
+      "nonTestLines": 255,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/periodic_ar.rs",
+      "rawLines": 164,
+      "nonTestLines": 164,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/seasonal_stats.rs",
+      "rawLines": 355,
+      "nonTestLines": 355,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/tests.rs",
+      "rawLines": 3969,
+      "nonTestLines": 0,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": true,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/fitting/yw_matrices.rs",
+      "rawLines": 611,
+      "nonTestLines": 606,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/lag_kernel.rs",
+      "rawLines": 1052,
+      "nonTestLines": 259,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/lag_transition.rs",
+      "rawLines": 1386,
+      "nonTestLines": 336,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/mod.rs",
+      "rawLines": 52,
+      "nonTestLines": 52,
+      "hasInlineTests": false,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/precompute.rs",
+      "rawLines": 1937,
+      "nonTestLines": 613,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/par/validation.rs",
+      "rawLines": 374,
+      "nonTestLines": 152,
+      "hasInlineTests": true,
+      "subStation": "par",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/provenance.rs",
+      "rawLines": 468,
+      "nonTestLines": 34,
+      "hasInlineTests": true,
+      "subStation": "seam",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/class_sampler.rs",
+      "rawLines": 1284,
+      "nonTestLines": 335,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/eta_inversion.rs",
+      "rawLines": 156,
+      "nonTestLines": 156,
+      "hasInlineTests": false,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/external.rs",
+      "rawLines": 3200,
+      "nonTestLines": 888,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/historical.rs",
+      "rawLines": 2422,
+      "nonTestLines": 605,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/insample.rs",
+      "rawLines": 270,
+      "nonTestLines": 49,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+      "rawLines": 1352,
+      "nonTestLines": 598,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/out_of_sample.rs",
+      "rawLines": 508,
+      "nonTestLines": 6,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/sampling/window.rs",
+      "rawLines": 763,
+      "nonTestLines": 236,
+      "hasInlineTests": true,
+      "subStation": "sampling",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/season_cast/mod.rs",
+      "rawLines": 1406,
+      "nonTestLines": 672,
+      "hasInlineTests": true,
+      "subStation": "seam",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/seeds.rs",
+      "rawLines": 449,
+      "nonTestLines": 8,
+      "hasInlineTests": true,
+      "subStation": "seam",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/generate.rs",
+      "rawLines": 2370,
+      "nonTestLines": 340,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/lhs.rs",
+      "rawLines": 499,
+      "nonTestLines": 159,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/mod.rs",
+      "rawLines": 14,
+      "nonTestLines": 14,
+      "hasInlineTests": false,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/opening_tree.rs",
+      "rawLines": 739,
+      "nonTestLines": 437,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/qmc_halton/mod.rs",
+      "rawLines": 551,
+      "nonTestLines": 290,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/qmc_sobol/mod.rs",
+      "rawLines": 553,
+      "nonTestLines": 299,
+      "hasInlineTests": true,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    },
+    {
+      "path": "crates/cobre-stochastic/src/tree/qmc_sobol/sobol_directions.rs",
+      "rawLines": 21229,
+      "nonTestLines": 21229,
+      "hasInlineTests": false,
+      "subStation": "tree-noise",
+      "isSiblingTest": false,
+      "command": "awk '/^#\\[cfg\\(test\\)\\]/{exit} {n++} END{print n+0}' <path>"
+    }
+  ]
+}

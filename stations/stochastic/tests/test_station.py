@@ -953,5 +953,81 @@ class SectionVerifyTests(sc.StationCase):
         )
 
 
+class GateTests(sc.StationCase):
+    """E03-6 owner ratification gate: gate.md's single Decision line and the BACKLOG markers.
+
+    gate.md carries exactly one `Decision:` line valued ratified or returned. When ratified,
+    the station section carries the `**Ratified <date>**` marker and the `**Gate: RETURNED
+    <date>**` line, every owner-overridden entry has a rationale line and every held
+    (conflicts) entry has an owner disposition; when returned, the section carries no
+    ratified marker. This station ratified with no holds and no overrides, so those two
+    clauses hold vacuously but still bite if a future run introduces either.
+    """
+
+    SLUG = "stochastic"
+
+    def setUp(self):
+        self.gate = self.artifact("gate.md").read_text(encoding="utf-8")
+        self.reg_lines = backlog_parse.read_register(sc.BACKLOG)
+        self.section = backlog_parse.find_section(self.reg_lines, STATION_SECTION)
+        self.body = "\n".join(self.section.lines)
+        self.cal = sc.load_json(self.artifact("calibration.json"))["assigned"]
+
+    def _decision(self) -> str:
+        found = re.findall(r"(?m)^Decision:[ \t]*(\w+)[ \t]*$", self.gate)
+        self.assertEqual(
+            len(found), 1, f"gate.md must carry exactly one Decision: line, got {found}"
+        )
+        self.assertIn(found[0], {"ratified", "returned"}, f"bad Decision {found[0]!r}")
+        return found[0]
+
+    def test_gate_md_has_single_decision_line(self):
+        self._decision()
+
+    def test_backlog_markers_match_decision(self):
+        ratified_marker = re.search(r"\*\*Ratified \d{4}-\d{2}-\d{2}\*\*", self.body)
+        if self._decision() == "ratified":
+            self.assertIsNotNone(
+                ratified_marker,
+                "a ratified gate must stamp the **Ratified <date>** marker",
+            )
+            self.assertRegex(
+                self.body,
+                r"\*\*Gate: RETURNED \d{4}-\d{2}-\d{2}\*\*",
+                "a ratified gate must carry the Gate: RETURNED line under the owner-gate H4",
+            )
+        else:
+            self.assertIsNone(
+                ratified_marker,
+                "a returned (not ratified) gate carries no ratified marker",
+            )
+
+    def test_every_hold_has_an_owner_disposition(self):
+        for h in [e for e in self.cal if e["alignmentHint"] == "conflicts"]:
+            self.assertRegex(
+                self.gate,
+                rf"(?m)^\|\s*{re.escape(h['id'])}\s*\|",
+                f"{h['id']}: held (conflicts) entry has no owner decision row in gate.md",
+            )
+
+    def test_overridden_entries_carry_a_rationale(self):
+        for m in re.finditer(
+            r"(?m)^\|\s*((?:CD|PD|OD|TD)-\d{3})\s*\|\s*([^|]*override[^|]*)\|",
+            self.gate,
+        ):
+            idn = m.group(1)
+            entry = next(
+                (e for e in backlog_parse.iter_entries(self.section) if e.id == idn),
+                None,
+            )
+            self.assertIsNotNone(
+                entry, f"{idn}: overridden gate row has no BACKLOG entry"
+            )
+            self.assertTrue(
+                any("override" in ln.lower() for ln in entry.body),
+                f"{idn}: overridden entry carries no override rationale line",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

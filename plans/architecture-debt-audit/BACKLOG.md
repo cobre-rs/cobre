@@ -3150,6 +3150,8 @@ No entry was rejected, so the Cleared list above is unchanged; no entry was tagg
 
 ### Station 3 — cobre-stochastic (2026-09, baseline a136840d)
 
+**Ratified 2026-09-08** — owner gate; baseline `a136840d`; accepted 35, downgraded 0, rejected 0, deferred 0, overridden 0.
+
 **Station.** cobre-stochastic — the L1 uncertainty store. **Method.** Four lenses (architecture, performance, over-engineering, test-bloat) over four sub-stations: `par/` (PAR fitting + evaluation), `sampling/` (realized-value libraries + ForwardSampler), `tree-noise` (`tree/`+`noise/`+`normal/`+`correlation/`), and the outward seam (`context.rs`, `seeds.rs`, `season_cast/`, `provenance.rs`, `lib.rs`).
 
 **Baseline.** `a136840d4f2ea137f685f0af6dac04254b983b60` (pinned). Read-only station: no tracked file was modified. 35 attacker candidates, 35 defended, 35 confirmed, 0 dismissed; every anchor resolves at the baseline.
@@ -3623,7 +3625,51 @@ Alignment hints only (Epic 9 adjudicates). The seam findings tagged `advances-1`
 
 #### Owner gate — decisions
 
-_(owner ratification pending — filled by the stochastic gate ticket)_
+Ratified 2026-09-08 in the main session over plans/architecture-debt-audit/stations/stochastic/gate.md. All 35 confirmed entries accepted as recorded; no downgrade, reject, defer or override; the 7 prior-register dispositions stand as recorded; the `cut_points` needs-human item is recorded not-a-finding. Severity is shown as `new (reviewer: original)` on any downgrade (none here). No timing number is asserted.
+
+| ID | Decision | Severity | Alignment | Rationale (owner) | Trigger / override | Queue |
+| -- | -------- | -------- | --------- | ----------------- | ------------------ | ----- |
+| CD-064 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | none |
+| PD-021 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| PD-020 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| TD-025 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
+| TD-024 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
+| CD-066 | accept | B (A-risk) | neutral | accepted as recorded (Sev-B batch) | — | none |
+| CD-065 | accept | B | advances-1 | accepted as recorded (Sev-B batch) | — | alignment |
+| OD-029 | accept | B (A-risk) | neutral | accepted as recorded (Sev-B batch) | — | none |
+| OD-028 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | none |
+| PD-023 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| PD-025 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| PD-024 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| TD-028 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
+| CD-070 | accept | B (A-risk) | advances-1 | accepted as recorded (Sev-B batch) | — | alignment |
+| CD-068 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | none |
+| CD-067 | accept | B (A-risk) | neutral | accepted as recorded (Sev-B batch) | — | none |
+| PD-027 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| PD-026 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
+| TD-030 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
+| OD-027 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| OD-026 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| PD-022 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| TD-027 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+| TD-026 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+| TD-029 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+| CD-071 | accept | C | advances-1 | accepted as recorded (Sev-C batch) | — | alignment |
+| OD-031 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| PD-029 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| PD-030 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| TD-032 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+| TD-033 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+| CD-069 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| OD-030 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| PD-028 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
+| TD-031 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+
+**Prior-register dispositions ratified (as recorded):** Stage-calendar crate home → keep; External-noise take/fill glue duplication → not-ours; Deterministic (σ = 0) AR(p > 0) external inflow stays rejected → keep; `LoadModel` conflates physical load with its stochastic model → not-ours; Cross-path static-RHS contract not yet in `.claude/rules/sddp.md` → not-ours; Oracle test-harness duplication → cross-reference; CD-001 — setup config-projection sprawl / CLI non-root reconstruction → resolved.
+
+**Cleared by this gate (do not re-raise):** none.
+
+**Gate: RETURNED 2026-09-08** — baseline `a136840d`; accepted 35, downgraded 0, rejected 0, deferred 0, overridden 0.
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — solver-comm
 

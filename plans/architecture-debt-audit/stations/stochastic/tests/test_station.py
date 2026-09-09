@@ -18,6 +18,8 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "tools"))
 
+import station_verify  # noqa: E402
+
 from lib import backlog_parse  # noqa: E402
 from lib import station_checks as sc  # noqa: E402
 
@@ -872,6 +874,83 @@ class CalibrationTests(sc.StationCase):
                     register_id,
                     f"{a['id']}: reserved-seam OD entry carries no register id",
                 )
+
+
+class SectionVerifyTests(sc.StationCase):
+    """E03-5 executable proof of the station verification.
+
+    The three harness checkers and the four station_verify subcommands pass over this
+    station (station_verify's inventory + genericity are generalized to accept the
+    single-crate/I.3-1 shape), the tracked tree is read-only, the frozen census
+    reconstructs the live *.rs set, and verify-figures.sh — invoked here so one unittest
+    run covers both — re-measures every figure to inventory.json and proves the partition,
+    perf-handoff, quoted-count and heading invariants. verify-station.sh runs THIS module
+    for the 'stochastic' slug, so it must not itself invoke verify-station.sh (recursion);
+    it exercises the four subcommands directly, exactly as core-io does.
+    """
+
+    SLUG = "stochastic"
+
+    def test_harness_checkers_exit_zero_over_slug(self):
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            self.assertEqual(
+                sc.run_checker(tool, self.SLUG),
+                0,
+                f"{tool} must exit 0 over {self.SLUG}",
+            )
+
+    def test_station_verify_subcommands_exit_zero(self):
+        base = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+        cmds = {
+            "register": [str(sc.AUDIT), self.SLUG],
+            "inventory": [str(self.artifact("inventory.json")), str(sc.REPO)],
+            "genericity": [str(sc.REPO), str(self.artifact("partI-handoff.json"))],
+            "readonly": [str(sc.REPO), base],
+        }
+        for sub, args in cmds.items():
+            proc = subprocess.run(
+                [sys.executable, str(sc.TOOLS / "station_verify.py"), sub, *args],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                proc.returncode, 0, f"station_verify {sub}:\n{proc.stdout}"
+            )
+
+    def test_inventory_census_reconstructs_the_tree(self):
+        inv = sc.load_json(self.artifact("inventory.json"))
+        listed = station_verify.reconstruct_listed(inv)
+        roots = station_verify.crate_src_roots(inv)
+        tree = subprocess.run(
+            ["git", "ls-files", "--", *(f"{r}/*.rs" for r in roots)],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        self.assertEqual(
+            len(tree),
+            inv["totals"]["srcFiles"],
+            "tree .rs count drifted from inventory srcFiles",
+        )
+        self.assertEqual(station_verify.inventory_diff(listed, tree), ([], []))
+
+    def test_tracked_tree_is_read_only(self):
+        self.assertEqual(sc.tracked_modifications(), [])
+
+    def test_verify_figures_recomputes_to_inventory(self):
+        proc = subprocess.run(
+            ["bash", str(self.artifact("verify-figures.sh"))],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"verify-figures.sh failed:\n{proc.stdout}\n{proc.stderr}",
+        )
 
 
 if __name__ == "__main__":

@@ -156,28 +156,33 @@ def register_violations(
 
 
 def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
-    """Every .rs path the inventory's frozen module census names, once each.
+    """Every .rs path the inventory's frozen census names, once each.
 
-    A `file` module is one .rs path; a `directory` module contributes the .rs names in its
-    `files[]` (nested dirs appear as their own module entries and as `subdir/` markers here,
-    so no path is double-counted).
+    Two census shapes are accepted so the verifier serves every station unchanged:
+    the multi-crate `crates{}.modules[]` shape (a `file` module is one .rs path; a
+    `directory` module contributes the .rs names in its `files[]`), and the single-crate
+    `files[]` shape whose rows each carry a `path`.
     """
-    listed: list[str] = []
-    for meta in inventory["crates"].values():
-        for module in meta["modules"]:
-            if module["kind"] == "file":
-                listed.append(module["path"])
-            else:
-                listed += [
-                    f"{module['path']}/{name}"
-                    for name in module.get("files", [])
-                    if name.endswith(".rs")
-                ]
-    return listed
+    if "crates" in inventory:
+        listed: list[str] = []
+        for meta in inventory["crates"].values():
+            for module in meta["modules"]:
+                if module["kind"] == "file":
+                    listed.append(module["path"])
+                else:
+                    listed += [
+                        f"{module['path']}/{name}"
+                        for name in module.get("files", [])
+                        if name.endswith(".rs")
+                    ]
+        return listed
+    return [f["path"] for f in inventory["files"]]
 
 
 def crate_src_roots(inventory: dict[str, Any]) -> list[str]:
-    return [f"crates/{crate}/src" for crate in inventory["crates"]]
+    if "crates" in inventory:
+        return [f"crates/{crate}/src" for crate in inventory["crates"]]
+    return [f"crates/{inventory['crate']}/src"]
 
 
 def inventory_diff(listed: list[str], tree: list[str]) -> tuple[list[str], list[str]]:
@@ -187,9 +192,18 @@ def inventory_diff(listed: list[str], tree: list[str]) -> tuple[list[str], list[
 
 
 def genericity_premises(
-    gate_returncode: int, gate_text: str, disposition: str | None
+    gate_returncode: int,
+    gate_text: str,
+    disposition: str | None,
+    owns_item6: bool = True,
 ) -> list[str]:
-    """Broken-premise messages behind Part-I item 6; empty when all three hold."""
+    """Broken-premise messages behind Part-I item 6; empty when all hold.
+
+    The genericity gate + EXCLUDED_FILES=() premises are checked for every station.
+    The I.3-6 disposition premise is checked only for the station that owns item 6
+    (`owns_item6`); a station whose Part-I refs do not include I.3-6 asserts the gate
+    alone. `owns_item6` defaults True so the three-arg core-io call is unchanged.
+    """
     broke: list[str] = []
     if gate_returncode != 0:
         broke.append(f"check-infra-genericity.sh exited {gate_returncode}")
@@ -197,7 +211,7 @@ def genericity_premises(
         broke.append(
             "EXCLUDED_FILES=() is no longer present: the output/policy exemption returned"
         )
-    if disposition not in {"retire", "sharpen"}:
+    if owns_item6 and disposition not in {"retire", "sharpen"}:
         broke.append(f"I.3-6 disposition is {disposition!r}, not retire/sharpen")
     return broke
 
@@ -288,6 +302,7 @@ def _cmd_genericity(root: pathlib.Path, handoff_path: pathlib.Path) -> int:
         ["bash", str(gate)], cwd=root, capture_output=True, text=True, check=False
     ).returncode
     handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    owns_item6 = any(d.get("partIRef") == "I.3-6" for d in handoff["dispositions"])
     disposition = next(
         (
             d.get("disposition")
@@ -297,7 +312,7 @@ def _cmd_genericity(root: pathlib.Path, handoff_path: pathlib.Path) -> int:
         None,
     )
     broke = genericity_premises(
-        returncode, gate.read_text(encoding="utf-8"), disposition
+        returncode, gate.read_text(encoding="utf-8"), disposition, owns_item6
     )
     for line in broke:
         print(f"FAIL item-6 premise: {line}")

@@ -1,0 +1,75 @@
+{
+  "station": "stochastic",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "measuredAtHead": true,
+  "producedAt": "2026-09",
+  "resolutionRule": "cobre-stochastic owns no I.3-6 (infra-genericity) item; its Part-I refs are all I.3-1 (the L1 store-vs-config seam that homes on the Phase-1 Switchable<T> uncertainty store). The genericity check therefore asserts the gate alone. Consistent with alignment-queue.json, which carries the same rows for Epic 9.",
+  "notOwned": {
+    "QMC/LHS fixture-prelude duplication": "owned by the test-corpus station (Epic 8) per the ratified defender scoping of TD-024 \u2014 the wider halton/sobol/lhs prelude spread and the crate-wide integration-binary total sit outside cobre-stochastic's sub-stations"
+  },
+  "dispositions": [
+    {
+      "partIRef": "I.3-1",
+      "disposition": "sharpen",
+      "id": "CD-065",
+      "candidateRef": "sto-architecture-sampling-00",
+      "owningStation": "stochastic",
+      "subStation": "sampling",
+      "baselineAnchor": {
+        "path": "crates/cobre-stochastic/src/sampling/mod.rs",
+        "symbol": "ForwardSamplerConfig",
+        "line": 263
+      },
+      "proposedPhase": "1",
+      "alignmentDestination": "alignment (Epic 9)",
+      "alignmentCites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "survivingClaim": "The structural residue only: the four realized-value Option<&Library> fields share one flat Copy bundle with the &StochasticContext store handle and no type-level separation of the two concerns/lifetimes, so a reader of the seam cannot tell store from per-run input without reading build_forward_sampler's body \u2014 the store/param split the alignment epic should reshape (the shape that survives the Part IV/V Switchable<T> unification), not a runtime defect."
+    },
+    {
+      "partIRef": "I.3-1",
+      "disposition": "sharpen",
+      "id": "CD-070",
+      "candidateRef": "sto-architecture-seam-00",
+      "owningStation": "stochastic",
+      "subStation": "seam",
+      "baselineAnchor": {
+        "path": "crates/cobre-stochastic/src/context.rs",
+        "symbol": "stage_id_to_index",
+        "line": 406
+      },
+      "proposedPhase": "1",
+      "alignmentDestination": "alignment (Epic 9)",
+      "alignmentCites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "survivingClaim": "The confirmed defect is confined to (1) the second parallel copy of the declared-id->study-index resolver (stage_id_to_index at context.rs:406 duplicating cobre-io's StageIdResolver) as the sole drift risk, and (2) the placement observation that the L1 store constructor owns realized-value external-scenario adaptation; it is NOT a dispute of the ratified External-authoritative behavior or the sigma=0 rejection, and the sample-moment derivation itself is correctly single-owned (not duplicated)."
+    },
+    {
+      "partIRef": "I.3-1",
+      "disposition": "sharpen",
+      "id": "CD-071",
+      "candidateRef": "sto-architecture-seam-01",
+      "owningStation": "stochastic",
+      "subStation": "seam",
+      "baselineAnchor": {
+        "path": "crates/cobre-stochastic/src/context.rs",
+        "symbol": "StochasticContext",
+        "line": 258
+      },
+      "proposedPhase": "1",
+      "alignmentDestination": "alignment (Epic 9)",
+      "alignmentCites": "Part V.2 \u2014 Phase 1 Switchable<T> uncertainty store (stochastic off System/Stage)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "survivingClaim": "The defect narrows to just the 2 pass-through seed fields (base_seed, forward_seed) being RunParams-shaped config echoed through the store's getters rather than computed payload; the struct is correctly shaped and correctly a many-reader store today, so the residue is only that these two fields mark the exact seam to unpick when the RunParams split lands, not that the store is malformed or over-abstracted now."
+    }
+  ],
+  "handoffs": [
+    {
+      "source": "CD-001 resolved disposition",
+      "question": "does an engine-neutral context constructor belong at L1 beside build_stochastic_context (context.rs:601)?",
+      "partIRef": null,
+      "alignmentDestination": "alignment (Epic 9)"
+    }
+  ],
+  "_needsHuman": []
+}

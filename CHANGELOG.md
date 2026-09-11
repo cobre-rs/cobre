@@ -12,12 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING — a hydro, line, pumping, contract, or hydro-unit-group
-  bound-override row naming a `stage_id` outside the study horizon is now
-  rejected at validation.** These five families previously resolved such a
-  row by silently dropping it, with no warning and no error. A deck that
-  relied on that leniency — for example carrying stale override rows for a
-  stage no longer in the study — now fails validation instead of loading
-  with the row discarded; remove or correct the offending rows' `stage_id`.
+  bound-override row naming a `stage_id` that is not a declared study stage
+  is now rejected at validation.** These five families previously resolved
+  such a row by silently dropping it, with no warning and no error. A deck
+  that relied on that leniency — for example carrying stale override rows
+  for a stage no longer in the study — now fails validation instead of
+  loading with the row discarded; remove or correct the offending rows'
+  `stage_id`.
 
 ### Fixed
 

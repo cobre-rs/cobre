@@ -90,6 +90,15 @@ fn group_id_message_clause(group_id: Option<i32>) -> String {
     }
 }
 
+/// `", block_id={b}"` for `Some(b)`, else empty — shared by the two
+/// declared-capacity-raise emitters.
+fn block_id_clause(block_id: Option<i32>) -> String {
+    match block_id {
+        Some(b) => format!(", block_id={b}"),
+        None => String::new(),
+    }
+}
+
 /// Rejects a bound-override row whose `block_id` is negative or outside
 /// `[0, n_blocks)` for the stage it names, across all six block-eligible
 /// bound families in the fixed order thermal, hydro, line, pumping, contract,
@@ -221,7 +230,6 @@ pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut Validation
         .filter(|s| s.id >= 0)
         .map(|s| s.id)
         .collect();
-    let n_stages = study_stage_ids.len();
 
     for row in &data.hydro_bounds {
         check_row_stage_range(
@@ -230,7 +238,6 @@ pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut Validation
             None,
             row.stage_id,
             &study_stage_ids,
-            n_stages,
             ctx,
         );
     }
@@ -241,7 +248,6 @@ pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut Validation
             None,
             row.stage_id,
             &study_stage_ids,
-            n_stages,
             ctx,
         );
     }
@@ -252,7 +258,6 @@ pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut Validation
             None,
             row.stage_id,
             &study_stage_ids,
-            n_stages,
             ctx,
         );
     }
@@ -263,7 +268,6 @@ pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut Validation
             None,
             row.stage_id,
             &study_stage_ids,
-            n_stages,
             ctx,
         );
     }
@@ -274,7 +278,6 @@ pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut Validation
             Some(row.hydro_unit_group_id.0),
             row.stage_id,
             &study_stage_ids,
-            n_stages,
             ctx,
         );
     }
@@ -286,7 +289,6 @@ fn check_row_stage_range(
     group_id: Option<i32>,
     stage_id: i32,
     study_stage_ids: &HashSet<i32>,
-    n_stages: usize,
     ctx: &mut ValidationContext,
 ) {
     if study_stage_ids.contains(&stage_id) {
@@ -304,8 +306,8 @@ fn check_row_stage_range(
         meta.file,
         Some(entity_str),
         format!(
-            "{family} {entity_id}{group_message}: {row_label} override at stage_id={stage_id} \
-             is outside the study horizon [0, {n_stages})"
+            "{family} {entity_id}{group_message}: {row_label} override names stage_id={stage_id}, \
+             which is not a declared study stage"
         ),
     );
 }
@@ -703,10 +705,7 @@ fn emit_raises_declared_capacity_error(
     let row_label = HYDRO.row_label;
     let entity_label = HYDRO.entity_label;
     let entity_str = format!("{entity_label}={entity_id}, stage_id={stage_id}");
-    let block_str = match block_id {
-        Some(b) => format!(", block_id={b}"),
-        None => String::new(),
-    };
+    let block_str = block_id_clause(block_id);
     ctx.add_error(
         ErrorKind::InvalidValue,
         HYDRO.file,
@@ -790,10 +789,7 @@ fn emit_group_raises_declared_capacity_error(
     let group_entity = group_id_entity_clause(Some(group_id));
     let group_message = group_id_message_clause(Some(group_id));
     let entity_str = format!("{entity_label}={hydro_id}{group_entity}, stage_id={stage_id}");
-    let block_str = match block_id {
-        Some(b) => format!(", block_id={b}"),
-        None => String::new(),
-    };
+    let block_str = block_id_clause(block_id);
     ctx.add_error(
         ErrorKind::InvalidValue,
         HYDRO_UNIT_GROUP.file,
@@ -1138,7 +1134,7 @@ mod tests {
             line_row(2, 1, Some(1)),  // valid: stage 1 declares 2 blocks (0..2)
         ];
         data.contract_bounds = vec![
-            contract_row(1, 99, Some(0)), // invalid: stage_id 99 is outside the study horizon
+            contract_row(1, 99, Some(0)), // invalid: stage_id 99 is not a declared study stage
             contract_row(2, 0, Some(2)),  // valid: stage 0 declares 3 blocks (0..3)
         ];
 
@@ -1162,7 +1158,7 @@ mod tests {
             .find(|e| e.message.contains("stage_id=99"))
             .unwrap_or_else(|| panic!("expected a stage_id range finding: {errors:?}"));
         assert!(
-            stage_error.message.contains("outside the study horizon"),
+            stage_error.message.contains("not a declared study stage"),
             "message: {}",
             stage_error.message
         );
@@ -1217,13 +1213,13 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.message.contains("Hydro 1")
                 && e.message.contains("stage_id=2")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=2 finding: {errors:?}"
         );
         assert!(
             errors.iter().any(|e| e.message.contains("Hydro 1")
                 && e.message.contains("stage_id=-1")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=-1 finding: {errors:?}"
         );
     }
@@ -1249,13 +1245,13 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.message.contains("Line 1")
                 && e.message.contains("stage_id=2")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=2 finding: {errors:?}"
         );
         assert!(
             errors.iter().any(|e| e.message.contains("Line 1")
                 && e.message.contains("stage_id=-1")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=-1 finding: {errors:?}"
         );
     }
@@ -1281,13 +1277,13 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.message.contains("Pumping 1")
                 && e.message.contains("stage_id=2")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=2 finding: {errors:?}"
         );
         assert!(
             errors.iter().any(|e| e.message.contains("Pumping 1")
                 && e.message.contains("stage_id=-1")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=-1 finding: {errors:?}"
         );
     }
@@ -1313,13 +1309,13 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.message.contains("Contract 1")
                 && e.message.contains("stage_id=2")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=2 finding: {errors:?}"
         );
         assert!(
             errors.iter().any(|e| e.message.contains("Contract 1")
                 && e.message.contains("stage_id=-1")
-                && e.message.contains("outside the study horizon")),
+                && e.message.contains("not a declared study stage")),
             "expected a stage_id=-1 finding: {errors:?}"
         );
     }
@@ -1689,7 +1685,7 @@ mod tests {
                 .any(|e| e.message.contains("Hydro unit group 1")
                     && e.message.contains("unit group 3")
                     && e.message.contains("stage_id=2")
-                    && e.message.contains("outside the study horizon")),
+                    && e.message.contains("not a declared study stage")),
             "expected a stage_id=2 finding: {errors:?}"
         );
         assert!(
@@ -1698,7 +1694,7 @@ mod tests {
                 .any(|e| e.message.contains("Hydro unit group 1")
                     && e.message.contains("unit group 3")
                     && e.message.contains("stage_id=-1")
-                    && e.message.contains("outside the study horizon")),
+                    && e.message.contains("not a declared study stage")),
             "expected a stage_id=-1 finding: {errors:?}"
         );
     }

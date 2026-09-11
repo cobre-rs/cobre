@@ -35,7 +35,7 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
 
     // Skipped with no deficit segments (max == 0.0): there is then no comparand.
     if max_deficit_cost > 0.0 {
-        let mut violations: Vec<(i32, f64)> = Vec::new(); // (id, filling_target_cost)
+        let mut violations: Vec<(i32, f64)> = Vec::new();
         for hydro in &data.hydros {
             let filling = hydro.penalties.filling_target_violation_cost;
             if filling >= max_deficit_cost {
@@ -62,7 +62,7 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
     }
 
     {
-        let mut violations: Vec<(i32, f64)> = Vec::new(); // (id, storage_violation_cost)
+        let mut violations: Vec<(i32, f64)> = Vec::new();
         for hydro in &data.hydros {
             let higher = hydro.penalties.storage_violation_below_cost;
             if higher <= max_deficit_cost {
@@ -170,7 +170,7 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
     }
 
     {
-        let mut violations: Vec<(i32, f64)> = Vec::new(); // (id, min_resource_cost)
+        let mut violations: Vec<(i32, f64)> = Vec::new();
         for hydro in &data.hydros {
             let min_resource = hydro
                 .penalties
@@ -913,11 +913,8 @@ pub(super) fn check_load_factor_consistency(data: &ParsedData, ctx: &mut Validat
         for bf in &entry.block_factors {
             let block_idx = usize::try_from(bf.block_id).unwrap_or(usize::MAX);
             if !valid_indices.contains(&block_idx) {
-                let sorted: Vec<usize> = {
-                    let mut v: Vec<usize> = valid_indices.iter().copied().collect();
-                    v.sort_unstable();
-                    v
-                };
+                let mut sorted: Vec<usize> = valid_indices.iter().copied().collect();
+                sorted.sort_unstable();
                 ctx.add_error(
                     ErrorKind::BusinessRuleViolation,
                     "scenarios/load_factors.json",

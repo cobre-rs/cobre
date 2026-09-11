@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — a hydro, line, pumping, contract, or hydro-unit-group
+  bound-override row naming a `stage_id` outside the study horizon is now
+  rejected at validation.** These five families previously resolved such a
+  row by silently dropping it, with no warning and no error. A deck that
+  relied on that leniency — for example carrying stale override rows for a
+  stage no longer in the study — now fails validation instead of loading
+  with the row discarded; remove or correct the offending rows' `stage_id`.
+
+### Fixed
+
+- **Per-stage non-controllable-source curtailment penalty overrides now apply to
+  the LP objective.** The stage LP column build priced every non-controllable
+  source's curtailment cost from its single declaration-time constant,
+  regardless of a `penalty_overrides_ncs.parquet` override declared for that
+  source and stage. The objective coefficient now reads the resolved
+  per-(source, stage) penalty table instead, so a declared override changes the
+  cost the solver sees; a deck with no override file is unaffected, since the
+  resolved table's default is the same declaration-time constant.
+
+- **An invalid `simulation.scenario_source` is now rejected when the case is
+  loaded and by `cobre validate`, matching `cobre run`.** Config loading
+  previously validated only `training.scenario_source`, so a deck whose
+  simulation scenario source violated an admission rule (for example, a
+  `historical` load scheme, which is only valid for the inflow class) passed
+  `cobre validate` and Python's `cobre.io.validate` with no error, then failed
+  at study setup when `cobre run` resolved the simulation source. Both checks
+  now validate the same rules for both sections.
+
 ## [0.15.0] - 2026-08-24
 
 ### Added

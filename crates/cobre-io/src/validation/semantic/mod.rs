@@ -64,6 +64,7 @@
 //! |46 | `hydro_bounds` row `min_diversion_m3s` set for a hydro declaring no `diversion` channel (the channel is pinned `[0, 0]` with none declared, making a positive floor infeasible); cross-row/cross-source min/max inversion is deliberately out of scope for this rule | `constraints/hydro_bounds.parquet` | `InvalidValue` |
 //! |47 | Post-study boundary (`post_study_stages.json`), the sole post-horizon surface: stages date-contiguous with first `start_date` at the study horizon end (a); a `PostStudyThermalBound` for every post-study stage an anticipated thermal's extended lead reaches from an in-study, commissioning-active decision (Rule 1); the plant's pre-study-decided post-study stages tiled by `past_anticipated_commitments` at coverage `1.0`, an explicit `0 MW` window included where required (V2); no commitment window covering a study-decided or beyond-reach post-study stage (V3); a non-zero fixed value only inside the plant's commissioning window at its delivery stage (V5) | `post_study_stages.json` | `BusinessRuleViolation` |
 //! |48 | *(retired — number never reused)* | — | — |
+//! |49 | Bound-override row `stage_id` a member of the study stage id set, across five of the six bound families (hydro, line, pumping, contract, hydro unit group); thermal (rule 16) and NCS (the Layer-3 referential check) already own that stage-axis defect for their own families | `constraints/*_bounds.parquet` | `BusinessRuleViolation` |
 //!
 //! A hydro unit group bounds row's `block_id` range and duplicate-row keying
 //! are covered by rules 35 and 36 above; a row referencing a non-existent
@@ -173,6 +174,7 @@ pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut Valid
     thermal::warn_thermal_generation_on_anticipated_thermal(data, ctx);
     constraints::check_per_block_storage_interior_reference(data, ctx);
     block_bounds::check_bound_block_id_range(data, ctx);
+    block_bounds::check_bound_stage_id_range(data, ctx);
     block_bounds::check_duplicate_bound_rows(data, ctx);
     block_bounds::check_block_id_on_ineligible_column(data, ctx);
     block_bounds::check_block_id_on_anticipated_thermal(data, ctx);

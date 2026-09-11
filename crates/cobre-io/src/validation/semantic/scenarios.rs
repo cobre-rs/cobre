@@ -456,7 +456,7 @@ fn describe_par_rejection(hydro_id: i32, rejection: &ClosureRejection) -> String
 /// Validates that when a class uses the `External` sampling scheme, the
 /// corresponding external scenario file data is non-empty.
 pub(super) fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut ValidationContext) {
-    // Config is Layer-2-validated, so these reads do not fail in practice.
+    // validate_config resolves both sources at load, so these reads cannot fail here.
     let Ok(training_source) = data
         .config
         .training_scenario_source(Path::new("config.json"))

@@ -173,6 +173,9 @@ pub(crate) fn validate_config(config: &Config, path: &Path) -> Result<(), LoadEr
         });
     }
 
+    config.training_scenario_source(path)?;
+    config.simulation_scenario_source(path)?;
+
     Ok(())
 }
 
@@ -1197,8 +1200,7 @@ mod tests {
         let f = write_config(&format!(
             r#"{{"training": {MINIMAL_TRAINING}, "simulation": {{"scenario_source": {{"seed": 1, "load": {{"scheme": "historical"}}}}}}}}"#
         ));
-        let cfg = parse_config(f.path()).unwrap();
-        let err = cfg.simulation_scenario_source(f.path()).unwrap_err();
+        let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { message, field, .. } => {
                 assert!(
@@ -1216,8 +1218,7 @@ mod tests {
     fn test_scenario_source_historical_ncs_rejected() {
         let f =
             write_with_training_scenario_source(r#"{"seed": 1, "ncs": {"scheme": "historical"}}"#);
-        let cfg = parse_config(f.path()).unwrap();
-        let err = cfg.training_scenario_source(f.path()).unwrap_err();
+        let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { message, field, .. } => {
                 assert!(
@@ -1286,8 +1287,7 @@ mod tests {
     #[test]
     fn test_scenario_source_seed_required_for_oos() {
         let f = write_with_training_scenario_source(r#"{"inflow": {"scheme": "out_of_sample"}}"#);
-        let cfg = parse_config(f.path()).unwrap();
-        let err = cfg.training_scenario_source(f.path()).unwrap_err();
+        let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { message, field, .. } => {
                 assert!(
@@ -1323,8 +1323,7 @@ mod tests {
         let f = write_with_training_scenario_source(
             r#"{"seed": 1, "inflow": {"scheme": "out_of_sample"}, "historical_years": [1990, 2000]}"#,
         );
-        let cfg = parse_config(f.path()).unwrap();
-        let err = cfg.training_scenario_source(f.path()).unwrap_err();
+        let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { message, .. } => {
                 assert!(
@@ -1332,6 +1331,28 @@ mod tests {
                         "historical_years is specified but no class uses the 'historical' scheme"
                     ),
                     "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// `historical_years` range with `from > to` → SchemaError.
+    #[test]
+    fn parse_config_rejects_historical_years_inverted_range() {
+        let f = write_with_training_scenario_source(
+            r#"{"seed": 1, "inflow": {"scheme": "historical"}, "historical_years": {"from": 2010, "to": 1990}}"#,
+        );
+        let err = parse_config(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, field, .. } => {
+                assert!(
+                    message.contains("must be <= 'to'"),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    field.contains("scenario_source.historical_years"),
+                    "unexpected field: {field}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),
@@ -1404,8 +1425,7 @@ mod tests {
             r#"{"inflow": {"scheme": "in_sample"}}"#,
             r#"{"openings": {"source": "generated"}}"#,
         );
-        let cfg = parse_config(f.path()).unwrap();
-        let err = cfg.simulation_scenario_source(f.path()).unwrap_err();
+        let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { field, message, .. } => {
                 assert_eq!(field, "simulation.scenario_source.openings");
@@ -1816,6 +1836,37 @@ mod tests {
                     field.contains("training.selection"),
                     "field should name training.selection, got: {field}"
                 );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// An override that makes `simulation.scenario_source` violate an admission
+    /// rule fails post-merge validation, carrying the synthetic override path.
+    #[test]
+    fn with_overrides_rejects_invalid_simulation_scenario_source() {
+        let base = base_value(OVERRIDE_BASE_CONFIG);
+        let overrides = override_map(&[(
+            "simulation.scenario_source",
+            serde_json::json!({"seed": 1, "load": {"scheme": "historical"}}),
+        )]);
+
+        let err = Config::with_overrides(&base, &overrides).unwrap_err();
+        match &err {
+            LoadError::SchemaError {
+                field,
+                message,
+                path,
+            } => {
+                assert!(
+                    field.contains("simulation.scenario_source.load.scheme"),
+                    "unexpected field: {field}"
+                );
+                assert!(
+                    message.contains("historical scheme is only valid for the inflow class"),
+                    "unexpected message: {message}"
+                );
+                assert_eq!(path, std::path::Path::new("<config_overrides>"));
             }
             other => panic!("expected SchemaError, got: {other:?}"),
         }

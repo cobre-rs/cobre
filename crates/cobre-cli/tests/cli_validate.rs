@@ -308,6 +308,35 @@ fn removed_cut_selection_field_fails_validate() {
         .failure();
 }
 
+/// An invalid `simulation.scenario_source` must be rejected by both `validate`
+/// and `run`, carrying the same rule message — the training half of the
+/// config stays valid so the failure is unambiguously the simulation source.
+#[test]
+fn invalid_simulation_scenario_source_fails_validate_and_run() {
+    const MSG: &str = "historical scheme is only valid for the inflow class";
+
+    let dir = TempDir::new().unwrap();
+    make_valid_case(&dir);
+
+    let mut config: serde_json::Value = serde_json::from_str(CONFIG_JSON).unwrap();
+    config["simulation"] = serde_json::json!({
+        "scenario_source": { "seed": 1, "load": { "scheme": "historical" } }
+    });
+    write_file(dir.path(), "config.json", &config.to_string());
+
+    cobre()
+        .args(["validate", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(MSG));
+
+    cobre()
+        .args(["run", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(MSG));
+}
+
 /// An FPHA hydro with no `hydro_production_models.json` entry slips past the
 /// IO pipeline (the Layer-4 dimensional check skips FPHA hydros when
 /// `fpha_hyperplanes.parquet` is absent) and is rejected only at Phase 10 by

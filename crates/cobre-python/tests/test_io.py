@@ -7,7 +7,9 @@ Run with (from the repo root):
     pytest crates/cobre-python/tests/
 """
 
+import json
 import pathlib
+import shutil
 
 import pytest
 
@@ -52,6 +54,30 @@ def test_validate_valid_case() -> None:
     assert result["valid"] is True
     assert result["errors"] == []
     assert "warnings" in result
+
+
+def test_validate_invalid_simulation_scenario_source(tmp_path: pathlib.Path) -> None:
+    """validate returns valid=False when simulation.scenario_source violates an admission rule."""
+    import cobre.io  # noqa: PLC0415
+
+    case_dir = tmp_path / "case"
+    shutil.copytree(VALID_CASE, case_dir)
+
+    config_path = case_dir / "config.json"
+    config = json.loads(config_path.read_text())
+    config["simulation"]["scenario_source"] = {
+        "seed": 1,
+        "load": {"scheme": "historical"},
+    }
+    config_path.write_text(json.dumps(config))
+
+    result = cobre.io.validate(str(case_dir))
+    assert isinstance(result, dict)
+    assert result["valid"] is False
+    assert any(
+        "historical scheme is only valid for the inflow class" in error["message"]
+        for error in result["errors"]
+    )
 
 
 def test_validate_nonexistent_case() -> None:

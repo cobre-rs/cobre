@@ -210,6 +210,106 @@ fn check_row(
     }
 }
 
+/// Thermal (rule 16) and NCS (the Layer-3 referential check) already own the
+/// stage-axis defect for their own families, so both are excluded here to avoid
+/// double-reporting.
+pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut ValidationContext) {
+    let study_stage_ids: HashSet<i32> = data
+        .stages
+        .stages
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+    let n_stages = study_stage_ids.len();
+
+    for row in &data.hydro_bounds {
+        check_row_stage_range(
+            &HYDRO,
+            row.hydro_id.0,
+            None,
+            row.stage_id,
+            &study_stage_ids,
+            n_stages,
+            ctx,
+        );
+    }
+    for row in &data.line_bounds {
+        check_row_stage_range(
+            &LINE,
+            row.line_id.0,
+            None,
+            row.stage_id,
+            &study_stage_ids,
+            n_stages,
+            ctx,
+        );
+    }
+    for row in &data.pumping_bounds {
+        check_row_stage_range(
+            &PUMPING,
+            row.station_id.0,
+            None,
+            row.stage_id,
+            &study_stage_ids,
+            n_stages,
+            ctx,
+        );
+    }
+    for row in &data.contract_bounds {
+        check_row_stage_range(
+            &CONTRACT,
+            row.contract_id.0,
+            None,
+            row.stage_id,
+            &study_stage_ids,
+            n_stages,
+            ctx,
+        );
+    }
+    for row in &data.hydro_unit_group_bounds {
+        check_row_stage_range(
+            &HYDRO_UNIT_GROUP,
+            row.hydro_id.0,
+            Some(row.hydro_unit_group_id.0),
+            row.stage_id,
+            &study_stage_ids,
+            n_stages,
+            ctx,
+        );
+    }
+}
+
+fn check_row_stage_range(
+    meta: &FamilyMeta,
+    entity_id: i32,
+    group_id: Option<i32>,
+    stage_id: i32,
+    study_stage_ids: &HashSet<i32>,
+    n_stages: usize,
+    ctx: &mut ValidationContext,
+) {
+    if study_stage_ids.contains(&stage_id) {
+        return;
+    }
+
+    let family = meta.family;
+    let entity_label = meta.entity_label;
+    let row_label = meta.row_label;
+    let group_entity = group_id_entity_clause(group_id);
+    let group_message = group_id_message_clause(group_id);
+    let entity_str = format!("{entity_label}={entity_id}{group_entity}, stage_id={stage_id}");
+    ctx.add_error(
+        ErrorKind::BusinessRuleViolation,
+        meta.file,
+        Some(entity_str),
+        format!(
+            "{family} {entity_id}{group_message}: {row_label} override at stage_id={stage_id} \
+             is outside the study horizon [0, {n_stages})"
+        ),
+    );
+}
+
 /// Rejects two bound rows in the same family that set the same column for
 /// the same `(entity_id, stage_id, block_id)` — [`resolve_bounds`] resolves
 /// the second such row over the first (last write wins) with no diagnostic,
@@ -1030,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn test_negative_block_id_rejected_and_unknown_stage_skipped() {
+    fn test_negative_block_id_and_out_of_horizon_stage_both_rejected() {
         let mut data = make_data(
             vec![],
             vec![],
@@ -1044,9 +1144,203 @@ mod tests {
             line_row(2, 1, Some(1)),  // valid: stage 1 declares 2 blocks (0..2)
         ];
         data.contract_bounds = vec![
-            contract_row(1, 99, Some(0)), // stage_id 99 is not a study stage — skipped
+            contract_row(1, 99, Some(0)), // invalid: stage_id 99 is outside the study horizon
             contract_row(2, 0, Some(2)),  // valid: stage 0 declares 3 blocks (0..3)
         ];
+
+        let errors = bound_range_errors(&data);
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected exactly two errors, got: {errors:?}"
+        );
+        let block_error = errors
+            .iter()
+            .find(|e| e.message.contains("block_id=-1"))
+            .unwrap_or_else(|| panic!("expected a block_id range finding: {errors:?}"));
+        assert!(
+            block_error.message.contains("valid range: 0.."),
+            "message: {}",
+            block_error.message
+        );
+        let stage_error = errors
+            .iter()
+            .find(|e| e.message.contains("stage_id=99"))
+            .unwrap_or_else(|| panic!("expected a stage_id range finding: {errors:?}"));
+        assert!(
+            stage_error.message.contains("outside the study horizon"),
+            "message: {}",
+            stage_error.message
+        );
+    }
+
+    // ── stage-axis rule (check_bound_stage_id_range, rule 49) ────────────────
+
+    #[test]
+    fn test_all_five_bound_families_in_horizon_stage_accepted() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.hydro_bounds = vec![hydro_row(1, 0, None)];
+        data.line_bounds = vec![line_row(1, 1, None)];
+        data.pumping_bounds = vec![pumping_row(1, 0, None)];
+        data.contract_bounds = vec![contract_row(1, 1, None)];
+        data.hydro_unit_group_bounds = vec![group_bounds_row(1, 2, 0, None)];
+
+        assert!(
+            bound_range_errors(&data).is_empty(),
+            "in-horizon stage rows must not be rejected"
+        );
+        assert!(
+            group_bound_errors_of_kind(&data, ErrorKind::BusinessRuleViolation).is_empty(),
+            "in-horizon stage group-family row must not be rejected"
+        );
+    }
+
+    #[test]
+    fn test_hydro_bounds_out_of_horizon_and_negative_stage_rejected() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.hydro_bounds = vec![hydro_row(1, 2, None), hydro_row(1, -1, None)];
+
+        let errors = bound_range_errors(&data);
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected exactly two errors, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Hydro 1")
+                && e.message.contains("stage_id=2")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=2 finding: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Hydro 1")
+                && e.message.contains("stage_id=-1")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=-1 finding: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_line_bounds_out_of_horizon_and_negative_stage_rejected() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.line_bounds = vec![line_row(1, 2, None), line_row(1, -1, None)];
+
+        let errors = bound_range_errors(&data);
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected exactly two errors, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Line 1")
+                && e.message.contains("stage_id=2")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=2 finding: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Line 1")
+                && e.message.contains("stage_id=-1")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=-1 finding: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_pumping_bounds_out_of_horizon_and_negative_stage_rejected() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.pumping_bounds = vec![pumping_row(1, 2, None), pumping_row(1, -1, None)];
+
+        let errors = bound_range_errors(&data);
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected exactly two errors, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Pumping 1")
+                && e.message.contains("stage_id=2")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=2 finding: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Pumping 1")
+                && e.message.contains("stage_id=-1")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=-1 finding: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_contract_bounds_out_of_horizon_and_negative_stage_rejected() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.contract_bounds = vec![contract_row(1, 2, None), contract_row(1, -1, None)];
+
+        let errors = bound_range_errors(&data);
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected exactly two errors, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Contract 1")
+                && e.message.contains("stage_id=2")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=2 finding: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("Contract 1")
+                && e.message.contains("stage_id=-1")
+                && e.message.contains("outside the study horizon")),
+            "expected a stage_id=-1 finding: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_out_of_horizon_stage_with_block_id_produces_only_stage_finding() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.contract_bounds = vec![contract_row(1, 99, Some(0))];
 
         let errors = bound_range_errors(&data);
         assert_eq!(
@@ -1056,13 +1350,18 @@ mod tests {
         );
         let err = &errors[0];
         assert!(
-            err.message.contains("block_id=-1"),
+            err.file.to_string_lossy().as_ref() == "constraints/contract_bounds.parquet",
+            "file: {:?}",
+            err.file
+        );
+        assert!(
+            err.message.contains("stage_id=99"),
             "message: {}",
             err.message
         );
         assert!(
-            err.message.contains("valid range: 0.."),
-            "message: {}",
+            !err.message.contains("block_id"),
+            "message must not mention block_id: {}",
             err.message
         );
     }
@@ -1366,6 +1665,47 @@ mod tests {
             errors[0].message.contains("min_generation_mw"),
             "message: {}",
             errors[0].message
+        );
+    }
+
+    #[test]
+    fn test_group_bounds_out_of_horizon_and_negative_stage_rejected() {
+        let mut data = make_data(
+            vec![],
+            vec![],
+            vec![],
+            two_stage_study_stages(),
+            vec![],
+            vec![],
+        );
+        data.hydro_unit_group_bounds = vec![
+            group_bounds_row(1, 3, 2, None),
+            group_bounds_row(1, 3, -1, None),
+        ];
+
+        let errors = group_bound_errors_of_kind(&data, ErrorKind::BusinessRuleViolation);
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected exactly two errors, got: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Hydro unit group 1")
+                    && e.message.contains("unit group 3")
+                    && e.message.contains("stage_id=2")
+                    && e.message.contains("outside the study horizon")),
+            "expected a stage_id=2 finding: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Hydro unit group 1")
+                    && e.message.contains("unit group 3")
+                    && e.message.contains("stage_id=-1")
+                    && e.message.contains("outside the study horizon")),
+            "expected a stage_id=-1 finding: {errors:?}"
         );
     }
 

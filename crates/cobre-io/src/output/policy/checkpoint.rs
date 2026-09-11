@@ -252,7 +252,6 @@ pub fn write_policy_checkpoint(
         }
     }
 
-    // Write manifest.bin LAST — its presence is the commit signal.
     let manifest_buf = serialize_checkpoint_manifest(metadata);
     write_bytes_atomic(&manifest_path, &manifest_buf)?;
 
@@ -292,8 +291,6 @@ pub fn write_policy_checkpoint(
 /// # }
 /// ```
 pub fn read_policy_checkpoint(path: &Path) -> Result<PolicyCheckpoint, OutputError> {
-    // Read manifest.bin FIRST: its CBVF-identifier and format_version gates
-    // reject an unreadable artifact before any payload is parsed.
     let manifest_path = path.join("manifest.bin");
     let manifest_bytes =
         std::fs::read(&manifest_path).map_err(|e| OutputError::io(&manifest_path, e))?;

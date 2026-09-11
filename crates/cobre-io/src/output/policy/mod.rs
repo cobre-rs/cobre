@@ -305,7 +305,6 @@ mod tests {
         }
     }
 
-    /// Build a [`PolicyBasisRecord`] for the given stage.
     fn make_basis_record(stage_id: u32) -> PolicyBasisRecord<'static> {
         PolicyBasisRecord {
             stage_id,
@@ -478,7 +477,6 @@ mod tests {
         );
     }
 
-    /// Returns `true` when running as root (UID 0). Used to skip permission tests.
     #[cfg(unix)]
     fn is_root() -> bool {
         std::fs::read_to_string("/proc/self/status")

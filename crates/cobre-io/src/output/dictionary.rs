@@ -138,6 +138,14 @@ fn write_codes_json(path: &Path) -> Result<(), OutputError> {
 
 // ─── entities.csv ────────────────────────────────────────────────────────────
 
+fn finish_csv_atomic(mut wtr: csv::Writer<Vec<u8>>, file_path: &Path) -> Result<(), OutputError> {
+    wtr.flush().map_err(|e| OutputError::io(file_path, e))?;
+    let bytes = wtr
+        .into_inner()
+        .map_err(|e| OutputError::io(file_path, std::io::Error::other(e)))?;
+    write_bytes_atomic(file_path, &bytes)
+}
+
 /// Write `entities.csv`, one row per entity, ordered by `entity_type_code`
 /// ascending then by entity ID (canonical accessor order). The
 /// `entity_type_code` 8 block breaks that second axis: a group's `entity_id`
@@ -209,13 +217,7 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         }
     }
 
-    wtr.flush().map_err(|e| OutputError::io(&file_path, e))?;
-    let bytes = wtr
-        .into_inner()
-        .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
-    write_bytes_atomic(&file_path, &bytes)?;
-
-    Ok(())
+    finish_csv_atomic(wtr, &file_path)
 }
 
 // ─── variables.csv ───────────────────────────────────────────────────────────
@@ -280,13 +282,7 @@ fn write_variables_csv(path: &Path) -> Result<(), OutputError> {
         }
     }
 
-    wtr.flush().map_err(|e| OutputError::io(&file_path, e))?;
-    let bytes = wtr
-        .into_inner()
-        .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
-    write_bytes_atomic(&file_path, &bytes)?;
-
-    Ok(())
+    finish_csv_atomic(wtr, &file_path)
 }
 
 /// Map an Arrow `DataType` to the string representation used in `variables.csv`.

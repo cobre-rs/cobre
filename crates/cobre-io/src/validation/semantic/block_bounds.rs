@@ -563,8 +563,6 @@ pub(super) fn check_block_id_on_ineligible_column(data: &ParsedData, ctx: &mut V
     }
 }
 
-/// Emits one `BusinessRuleViolation` for a single ineligible column present
-/// on a block row.
 fn emit_ineligible_column_error(
     meta: &FamilyMeta,
     entity_id: i32,
@@ -692,8 +690,6 @@ pub(super) fn check_bound_raises_declared_capacity(data: &ParsedData, ctx: &mut 
     }
 }
 
-/// Emits one `InvalidValue` for a `hydro_bounds` row that raises `column`
-/// above the plant's declared value.
 fn emit_raises_declared_capacity_error(
     entity_id: i32,
     stage_id: i32,
@@ -778,8 +774,6 @@ pub(super) fn check_group_bound_raises_declared_capacity(
     }
 }
 
-/// Emits one `InvalidValue` for a `hydro_unit_group_bounds` row that raises
-/// `column` above the group's own declared value.
 fn emit_group_raises_declared_capacity_error(
     hydro_id: i32,
     group_id: i32,

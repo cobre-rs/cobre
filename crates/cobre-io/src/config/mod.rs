@@ -320,6 +320,19 @@ fn validate_scenario_source_cfg(
     Ok(())
 }
 
+/// Coerce `current` to a JSON object in place, reusing it when it already is
+/// one — an unconditional replace would clobber sibling keys, breaking
+/// `set_dotted`'s deep-merge contract.
+fn coerce_object(current: &mut Value) -> &mut Map<String, Value> {
+    if !current.is_object() {
+        *current = Value::Object(Map::new());
+    }
+    let Value::Object(map) = current else {
+        unreachable!("current was just coerced to an object")
+    };
+    map
+}
+
 impl Config {
     /// Resolve the training-phase [`ScenarioSource`].
     ///
@@ -496,29 +509,15 @@ impl Config {
 
         let mut current = target;
         for segment in &segments[..segments.len() - 1] {
-            // Reuse the existing intermediate object rather than replacing it; a
-            // replace clobbers sibling keys, breaking the deep-merge contract.
-            if !current.is_object() {
-                *current = serde_json::Value::Object(serde_json::Map::new());
-            }
-            let serde_json::Value::Object(map) = current else {
-                unreachable!("current was just coerced to an object")
-            };
-            current = map
+            current = coerce_object(current)
                 .entry((*segment).to_string())
-                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                .or_insert_with(|| Value::Object(Map::new()));
         }
 
         // The empty-segment guard above rejects the only `dotted_key` that could
         // make `segments` empty, so this last index never panics.
         let last = segments[segments.len() - 1];
-        if !current.is_object() {
-            *current = serde_json::Value::Object(serde_json::Map::new());
-        }
-        let serde_json::Value::Object(map) = current else {
-            unreachable!("current was just coerced to an object")
-        };
-        map.insert(last.to_string(), value);
+        coerce_object(current).insert(last.to_string(), value);
 
         Ok(())
     }

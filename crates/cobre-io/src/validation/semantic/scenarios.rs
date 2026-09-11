@@ -129,46 +129,43 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
     }
 
     {
-        if !data.hydros.is_empty() {
-            let min_cv = |h: &Hydro| {
-                let p = &h.penalties;
-                p.turbined_violation_below_cost
-                    .min(p.outflow_violation_below_cost)
-                    .min(p.outflow_violation_above_cost)
-                    .min(p.generation_violation_below_cost)
-                    .min(p.evaporation_violation_cost)
-                    .min(p.water_withdrawal_violation_cost)
-            };
+        let min_cv = |h: &Hydro| {
+            let p = &h.penalties;
+            p.turbined_violation_below_cost
+                .min(p.outflow_violation_below_cost)
+                .min(p.outflow_violation_above_cost)
+                .min(p.generation_violation_below_cost)
+                .min(p.evaporation_violation_cost)
+                .min(p.water_withdrawal_violation_cost)
+        };
 
-            let min_constraint_cost: f64 =
-                data.hydros.iter().map(min_cv).fold(f64::INFINITY, f64::min);
+        let min_constraint_cost: f64 = data.hydros.iter().map(min_cv).fold(f64::INFINITY, f64::min);
 
-            let max_resource_cost: f64 = data
-                .hydros
-                .iter()
-                .map(|h| h.penalties.spillage_cost.max(h.penalties.diversion_cost))
-                .fold(f64::NEG_INFINITY, f64::max)
-                .max(0.0);
+        let max_resource_cost: f64 = data
+            .hydros
+            .iter()
+            .map(|h| h.penalties.spillage_cost.max(h.penalties.diversion_cost))
+            .fold(f64::NEG_INFINITY, f64::max)
+            .max(0.0);
 
-            if min_constraint_cost <= max_resource_cost
-                && let Some(worst_hydro) = data.hydros.iter().min_by(|a, b| {
-                    min_cv(a)
-                        .partial_cmp(&min_cv(b))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            {
-                ctx.add_warning(
-                    ErrorKind::ModelQuality,
-                    "penalties.json",
-                    None::<&str>,
-                    format!(
-                        "Penalty ordering violation: min(constraint_violation_costs) \
-                         ({min_constraint_cost}) should be > max(resource_costs) \
-                         ({max_resource_cost}) -- 1 hydro(s) affected, worst case: Hydro {}",
-                        worst_hydro.id.0
-                    ),
-                );
-            }
+        if min_constraint_cost <= max_resource_cost
+            && let Some(worst_hydro) = data.hydros.iter().min_by(|a, b| {
+                min_cv(a)
+                    .partial_cmp(&min_cv(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        {
+            ctx.add_warning(
+                ErrorKind::ModelQuality,
+                "penalties.json",
+                None::<&str>,
+                format!(
+                    "Penalty ordering violation: min(constraint_violation_costs) \
+                     ({min_constraint_cost}) should be > max(resource_costs) \
+                     ({max_resource_cost}) -- 1 hydro(s) affected, worst case: Hydro {}",
+                    worst_hydro.id.0
+                ),
+            );
         }
     }
 
@@ -213,20 +210,21 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
 pub(super) fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationContext) {
     use cobre_core::entities::HydroGenerationModel;
     for hydro in &data.hydros {
-        if hydro.generation_model == HydroGenerationModel::Fpha {
-            let fpha_cost = hydro.penalties.turbined_cost;
-            if fpha_cost < 0.0 {
-                let entity_str = format!("Hydro {}", hydro.id.0);
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
-                    "penalties.json",
-                    Some(&entity_str),
-                    format!(
-                        "{entity_str}: turbined_cost ({fpha_cost}) must be non-negative (>= 0) \
-                         for FPHA hydros; negative values distort LP dispatch"
-                    ),
-                );
-            }
+        if hydro.generation_model != HydroGenerationModel::Fpha {
+            continue;
+        }
+        let fpha_cost = hydro.penalties.turbined_cost;
+        if fpha_cost < 0.0 {
+            let entity_str = format!("Hydro {}", hydro.id.0);
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "penalties.json",
+                Some(&entity_str),
+                format!(
+                    "{entity_str}: turbined_cost ({fpha_cost}) must be non-negative (>= 0) \
+                     for FPHA hydros; negative values distort LP dispatch"
+                ),
+            );
         }
     }
 }

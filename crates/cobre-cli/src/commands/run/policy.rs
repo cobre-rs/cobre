@@ -6,6 +6,7 @@ use cobre_comm::Communicator;
 use cobre_core::System;
 use cobre_io::Config;
 use cobre_io::EntitySlot;
+use cobre_io::OwnedPolicyCutRecord;
 use cobre_io::PolicyMode;
 use cobre_io::PolicyMode::Fresh;
 use cobre_io::PolicyMode::Resume;
@@ -17,6 +18,7 @@ use cobre_sddp::PolicyLoadProof;
 use cobre_sddp::PolicyStageManifest;
 use cobre_sddp::StudySetup;
 use cobre_sddp::TrainingResult;
+use cobre_sddp::ValidatedBoundaryCuts;
 use cobre_sddp::build_basis_cache_from_checkpoint;
 use cobre_sddp::checkpoint_terminal_cost_scale_factor;
 use cobre_sddp::inject_boundary_cuts;
@@ -25,6 +27,7 @@ use cobre_sddp::rescale_checkpoint_cuts_for_load;
 use cobre_sddp::resolve_boundary_source_stage;
 use cobre_sddp::validate_policy_load;
 
+use crate::commands::broadcast::broadcast_value;
 use crate::error::CliError;
 use crate::summary::print_boundary_summary;
 
@@ -233,69 +236,92 @@ pub(super) fn apply_training_policy(
 
     // Must run after the match: warm-start replaces the whole FCF first, then
     // boundary cuts overwrite only the terminal pool.
-    if let Some(bp) = root_config.and_then(|c| c.policy.boundary.as_ref()) {
-        let boundary_path = bp.checkpoint_path(&ctx.case_dir);
-        // Rationale: the cast cannot truncate — `state_dimension` counts FCF
-        // state variables (one per reservoir/lag), bounded by the validated study
-        // dimensions and far below `u32::MAX`.
-        #[allow(clippy::cast_possible_truncation)]
-        let state_dim = setup.fcf.state_dimension as u32;
-        let current_manifest = setup.build_terminal_entity_manifest(system);
-        let target_delivery_intervals = setup.build_terminal_anticipated_delivery_intervals(system);
-        let fixed_windows = setup.build_terminal_fixed_post_horizon_windows(system);
-        let source_stage = if let Some(idx) = bp.source_stage {
-            idx
-        } else {
-            let resolved =
-                resolve_boundary_source_stage(&boundary_path, &target_delivery_intervals)
-                    .map_err(CliError::from)?;
-            if ctx.is_root && !ctx.quiet {
-                let _ = ctx.stderr.write_line(&format!(
-                    "Boundary source_stage resolved to {resolved} (no explicit \
-                     policy.boundary.source_stage configured)."
-                ));
-            }
-            resolved
-        };
-        let stderr = &ctx.stderr;
-        let quiet = ctx.quiet;
-        let is_root = ctx.is_root;
-        let mut on_warning = |msg: &str| {
-            if is_root && !quiet {
-                let _ = stderr.write_line(&format!("warning: {msg}"));
-            }
-        };
-        // The depth the state layout already reserved (read off the constructed
-        // setup, not re-inferred from the checkpoint), so the load-time depth
-        // guard is a defensive check, never a user error.
-        let effective_inflow_lag_depth = setup.boundary_requirements().inflow_lag_depth();
-        let boundary_records = load_boundary_cuts(
-            &boundary_path,
-            source_stage,
-            state_dim,
-            &current_manifest,
-            &target_delivery_intervals,
-            &fixed_windows,
-            effective_inflow_lag_depth,
-            setup.stage_data.stage_templates.cost_scale_factor,
-            &mut on_warning,
-        )
-        .map_err(CliError::from)?;
-        inject_boundary_cuts(setup, &boundary_records);
-        if ctx.is_root && !ctx.quiet {
-            print_boundary_summary(
-                &ctx.stderr,
-                boundary_records.len(),
-                source_stage,
+    //
+    // Boundary PRESENCE is a broadcast fact (`boundary_requirements`), identical
+    // on every rank; the reconciled cuts are read and reconciled once on rank 0
+    // (the single disk reader, the only rank carrying `root_config`) and
+    // broadcast, so every rank injects the identical terminal pool. Gating on the
+    // rank-0-only `root_config` instead leaves non-root ranks with an empty
+    // terminal pool, so their forward/backward/simulation terminal solves drop
+    // the post-horizon value-to-go — a rank-count-dependent wrong bound.
+    if setup.boundary_requirements().is_present() {
+        let boundary_records: Option<Vec<OwnedPolicyCutRecord>> = if ctx.is_root {
+            let bp = root_config
+                .and_then(|c| c.policy.boundary.as_ref())
+                .ok_or_else(|| CliError::Internal {
+                    message: "rank 0 missing policy.boundary while boundary_requirements \
+                              reports present — internal invariant violated"
+                        .to_string(),
+                })?;
+            let boundary_path = bp.checkpoint_path(&ctx.case_dir);
+            // Rationale: the cast cannot truncate — `state_dimension` counts FCF
+            // state variables (one per reservoir/lag), bounded by the validated
+            // study dimensions and far below `u32::MAX`.
+            #[allow(clippy::cast_possible_truncation)]
+            let state_dim = setup.fcf.state_dimension as u32;
+            let current_manifest = setup.build_terminal_entity_manifest(system);
+            let target_delivery_intervals =
+                setup.build_terminal_anticipated_delivery_intervals(system);
+            let fixed_windows = setup.build_terminal_fixed_post_horizon_windows(system);
+            let source_stage = if let Some(idx) = bp.source_stage {
+                idx
+            } else {
+                let resolved =
+                    resolve_boundary_source_stage(&boundary_path, &target_delivery_intervals)
+                        .map_err(CliError::from)?;
+                if !ctx.quiet {
+                    let _ = ctx.stderr.write_line(&format!(
+                        "Boundary source_stage resolved to {resolved} (no explicit \
+                         policy.boundary.source_stage configured)."
+                    ));
+                }
+                resolved
+            };
+            let stderr = &ctx.stderr;
+            let quiet = ctx.quiet;
+            let mut on_warning = |msg: &str| {
+                if !quiet {
+                    let _ = stderr.write_line(&format!("warning: {msg}"));
+                }
+            };
+            // The depth the state layout already reserved (read off the constructed
+            // setup, not re-inferred from the checkpoint), so the load-time depth
+            // guard is a defensive check, never a user error.
+            let effective_inflow_lag_depth = setup.boundary_requirements().inflow_lag_depth();
+            let validated = load_boundary_cuts(
                 &boundary_path,
-                boundary_records.report(),
-            );
-        }
-        if ctx.is_root {
-            for line in boundary_records.report().detail_lines() {
+                source_stage,
+                state_dim,
+                &current_manifest,
+                &target_delivery_intervals,
+                &fixed_windows,
+                effective_inflow_lag_depth,
+                setup.stage_data.stage_templates.cost_scale_factor,
+                &mut on_warning,
+            )
+            .map_err(CliError::from)?;
+            if !ctx.quiet {
+                print_boundary_summary(
+                    &ctx.stderr,
+                    validated.len(),
+                    source_stage,
+                    &boundary_path,
+                    validated.report(),
+                );
+            }
+            for line in validated.report().detail_lines() {
                 tracing::debug!("{line}");
             }
-        }
+            Some(validated.to_vec())
+        } else {
+            None
+        };
+
+        // Collective: rank 0 sends the reconciled records, every rank receives
+        // and injects the same terminal pool.
+        let boundary_records = broadcast_value(boundary_records, &ctx.comm)?;
+        let validated = ValidatedBoundaryCuts::from_broadcast_records(boundary_records);
+        inject_boundary_cuts(setup, &validated);
     }
 
     Ok(())

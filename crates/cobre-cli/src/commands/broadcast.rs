@@ -494,6 +494,31 @@ mod tests {
         assert_eq!(result, original);
     }
 
+    /// The reconciled boundary cuts ride `broadcast_value` to non-root ranks
+    /// (`apply_training_policy`), so `OwnedPolicyCutRecord` must survive the
+    /// postcard wire hop — losing its `Serialize` derive would silently strand
+    /// every non-root rank with an empty terminal pool.
+    #[test]
+    fn broadcast_value_round_trips_owned_policy_cut_records() {
+        let comm = cobre_comm::LocalBackend;
+        let original = vec![cobre_io::OwnedPolicyCutRecord {
+            cut_id: 7,
+            slot_index: 3,
+            iteration: 2,
+            forward_pass_index: 0,
+            intercept: 1.5,
+            coefficients: vec![0.25, -0.5, 1.0],
+            is_active: true,
+        }];
+        let result = broadcast_value(Some(original.clone()), &comm).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].cut_id, original[0].cut_id);
+        assert_eq!(result[0].slot_index, original[0].slot_index);
+        assert_eq!(result[0].intercept, original[0].intercept);
+        assert_eq!(result[0].coefficients, original[0].coefficients);
+        assert_eq!(result[0].is_active, original[0].is_active);
+    }
+
     #[test]
     fn broadcast_value_local_round_trips_config_like() {
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

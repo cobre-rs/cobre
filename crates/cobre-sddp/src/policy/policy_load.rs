@@ -1108,6 +1108,22 @@ impl ValidatedBoundaryCuts {
     pub fn report(&self) -> &BoundaryReconciliationReport {
         &self.report
     }
+
+    /// Reconstruct a validated set from records a peer rank produced with
+    /// [`load_boundary_cuts`] and broadcast over MPI. The single-disk-reader rank
+    /// reads and reconciles the source once; every rank must then inject the
+    /// identical terminal pool via [`inject_boundary_cuts`], or a non-root rank's
+    /// terminal pool stays empty and its forward/backward/simulation terminal
+    /// solves drop the post-horizon value-to-go — a rank-count-dependent wrong
+    /// bound. The `records` are already validated upstream, so no re-check runs;
+    /// the report is not carried across the wire (only the reading rank prints it).
+    #[must_use]
+    pub fn from_broadcast_records(records: Vec<OwnedPolicyCutRecord>) -> Self {
+        Self {
+            records,
+            report: BoundaryReconciliationReport::default(),
+        }
+    }
 }
 
 impl Deref for ValidatedBoundaryCuts {
@@ -3380,6 +3396,57 @@ mod tests {
             assert_eq!(*intercept, records[i].intercept);
             assert_eq!(coeffs, &records[i].coefficients);
         }
+    }
+
+    /// The non-root-rank boundary path — [`ValidatedBoundaryCuts::from_broadcast_records`]
+    /// on the records the reading rank broadcast — injects a terminal pool
+    /// bit-identical to the reading rank's own directly-loaded set. Gating
+    /// injection on the rank-0-only config instead leaves a non-root rank's
+    /// terminal pool empty, so its forward/backward/simulation terminal solves
+    /// drop the post-horizon value-to-go (a rank-count-dependent wrong bound).
+    #[test]
+    fn from_broadcast_records_injects_pool_identical_to_direct_load() {
+        let state_dimension = test_support::oracle_chain_setup(10).fcf.state_dimension;
+        let records = vec![
+            owned_cut(5.0, vec![1.0; state_dimension]),
+            owned_cut(6.0, vec![2.0; state_dimension]),
+            owned_cut(7.0, vec![3.0; state_dimension]),
+        ];
+        // Reading rank (rank 0): the set `load_boundary_cuts` returns.
+        let direct = ValidatedBoundaryCuts {
+            records: records.clone(),
+            report: BoundaryReconciliationReport::default(),
+        };
+        // Non-root rank: reconstructed from the broadcast record vec.
+        let broadcast = ValidatedBoundaryCuts::from_broadcast_records(records.clone());
+
+        let mut setup_direct = test_support::oracle_chain_setup(10);
+        let mut setup_bcast = test_support::oracle_chain_setup(10);
+        inject_boundary_cuts(&mut setup_direct, &direct);
+        inject_boundary_cuts(&mut setup_bcast, &broadcast);
+
+        let terminal_idx = setup_direct.fcf.pools.len() - 1;
+        let pool_direct = &setup_direct.fcf.pools[terminal_idx];
+        let pool_bcast = &setup_bcast.fcf.pools[terminal_idx];
+
+        assert_eq!(
+            pool_bcast.warm_start_count as usize,
+            records.len(),
+            "the broadcast path must populate the terminal pool, never leave it empty"
+        );
+        assert_eq!(pool_bcast.warm_start_count, pool_direct.warm_start_count);
+        assert_eq!(pool_bcast.capacity, pool_direct.capacity);
+
+        let active = |pool: &CutPool| -> Vec<(usize, f64, Vec<f64>)> {
+            pool.active_cuts()
+                .map(|(slot, intercept, coeffs)| (slot, intercept, coeffs.to_vec()))
+                .collect()
+        };
+        assert_eq!(
+            active(pool_bcast),
+            active(pool_direct),
+            "broadcast-reconstructed terminal pool must be bit-identical to the directly-loaded one"
+        );
     }
 
     // ── intercept-fold wiring tests ───────────────────────────────────────────

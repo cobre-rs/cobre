@@ -12,10 +12,15 @@ register entry. Finding IDs are owned by `BACKLOG.md`; every ID below links to i
 - **Method:** every entry re-derived against source by the main session (all Tier-1/Tier-2 items
   by hand) plus five read-only validators, one per lens/station. Outcome: **0 refuted, 26 partial
   (count/anchor/severity corrections), 86 verified.** Partials never changed a defect's existence.
-- **Status of the evaluation:** 2 of 11 stations ratified. The remaining nine
-  (`BACKLOG.md:3674–3708`) are empty. The tracked mirror
-  `docs/design/reserved-seams-and-deferred-debt.md` has received none of the 112 IDs despite the
+- **Status of the evaluation:** 2 of 11 stations ratified. Of the remaining nine
+  (`BACKLOG.md:3674–3708`) only `reconciliation` has content: the Tier-1 fix wave (2026-09-11).
+  The tracked mirror `docs/design/reserved-seams-and-deferred-debt.md` now carries an ID-free
+  2026-09 section grouped by the tiers below; it received nothing before that wave despite the
   register preamble (`BACKLOG.md:14–20`) naming it as the second write surface.
+- **Tier 1 status (2026-09-11):** all four FIXED — `fix/quality-tier1` (a729a259 … 0d4c8c22,
+  merged to `develop`) plus two follow-ups found during execution on `fix/quality-tier1-followups`:
+  19521701 (thermal joins rule 49 by declared-id membership; rule 16 retired) and 3b363161
+  (rewrite clears stale checkpoint payloads). Entries carry `- **Status:** fixed` bullets.
 - **Not yet a roadmap:** `tools/check-roadmap-dag.py` requires `- **Status:**` bullets on entries
   (none exist yet; the parser reads all 162 non-do-not-touch entries as `open`), so the Waves table
   in §5 is an _interim_ schedule in the checker's vocabulary, for the unified-roadmap station to lift.
@@ -130,6 +135,9 @@ an order-invariance test.
 ## 3. Register corrections to apply at the reconciliation station
 
 Facts the validators could not reproduce or that the register states wrongly; none changes a verdict.
+**Applied 2026-09-11** as `- **Correction (2026-09-11):**` bullets on the entries (reconciliation
+section of `BACKLOG.md`); `perf-queue.json` left as a station artifact. Two corrections found while
+fixing Tier 1 were added to the table below at the same time.
 
 | Entry                                                                   | Correction                                                                                                                        |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -138,7 +146,8 @@ Facts the validators could not reproduce or that the register states wrongly; no
 | CD-045 (`:2328`)                                                        | `PrecomputedPar::build` does not depend on model order (hash-keyed). Three tables, not "seven".                                   |
 | CD-047 (`:2349`)                                                        | 77 `try_new` prologue sites in 29 files (incl. tests), not 28 in 19.                                                              |
 | CD-054 (`:2421`)                                                        | `s.id >= 0` occurs 34× crate-wide (2 in `referential.rs`), not "20 copies".                                                       |
-| CD-058 (`:2462`)                                                        | Payload writes are NOT covered by manifest-last on the resume path (same directory rewritten, old manifest never removed).        |
+| CD-058 (`:2462`)                                                        | Payload writes are NOT covered by manifest-last on the resume path (same directory rewritten, old manifest never removed). Also: the reader enumerates `cuts/`/`basis/`/`states/` and the pool count is only a `debug_assert_eq!` (`fcf.rs::from_deserialized`), so stale payloads from a rewrite with fewer pools or states export off were read silently in release (fixed 3b363161). |
+| CD-056 (`:2441`)                                                        | "Thermal's guard is legitimately family-specific (padded resolution region)" is wrong: the padding holds base values only and `resolve_bounds` keys thermal overrides by `stage_index`; thermal's `[0, n)` test was a latent defect for gapped/1-based id sets (fixed 19521701). |
 | CD-060 (`:2482`)                                                        | 10 of 35 schemas declared outside `schemas.rs`; gate list covers 22 of 35 (not 9/34, 21/34).                                      |
 | CD-066 (`:3183`)                                                        | Gate is at `sampling/mod.rs:360`; a typo fails loudly.                                                                            |
 | CD-067 (`:3194`)                                                        | Producers at `sampling/mod.rs:231/240/249`; cobre-io rejects unknown tags at `referential.rs:447–461`.                            |
@@ -182,7 +191,7 @@ Milestones as in `BACKLOG.md:33–51`; `gnl-import` is SATISFIED (`44e72b76`, `9
 
 | Wave | Entry                       | Findings                                                                                                                                                                                       | Depends on                 | Phase    | Effort | Trigger/deadline                                                      |
 | ---- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------- | ------ | --------------------------------------------------------------------- |
-| 1    | W1-tier1-correctness        | OD-011, CD-058, CD-056, CD-051                                                                                                                                                                 | -                          | neutral  | M      | before the next release tag                                           |
+| 1    | W1-tier1-correctness        | OD-011, CD-058, CD-056, CD-051                                                                                                                                                                 | -                          | neutral  | M      | SATISFIED 2026-09-11 (`fix/quality-tier1` merged; follow-ups pending)  |
 | 2    | W2-canonical-order-registry | CD-043, CD-045, CD-048, CD-057, OD-019, CD-040                                                                                                                                                 | W1-tier1-correctness       | neutral  | M      | with the next cobre-io / cobre-core touch                             |
 | 3    | W3-forward-sampler-scratch  | PD-023, PD-024, PD-025, PD-026, PD-027, PD-028, CD-068, CD-069                                                                                                                                 | -                          | neutral  | L      | before QMC/LHS is recommended to users                                |
 | 4    | W4-typed-class-and-seam     | CD-066, CD-067, OD-028, OD-029                                                                                                                                                                 | W3-forward-sampler-scratch | neutral  | M      | after the sampler scratch lands (same files)                          |

@@ -2335,6 +2335,7 @@ The three *_models accessors (mod.rs:432/438/466) promise canonical order that n
 - **Fix-shape:** Make the L0 owner own the invariant it advertises. Either the builder sorts these seven tables into their documented canonical key the way it already sorts the other nine, or it validates them as sorted and returns a validation error otherwise — the second is cheaper and preserves the current cobre-io behaviour byte-for-byte, since cobre-io already emits them sorted.
 - **Alignment:** advances-1 (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-1 (cross-reference; verdict travels to Epic 9).
+- **Correction (2026-09-11):** `PrecomputedPar::build` does not depend on model order (hash-keyed). Three tables, not "seven".
 
 **CD-046 · Sev C · asymmetry · effort M · confidence high**
 The wire-reproducibility rationale in the System serde(skip) comment (mod.rs:64) is enforced by three unrelated bespoke mechanisms yet six HashMap fields on HorizonGraph/CascadeTopology/NetworkTopology serialize unguarded as non-skipped SystemRepr fields (mod.rs:157/158/160), an inconsistency with no single owner and no guard test; explicitly NOT a live wrong result today (single-serialize-then-broadcast plus a value-equality round-trip guard).
@@ -2355,6 +2356,7 @@ Six numeric extractors in extensions/{hydro_geometry,hydro_energy_productivity,t
 - **Evidence:** The md5 line is over the 23-line bodies of `extract_int32_column` sliced from the three extension files with sed;
 - **Fix-shape:** Extend `parquet_helpers.rs` past column extraction to cover the reader itself: one helper that takes a path and returns the batch reader with the three error mappings applied, so each parser opens with a single call and keeps only its own column reads and row loop. Delete the six copied extractors in `extensions/` in favour of the shared pair, accepting the one-word change in the missing-column message or reconciling the two spellings first.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** 77 `try_new` prologue sites in 29 files (tests included), not 28 in 19.
 
 **CD-048 · Sev B · asymmetry · effort M · confidence high**
 bounds.rs:24 and penalties.rs:23 state `sorted by ID` for entity families that all carry operational_start_date, contradicting the enforced `(operational_start_date, id)` canonical order (builder.rs sort_canonical, pipeline.rs:289) on the publicly reachable resolve_bounds/resolve_penalties surface -- a doc-contract-vs-enforced-contract drift, not a live miscompute; generic_bounds.rs:15's `sorted by ID` is correct (no date axis) and the three `must be sorted` spellings (ncs_bounds/load_factors/ncs_factors) are underspecified rather than wrong, so `two wrong statements` is the exact residue.
@@ -2397,6 +2399,7 @@ The scenario-source admission rules are enforced only lazily inside the accessor
 - **Fix-shape:** Move the admission decision to the point where the config is admitted, not to whoever happens to read it. Resolve both scenario sources once inside the Layer-2 config gate, report their failures into the validation context alongside every other layer's findings, and hand the already-resolved values to the semantic rules so those rules take a resolved value rather than a fallible accessor.
 - **Alignment:** advances-0a (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-7 (cross-reference; verdict travels to Epic 9).
+- **Status:** fixed (2026-09-11) — `validate_config` resolves both scenario sources, so `parse_config` is the single admission gate; the training-only pre-checks in `cli validate.rs` and `cobre-python/src/io.rs` are gone; `cli_validate.rs` and `test_io.py` pin validate/run parity for an invalid simulation source. `fix/quality-tier1` a729a259 (merged to develop 2026-09-11).
 
 **CD-052 · Sev B · asymmetry · effort M · confidence high**
 Confirmed narrowly: `LoadError::CrossReferenceError` is a dead variant (zero production producers, findings routed through `ConstraintError`) retaining two cobre-python consumer arms, and the overlapping line/hydro-filling predicate pairs can drift undetected because only cobre-io's copy fires in the production pipeline, not that cobre-core's builder validation is itself redundant (it legitimately guards cobre-core's public builder for direct/test constructors).
@@ -2427,6 +2430,7 @@ Confirmed narrowly: the uniform flat 'field is in id-set' reference blocks and t
 - **Evidence:** The check-and-emit shape for a dangling reference — index the rows, test membership in an id set, push an `InvalidReference` entry whose message reads "<RowType>[i] references non-existent <Entity> <id> via field '<field>'" — is written out 48 times in one file, spread over 13 functions;
 - **Fix-shape:** Align the referential module to the pattern its sibling already proves rather than propagating the open-coded one. A descriptor carrying the row label, source file, target entity name and field name, plus one emit helper taking a descriptor and an id set, collapses the bulk of the 48 blocks and makes the message template a single definition instead of a header comment describing 48 copies.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** `s.id >= 0` occurs 34× crate-wide (2 in `referential.rs`), not "20 copies".
 
 **CD-055 · Sev C · asymmetry · effort S · confidence high**
 Confirmed narrowly on the concrete drift: registry row 26 asserts a live semantic rule for `simulation.sampling_scheme.type`, a field `deny_unknown_fields` now rejects at parse-time with a different ErrorKind, while curated retirements elsewhere prove the table is maintained, so the demonstrated defect is this one drifted row, the unbound prose registry being the mechanism rather than a second proven drift.
@@ -2447,6 +2451,8 @@ Confirmed narrowly: the stage-axis out-of-horizon validator is missing for the f
 - **Evidence:** A stage-axis rule for bound-override rows exists for exactly two of the seven families: `thermal_bounds` (Layer 5a, `BusinessRuleViolation`) and `ncs_bounds` (Layer 3, `InvalidReference`).
 - **Fix-shape:** Give the stage axis the same table-driven treatment the block axis already has, so one rule covers every bound family instead of two families having bespoke rules and five having none. It belongs beside the block-axis rule in the Layer 5a family module, keyed off the same per-family descriptor and the same study-stage set, and it should reuse the crate's stage resolver rather than a fresh id-non-negative scan.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** the "thermal's guard is legitimately family-specific (padded resolution region)" clause is wrong — the padded cells `[n_stages, n_stages + k_max)` receive base values only; `resolve_bounds` keys thermal override rows through the same `stage_index` map as every other family. Thermal's `[0, n_stages)` position test was therefore a latent defect for gapped or 1-based study id sets (which `StageIdResolver` explicitly admits): an undeclared id inside the range was silently dropped, the last declared id was rejected.
+- **Status:** fixed (2026-09-11) — rule 49 `check_bound_stage_id_range` (`semantic/block_bounds.rs`) admits by declared-id set membership across all six bound families; rule 16 retired. The CD-053 half (absorbing the NCS Layer-3 stage check) was deliberately NOT done — NCS keeps its Layer-3 check; CD-053 stays open. `fix/quality-tier1` a729a259 + 0d4c8c22 (merged) + `fix/quality-tier1-followups` 19521701 (pending merge).
 
 **CD-057 · Sev B (A-risk) · asymmetry · effort M · confidence high**
 Confirmed narrowly: the positional `FILE_ENTRIES` to `manifest_fields_mut` zip is guarded only by an equal-length assertion that cannot detect a same-arity reordering, so swapping two entries silently misassigns presence flags; the `ParsedData`/schema.rs list is a third parallel restatement of the file set but keyed by name (a DRY/fan-out concern), not part of the positional join.
@@ -2468,6 +2474,8 @@ The crash-safety hole is specifically the in-place (O_TRUNC) overwrites of manif
 - **Evidence:** atomic.rs's module doc opens 'Single owner of the write-side crash-safety contract: write to {path}.tmp, flush explicitly (never via Drop), then rename', and twelve of the thirteen writer modules import it.
 - **Fix-shape:** Route every remaining output write through output/atomic.rs. For the policy artifact, serialize each payload to bytes as it already does and hand the buffer to write_bytes_atomic instead of std::fs::write, keeping manifest.bin last so the commit-signal ordering is unchanged;
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** payload writes were NOT covered by manifest-last on the resume path — the same directory is rewritten in place and the old `manifest.bin` was never removed, so a crash mid-rewrite paired the old commit signal with new payloads. Also: `read_policy_checkpoint` lists `cuts/`, `basis/`, `states/` (no inventory) and the pool count against the manifest is only a `debug_assert_eq!` (`cobre-sddp/src/cut/fcf.rs::from_deserialized`), so a rewrite with fewer pools or with states export off left stale payloads that a release build read silently (the stale last pool becoming the terminal witness in `cobre-cli/src/commands/run/policy.rs`).
+- **Status:** fixed (2026-09-11) — every checkpoint payload, the manifest and both dictionary CSVs go through `write_bytes_atomic`; a rewrite removes `manifest.bin`, then every previous `.bin` (and `states/` when none is written), before writing; manifest stays last. `fix/quality-tier1` 8375e63b (merged) + `fix/quality-tier1-followups` 3b363161 (pending merge).
 
 **CD-059 · Sev B · asymmetry · effort M · confidence high**
 The confirmed defect is narrowly the false module-doc contract at output/mod.rs:6-8 (write_results does not 'write all output artifacts' and does not mirror load_case) and the resulting undocumented CLI/Python hand-mirror; it does not establish that write_results must be expanded to orchestrate every artifact - that consolidation is the 0a design choice, not part of the present defect.
@@ -2488,6 +2496,7 @@ The load-bearing, concretely-defective residue is the over-broad self-descriptio
 - **Evidence:** `python3 - <<'EOF'` — schemas.rs opens with '//! Arrow schema definitions for all Parquet output files' yet 9 of the 34 output schemas are declared privately in three sibling writers.
 - **Fix-shape:** Give the output-schema family one owner and derive both consumers from it. Move the nine sibling-declared schemas into output/schemas.rs alongside the twenty-five already there, then replace the three hand-maintained lists with a single crate-internal table that pairs each output file's relative path with its schema function.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** 10 of 35 schemas are declared outside `schemas.rs`; the gate list covers 22 of 35 (not 9/34 and 21/34).
 
 **CD-061 · Sev B · asymmetry · effort M · confidence high**
 The confirmed defect is the register/oracle-coverage gap only: the Parquet convergence/timing/row_selection schemas and IterationRecord carry training-loop column names that Part-I I.3-6 does not name and the word-boundary genericity gate deliberately cannot see; it is expressly NOT an enforced-contract violation (the ratified sddp/SDDP/Benders/standalone-cut tokens are absent) and requires no rename now - only widening the I.3-6 disposition.
@@ -2542,6 +2551,7 @@ Confirmed narrowly: all five discarding call sites lie on one-time setup/validat
 - **Evidence:** The only entry point returns an owned `Vec<f64>`, and its accumulator is built with `Vec::new()` (:41) rather than reserving against `stage_lengths_hours.len()`, which is known before the loop starts.
 - **Fix-shape:** Keep the vector-returning function as the multi-period answer, and give the same module two narrower entry points beside it that the discarding callers can use: a scalar single-period overlap that returns the intersected hours for one period without touching the heap, and a reach predicate or depth count that answers how far a window extends by walking periods and returning a boolean or an index instead of materialising the per-period series. All three should share one internal walk so the overlap arithmetic stays single-owner and the existing bit-exactness tests keep covering it.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** O(N · window depth), not O(N²): the overlap walk breaks past the window end.
 
 **PD-008 · Sev B · allocation · effort M · confidence high**
 Confirmed, narrowed to a one-time study-setup MPI broadcast payload (not any per-iteration hot-path cost) and with the title's count corrected: the skipped-and-rebuilt siblings are the seven entity index maps plus stage_index (eight, not 'three fields above'). The defensible residue is that cascade+network's five HashMaps are transmitted on the wire despite being pure, content-determined derivations of the seven entity slices already serialized ahead of them in the same struct, and thus locally reconstructible in rebuild_indices.
@@ -2687,6 +2697,7 @@ The single missing wire is at columns.rs:1136: the NCS curtailment objective is 
 - **Fix-shape:** Decide the axis one way and make the code say so. Either wire it: have the NCS column builder take its objective coefficient from the resolved per-(ncs, stage) cell the way the hydro, line and bus column builders already take theirs, which makes the declared stage override effective and puts all four penalty families on one read path.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Reviewer rating:** A — downgraded here because defender narrowed the claim to a single missing LP read at `columns.rs:1136`; the resolve and write path (including the `penalty_overrides_ncs` override) is functional, so the blast radius is one call site, not a spreading structural gap.
+- **Status:** fixed (2026-09-11) — `fill_ncs_columns` prices curtailment from `ctx.resolved.penalties.ncs_penalties(ncs_sys_idx, stage_idx)`, on the same read path as the hydro, line and bus fills; `ncs_objective_tests` pins a stage override changing the coefficient. `fix/quality-tier1` a729a259 (merged to develop 2026-09-11).
 
 **OD-012 · Sev C · speculative-generality · effort S · confidence high**
 The genuinely unconsumed public surface is the population-statistics arm: population ci_95_half_width and the count accessor have only test callers, and the population variance/std_dev are public entry points whose sole non-test use is internal delegation within a population branch no production path reaches (the one consumer uses the sample arm exclusively); variance and sample_variance are conceded to be live internal delegates, not deletable outright.
@@ -2749,6 +2760,7 @@ default_severity (validation/mod.rs:95) has no caller outside its own unit test 
 - **Evidence:** The only references to `default_severity` anywhere in crates/ are its own declaration and the four assertions of its own unit test at validation/mod.rs:419-429;
 - **Fix-shape:** Delete the method and its tautological unit test, leaving `add_error` / `add_warning` as the single owner of severity. If a per-kind default is actually wanted, invert the direction instead of deleting: make the table the one that decides, by routing every diagnostic through a single `add` entry point that consults the kind, and turn the `season.rs` warning into a deliberate documented override rather than a silent divergence.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** `BusinessRuleViolation` has 58 `add_error` emissions and 1 `add_warning`; there is no "sole emission".
 
 **OD-018 · Sev B · speculative-generality · effort M · confidence high**
 ParsedData.penalties (schema.rs:75) has zero data.penalties reads workspace-wide and its rationale's saving is false (Layer-5 reads hydro.penalties at scenarios.rs:179, not the bundle); the scalar_parameters #[allow(dead_code)] (schema.rs:113) is merely REDUNDANT because the field is read at pipeline.rs:96 and moved at :244, so — narrowing the title — only its allow is stale while its rationale naming the resolution consumer is accurate.
@@ -2791,6 +2803,7 @@ The narrower defect is needless pub visibility: both functions back only a same-
 - **Evidence:** `grep -rn '\bdefault_bounds\b\|\bdefault_upper_bound_kind\b' crates/ --include='*.rs'` — Both functions exist solely to satisfy a `#[serde(default = "...")]` attribute on a field in their own file: `default_upper_bound_kind` for `MetadataBounds.final_upper_bound_kind` at manifest.rs:214, `default_bounds` for `TrainingMetadata.bounds` at manifest.rs:412.
 - **Fix-shape:** Make both functions private to the manifest module and remove `default_bounds` from the output module's re-export list and from the crate-root re-export in lib.rs. Verify the `schema` feature's export path does not name either function before narrowing, since a schemars-visible helper would change the committed schemas and CI diffs them.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** `default_bounds` is public at `cobre_io::output::default_bounds`, not at the crate root; `manifest.rs` carries no `JsonSchema` derive.
 
 **OD-022 · Sev C · speculative-generality · effort S · confidence high**
 The defect is exactly the two fields IterationRecord.time_bwd_setup_ms (mod.rs:141) and time_fwd_setup_ms (mod.rs:149): they are the only two time_* fields the convergence-path conversion loop skips (slots 8 and 11, training_output.rs:517-530), so they are populated at training_output.rs:234,237 and read nowhere; the columns they doc-arrow to are real but fed solely from the per-worker WorkerPhaseTimings path, not from IterationRecord.
@@ -2874,6 +2887,7 @@ Narrower than 'ad-hoc comparators ... where the yardstick calls for one shared c
 - **Evidence:** Six struct-specific bit comparators plus one Option helper are hand-written inside one inline test module, each an explicit `a.field.to_bits() == b.field.to_bits()` chain per field.
 - **Fix-shape:** Make the comparators exhaustive by construction rather than by review: destructure both sides with a full field pattern that has no `..` rest, so adding a field to a bounds struct fails to compile until the comparator names it. Then hoist the generic pieces, the scalar and `Option<f64>` bit comparison, into cobre-core's `test-support` surface as the shared exact-equality comparator the testing yardstick asks for, leaving only the per-struct field lists local.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** comparators are exhaustive today; `clp_determinism.rs` has no `opt_f64_bits_eq` (it uses `SolveBits`). Latent.
 
 **TD-005 · Sev B · duplication · effort M · confidence high**
 Narrower than 'copy-pasted across five test sites': the plain zero-varying builders (make_bus/make_line/make_thermal/make_ncs/make_group/make_hydro) are structurally duplicated across topology/network.rs, system/mod.rs and tests/integration.rs, differing only in trivial axes (name string, a 100->200 capacity), so a field add to Line/Bus/etc. is O(sites); but system/builder.rs's bus/line/hydro are a deliberately date+name-parameterized variant for canonical-order tests, not plain copies, and the full eight-name family is not present at every one of the five sites.
@@ -2914,6 +2928,7 @@ The durable, threshold-independent residue is the intra-directory homing inconsi
 - **Evidence:** docs/design/testing-architecture.md section 5.1 asks for one deterministic homing rule -- inline below roughly 500 test-LOC or 40 test fns, extracted to a sibling tests.rs above it -- and section 3.2 item 4 records the inline-giant-versus-extracted-sibling asymmetry as a ranked sustainability problem, naming cobre-sddp anchors.
 - **Fix-shape:** Pick the threshold once and apply it mechanically across the input path rather than per author. Adopt the section 5.1 numbers as written (roughly 500 test-LOC or 40 test fns), extract the seven over-threshold modules to sibling tests.rs files following the shape scenarios/estimation.rs already uses -- `#[cfg(test)] mod tests;` in the parent, the module body moved verbatim into <module>/tests.rs with the crate-inner allow attributes carried along as module-inner attributes -- and leave everything under the threshold inline.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** mechanical application hits ~15 input-path modules, not seven.
 
 **TD-009 · Sev C · duplication · effort S · confidence high**
 The genuinely redundant triplicated surface is make_batch plus the five non-determinism common cases (valid-sorted, negative-std, nan-mean, missing-column, empty); the three per-parser declaration_order_invariance tests are load-bearing determinism-hard-rule pins and are NOT bloat, and each parser's unit-specific error-message assertions must survive any consolidation.
@@ -3055,6 +3070,7 @@ The redundant surface is the count-only per-schema tests (thermals_schema_field_
 - **Evidence:** `all_schema_functions_return_valid_schemas` (line 1282) holds a twenty-row `expected: &[(&str, usize)]` table asserting the field count of every output schema.
 - **Fix-shape:** Pick one registry for field counts. The umbrella table is the better owner because it is exhaustive and a new schema cannot be added without appearing there, so the seven count-only per-schema tests collapse into it, and `transit_seed` gains the umbrella row it is currently missing.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Correction (2026-09-11):** 11 count-only tests (10 with an umbrella row), not seven.
 
 **TD-023 · Sev B · duplication · effort M · confidence high**
 parquet_helpers.rs has zero #[cfg(test)] module (166 lines, all non-test), so the six extractors' missing-column and wrong-type SchemaError message contract is pinned by no owner-level test; the narrower residue drops 'all twelve reachable transitively' — consumer paths like scenarios/inflow_history.rs intercept the missing-column case as a legacy-layout error before the helper's arm, so transitive coverage is partial, not uniform.
@@ -3190,6 +3206,7 @@ Only the single `class_name != "inflow"` Historical gate at mod.rs:436 is a corr
 - **Fix-shape:** Introduce a small closed class discriminant (e.g. an entity-class enum with `Inflow|Load|Ncs`) carried on `ClassSamplerParams` in place of the `&str`, so the Historical-only-for-inflow gate becomes a match/`==` on a typed value the compiler checks, and the three build sites pass the variant instead of a literal. Keep the human-readable label for diagnostics as a `Display`/`as_str` off that enum so error messages are unchanged. Purely local type-safety; advances no roadmap phase and introduces no engine vocabulary.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Reviewer rating:** C — recalibrated to B (A-risk) because raised from C per the silent-divergence seam precedent: the untyped &str class gate silently mis-gates on a call-site literal typo.
+- **Correction (2026-09-11):** the gate is at `sampling/mod.rs::` the entity-type match (`sampling/mod.rs:360` at `1baeeadb`); a typo fails loudly, so this is not a silent-accept.
 
 **CD-067 · Sev B (A-risk) · bad-abstraction · effort M · confidence high**
 The in-station residue is the in-crate GroupFactor.entity_type String field plus the two `!=` dispatch sites (resolve.rs:286, 352) that a boundary-parse to an in-crate EntityClass{Inflow,Load,Ncs} enum at build() would make compiler-checked; the source-of-truth String is cobre-core's CorrelationEntity.entity_type (scenario.rs:594) which is OUT of station (a cross-station note, not changed here), so the confirmed defect is the stochastic-side stringly-typed carrier + comparisons, not the cobre-core field.
@@ -3200,6 +3217,7 @@ The in-station residue is the in-crate GroupFactor.entity_type String field plus
 - **Evidence:** The entity class is a closed 3-value set (inflow/load/ncs) but is carried as a String on GroupFactor and dispatched by `!=`/`==` at two sites in resolve.rs (apply_correlation_for_class L352, resolve_class_positions L286). The producers are bare string literals at generate.rs:332-334 and sampling/mod.rs:227/236/245. Nothing links the literal producer to the stored value at compile time: a typo (`"inlfow"`) or a vocab… Re-derive: `git show a136840d:crates/cobre-stochastic/src/correlation/resolve.rs | sed -n '27,28p;351,353p' ; git show a136840d:crates/cobre-…`
 - **Fix-shape:** Introduce an in-crate closed enum EntityClass { Inflow, Load, Ncs }. Parse the cobre-core-sourced CorrelationEntity.entity_type String exactly once, at DecomposedCorrelation::build, into the enum stored on GroupFactor (replacing the String field). Type the apply_correlation_for_class and resolve_class_positions `entity_type` parameter and the generate.rs / sampling/mod.rs call-site literals on the enum, so every class comparison becomes an exhaustive compiler-checked match with a single String->enum boundary at build. The source String remains owned by cobre-core (a cross-station note, not a change here); the boundary-parse keeps this fix entirely inside cobre-stochastic. No paradigm noun and >=2 consumers, so it does not trip the L1 purity guardrail.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
+- **Correction (2026-09-11):** producers are the three `sampling/mod.rs` tag sites (`:231/:240/:249` at `1baeeadb`); cobre-io rejects an unknown `entity_type` in `referential.rs` (`:447–461`), so the finding is not user-visible.
 
 **CD-068 · Sev B · duplication · effort M · confidence high**
 The narrow residue is that the full-vector applier trio (apply_correlation + resolve_positions + GroupFactor.positions) is pub production surface with NO production caller (kept alive only as the per-class path's differential-test oracle, test_per_class_tree_matches_full_vector_*) and the per-class precompute (resolve_class_positions + GroupFactor.class_positions) is wholly unwired (zero callers, class_positions never populated) -- so exactly one applier (apply_correlation_for_class) and zero precompute run in production; this is duplicated-but-tested surface plus a dead precompute, NOT literal unreferenced dead code, and its removal-vs-wiring is the open question candidate perf-00 pulls the other way on.
@@ -3293,6 +3311,7 @@ Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/Ex
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Correction (2026-09-11):** path class is HOT (forward sampler, per iteration × scenario × stage under `scheme: out_of_sample` + `qmc_sobol`), not "setup/fitting-time"; the Measurement bullet's path-class clause is superseded.
 
 **PD-024 · Sev B · missing-seam · effort M · confidence high**
 Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-sieve + nested Vec<Vec<Vec<u32>>> scramble-table allocation and recomputation is scenario-invariant and should be hoisted per (iteration, stage); because NO HaltonPrecomputed seam exists (unlike Sobol's dormant one), the precompute primitive is a cross-station dependency on the tree-noise cell and only the sampler-side wiring is this sub-station's part; determinism is preserved (tables are a pure function of the existing seed tuple).
@@ -3305,6 +3324,7 @@ Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-s
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Correction (2026-09-11):** path class is HOT (forward sampler under `scheme: out_of_sample` + `qmc_halton`), not "setup/fitting-time".
 
 **PD-025 · Sev B · duplication · effort M · confidence high**
 Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not allocation — perm_scratch is caller-owned): the scenario-invariant set of `dim` Fisher-Yates permutations of `total_scenarios` strata is reshuffled once per scenario, giving the quadratic-in-scenario O(dim*total_scenarios^2) per stage that a per-(iteration,stage) permutation cache (or the existing generate_lhs batch primitive) collapses to O(dim*total_scenarios), determinism preserved.
@@ -3317,6 +3337,7 @@ Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Correction (2026-09-11):** path class is HOT (forward sampler under `scheme: out_of_sample` + `lhs`), not "setup/fitting-time".
 
 **PD-026 · Sev B · duplication · effort M · confidence high**
 Narrowed: the confirmed defect is a pure eliminable-work perf issue -- the stage-invariant per-entity position resolution (entity_order.iter().position at resolve.rs:428) recomputed n_openings x n_groups times per stage because resolve_class_positions has zero callers so class_positions stays None; I concede the scan output is numerically correct and bit-identical to the precomputed/full-vector path (proven by test_per_class_tree_matches_full_vector_*), so this is not a correctness defect, and the fix requires either &mut DecomposedCorrelation plumbing into generate_opening_tree or build-time resolution.
@@ -3416,6 +3437,7 @@ The rationale's "no natural sub-grouping exists" clause is false — the four ar
 - **Evidence:** The rationale asserts the four seed inputs (derived_lag_values, l_state, derived_accum, derived_weight) have 'no natural sub-grouping'. The code contradicts that: the same 4-tuple is re-declared verbatim as positional parameters in run_eta_inversion (eta_inversion.rs:37, passed straight through) and in standardize_historical_windows (historical.rs:296, whose own comment at line 292 says it 'mirrors standardize_exter… Re-derive: `git show a136840d:crates/cobre-stochastic/src/sampling/external.rs | sed -n '256,273p'`
 - **Fix-shape:** Introduce a by-reference aggregate for the stage-0 derived seed, e.g. DerivedSeed<'a> { lag_values: &'a [f64], l_state: usize, accum: &'a [f64], weight: &'a [f64] }, constructed once where the seed is computed and passed as a single argument through standardize_external_inflow, run_eta_inversion, standardize_historical_windows, and the caller build_external_inflow_library. The shared per-hydro canonical-position ordering and 'empty accum means reset-to-zero' invariant, currently restated in three near-identical doc-comment blocks, attaches to the type once. This shrinks the 11-arg / 14-arg / 12-arg signatures and removes the same-typed &[f64] transposition hazard. This does NOT dispute the mirror's blanket sanction of allow-with-rationale as a load-bearing lint class; it disputes only the factual claim of this specific rationale. Once the seed is a struct the #[allow(too_many_arguments)…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
+- **Correction (2026-09-11):** arities are 11/13/13, not 11/14/12.
 
 **OD-030 · Sev C · speculative-generality · effort S · confidence high**
 Narrowed: the defensible residue is only that SweepDirection::Ascending and its comparator arm (opening_tree.rs:168) have ZERO non-test constructors while every production path passes Descending -- an unwired second variant exercised solely by opening_tree.rs's own tests. I concede this does NOT establish the enum must be deleted: SweepDirection is a minimal, engine-neutral two-variant sort-direction API (not a speculative multi-variant fan-out), so keeping a two-way ordering knob on a generic L1 primitive is defensible; the finding is the unwired variant, not that the `direction` parameter is itself over-abstraction.
@@ -3493,6 +3515,7 @@ Narrowed to the verified mechanical duplications — the 3x byte-identical unifo
 - **Fix-shape:** Hoist each shared builder to the crate that owns the type it constructs, behind a test-support feature, per testing-architecture.md 5.2 (helpers live with the type they build). The cobre_core entities - make_hydro (Hydro/HydroPenalties), the Stage builders and dated_stage (Stage/StageStateConfig/ScenarioSourceConfig), monthly_season_map (SeasonMap) - belong in cobre-core's test-support surface (the universal base dependency), parameterized so a caller overrides only the field it cares about (an O(1)-field-add builder), which collapses the ~9 Stage literals and the 46-line Hydro literal to one definition each. uniform_tree builds a cobre_stochastic OpeningTree and has three in-crate consumers, so it homes in cobre-stochastic's own test-support surface (three consumers, so not the single-consumer abstraction the L1 purity guardrail forbids). No SDDP paradigm noun and no engine-crate depen…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Queued to:** test-corpus
+- **Correction (2026-09-11):** `sampling/mod.rs` `make_hydro` (`:670` at `1baeeadb`) is the canonical 9-copy variant, not a divergent outlier.
 
 **TD-029 · Sev C · duplication · effort M · confidence high**
 Narrowed to the single verified byte-identical duplication — saa_golden_value.rs's 28-line identity_correlation copy of the QMC binaries' fixture; 're-declares the integration-binary fixture prelude' over-reaches because saa carries only this one of the ~8 shared prelude helpers and its make_stage is a distinct 3-arg builder, so identity_correlation is the only byte-identical copy.
@@ -3504,6 +3527,7 @@ Narrowed to the single verified byte-identical duplication — saa_golden_value.
 - **Fix-shape:** When the shared integration prelude is consolidated (testing-architecture.md 5.2/5.1 - a per-crate test-support surface plus the single integration binary), saa_golden_value.rs drops its private identity_correlation and make_stage and pulls both from cobre-stochastic's test-support fixtures alongside the QMC binaries. saa's own contribution is small (one 28-line duplicate + one Stage builder); the bulk of the integration-prelude debt is the tree-noise QMC-prelude headline, so this candidate is scoped to the saa binary and defers the cross-binary consolidation to that cell's finding. No behavior change: the six pinned golden constants and their assertions are untouched.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Queued to:** test-corpus
+- **Correction (2026-09-11):** `identity_correlation` is at `saa_golden_value.rs:53`, not `:32`.
 
 **TD-030 · Sev B · duplication · effort M · confidence high**
 Narrowed: the confirmed residue is strictly the byte-identical eight-helper fixture prelude physically copied across the QMC trio (halton/sobol/lhs), with make_hydro also copied into reproducibility (verified) and no tests/common/ home, already drifting into two identity_correlation return types; I concede the ~50 genuinely per-family lines (make_stage_<family> and build_<family>_context, differing only in NoiseMethod variant / block presence / panic-string) are legitimate and must survive any consolidation as thin per-family wrappers -- the finding is the shared prelude only, not the whole file, and it is distinct from (cites, does not restate) the cobre-sddp Oracle-harness mirror entry.
@@ -3526,6 +3550,7 @@ Narrowed: no RATIFIED homing threshold exists at baseline -- testing-architectur
 - **Fix-shape:** Adopt the yardstick §5.1 deterministic homing rule as a crate-wide lint: unit tests stay inline below a fixed threshold (the proposal is ~500 test-LOC or ~40 test fns), extracted to a sibling `tests.rs` above it. Under that rule tree/generate.rs (~2030), correlation/resolve.rs (~531) move to `<module>/tests.rs` siblings (matching the already-extracted par/fitting form), while small modules (noise/rng.rs ~40, noise/seed.rs) stay inline. Pure relocation, no test body/assertion/tier/gate change, count-neutral -- resolves the intra-crate coin-flip without touching coverage.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Queued to:** test-corpus
+- **Correction (2026-09-11):** 16 modules exceed 500 inline test LOC (e.g. `sampling/external.rs` 2312); the anchor list is under-scoped.
 
 **TD-032 · Sev C · duplication · effort M · confidence high**
 The duplication narrows to the byte-identical make_bus/make_stage/make_hydro/identity_correlation across context.rs, provenance.rs and tests/reproducibility.rs plus the fourth date-differing make_hydro in seeds.rs; it does NOT extend to make_inflow_model (a legitimate parameterized-superset vs fixed-value split) nor to seeds.rs's make_stage/season-map builders (distinct signatures), so the defensible residue is one shared entity-builder surface owed for exactly those four builders, coverage-neutral with no test deleted.
@@ -3701,7 +3726,34 @@ _(no entries yet)_
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — reconciliation
 
-_(no entries yet)_
+### Tier-1 fix wave (2026-09-11) — validated at `1baeeadb`, fixed on `fix/quality-tier1` + `fix/quality-tier1-followups`
+
+The 112 ratified findings were re-derived against source (`PRIORITIES.md`, c03c0336: 0 refuted,
+26 partial, 86 verified) and the user-visible correctness tier was fixed first. `fix/quality-tier1`
+(a729a259, 4af5e4c7, 8375e63b, 2d7c7cd7, 0d4c8c22) is merged to `develop`; the two follow-up
+fixes found while executing it (19521701, 3b363161 on `fix/quality-tier1-followups`) are pending
+merge. Each closed entry carries a `- **Status:** fixed` bullet with current-tree evidence.
+
+| Finding    | Resolution                                                                                                                                                                                                                                                                         |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OD-011** | FIXED — the NCS column fill reads the resolved per-(source, stage) curtailment penalty like its three siblings.                                                                                                                                                                     |
+| **CD-056** | FIXED — one table-driven stage-axis rule (rule 49) over all six bound families, declared-id set membership; rule 16 retired. Its "padded region makes thermal legitimately family-specific" clause was wrong (correction bullet on the entry). CD-053's NCS half deliberately untouched. |
+| **CD-051** | FIXED — `validate_config` resolves both scenario sources; validate and run agree; Python parity test added.                                                                                                                                                                        |
+| **CD-058** | FIXED — atomic payload/manifest/CSV writes; a rewrite removes the old manifest, then every stale payload, before writing. The reader's directory enumeration made stale payloads a release-build silent hazard (correction bullet on the entry).                                   |
+
+Register corrections from `PRIORITIES.md` §3 were folded into their entries as
+`- **Correction (2026-09-11):**` bullets (PD-007, PD-023/024/025, CD-045, CD-047, CD-054, CD-058,
+CD-060, CD-066, CD-067, OD-017, OD-021, OD-029, TD-004, TD-008, TD-022, TD-028, TD-029, TD-031);
+`stations/stochastic/perf-queue.json` is a station artifact and was left as written.
+
+New observations recorded for the sddp / cli-python stations (no IDs minted outside a gate):
+`EventConfig.checkpoint_interval` has no production consumer; `SobolPrecomputed::new` had zero
+callers at `1baeeadb`; `sampling/out_of_sample.rs` carries a false "No heap allocation" doc claim.
+
+Mirror: `docs/design/reserved-seams-and-deferred-debt.md` gained its first 2026-09 section
+(ID-free, by tier) in the same commit as this entry.
+
+**Baseline for the next reconciliation: `develop` after `fix/quality-tier1-followups` merges.**
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 

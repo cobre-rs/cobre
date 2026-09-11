@@ -65,6 +65,12 @@ TD-002/005/007/014/016 B (they compound through one missing mechanism, §Tier 4)
 
 ### Tier 2 — hard-rule violations on the forward hot path (non-default config; fix before recommending QMC/LHS)
 
+**2026-09-11:** planned as `plans/quality-tier2-hotpath/` (spec + seam map) on the baseline that includes
+CD-072's fix. Owner decisions: per-iteration shared tables on the training session (never per thread),
+all three methods hoisted, single precomputed correlation path (twin and scan deleted), riders CD-069
+(shared point spec) and CD-066/CD-067 (entity-class enum) included. CD-072 (cross-class seed sharing,
+Sev A) was found while mapping the seams and fixed first on `fix/out-of-sample-class-seed`.
+
 | ID                     | Register                  | Defect                                                        | Fix-shape (validated)                                                                                                                                                                                                                                                                                                                                                                            | Effort                                                          |
 | ---------------------- | ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
 | PD-023, PD-024         | `:3285`, `:3297`          | Sobol/Halton per-draw heap allocation                         | Caller-owned per-thread QMC scratch threaded through `SampleRequest` (precedent: `perm_scratch`), keyed on (forward_seed, iteration, noise_group_id, dim, total_scenarios) and rebuilt on key change; pass `Some(&ctx)` into the existing `sobol_ctx`; add `HaltonPrecomputed`. Add a precomputed-vs-direct bit-equality test (`SobolPrecomputed::new` has zero callers today, including tests). | L (cross-crate plumbing into cobre-sddp's per-thread workspace) |

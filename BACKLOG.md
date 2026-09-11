@@ -3753,7 +3753,20 @@ callers at `1baeeadb`; `sampling/out_of_sample.rs` carries a false "No heap allo
 Mirror: `docs/design/reserved-seams-and-deferred-debt.md` gained its first 2026-09 section
 (ID-free, by tier) in the same commit as this entry.
 
-**Baseline for the next reconciliation: `develop` after `fix/quality-tier1-followups` merges.**
+### New finding minted at reconciliation (2026-09-11) — found while mapping the Tier-2 seams
+
+**CD-072 · Sev A · asymmetry · effort S · confidence high**
+Every out-of-sample class sampler was seeded from the study's root forward seed with no class discriminator anywhere in the derivation, so a deck that set two or more of `inflow`, `load`, `ncs` to `out_of_sample` drew bit-identical noise for the k-th entity of each class under every noise method (SAA, LHS, Sobol, Halton) — an undeclared perfect cross-class correlation; the shipped decks and every test set only the inflow class, so nothing pinned it.
+
+- **Station:** cobre-stochastic (sub-station sampling) — minted at reconciliation, not at the station gate
+- **Baseline:** `0d4c8c22` (develop after the Tier-1 merge)
+- **Anchors:** `crates/cobre-stochastic/src/sampling/mod.rs::build_forward_sampler`, `crates/cobre-stochastic/src/sampling/mod.rs::build_class_sampler`, `crates/cobre-stochastic/src/sampling/out_of_sample.rs::fill_uncorrelated`, `crates/cobre-stochastic/src/sampling/out_of_sample.rs::fill_saa`, `crates/cobre-stochastic/src/noise/seed.rs::derive_forward_seed_grouped`
+- **Evidence:** the three `build_class_sampler` calls pass the same `forward_seed`; `ClassSampler::fill`'s `OutOfSample` arm builds `FreshNoiseSpec` from `(forward_seed, iteration, scenario, noise_group_id, dim)` only; `fill_saa` seeds `derive_forward_seed_grouped(forward_seed, iteration, scenario, noise_group_id)` and each QMC/LHS point spec maps the same tuple. Reproduced with a throwaway test calling `ClassSampler::OutOfSample { forward_seed: 99, dim: 4 }` and `{ dim: 2 }` with one `ClassSampleRequest`: `output[..2]` identical for all four methods. Supported configuration: `config/mod.rs` tests assert `simulation.load_scheme == OutOfSample`; `stochastic_summary.rs` builds a context with `load: OutOfSample`.
+- **Fix-shape:** derive a per-class forward seed at `build_forward_sampler`; keep the inflow class on the root seed so every existing inflow-only deck reproduces bit-for-bit, derive load and NCS with a class tag under a new domain prefix.
+- **Alignment:** neutral
+- **Status:** fixed (2026-09-11) — `derive_class_forward_seed(root, "load" | "ncs")` in `noise/seed.rs` (`0x02` prefix); inflow unchanged; `sampling::tests::test_out_of_sample_classes_draw_distinct_streams` pins it (fails on the old seeding). `fix/out-of-sample-class-seed` ff2221d1 (pending merge). Results change only for decks with two or more out-of-sample classes.
+
+**Baseline for the next reconciliation: `develop` after `fix/quality-tier1-followups` and `fix/out-of-sample-class-seed` merge.**
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 

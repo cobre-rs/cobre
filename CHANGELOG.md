@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at study setup when `cobre run` resolved the simulation source. Both checks
   now validate the same rules for both sections.
 
+- **Policy checkpoint payloads and dictionary CSV files are now written
+  atomically, and rewriting an existing policy checkpoint directory can no
+  longer leave a partially written checkpoint behind.** Every checkpoint
+  payload, its manifest, and each dictionary CSV are now written to a
+  temporary sibling file and renamed into place, so a crash or I/O failure
+  mid-write leaves the previous file (or none) rather than a truncated one.
+  Rewriting a directory that already holds a checkpoint now removes its old
+  manifest before any new payload is written, so a crash partway through a
+  rewrite can no longer leave that old manifest pointing at a mix of old and
+  new payloads: a reader sees either the complete previous checkpoint or none
+  at all.
+
 ## [0.15.0] - 2026-08-24
 
 ### Added

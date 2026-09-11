@@ -10,6 +10,7 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 
+use super::super::atomic::write_bytes_atomic;
 use super::super::error::OutputError;
 use super::codec::{
     deserialize_checkpoint_manifest, deserialize_stage_basis, deserialize_stage_cuts,
@@ -140,6 +141,11 @@ fn bin_file_name(id: u32) -> String {
 /// written files are not cleaned up. An empty `stage_bases` writes no basis files
 /// (the `basis/` directory is still created).
 ///
+/// Rewriting a directory that already holds a checkpoint removes its
+/// `manifest.bin` before any payload write, so a crash partway through the
+/// rewrite cannot leave that old manifest pointing at new or partially written
+/// payloads.
+///
 /// # Errors
 ///
 /// - [`OutputError::IoError`] — directory creation or file write failed.
@@ -209,22 +215,30 @@ pub fn write_policy_checkpoint(
     metadata: &CheckpointManifest,
     stage_states: &[StageStatesPayload<'_>],
 ) -> Result<(), OutputError> {
+    let manifest_path = path.join("manifest.bin");
+
     let cuts_dir = path.join("cuts");
     std::fs::create_dir_all(&cuts_dir).map_err(|e| OutputError::io(&cuts_dir, e))?;
 
     let basis_dir = path.join("basis");
     std::fs::create_dir_all(&basis_dir).map_err(|e| OutputError::io(&basis_dir, e))?;
 
+    match std::fs::remove_file(&manifest_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(OutputError::io(&manifest_path, e)),
+    }
+
     for payload in stage_cuts {
         let file_path = cuts_dir.join(bin_file_name(payload.stage_id));
         let buf = serialize_stage_cuts(payload);
-        std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;
+        write_bytes_atomic(&file_path, &buf)?;
     }
 
     for record in stage_bases {
         let file_path = basis_dir.join(bin_file_name(record.stage_id));
         let buf = serialize_stage_basis(record);
-        std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;
+        write_bytes_atomic(&file_path, &buf)?;
     }
 
     if !stage_states.is_empty() {
@@ -234,15 +248,13 @@ pub fn write_policy_checkpoint(
         for payload in stage_states {
             let file_path = states_dir.join(bin_file_name(payload.stage_id));
             let buf = serialize_stage_states(payload);
-            std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;
+            write_bytes_atomic(&file_path, &buf)?;
         }
     }
 
     // Write manifest.bin LAST — its presence is the commit signal.
     let manifest_buf = serialize_checkpoint_manifest(metadata);
-    let manifest_path = path.join("manifest.bin");
-    std::fs::write(&manifest_path, &manifest_buf)
-        .map_err(|e| OutputError::io(&manifest_path, e))?;
+    write_bytes_atomic(&manifest_path, &manifest_buf)?;
 
     Ok(())
 }

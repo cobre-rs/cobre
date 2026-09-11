@@ -959,6 +959,23 @@ mod tests {
 
     // ── read_policy_checkpoint round-trip tests ───────────────────────────────
 
+    fn assert_no_tmp_files_under(dir: &std::path::Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                assert_no_tmp_files_under(&path);
+            } else {
+                assert_ne!(
+                    path.extension().and_then(std::ffi::OsStr::to_str),
+                    Some("tmp"),
+                    "no .tmp file must remain under {}: found {}",
+                    dir.display(),
+                    path.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn read_policy_checkpoint_full_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -985,6 +1002,8 @@ mod tests {
             &[],
         )
         .expect("write must succeed");
+
+        assert_no_tmp_files_under(tmp.path());
 
         let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");
 
@@ -1042,6 +1061,123 @@ mod tests {
         assert!(
             checkpoint.stage_bases.is_empty(),
             "no basis files must produce empty stage_bases"
+        );
+    }
+
+    #[test]
+    fn rewrite_over_existing_checkpoint_reads_back_the_new_artifact() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let a0 = [1.0_f64, 2.0, 3.0];
+        let piece_a = PolicyCutRecord {
+            intercept: 11.0,
+            ..make_cut_record(101, 0, 1, &a0)
+        };
+        let cuts_a = [piece_a];
+        let stage_cuts_a = [make_stage_cuts_payload(0, &cuts_a, &[0], 3)];
+        let basis_a = [make_basis_record(0)];
+        let metadata_a = make_metadata(1, 3);
+
+        write_policy_checkpoint(tmp.path(), &stage_cuts_a, &basis_a, &metadata_a, &[])
+            .expect("write of checkpoint A must succeed");
+
+        let b0 = [40.0_f64, 50.0, 60.0];
+        let piece_b = PolicyCutRecord {
+            intercept: 99.0,
+            ..make_cut_record(202, 0, 5, &b0)
+        };
+        let cuts_b = [piece_b];
+        let stage_cuts_b = [make_stage_cuts_payload(0, &cuts_b, &[0], 3)];
+        let basis_b = [make_basis_record(0)];
+        let metadata_b = make_metadata(1, 3);
+
+        write_policy_checkpoint(tmp.path(), &stage_cuts_b, &basis_b, &metadata_b, &[])
+            .expect("rewrite with checkpoint B must succeed");
+
+        assert_no_tmp_files_under(tmp.path());
+
+        let checkpoint = read_policy_checkpoint(tmp.path())
+            .expect("read of the rewritten checkpoint must succeed");
+
+        assert_eq!(
+            checkpoint.stage_cuts.len(),
+            1,
+            "rewrite must not accumulate stale pools from A"
+        );
+        assert_eq!(
+            checkpoint.stage_cuts[0].stage_id, 0,
+            "must read back B's stage id"
+        );
+        assert_eq!(checkpoint.stage_cuts[0].cuts.len(), 1);
+
+        let cut = &checkpoint.stage_cuts[0].cuts[0];
+        assert_eq!(cut.cut_id, 202, "must read back B's cut id, not A's");
+        assert_ne!(cut.cut_id, 101, "A's cut id must not survive the rewrite");
+        assert_eq!(
+            cut.coefficients,
+            &[40.0f64, 50.0, 60.0],
+            "must read back B's coefficients, not A's"
+        );
+        assert_eq!(cut.intercept, 99.0, "must read back B's intercept, not A's");
+        assert_ne!(
+            cut.intercept, 11.0,
+            "A's intercept must not survive the rewrite"
+        );
+
+        assert_eq!(checkpoint.stage_bases.len(), 1);
+        assert_eq!(checkpoint.stage_bases[0].stage_id, 0);
+    }
+
+    #[test]
+    fn interrupted_rewrite_never_pairs_an_old_manifest_with_new_payloads() {
+        // Skip this test on platforms where read-only enforcement is unreliable
+        // (e.g., when running as root).
+        if is_root() {
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+
+        let a0 = [1.0_f64, 2.0, 3.0];
+        let cuts_a = [make_cut_record(1, 0, 1, &a0)];
+        let stage_cuts_a = [make_stage_cuts_payload(0, &cuts_a, &[0], 3)];
+        let metadata_a = make_metadata(1, 3);
+
+        write_policy_checkpoint(tmp.path(), &stage_cuts_a, &[], &metadata_a, &[])
+            .expect("write of checkpoint A must succeed");
+
+        // Make cuts/ unwritable so the first payload write of the rewrite fails
+        // after the manifest removal has already happened.
+        let cuts_dir = tmp.path().join("cuts");
+        let mut perms = std::fs::metadata(&cuts_dir).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o555);
+        std::fs::set_permissions(&cuts_dir, perms).unwrap();
+
+        let b0 = [40.0_f64, 50.0, 60.0];
+        let cuts_b = [make_cut_record(2, 0, 5, &b0)];
+        let stage_cuts_b = [make_stage_cuts_payload(0, &cuts_b, &[0], 3)];
+        let metadata_b = make_metadata(1, 3);
+
+        let result = write_policy_checkpoint(tmp.path(), &stage_cuts_b, &[], &metadata_b, &[]);
+
+        // Restore permissions so the tempdir can be cleaned up.
+        let mut perms2 = std::fs::metadata(&cuts_dir).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms2, 0o755);
+        std::fs::set_permissions(&cuts_dir, perms2).unwrap();
+
+        assert!(
+            matches!(result, Err(OutputError::IoError { .. })),
+            "the interrupted rewrite must surface an IoError, got: {result:?}"
+        );
+        assert!(
+            !tmp.path().join("manifest.bin").exists(),
+            "manifest.bin must stay absent after an interrupted rewrite"
+        );
+
+        let read_result = read_policy_checkpoint(tmp.path());
+        assert!(
+            matches!(read_result, Err(OutputError::IoError { .. })),
+            "read_policy_checkpoint must reject the directory as not-a-checkpoint, got: {read_result:?}"
         );
     }
 

@@ -2452,7 +2452,7 @@ Confirmed narrowly: the stage-axis out-of-horizon validator is missing for the f
 - **Fix-shape:** Give the stage axis the same table-driven treatment the block axis already has, so one rule covers every bound family instead of two families having bespoke rules and five having none. It belongs beside the block-axis rule in the Layer 5a family module, keyed off the same per-family descriptor and the same study-stage set, and it should reuse the crate's stage resolver rather than a fresh id-non-negative scan.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Correction (2026-09-11):** the "thermal's guard is legitimately family-specific (padded resolution region)" clause is wrong — the padded cells `[n_stages, n_stages + k_max)` receive base values only; `resolve_bounds` keys thermal override rows through the same `stage_index` map as every other family. Thermal's `[0, n_stages)` position test was therefore a latent defect for gapped or 1-based study id sets (which `StageIdResolver` explicitly admits): an undeclared id inside the range was silently dropped, the last declared id was rejected.
-- **Status:** fixed (2026-09-11) — rule 49 `check_bound_stage_id_range` (`semantic/block_bounds.rs`) admits by declared-id set membership across all six bound families; rule 16 retired. The CD-053 half (absorbing the NCS Layer-3 stage check) was deliberately NOT done — NCS keeps its Layer-3 check; CD-053 stays open. `fix/quality-tier1` a729a259 + 0d4c8c22 (merged) + `fix/quality-tier1-followups` 19521701 (pending merge).
+- **Status:** fixed (2026-09-11) — rule 49 `check_bound_stage_id_range` (`semantic/block_bounds.rs`) admits by declared-id set membership across all six bound families; rule 16 retired. The CD-053 half (absorbing the NCS Layer-3 stage check) was deliberately NOT done — NCS keeps its Layer-3 check; CD-053 stays open. `fix/quality-tier1` a729a259 + 0d4c8c22 (merged) + `fix/quality-tier1-followups` 19521701 (merged to develop 2026-09-12).
 
 **CD-057 · Sev B (A-risk) · asymmetry · effort M · confidence high**
 Confirmed narrowly: the positional `FILE_ENTRIES` to `manifest_fields_mut` zip is guarded only by an equal-length assertion that cannot detect a same-arity reordering, so swapping two entries silently misassigns presence flags; the `ParsedData`/schema.rs list is a third parallel restatement of the file set but keyed by name (a DRY/fan-out concern), not part of the positional join.
@@ -2475,7 +2475,7 @@ The crash-safety hole is specifically the in-place (O_TRUNC) overwrites of manif
 - **Fix-shape:** Route every remaining output write through output/atomic.rs. For the policy artifact, serialize each payload to bytes as it already does and hand the buffer to write_bytes_atomic instead of std::fs::write, keeping manifest.bin last so the commit-signal ordering is unchanged;
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Correction (2026-09-11):** payload writes were NOT covered by manifest-last on the resume path — the same directory is rewritten in place and the old `manifest.bin` was never removed, so a crash mid-rewrite paired the old commit signal with new payloads. Also: `read_policy_checkpoint` lists `cuts/`, `basis/`, `states/` (no inventory) and the pool count against the manifest is only a `debug_assert_eq!` (`cobre-sddp/src/cut/fcf.rs::from_deserialized`), so a rewrite with fewer pools or with states export off left stale payloads that a release build read silently (the stale last pool becoming the terminal witness in `cobre-cli/src/commands/run/policy.rs`).
-- **Status:** fixed (2026-09-11) — every checkpoint payload, the manifest and both dictionary CSVs go through `write_bytes_atomic`; a rewrite removes `manifest.bin`, then every previous `.bin` (and `states/` when none is written), before writing; manifest stays last. `fix/quality-tier1` 8375e63b (merged) + `fix/quality-tier1-followups` 3b363161 (pending merge).
+- **Status:** fixed (2026-09-11) — every checkpoint payload, the manifest and both dictionary CSVs go through `write_bytes_atomic`; a rewrite removes `manifest.bin`, then every previous `.bin` (and `states/` when none is written), before writing; manifest stays last. `fix/quality-tier1` 8375e63b (merged) + `fix/quality-tier1-followups` 3b363161 (merged to develop 2026-09-12).
 
 **CD-059 · Sev B · asymmetry · effort M · confidence high**
 The confirmed defect is narrowly the false module-doc contract at output/mod.rs:6-8 (write_results does not 'write all output artifacts' and does not mirror load_case) and the resulting undocumented CLI/Python hand-mirror; it does not establish that write_results must be expanded to orchestrate every artifact - that consolidation is the 0a design choice, not part of the present defect.
@@ -3207,6 +3207,7 @@ Only the single `class_name != "inflow"` Historical gate at mod.rs:436 is a corr
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Reviewer rating:** C — recalibrated to B (A-risk) because raised from C per the silent-divergence seam precedent: the untyped &str class gate silently mis-gates on a call-site literal typo.
 - **Correction (2026-09-11):** the gate is at `sampling/mod.rs::` the entity-type match (`sampling/mod.rs:360` at `1baeeadb`); a typo fails loudly, so this is not a silent-accept.
+- **Status:** partially addressed (2026-09-12) — the closed discriminant now exists (`EntityClass`, see CD-067) but `ClassSamplerParams.class_name: &str` and the `class_name != "inflow"` Historical gate in `build_class_sampler` (`sampling/mod.rs`) still ride on the string; the remaining fix is to carry `EntityClass` on `ClassSamplerParams`, keep the label for diagnostics via a `Display`/`as_str`, and derive the class forward seed from the same value. Open, effort S now.
 
 **CD-067 · Sev B (A-risk) · bad-abstraction · effort M · confidence high**
 The in-station residue is the in-crate GroupFactor.entity_type String field plus the two `!=` dispatch sites (resolve.rs:286, 352) that a boundary-parse to an in-crate EntityClass{Inflow,Load,Ncs} enum at build() would make compiler-checked; the source-of-truth String is cobre-core's CorrelationEntity.entity_type (scenario.rs:594) which is OUT of station (a cross-station note, not changed here), so the confirmed defect is the stochastic-side stringly-typed carrier + comparisons, not the cobre-core field.
@@ -3218,6 +3219,7 @@ The in-station residue is the in-crate GroupFactor.entity_type String field plus
 - **Fix-shape:** Introduce an in-crate closed enum EntityClass { Inflow, Load, Ncs }. Parse the cobre-core-sourced CorrelationEntity.entity_type String exactly once, at DecomposedCorrelation::build, into the enum stored on GroupFactor (replacing the String field). Type the apply_correlation_for_class and resolve_class_positions `entity_type` parameter and the generate.rs / sampling/mod.rs call-site literals on the enum, so every class comparison becomes an exhaustive compiler-checked match with a single String->enum boundary at build. The source String remains owned by cobre-core (a cross-station note, not a change here); the boundary-parse keeps this fix entirely inside cobre-stochastic. No paradigm noun and >=2 consumers, so it does not trip the L1 purity guardrail.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Correction (2026-09-11):** producers are the three `sampling/mod.rs` tag sites (`:231/:240/:249` at `1baeeadb`); cobre-io rejects an unknown `entity_type` in `referential.rs` (`:447–461`), so the finding is not user-visible.
+- **Status:** fixed (2026-09-12) — in-crate `EntityClass { Inflow, Load, Ncs }` with `EntityClass::from_wire` parsed once in `DecomposedCorrelation::build` (an unknown tag is `InvalidCorrelation`); `GroupFactor.entity_type: EntityClass`; the applier and both producers (`ForwardSampler::sample`, `generate_opening_tree`) pass variants. ebba0508. CD-066's sampler-side gate is NOT covered (see its status).
 
 **CD-068 · Sev B · duplication · effort M · confidence high**
 The narrow residue is that the full-vector applier trio (apply_correlation + resolve_positions + GroupFactor.positions) is pub production surface with NO production caller (kept alive only as the per-class path's differential-test oracle, test_per_class_tree_matches_full_vector_*) and the per-class precompute (resolve_class_positions + GroupFactor.class_positions) is wholly unwired (zero callers, class_positions never populated) -- so exactly one applier (apply_correlation_for_class) and zero precompute run in production; this is duplicated-but-tested surface plus a dead precompute, NOT literal unreferenced dead code, and its removal-vs-wiring is the open question candidate perf-00 pulls the other way on.
@@ -3228,6 +3230,7 @@ The narrow residue is that the full-vector applier trio (apply_correlation + res
 - **Evidence:** Production correlation runs exclusively through apply_correlation_for_class on the linear-scan fallback: the per-class precompute resolve_class_positions is never called in any build, so GroupFactor.class_positions stays None and the apply_group_precomputed branch it feeds is unreachable. The entire full-vector twin (apply_correlation + resolve_positions + GroupFactor.positions) has no non-test workspace consumer —… Re-derive: `git grep -nE 'apply_correlation\b|\.resolve_positions|resolve_class_positions' a136840d -- crates/cobre-stochastic/src crates/cob…`
 - **Fix-shape:** Collapse to a single correlation applier. Preferred: since production uses only apply_correlation_for_class on the scan path, remove the full-vector twin (apply_correlation, resolve_positions, GroupFactor.positions) that only tests exercise and the never-called resolve_class_positions + GroupFactor.class_positions, leaving one applier over the shared apply_group_scan and one position-cache concept. Alternative, if the position-precompute is genuinely wanted for the forward-sampler hot loop: wire resolve_class_positions once at ForwardSampler/opening-tree setup and delete the redundant full-vector method rather than keeping both. Either way keep the spectral transform byte-identical and preserve the BTreeMap deterministic iteration order noted in-code; retire, not re-point, the segment-relative-vs-full-vector position-base distinction so the trap cannot be mis-merged.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
+- **Status:** fixed (2026-09-12) — `apply_correlation`, `resolve_positions`, `GroupFactor.positions`, `apply_group_scan`, `apply_group_precomputed`, `apply_correlation_for_class` and the four `test_per_class_tree_matches_full_vector_*` oracles are deleted; one applier (`apply_groups_for_class`) over positions resolved at build; the scheduled-profile composition is re-covered by `apply_groups_for_class_differs_between_scheduled_and_default_profile`. ebba0508, fe439fc0.
 
 **CD-069 · Sev C · duplication · effort S · confidence high**
 The residue is strictly the missing shared parameter-carrier: the three structs are byte-identical in field set and types (differing only in name and one Lhs doc line), so the defect is purely a triplicated bag-of-parameters seam (Sev C); each struct is a live, exercised type (not a speculative one-consumer abstraction) and the three point generators legitimately keep distinct algorithms -- only the parameter carrier is duplicated, nothing about the generators themselves.
@@ -3238,6 +3241,7 @@ The residue is strictly the missing shared parameter-carrier: the three structs 
 - **Evidence:** The three point-wise generators (sample_lhs_point, scrambled_halton_point, scrambled_sobol_point/_precomputed) each take a distinct spec struct whose field set is byte-for-byte the same six fields with the same types. out_of_sample.rs constructs all three from the same FreshNoiseSpec. There is no shared type, so the point-sampling parameter contract is expressed in triplicate and any new field (or a rename) is an O(… Re-derive: `git show a136840d:crates/cobre-stochastic/src/tree/lhs.rs | sed -n '88,102p' ; git show a136840d:crates/cobre-stochastic/src/tree…`
 - **Fix-shape:** Introduce one shared spec type (e.g. QmcPointSpec / PointSampleSpec) in a common noise or tree module carrying sampling_seed/iteration/scenario/stage_id/total_scenarios/dim, and have sample_lhs_point, scrambled_halton_point, scrambled_sobol_point and scrambled_sobol_point_precomputed all accept it. The three generators keep their distinct algorithms; only the parameter carrier is unified, so a future field is a one-line change. Three present consumers make this a real de-duplication, not a speculative one-consumer abstraction, so it does not trip the L1 purity guardrail.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
+- **Status:** fixed (2026-09-12) — `NoisePointSpec` (`tree/point_spec.rs`, re-exported at the crate root) is the one carrier for the LHS, Halton and Sobol generators; the three structs are gone. 66b9b788. Residue recorded as CD-073 (its `stage_id` field carries the noise-group id).
 
 **CD-070 · Sev B (A-risk) · duplication · effort L · confidence high**
 The confirmed defect is confined to (1) the second parallel copy of the declared-id->study-index resolver (stage_id_to_index at context.rs:406 duplicating cobre-io's StageIdResolver) as the sole drift risk, and (2) the placement observation that the L1 store constructor owns realized-value external-scenario adaptation; it is NOT a dispute of the ratified External-authoritative behavior or the sigma=0 rejection, and the sample-moment derivation itself is correctly single-owned (not duplicated).
@@ -3312,6 +3316,7 @@ Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/Ex
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
 - **Correction (2026-09-11):** path class is HOT (forward sampler, per iteration × scenario × stage under `scheme: out_of_sample` + `qmc_sobol`), not "setup/fitting-time"; the Measurement bullet's path-class clause is superseded.
+- **Status:** fixed (2026-09-12) — `ForwardSampler::rebuild_noise_tables` builds one `SobolPrecomputed` per `(noise_group_id, noise_method)` and per class once per iteration (`ClassNoiseTables::refill`, `sampling/tables.rs`); `scrambled_sobol_point` reads it and is the only production generator, the direct one survives as `#[cfg(test)] scrambled_sobol_point_reference` (`sobol_point_matches_reference`). `tests/forward_sampler_golden.rs` pins the pre-change bits; `cobre-sddp/tests/forward_sampler_no_alloc.rs` asserts zero allocations across Sobol, Halton and LHS draws with a 70-entity group. `plans/quality-tier2-hotpath` 66b9b788 … fe439fc0 (merged to develop 2026-09-12).
 
 **PD-024 · Sev B · missing-seam · effort M · confidence high**
 Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-sieve + nested Vec<Vec<Vec<u32>>> scramble-table allocation and recomputation is scenario-invariant and should be hoisted per (iteration, stage); because NO HaltonPrecomputed seam exists (unlike Sobol's dormant one), the precompute primitive is a cross-station dependency on the tree-noise cell and only the sampler-side wiring is this sub-station's part; determinism is preserved (tables are a pure function of the existing seed tuple).
@@ -3325,6 +3330,7 @@ Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-s
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
 - **Correction (2026-09-11):** path class is HOT (forward sampler under `scheme: out_of_sample` + `qmc_halton`), not "setup/fitting-time".
+- **Status:** fixed (2026-09-12) — `HaltonPrecomputed` (primes + scramble tables, `tree/qmc_halton`) is built once per `(noise_group_id, noise_method)` table and read by `scrambled_halton_point`; the direct generator is `#[cfg(test)] scrambled_halton_point_reference` (`halton_point_matches_reference`). Same wave as PD-023.
 
 **PD-025 · Sev B · duplication · effort M · confidence high**
 Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not allocation — perm_scratch is caller-owned): the scenario-invariant set of `dim` Fisher-Yates permutations of `total_scenarios` strata is reshuffled once per scenario, giving the quadratic-in-scenario O(dim*total_scenarios^2) per stage that a per-(iteration,stage) permutation cache (or the existing generate_lhs batch primitive) collapses to O(dim*total_scenarios), determinism preserved.
@@ -3338,6 +3344,7 @@ Scoped to the OutOfSample LHS forward path, and a redundant-COMPUTE finding (not
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
 - **Correction (2026-09-11):** path class is HOT (forward sampler under `scheme: out_of_sample` + `lhs`), not "setup/fitting-time".
+- **Status:** fixed (2026-09-12) — `LhsPrecomputed` holds the `dim × total_scenarios` stratum table, built once per table with `perm_rng` consumed in the original order; `sample_lhs_point` reads one column per draw, O(dim · n) per group instead of O(dim · n²) (`lhs_point_matches_reference`, `lhs_precomputed_strata_rows_are_permutations`). Same wave as PD-023.
 
 **PD-026 · Sev B · duplication · effort M · confidence high**
 Narrowed: the confirmed defect is a pure eliminable-work perf issue -- the stage-invariant per-entity position resolution (entity_order.iter().position at resolve.rs:428) recomputed n_openings x n_groups times per stage because resolve_class_positions has zero callers so class_positions stays None; I concede the scan output is numerically correct and bit-identical to the precomputed/full-vector path (proven by test_per_class_tree_matches_full_vector_*), so this is not a correctness defect, and the fix requires either &mut DecomposedCorrelation plumbing into generate_opening_tree or build-time resolution.
@@ -3350,6 +3357,7 @@ Narrowed: the confirmed defect is a pure eliminable-work perf issue -- the stage
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Status:** fixed (2026-09-12) — `DecomposedCorrelation::build(model, entity_order, dims)` resolves `GroupFactor.class_positions: Box<[usize]>` once at construction (`resolve_into`); the scan fallback is deleted (`test_class_positions_match_linear_scan_three_class_model`). Same wave as PD-023, ebba0508.
 
 **PD-027 · Sev B · missing-seam · effort M · confidence high**
 Narrowed to the live path: at baseline only apply_group_scan's n>64 branch (resolve.rs:426/436-437, three transient Vecs) is actually reached from the tree loop -- apply_group_precomputed is unreachable in production because class_positions stays None (per perf-00), so its n>64 allocation (resolve.rs:380-381) is latent, not currently on any production path; the confirmed residue is the per-opening transient scratch allocation in apply_group_scan for any correlation group exceeding MAX_STACK_DIM=64.
@@ -3362,6 +3370,7 @@ Narrowed to the live path: at baseline only apply_group_scan's n>64 branch (reso
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Status:** fixed (2026-09-12) — `DecomposedCorrelation::apply_groups_for_class(groups, class, class_noise, scratch)` correlates a group of any width from caller-owned scratch: `ScratchBuffers.corr_scratch` (sized `2 * noise_dim`, threaded through `SampleRequest.corr_scratch`) on the forward path, one `Vec` per tree in `generate_opening_tree`. The allocation guard in PD-023's status covers the wide-group path. ebba0508.
 
 **PD-028 · Sev C · duplication · effort S · confidence high**
 The eliminable cost is precisely the stage-constant profile+slice resolution (the profile_for_stage HashMap probe plus the factors.get BTreeMap<String> string-keyed walk) repeated 3 x n_openings per stage; I concede the per-group entity_type filter and the spectral transform must stay per-call/per-group -- only the profile-name and group-factor-slice lookup is hoistable to once per stage, so the defect is repeated map traversal, not the per-opening application itself.
@@ -3373,6 +3382,7 @@ The eliminable cost is precisely the stage-constant profile+slice resolution (th
 - **Fix-shape:** Resolve the &[GroupFactor] slice for the stage once, before the opening loop in generate_opening_tree (e.g. a per-stage accessor on DecomposedCorrelation that returns the group-factor slice for a stage_id), then iterate openings against that borrowed slice, filtering by entity_type in the loop. Folds naturally into candidate 1's once-per-stage/tree resolution.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path) — recorded as deferred debt, below the Sev-A/B performance-sweep threshold.
+- **Status:** fixed (2026-09-12) — `DecomposedCorrelation::groups_for_stage(stage_id)` resolves the profile and the group slice once per draw in `ForwardSampler::sample` and once per stage above the opening loop in `generate_opening_tree`. ebba0508.
 
 **PD-029 · Sev C · duplication · effort M · confidence high**
 The quadratic is real but bounded to a single setup-time construction (StudySetup::new, once per study) and to l_state = max PAR lag order (a small bounded model parameter, not n_scenarios/n_stages/n_iterations), so the confirmed residue is a low-magnitude O(n_hydros*l_state^2*S) setup-time redundancy fixable by walking the occurrence chain once per hydro, never a hot-path or per-iteration cost.
@@ -3764,9 +3774,76 @@ Every out-of-sample class sampler was seeded from the study's root forward seed 
 - **Evidence:** the three `build_class_sampler` calls pass the same `forward_seed`; `ClassSampler::fill`'s `OutOfSample` arm builds `FreshNoiseSpec` from `(forward_seed, iteration, scenario, noise_group_id, dim)` only; `fill_saa` seeds `derive_forward_seed_grouped(forward_seed, iteration, scenario, noise_group_id)` and each QMC/LHS point spec maps the same tuple. Reproduced with a throwaway test calling `ClassSampler::OutOfSample { forward_seed: 99, dim: 4 }` and `{ dim: 2 }` with one `ClassSampleRequest`: `output[..2]` identical for all four methods. Supported configuration: `config/mod.rs` tests assert `simulation.load_scheme == OutOfSample`; `stochastic_summary.rs` builds a context with `load: OutOfSample`.
 - **Fix-shape:** derive a per-class forward seed at `build_forward_sampler`; keep the inflow class on the root seed so every existing inflow-only deck reproduces bit-for-bit, derive load and NCS with a class tag under a new domain prefix.
 - **Alignment:** neutral
-- **Status:** fixed (2026-09-11) — `derive_class_forward_seed(root, "load" | "ncs")` in `noise/seed.rs` (`0x02` prefix); inflow unchanged; `sampling::tests::test_out_of_sample_classes_draw_distinct_streams` pins it (fails on the old seeding). `fix/out-of-sample-class-seed` ff2221d1 (pending merge). Results change only for decks with two or more out-of-sample classes.
+- **Status:** fixed (2026-09-11) — `derive_class_forward_seed(root, "load" | "ncs")` in `noise/seed.rs` (`0x02` prefix); inflow unchanged; `sampling::tests::test_out_of_sample_classes_draw_distinct_streams` pins it (fails on the old seeding). `fix/out-of-sample-class-seed` ff2221d1 (merged to develop 2026-09-12). Results change only for decks with two or more out-of-sample classes.
 
-**Baseline for the next reconciliation: `develop` after `fix/quality-tier1-followups` and `fix/out-of-sample-class-seed` merge.**
+### Tier-2 fix wave (2026-09-12) — `plans/quality-tier2-hotpath`, base `5cc0a042` (develop after both follow-ups and CD-072 merged), merged to `develop` at `fe439fc0`
+
+Fourteen tickets in two epics, every ticket bit-for-bit neutral (goldens captured on the pre-change
+code in `crates/cobre-stochastic/tests/forward_sampler_golden.rs`). Each closed entry carries a
+`- **Status:** fixed` bullet with current-tree evidence.
+
+| Finding                    | Resolution                                                                                                                                                                                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PD-023, PD-024, PD-025** | FIXED — per-iteration noise tables (`ForwardNoiseTables`, one table per class and `(noise_group_id, noise_method)`), rebuilt by each driver and shared by reference through the sample request; Sobol wires its dormant precompute, Halton and LHS gain one each. |
+| **PD-026, PD-028**         | FIXED — positions resolved once at `DecomposedCorrelation::build`; profile and group slice resolved once per draw / per stage.                                                                                                                                    |
+| **PD-027**                 | FIXED — caller-owned correlation scratch (`ScratchBuffers.corr_scratch`) replaces the permutation scratch; no allocation at any group width, pinned by a counting-allocator guard.                                                                                |
+| **CD-068**                 | FIXED — the full-vector applier, the scan fallback and their differential oracles are deleted; one applier remains.                                                                                                                                              |
+| **CD-069**                 | FIXED — one `NoisePointSpec`.                                                                                                                                                                                                                                    |
+| **CD-067**                 | FIXED — `EntityClass` parsed once at build; the correlation side is typed end to end.                                                                                                                                                                            |
+| **CD-066**                 | PARTIAL — the enum exists; the sampler-side `class_name: &str` gate is still open (status bullet on the entry).                                                                                                                                                  |
+
+Found and fixed inside the wave (not register findings): the hoist moved Sobol construction ahead
+of the draw-time dimension check, so a class wider than the direction table panicked in the rebuild
+instead of returning `DimensionExceedsCapacity` — `ClassNoiseTables::refill` is fallible and both
+drivers propagate; `WorkspaceSizing.total_forward_passes` lost its only reader when the permutation
+scratch was retyped and is removed; the allocation guard's `mod common;` pulled the aggregator's own
+`#[cfg(test)]` tests into its binary and failed under the threaded `cargo test` harness (nextest's
+process-per-test isolation masked it) — the guard now includes only `common/builders.rs`.
+
+Observations from the 2026-09-11 list now resolved: `SobolPrecomputed::new` has production callers;
+the false "No heap allocation" claim in `sampling/out_of_sample.rs` is gone; `cargo machete` is
+clean (the unused `postcard` dependency left `crates/cobre-sddp/Cargo.toml`). Still open:
+`EventConfig.checkpoint_interval` has no production consumer.
+
+Partial progress on the test-corpus tier (not closed): `crates/cobre-stochastic/tests/common/mod.rs`
+now homes the correlation-model and inflow order/dimension fixtures for the three QMC/LHS binaries
+(part of TD-029/TD-030); `make_bus`, `make_hydro`, `make_inflow_model`, `approx_erf` and `norm_cdf`
+remain copied per binary, and `saa_golden_value.rs` / `forward_sampler.rs` / `forward_sampler_golden.rs`
+keep local helpers whose shapes differ. The cobre-sddp side already had `tests/common/builders.rs`.
+
+### New findings minted at reconciliation (2026-09-12) — found while executing the Tier-2 wave
+
+**CD-073 · Sev C · bad-naming · effort S · confidence high**
+`NoisePointSpec.stage_id` is fed `noise_group_id` at every production call site (`fill_uncorrelated`, `ClassNoiseTables::refill` → `build_table`), and the `stage_id` position on the three precompute constructors receives the group id too; the name predates the wave and was preserved deliberately so the precomputed-vs-direct equivalence tests stayed trustworthy.
+
+- **Station:** cobre-stochastic (sub-station tree-noise) — minted at reconciliation
+- **Baseline:** `fe439fc0`
+- **Anchors:** `crates/cobre-stochastic/src/tree/point_spec.rs::NoisePointSpec`, `crates/cobre-stochastic/src/sampling/out_of_sample.rs::fill_uncorrelated`, `crates/cobre-stochastic/src/sampling/tables.rs::build_table`
+- **Evidence:** every producer writes `stage_id: spec.noise_group_id` or passes `group` into the `stage_id` parameter; the opening-tree callers pass a real stage id. One name, two meanings.
+- **Fix-shape:** rename the field (and the constructor parameter) to the seed-tuple role it plays (`noise_group_id`, or a neutral `group_id`), or split the tree-side and forward-side spec constructors so each names its own key. Bit-neutral; a rename touches every equivalence test and the goldens' helper, so it is its own narrow ticket, not folded into another.
+- **Alignment:** neutral
+
+**PD-031 · Sev C · asymmetry · effort S · confidence high**
+`fill_uncorrelated`'s `Selective` and `HistoricalResiduals` arms emit `tracing::warn!` on every draw before falling back to the sample-average method; under those (unsupported-in-forward) methods the warning fires once per (iteration, scenario, stage) on the hot path.
+
+- **Station:** cobre-stochastic (sub-station sampling) — minted at reconciliation
+- **Baseline:** `fe439fc0`
+- **Anchors:** `crates/cobre-stochastic/src/sampling/out_of_sample.rs::fill_uncorrelated`
+- **Evidence:** the two arms log with the stage id and fall through to `fill_saa`; nothing rate-limits or hoists the warning to sampler construction.
+- **Fix-shape:** reject or warn once at `build_forward_sampler` (where the per-stage methods are known) and make the two arms silent fallbacks, or reject the combination at config validation so the arms become unreachable.
+- **Alignment:** neutral
+
+**TD-034 · Sev C · asymmetry · effort S · confidence high**
+`crates/cobre-sddp/tests/common/permute.rs` carries its own `#[cfg(test)] mod tests`, so every integration binary that declares `mod common;` compiles and runs those tests inside its own harness; a binary that owns process-global state (the counting-allocator guard) cannot use the aggregator at all and includes `common/builders.rs` by `#[path]` with an include-level `dead_code` allow instead.
+
+- **Station:** cobre-sddp (test corpus) — minted at reconciliation
+- **Baseline:** `fe439fc0`
+- **Anchors:** `crates/cobre-sddp/tests/common/permute.rs`, `crates/cobre-sddp/tests/common/mod.rs`, `crates/cobre-sddp/tests/forward_sampler_no_alloc.rs`
+- **Evidence:** `cargo test -p cobre-sddp --features test-support --test forward_sampler_no_alloc -- --list` showed four tests before the `#[path]` include; nextest's process-per-test isolation hid the coupling on every per-ticket gate, and only the threaded `cargo test` harness (which `ci.yml` runs) exposed it.
+- **Fix-shape:** move `permute.rs`'s tests to a binary of their own (or to a `#[cfg(test)]` module gated behind a cargo feature the aggregator does not enable), so `mod common;` never adds tests to a consumer; then the guard can use the aggregator and drop its include-level allow. Fold into the test-support surface work (Tier 4) that already owns `common/`.
+- **Alignment:** neutral
+
+**Baseline for the next reconciliation: `develop` @ `fe439fc0` (the Tier-2 merge).**
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 

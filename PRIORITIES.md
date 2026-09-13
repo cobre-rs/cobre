@@ -20,7 +20,12 @@ register entry. Finding IDs are owned by `BACKLOG.md`; every ID below links to i
 - **Tier 1 status (2026-09-11):** all four FIXED — `fix/quality-tier1` (a729a259 … 0d4c8c22,
   merged to `develop`) plus two follow-ups found during execution on `fix/quality-tier1-followups`:
   19521701 (thermal joins rule 49 by declared-id membership; rule 16 retired) and 3b363161
-  (rewrite clears stale checkpoint payloads). Entries carry `- **Status:** fixed` bullets.
+  (rewrite clears stale checkpoint payloads). Entries carry `- **Status:** fixed` bullets. Both
+  follow-ups and CD-072's fix are merged to `develop`.
+- **Tier 2 status (2026-09-12):** all eight FIXED plus CD-067; CD-066 partial — `plans/quality-tier2-hotpath`,
+  14 tickets, commits 66b9b788 … fe439fc0 (merged to `develop`, which is the next reconciliation
+  baseline). Three new findings minted (CD-073, PD-031, TD-034); the wave's own defects and their
+  fixes are recorded in the register's reconciliation section.
 - **Not yet a roadmap:** `tools/check-roadmap-dag.py` requires `- **Status:**` bullets on entries
   (none exist yet; the parser reads all 162 non-do-not-touch entries as `open`), so the Waves table
   in §5 is an _interim_ schedule in the checker's vocabulary, for the unified-roadmap station to lift.
@@ -71,6 +76,13 @@ all three methods hoisted, single precomputed correlation path (twin and scan de
 (shared point spec) and CD-066/CD-067 (entity-class enum) included. CD-072 (cross-class seed sharing,
 Sev A) was found while mapping the seams and fixed first on `fix/out-of-sample-class-seed`.
 
+**2026-09-12: FIXED.** Every row below is closed (status bullets on the entries; wave summary in the
+register's reconciliation section). The shipped shape differs from the fix-shapes in one respect:
+the scenario-invariant state lives in per-iteration tables owned by the training and simulation
+state structs (`ForwardNoiseTables`, rebuilt once per iteration and shared by `&` through
+`SampleRequest`), not in per-thread scratch; the correlation scratch does ride on `ScratchBuffers`
+as planned.
+
 | ID                     | Register                  | Defect                                                        | Fix-shape (validated)                                                                                                                                                                                                                                                                                                                                                                            | Effort                                                          |
 | ---------------------- | ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
 | PD-023, PD-024         | `:3285`, `:3297`          | Sobol/Halton per-draw heap allocation                         | Caller-owned per-thread QMC scratch threaded through `SampleRequest` (precedent: `perm_scratch`), keyed on (forward_seed, iteration, noise_group_id, dim, total_scenarios) and rebuilt on key change; pass `Some(&ctx)` into the existing `sobol_ctx`; add `HaltonPrecomputed`. Add a precomputed-vs-direct bit-equality test (`SobolPrecomputed::new` has zero callers today, including tests). | L (cross-crate plumbing into cobre-sddp's per-thread workspace) |
@@ -88,7 +100,7 @@ Determinism guards: `tests/saa_golden_value.rs`, `tests/{halton,sobol,lhs}_integ
 | Builder owns canonical order | CD-043, CD-045, CD-048 | `:2307`, `:2328`, `:2359` | Reassign `Stage.index` after `SystemBuilder::build` sorts (`system/builder.rs:364`) and drop the `stages.rs:812–816` loop; validate (not sort) the three `*_models` tables as canonical; fix the four doc sites incl. `cobre-core/src/system/mod.rs:3,28`. Validate-not-sort keeps bytes identical. | S–M    |
 | Input-file registry          | CD-057, OD-019         | `:2451`, `:2763`          | Replace the positional `FILE_ENTRIES` ↔ `manifest_fields_mut` zip (`validation/structural.rs:376,398`) with a keyed registry (enum key + flag array + named accessors). Order matches today (43/43).                                                                                                | M      |
 | Penalty twin                 | CD-040                 | `:2277`                   | `pub type HydroStagePenalties = HydroPenalties;` (S). Deleting the twin outright touches ~130 construction sites (L) — do not.                                                                                                                                                                      | S      |
-| Typed entity class           | CD-066, CD-067         | `:3183`, `:3194`          | In-crate `EntityClass { Inflow, Load, Ncs }`, parsed once at `DecomposedCorrelation::build`; typed `ClassSamplerParams`. Maintainability; sequence with the Tier-2 sampler changes (same files).                                                                                                    | M      |
+| Typed entity class           | CD-066 (remainder)     | `:3183`                   | `EntityClass` exists and the correlation side is typed (CD-067 fixed in Tier 2). Remaining: carry `EntityClass` on `ClassSamplerParams` in place of `class_name: &str`, keep the label for diagnostics, derive the class seed from it. | S      |
 
 ### Tier 4 — the one structural lever (unblocks fifteen test-bloat findings)
 
@@ -169,8 +181,8 @@ fixing Tier 1 were added to the table below at the same time.
 
 New observations not in the register (candidates for the sddp / cli-python stations):
 `EventConfig.checkpoint_interval` (`cobre-sddp/src/config.rs:183`) has no production consumer;
-`SobolPrecomputed::new` (`qmc_sobol/mod.rs:181`) has zero callers including tests;
-`out_of_sample.rs:44` "No heap allocation" is a false doc claim.
+`SobolPrecomputed::new` (`qmc_sobol/mod.rs:181`) had zero callers including tests (resolved 2026-09-12);
+`out_of_sample.rs:44` "No heap allocation" was a false doc claim (removed 2026-09-12).
 
 ---
 
@@ -199,9 +211,9 @@ Milestones as in `BACKLOG.md:33–51`; `gnl-import` is SATISFIED (`44e72b76`, `9
 | ---- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------- | ------ | --------------------------------------------------------------------- |
 | 1    | W1-tier1-correctness        | OD-011, CD-058, CD-056, CD-051                                                                                                                                                                 | -                          | neutral  | M      | SATISFIED 2026-09-11 (`fix/quality-tier1` merged; follow-ups pending)  |
 | 2    | W2-canonical-order-registry | CD-043, CD-045, CD-048, CD-057, OD-019, CD-040                                                                                                                                                 | W1-tier1-correctness       | neutral  | M      | with the next cobre-io / cobre-core touch                             |
-| 3    | W3-forward-sampler-scratch  | PD-023, PD-024, PD-025, PD-026, PD-027, PD-028, CD-068, CD-069                                                                                                                                 | -                          | neutral  | L      | before QMC/LHS is recommended to users                                |
-| 4    | W4-typed-class-and-seam     | CD-066, CD-067, OD-028, OD-029                                                                                                                                                                 | W3-forward-sampler-scratch | neutral  | M      | after the sampler scratch lands (same files)                          |
-| 5    | W5-test-support-surface     | TD-023, TD-002, TD-005, TD-004, TD-007, TD-014, TD-016, TD-018, TD-020, TD-009, TD-024, TD-025, TD-028, TD-029, TD-030, TD-032                                                                 | -                          | neutral  | M      | after testing-architecture.md §5 is ratified                          |
+| 3    | W3-forward-sampler-scratch  | PD-023, PD-024, PD-025, PD-026, PD-027, PD-028, CD-068, CD-069                                                                                                                                 | -                          | neutral  | L      | SATISFIED 2026-09-12 (`plans/quality-tier2-hotpath`, merged to develop at fe439fc0)     |
+| 4    | W4-typed-class-and-seam     | CD-066 (remainder), OD-028, OD-029 — CD-067 fixed 2026-09-12                                                                                                                                       | W3-forward-sampler-scratch | neutral  | M      | unblocked 2026-09-12; CD-073, PD-031 (minted 2026-09-12) ride here            |
+| 5    | W5-test-support-surface     | TD-023, TD-002, TD-005, TD-004, TD-007, TD-014, TD-016, TD-018, TD-020, TD-009, TD-024, TD-025, TD-028, TD-029, TD-030, TD-032, TD-034 (minted 2026-09-12)                                         | -                          | neutral  | M      | after testing-architecture.md §5 is ratified; `cobre-stochastic/tests/common/` exists since 2026-09-12 |
 | 6    | W6-dead-surface-sweep       | OD-010, OD-012, OD-014, OD-015, OD-016, OD-017, OD-018, OD-020, OD-021, OD-022, OD-024, OD-025, OD-026, OD-027, OD-030, OD-031, CD-041, CD-052, PD-017, PD-008, OD-013, CD-047, CD-063, CD-049 | W1-tier1-correctness       | neutral  | S      | batch with adjacent feature work                                      |
 | 7    | W7-doc-and-table-drift      | CD-042, CD-044, CD-046, CD-050, CD-053, CD-054, CD-055, CD-059, CD-060, CD-062, CD-064                                                                                                         | W1-tier1-correctness       | neutral  | S      | one sweep after Wave 1                                                |
 | 8    | W8-setup-perf-opportunistic | PD-006, PD-007, PD-009, PD-010, PD-011, PD-012, PD-013, PD-014, PD-015, PD-016, PD-018, PD-019, PD-020, PD-021, PD-022, PD-029, PD-030, OD-023                                                 | W6-dead-surface-sweep      | neutral  | M      | opportunistic; PD-009 first                                           |

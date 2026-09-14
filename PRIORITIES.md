@@ -26,8 +26,16 @@ register entry. Finding IDs are owned by `BACKLOG.md`; every ID below links to i
   14 tickets, commits 66b9b788 … fe439fc0 (merged to `develop`, which is the next reconciliation
   baseline). Three new findings minted (CD-073, PD-031, TD-034); the wave's own defects and their
   fixes are recorded in the register's reconciliation section.
-- **Not yet a roadmap:** `tools/check-roadmap-dag.py` requires `- **Status:**` bullets on entries
-  (none exist yet; the parser reads all 162 non-do-not-touch entries as `open`), so the Waves table
+- **Tier 3 status (2026-09-14):** all eleven FIXED (CD-040, CD-043, CD-045, CD-048, CD-057, OD-019,
+  CD-066 remainder, OD-028, OD-029, CD-073, PD-031) — `plans/quality-tier3-footguns`, 10 tickets,
+  commits 25603faf … 3e90024f (merged to `develop`, which is the next reconciliation baseline).
+  Shipped shapes that differ from §Tier 3: the penalty twin was deleted, not aliased (owner decision);
+  the model tables are validated through a new `ValidationError::UnsortedModelTable` and
+  `with_scenario_models` became fallible. Two regressions surfaced at the epic boundaries (a pre-build
+  reader of `Stage.index` in cobre-io's semantic validation; an unsorted `run_partial_estimation` table)
+  and were fixed before the epic commits — see the register's reconciliation section.
+- **Not yet a roadmap:** `tools/check-roadmap-dag.py` reads `- **Status:**` bullets on entries
+  (only the fixed Tier-1/2/3 entries carry one; every other entry parses as `open`), so the Waves table
   in §5 is an _interim_ schedule in the checker's vocabulary, for the unified-roadmap station to lift.
 
 ---
@@ -94,6 +102,11 @@ Determinism guards: `tests/saa_golden_value.rs`, `tests/{halton,sobol,lhs}_integ
 `tests/reproducibility.rs` pin opening-tree and forward-noise bits; any hoist must reproduce them.
 
 ### Tier 3 — latent footguns, one ticket each
+
+**2026-09-14: FIXED.** Every row below is closed (status bullets on the entries; wave summary in the
+register's reconciliation section). The penalty-twin row's fix-shape was superseded by the owner's
+deletion decision: the sweep touched 34 files / 224 occurrences and compiled after one
+`cargo check --all-targets` pass, so the "~130 sites (L) — do not" caution was overstated.
 
 | Ticket                       | IDs                    | Register                  | Fix-shape (validated)                                                                                                                                                                                                                                                                               | Effort |
 | ---------------------------- | ---------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
@@ -210,9 +223,9 @@ Milestones as in `BACKLOG.md:33–51`; `gnl-import` is SATISFIED (`44e72b76`, `9
 | Wave | Entry                       | Findings                                                                                                                                                                                       | Depends on                 | Phase    | Effort | Trigger/deadline                                                      |
 | ---- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------- | ------ | --------------------------------------------------------------------- |
 | 1    | W1-tier1-correctness        | OD-011, CD-058, CD-056, CD-051                                                                                                                                                                 | -                          | neutral  | M      | SATISFIED 2026-09-11 (`fix/quality-tier1` merged; follow-ups pending)  |
-| 2    | W2-canonical-order-registry | CD-043, CD-045, CD-048, CD-057, OD-019, CD-040                                                                                                                                                 | W1-tier1-correctness       | neutral  | M      | with the next cobre-io / cobre-core touch                             |
+| 2    | W2-canonical-order-registry | CD-043, CD-045, CD-048, CD-057, OD-019, CD-040                                                                                                                                                 | W1-tier1-correctness       | neutral  | M      | SATISFIED 2026-09-14 (`plans/quality-tier3-footguns` epic-01, merged to develop at 3e90024f)                             |
 | 3    | W3-forward-sampler-scratch  | PD-023, PD-024, PD-025, PD-026, PD-027, PD-028, CD-068, CD-069                                                                                                                                 | -                          | neutral  | L      | SATISFIED 2026-09-12 (`plans/quality-tier2-hotpath`, merged to develop at fe439fc0)     |
-| 4    | W4-typed-class-and-seam     | CD-066 (remainder), OD-028, OD-029 — CD-067 fixed 2026-09-12                                                                                                                                       | W3-forward-sampler-scratch | neutral  | M      | unblocked 2026-09-12; CD-073, PD-031 (minted 2026-09-12) ride here            |
+| 4    | W4-typed-class-and-seam     | CD-066 (remainder), OD-028, OD-029 — CD-067 fixed 2026-09-12                                                                                                                                       | W3-forward-sampler-scratch | neutral  | M      | SATISFIED 2026-09-14 (`plans/quality-tier3-footguns` epic-02, incl. CD-073 and PD-031)            |
 | 5    | W5-test-support-surface     | TD-023, TD-002, TD-005, TD-004, TD-007, TD-014, TD-016, TD-018, TD-020, TD-009, TD-024, TD-025, TD-028, TD-029, TD-030, TD-032, TD-034 (minted 2026-09-12)                                         | -                          | neutral  | M      | after testing-architecture.md §5 is ratified; `cobre-stochastic/tests/common/` exists since 2026-09-12 |
 | 6    | W6-dead-surface-sweep       | OD-010, OD-012, OD-014, OD-015, OD-016, OD-017, OD-018, OD-020, OD-021, OD-022, OD-024, OD-025, OD-026, OD-027, OD-030, OD-031, CD-041, CD-052, PD-017, PD-008, OD-013, CD-047, CD-063, CD-049 | W1-tier1-correctness       | neutral  | S      | batch with adjacent feature work                                      |
 | 7    | W7-doc-and-table-drift      | CD-042, CD-044, CD-046, CD-050, CD-053, CD-054, CD-055, CD-059, CD-060, CD-062, CD-064                                                                                                         | W1-tier1-correctness       | neutral  | S      | one sweep after Wave 1                                                |

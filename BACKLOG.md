@@ -2283,6 +2283,7 @@ HydroPenalties (entities/hydro.rs:58) and HydroStagePenalties (model/resolved/pe
 - **Evidence:** All three structs declare exactly 16 fields.
 - **Fix-shape:** Collapse the two identical structs into one declaration owned by the entity module, and have the resolved per-(hydro, stage) table store that single type rather than a twin. The override struct stays distinct because its `Option` semantics differ, but it should be derived from the same field list rather than restated, so a new penalty column is added once.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-14) — `HydroStagePenalties` is deleted outright (owner decision on 2026-09-13; not the alias PRIORITIES §Tier 3 suggested): `PenaltiesDefaults.hydro` and the resolved per-(hydro, stage) table store `cobre_core::HydroPenalties`; the sixteen-field copy in `cobre-io/src/resolution/penalties.rs` is a move of `hydro.penalties`; the FPHA clause moved onto `HydroPenalties.turbined_cost` (softened at the boundary review to "should exceed `spillage_cost`; not enforced by validation" because `check_fpha_penalty_rule` only checks `>= 0` and `test_5b_fpha_penalty_equal_spillage_valid` asserts equality is valid). 224 occurrences in 34 files renamed, BREAKING CHANGELOG entry. `plans/quality-tier3-footguns` ticket-001, `25603faf`, merged to `develop` at `3e90024f`.
 
 **CD-041 · Sev B · asymmetry · effort M · confidence high**
 DisconnectedBus (error.rs:65) and InvalidPenalty (error.rs:72) are emitted by no production/validation path and both carry a false 'Emitted by cobre-io validation' doc line while cobre-io imports ValidationError zero times; DisconnectedBus additionally has a discarded buses builder parameter (network.rs:90-91) behind a TODO. Narrower than 'constructed nowhere', because DisconnectedBus is constructed in the test_error_trait test at error.rs:196.
@@ -2313,6 +2314,7 @@ SystemBuilder::build re-sorts stages by id (builder.rs:364) but neither reassign
 - **Evidence:** `Stage.index` is documented as the position in the canonical-ordered stage vector.
 - **Fix-shape:** Move the assignment to the sort. The builder already establishes the canonical stage order, so it should reassign each stage's position immediately after sorting, making the field a derived value that cannot disagree with its slot and letting the cobre-io parser drop its own loop.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-14) — `SystemBuilder::build` assigns `Stage.index = position` immediately after its stage sort; the `cobre-io/src/stages.rs` loop is deleted and `Stage.index`'s doc names the builder as the sole writer for a stage reachable via `System::stages()`. The epic-boundary review then found the live pre-build reader the ticket's survey missed: `validate_inflow_seeding` runs `precompute_stage_lag_transitions` on the parser's `StagesData`, and `compute_period_transition` read `.skip(stage.index + 1)` — every pre-build index was 0. `compute_period_transition` now takes the slice position (`par/lag_transition.rs`), which also corrects a latent over-skip on `stochastic_pipeline.rs`'s `id >= 0`-filtered `study_stages` slice when pre-study stages exist (d26/d30/d43 goldens unchanged). Regression test through the real parser: `stages::tests::test_prebuild_lag_transition_uses_position_not_index`. ticket-002 + `b8a69b57`.
 
 **CD-044 · Sev B · asymmetry · effort M · confidence high**
 StageLagTransition (temporal.rs:175) has zero cobre-core consumers (all 4 occurrences are its own declaration/comments) and its field doc references the L3 pub(crate) symbol accumulate_and_shift_lag_state (noise.rs:232) that no cobre-core reader can resolve; the strictly-defensible residue is this zero-consumer plus broken-L0-doc-contract pair, leaving physical relocation to Epic-9 layering adjudication.
@@ -2336,6 +2338,7 @@ The three *_models accessors (mod.rs:432/438/466) promise canonical order that n
 - **Alignment:** advances-1 (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-1 (cross-reference; verdict travels to Epic 9).
 - **Correction (2026-09-11):** `PrecomputedPar::build` does not depend on model order (hash-keyed). Three tables, not "seven".
+- **Status:** fixed (2026-09-14) — validate, not sort: new `ValidationError::UnsortedModelTable { table, position }`; `build` checks the three tables after the duplicate checks through one `check_canonical_order` helper (strict decrease only; duplicate keys accepted); `System::with_scenario_models` is fallible (`Result<Self, ValidationError>`, `EstimationError::Validation` `#[from]` variant, one arm in `cobre-sddp/src/error.rs`), CHANGELOG entry. Exposed two pre-existing contract violations: 31 test fixtures in cobre-sddp and cobre-stochastic built model tables stage-major (reordered, values unchanged), and `run_partial_estimation` appended pre-study rows unsorted (now sorted by `(hydro_id, stage_id)` like `seasonal_stats_to_rows`; regression test `test_partial_estimation_partial_year_study_orders_canonically`). ticket-003 + `b8a69b57`.
 
 **CD-046 · Sev C · asymmetry · effort M · confidence high**
 The wire-reproducibility rationale in the System serde(skip) comment (mod.rs:64) is enforced by three unrelated bespoke mechanisms yet six HashMap fields on HorizonGraph/CascadeTopology/NetworkTopology serialize unguarded as non-skipped SystemRepr fields (mod.rs:157/158/160), an inconsistency with no single owner and no guard test; explicitly NOT a live wrong result today (single-serialize-then-broadcast plus a value-equality round-trip guard).
@@ -2367,6 +2370,7 @@ bounds.rs:24 and penalties.rs:23 state `sorted by ID` for entity families that a
 - **Evidence:** Seven resolvers share one precondition — slice position becomes the table's entity index — but state it four different ways.
 - **Fix-shape:** Give the canonical key one owner and make every resolver doc point at it instead of restating it. cobre-core already owns the ordering in `sort_canonical`;
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-14) — `SystemBuilder::build`'s doc is the single owner (key + "slice position is the entity's canonical index"); the two wrong statements, the three underspecified ones, `resolve_hydro_unit_group_bounds`, `CaseArtifacts` and `sort_into_canonical_order` are one-clause pointers at it (the comparator warning "not `(id, date)` or `id` alone" survived the Deletion Test). Scope widened with owner approval to seven parser docs (`cobre-io/src/system/*.rs`) that restated the key as the builder's tiebreak; `CaseArtifacts`'s pointer was corrected at the boundary review (its fields are row tables with their own key columns, not entity-index-aligned slices). `generic_bounds.rs` untouched. ticket-005.
 
 **CD-049 · Sev C · asymmetry · effort S · confidence high**
 The two resolvers share an identical algorithm skeleton and five parallel tests collapsible to one generic routine parameterised over the id accessor and destination table; residual differences are confined to the entity/entry/output-table types, local names, and one incidental `usize::try_from` spelling (load_factors.rs:59 vs ncs_factors.rs:61). `Same function twice` over-reaches (they are two monomorphizations over distinct output-table types, not literal copies), but the duplication is real and has two live consumers.
@@ -2464,6 +2468,7 @@ Confirmed narrowly: the positional `FILE_ENTRIES` to `manifest_fields_mut` zip i
 - **Fix-shape:** Collapse the parallel lists to one keyed registry so a file is declared once and looked up by name rather than by ordinal. The manifest becomes a lookup keyed on the registry's own entry identity instead of a 43-field struct plus a 43-slot array, which removes the positional join and the hand-kept field order along with it.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Re-raise-of:** CD-031 (precedent citation only — this entry cites the boundary-context config-projection-sprawl calibration precedent, it does not re-raise CD-031)
+- **Status:** fixed (2026-09-14) — one keyed registry: `pub enum InputFile` (43 variants, no `Default`), a private `INPUT_FILES: &[FileEntry { key, relative, required }]` table, and `FileManifest { flags: [bool; INPUT_FILE_COUNT] }` with `present(InputFile) -> bool` as the only public read and a `pub(crate)` setter; `manifest_fields_mut`, `FILE_ENTRIES` and the 43 `pub bool` fields are gone; `test_input_files_registry_invariants` pins unique paths, variant order == table order, and the eight-file required set. `ParsedData` in `validation/schema.rs` stays name-keyed (DRY residue, not the positional join). ticket-004.
 
 **CD-058 · Sev B · asymmetry · effort M · confidence high**
 The crash-safety hole is specifically the in-place (O_TRUNC) overwrites of manifest.bin at checkpoint.rs:244 and of entities.csv/variables.csv in dictionary.rs, which can leave a truncated file replacing the previous good one; the cuts/basis/states .bin payload writes are covered by the manifest-last commit-signal design and are not an independent crash-safety hole.
@@ -2782,6 +2787,7 @@ The defect is the ORDER-unguarded positional zip between FILE_ENTRIES and manife
 - **Fix-shape:** Collapse the three lists to one by making the file table the single declaration and deriving both the storage and the accessors from it. The shape that keeps the named, type-checked reads the 34 call sites in validation/schema.rs depend on is a single ordered table of files paired with an enum key, with the manifest holding one flag array indexed by that key and named accessor methods generated alongside it, so adding a file is one edit and a mis-order is a compile error rather than a silent misassignment.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Re-raise-of:** CD-031 (precedent citation only — this entry cites the boundary-context config-projection-sprawl calibration precedent, it does not re-raise CD-031)
+- **Status:** fixed (2026-09-14) — see CD-057: the enum's discriminant is the ordinal, so a table/enum reorder fails the registry test and a wrong key is a compile error; no named per-file accessor was generated (seven of the 43 flags have no reader). ticket-004.
 
 **OD-020 · Sev C · speculative-generality · effort S · confidence high**
 The removable defect is precisely the unread third parameter `_config: &Config` on write_dictionaries (dictionary.rs:71) and the module's sole `use crate::Config` (dictionary.rs:16) that exists only to name it; the caller write_training_results still legitimately holds &Config for its own fields, so only the writer's parameter and import can go, not the caller's signature.
@@ -3207,7 +3213,7 @@ Only the single `class_name != "inflow"` Historical gate at mod.rs:436 is a corr
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Reviewer rating:** C — recalibrated to B (A-risk) because raised from C per the silent-divergence seam precedent: the untyped &str class gate silently mis-gates on a call-site literal typo.
 - **Correction (2026-09-11):** the gate is at `sampling/mod.rs::` the entity-type match (`sampling/mod.rs:360` at `1baeeadb`); a typo fails loudly, so this is not a silent-accept.
-- **Status:** partially addressed (2026-09-12) — the closed discriminant now exists (`EntityClass`, see CD-067) but `ClassSamplerParams.class_name: &str` and the `class_name != "inflow"` Historical gate in `build_class_sampler` (`sampling/mod.rs`) still ride on the string; the remaining fix is to carry `EntityClass` on `ClassSamplerParams`, keep the label for diagnostics via a `Display`/`as_str`, and derive the class forward seed from the same value. Open, effort S now.
+- **Status:** fixed (2026-09-14) — `ClassSamplerParams` carried `class: EntityClass` (ticket-006: `EntityClass::as_str` added beside `from_wire`, the historical gate compares `EntityClass::Inflow`, `derive_class_forward_seed(u64, EntityClass)` hashes `class.as_str().as_bytes()` so both pinned constants are unchanged); ticket-007 then folded the class into `resolve_class_source`, which rejects `Historical` for load and NCS with the same message text. No `Display` impl. `plans/quality-tier3-footguns` tickets 006/007, `662bb3cc`.
 
 **CD-067 · Sev B (A-risk) · bad-abstraction · effort M · confidence high**
 The in-station residue is the in-crate GroupFactor.entity_type String field plus the two `!=` dispatch sites (resolve.rs:286, 352) that a boundary-parse to an in-crate EntityClass{Inflow,Load,Ncs} enum at build() would make compiler-checked; the source-of-truth String is cobre-core's CorrelationEntity.entity_type (scenario.rs:594) which is OUT of station (a cross-station note, not changed here), so the confirmed defect is the stochastic-side stringly-typed carrier + comparisons, not the cobre-core field.
@@ -3437,6 +3443,7 @@ Representability only: the config permits exactly two invalid/redundant states �
 - **Evidence:** The four Options are not four independent knobs. build_forward_sampler pairs class_schemes.inflow with EITHER historical_library OR external_inflow_library (mutually exclusive by inflow scheme), and hard-wires historical_library: None for the load and ncs classes so they read only external_load_library / external_ncs_library. Validity is a (3 class x scheme) matrix flattened into 4 loosely-typed Options: each field… Re-derive: `git show a136840d:crates/cobre-stochastic/src/sampling/mod.rs | sed -n '263,289p;359,388p'`
 - **Fix-shape:** Fold each class's scheme selector and its required library into one per-class source enum whose data-bearing variants carry the borrow: e.g. InflowSource { InSample, OutOfSample, Historical(&HistoricalScenarioLibrary), External(&ExternalScenarioLibrary) } and a LoadSource / NcsSource with only { InSample, OutOfSample, External(&ExternalScenarioLibrary) } (load and ncs never take a historical library, so the hard-wired historical_library: None disappears). build_forward_sampler then matches per-class variants instead of pairing a scheme with a maybe-present Option, so the scheme-to-library requirement becomes a compile-time consequence, the InSample-with-library silent-ignore state stops being representable, and the two mutually-exclusive inflow libraries can no longer both be Some. The MissingScenarioSource diagnostics move up to the config-construction boundary (where a library is or i…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
+- **Status:** fixed (2026-09-14) — two private enums inside the factory, `InflowSource<'a> { InSample, OutOfSample, Historical(&'a …), External(&'a …) }` and `ClassSource<'a>` without a `Historical` variant; `resolve_inflow_source` / `resolve_class_source` build them from the unchanged public `ForwardSamplerConfig`, `ClassSamplerParams.source: ClassSource` replaces `scheme` + two `Option`s, the hard-wired `historical_library: None` is gone, every `MissingScenarioSource` text and raise order is byte-identical; `test_build_historical_with_library_ignores_external_library` covers the both-libraries-`Some` state. The fix-shape's "diagnostics move to the config-construction boundary" was rejected by the owner (2026-09-13). ticket-007.
 
 **OD-029 · Sev B (A-risk) · over-parameterization · effort L · confidence high**
 The rationale's "no natural sub-grouping exists" clause is false — the four are a documented atomic seed reset together at each outer boundary and re-threaded verbatim through >=6 signatures; the defensible residue is the silent same-typed transposition hazard between derived_accum and derived_weight (both &[f64], both length n_hydros, adjacent positional args) plus the reset-together invariant restated across >=3 doc blocks, which a by-ref DerivedSeed aggregate removes. The #[allow] itself stays (all three functions remain >7 args), so this is not an eliminate-the-lint finding.
@@ -3448,6 +3455,7 @@ The rationale's "no natural sub-grouping exists" clause is false — the four ar
 - **Fix-shape:** Introduce a by-reference aggregate for the stage-0 derived seed, e.g. DerivedSeed<'a> { lag_values: &'a [f64], l_state: usize, accum: &'a [f64], weight: &'a [f64] }, constructed once where the seed is computed and passed as a single argument through standardize_external_inflow, run_eta_inversion, standardize_historical_windows, and the caller build_external_inflow_library. The shared per-hydro canonical-position ordering and 'empty accum means reset-to-zero' invariant, currently restated in three near-identical doc-comment blocks, attaches to the type once. This shrinks the 11-arg / 14-arg / 12-arg signatures and removes the same-typed &[f64] transposition hazard. This does NOT dispute the mirror's blanket sanction of allow-with-rationale as a load-bearing lint class; it disputes only the factual claim of this specific rationale. Once the seed is a struct the #[allow(too_many_arguments)…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Correction (2026-09-11):** arities are 11/13/13, not 11/14/12.
+- **Status:** fixed (2026-09-14) — `DerivedSeed<'a> { lag_values, l_state, accum, weight }` (`Copy`) in `seeds.rs` with `DerivedInflowSeeds::as_seed(l_state)`, re-exported at the crate root; replaces the four positional parameters in all six signatures (`standardize_external_inflow` 11→8, `run_eta_inversion` 13→10, `standardize_historical_windows` 13→10, `build_external_inflow_library` 11→8, `build_historical_inflow_library` 13→10, `build_scenario_libraries` 13→10 — the entry's "three functions" undercounted). All six `#[allow(too_many_arguments)]` stay (still above 7); the three "no natural sub-grouping" rationales are rewritten and the two "mirrors <callee>" ones in `scenario_libraries.rs` name `DerivedSeed`. `seed_digest` hashes the same bytes. ticket-008 (+ `par_a_historical_replay.rs`, omitted from the ticket's frontmatter, added with owner approval).
 
 **OD-030 · Sev C · speculative-generality · effort S · confidence high**
 Narrowed: the defensible residue is only that SweepDirection::Ascending and its comparator arm (opening_tree.rs:168) have ZERO non-test constructors while every production path passes Descending -- an unwired second variant exercised solely by opening_tree.rs's own tests. I concede this does NOT establish the enum must be deleted: SweepDirection is a minimal, engine-neutral two-variant sort-direction API (not a speculative multi-variant fan-out), so keeping a two-way ordering knob on a generic L1 primitive is defensible; the finding is the unwired variant, not that the `direction` parameter is itself over-abstraction.
@@ -3822,6 +3830,7 @@ keep local helpers whose shapes differ. The cobre-sddp side already had `tests/c
 - **Evidence:** every producer writes `stage_id: spec.noise_group_id` or passes `group` into the `stage_id` parameter; the opening-tree callers pass a real stage id. One name, two meanings.
 - **Fix-shape:** rename the field (and the constructor parameter) to the seed-tuple role it plays (`noise_group_id`, or a neutral `group_id`), or split the tree-side and forward-side spec constructors so each names its own key. Bit-neutral; a rename touches every equivalence test and the goldens' helper, so it is its own narrow ticket, not folded into another.
 - **Alignment:** neutral
+- **Status:** fixed (2026-09-14) — `NoisePointSpec.stream_id` (doc: forward-pass producers pass the `noise_group_id`, opening-tree producers the stage id) and `stream_id` on the three `*Precomputed::new` constructors; `generate_*`'s `stage_id`, `derive_stage_seed`, `derive_opening_seed` and `FreshNoiseSpec.stage_id` untouched by the rename; `build_table`'s doc deleted (the naming tension it explained is gone). ticket-009.
 
 **PD-031 · Sev C · asymmetry · effort S · confidence high**
 `fill_uncorrelated`'s `Selective` and `HistoricalResiduals` arms emit `tracing::warn!` on every draw before falling back to the sample-average method; under those (unsupported-in-forward) methods the warning fires once per (iteration, scenario, stage) on the hot path.
@@ -3832,6 +3841,7 @@ keep local helpers whose shapes differ. The cobre-sddp side already had `tests/c
 - **Evidence:** the two arms log with the stage id and fall through to `fill_saa`; nothing rate-limits or hoists the warning to sampler construction.
 - **Fix-shape:** reject or warn once at `build_forward_sampler` (where the per-stage methods are known) and make the two arms silent fallbacks, or reject the combination at config validation so the arms become unreachable.
 - **Alignment:** neutral
+- **Status:** fixed (2026-09-14) — `warn_unsupported_forward_noise_methods(class, scheme, stages, noise_methods)` runs once per class in `build_forward_sampler` (only for `OutOfSample`, naming the class via `EntityClass::as_str`, the method(s) and the affected `Stage.id`s); the two draw arms are one silent `Selective | HistoricalResiduals => fill_saa` arm; four `WarnRecorder` tests, one of which draws after construction and asserts no further WARN. `FreshNoiseSpec.stage_id` lost its only production readers and was deleted (owner rejected keeping it alive through error-string reads); the test-only `sample_fresh` takes the stage id explicitly. Allocation guard unchanged. ticket-010.
 
 **TD-034 · Sev C · asymmetry · effort S · confidence high**
 `crates/cobre-sddp/tests/common/permute.rs` carries its own `#[cfg(test)] mod tests`, so every integration binary that declares `mod common;` compiles and runs those tests inside its own harness; a binary that owns process-global state (the counting-allocator guard) cannot use the aggregator at all and includes `common/builders.rs` by `#[path]` with an include-level `dead_code` allow instead.
@@ -3843,7 +3853,61 @@ keep local helpers whose shapes differ. The cobre-sddp side already had `tests/c
 - **Fix-shape:** move `permute.rs`'s tests to a binary of their own (or to a `#[cfg(test)]` module gated behind a cargo feature the aggregator does not enable), so `mod common;` never adds tests to a consumer; then the guard can use the aggregator and drop its include-level allow. Fold into the test-support surface work (Tier 4) that already owns `common/`.
 - **Alignment:** neutral
 
-**Baseline for the next reconciliation: `develop` @ `fe439fc0` (the Tier-2 merge).**
+### Tier-3 fix wave (2026-09-14) — `plans/quality-tier3-footguns`, base `fe439fc0`, merged to `develop` at `3e90024f`
+
+Ten tickets in two epics (`epic-01-core-io-invariants`, `epic-02-sampler-typing`), every ticket
+bit-for-bit neutral for every deck cobre-io can load; two BREAKING CHANGELOG entries (a removed
+public type; a new validation error plus a fallible setter). Waves W2 and W4 of `PRIORITIES.md` §5
+are closed. Each closed entry carries a `- **Status:** fixed` bullet with current-tree evidence.
+
+| Finding                      | Resolution                                                                                                                                                                                                                                            |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CD-040**                   | FIXED — `HydroStagePenalties` deleted outright (owner chose deletion over the alias); the resolved table stores `HydroPenalties`; the sixteen-field copy is a move.                                                                                    |
+| **CD-043**                   | FIXED — the builder assigns `Stage.index` after its sort; the loader loop is gone. The boundary review caught a pre-build reader (inflow-seeding validation → lag transitions); the window is now position-based, which also fixes a latent over-skip. |
+| **CD-045**                   | FIXED — validate-not-sort: `ValidationError::UnsortedModelTable`, `with_scenario_models` fallible. Exposed 31 stage-major test fixtures and an unsorted `run_partial_estimation` table, both corrected.                                                |
+| **CD-048**                   | FIXED — `SystemBuilder::build` is the one doc owner; sixteen sites are pointers (seven parser docs added with owner approval).                                                                                                                         |
+| **CD-057, OD-019**           | FIXED — keyed `InputFile` registry; `FileManifest::present(InputFile)` is the single read; the positional zip and the 43-field struct are gone.                                                                                                        |
+| **CD-066**                   | FIXED — `EntityClass` carried through the factory; the class seed derives from `EntityClass::as_str`, both pinned constants unchanged.                                                                                                                |
+| **OD-028**                   | FIXED — per-class `InflowSource` / `ClassSource` built inside the factory from the unchanged public config; `MissingScenarioSource` text and order byte-identical; diagnostics stay in the factory (owner).                                            |
+| **OD-029**                   | FIXED — `DerivedSeed<'a>` through six signatures (11→8, 13→10 ×5); all six suppressions kept, rationales true.                                                                                                                                        |
+| **CD-073**                   | FIXED — `NoisePointSpec.stream_id`, named for the seed-tuple slot; the genuine stage-id carriers are untouched.                                                                                                                                       |
+| **PD-031**                   | FIXED — one warning per out-of-sample class at sampler construction; the draw arms are silent; `FreshNoiseSpec.stage_id` deleted with its last production reader.                                                                                     |
+
+Found and fixed inside the wave (not register findings): (1) `cobre-io`'s semantic validation runs
+`precompute_stage_lag_transitions` on pre-build `StagesData`, so removing the parser's index loop
+zeroed every index it read — `compute_period_transition` now derives the "later stages" window from
+slice position (`par/lag_transition.rs`), a change that also corrects the pre-existing over-skip on
+the pre-study-filtered `study_stages` slice in `stochastic_pipeline.rs` (the three shipped decks
+with pre-study stages, d26/d30/d43, reproduce their goldens unchanged); (2) `run_partial_estimation`
+appended pre-study seasonal rows after the in-study rows without a re-sort, a contract violation
+the new check turned into a hard error — sorted, with a regression test through
+`estimate_from_history`; (3) 31 test fixtures across 13 cobre-sddp/cobre-stochastic files built
+`inflow_models` / `load_models` stage-major — reordered, rows and values unchanged; (4) ticket-007's
+fold made the `class` field ticket-006 had just added unread, so it was dropped rather than kept.
+
+Register corrections folded into the entries as part of the status bullets: CD-040's PRIORITIES
+fix-shape (alias, "~130 sites") — deletion touched 34 files / 224 occurrences and compiled after one
+`cargo check --all-targets` sweep; CD-043's PRIORITIES re-rating ("still latent") — the live reader
+was on the cobre-io validation path, not only post-build; OD-029 — six signatures, not three.
+CD-066's PRIORITIES re-rating (C) stands; it is closed as part of the same epic.
+
+Process observations carried to memory (not register findings): a ticket that deletes a field's
+writer must enumerate every *caller of every reader* across crates (the missed `validate_inflow_seeding`
+path), and a ticket that changes a `pub` signature must grep `tests/` binaries for direct callers
+(`par_a_historical_replay.rs` was named in ticket-008's Integration Tests section but omitted from
+its frontmatter). Two owner-approved scope widenings and one rejected workaround (keeping
+`FreshNoiseSpec.stage_id` alive through manufactured error-string reads) are recorded in the plan's
+`boundary-notes.md` files.
+
+Boundary simplification (owner gate G4c each time): 21 + 19 + 13 proposals applied, 7 declined with
+owners; the two epic-boundary code reviews found the two regressions above (NEEDS_ATTENTION → fixed
+before each epic commit); the plan-level review was PASS_WITH_WARNINGS (two stale doc fragments, fixed).
+Two follow-ups closed on the same branch (`3e90024f`): the two byte-identical duplicate-id validators
+in `cobre-io/src/stages.rs` are one, and `seeds.rs` casts the k=0 season projection directly (its
+`unreachable!` is gone). Still open from the 2026-09-11 list: `EventConfig.checkpoint_interval` has
+no production consumer (cobre-sddp station). TD-034 stays in W5.
+
+**Baseline for the next reconciliation: `develop` @ `3e90024f` (the Tier-3 merge).**
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 

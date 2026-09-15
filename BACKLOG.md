@@ -3370,7 +3370,7 @@ Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/Ex
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
 - **Correction (2026-09-11):** path class is HOT (forward sampler, per iteration × scenario × stage under `scheme: out_of_sample` + `qmc_sobol`), not "setup/fitting-time"; the Measurement bullet's path-class clause is superseded.
-- **Status:** fixed (2026-09-12) — `ForwardSampler::rebuild_noise_tables` builds one `SobolPrecomputed` per `(noise_group_id, noise_method)` and per class once per iteration (`ClassNoiseTables::refill`, `sampling/tables.rs`); `scrambled_sobol_point` reads it and is the only production generator, the direct one survives as `#[cfg(test)] scrambled_sobol_point_reference` (`sobol_point_matches_reference`). `tests/forward_sampler_golden.rs` pins the pre-change bits; `cobre-sddp/tests/forward_sampler_no_alloc.rs` asserts zero allocations across Sobol, Halton and LHS draws with a 70-entity group. `plans/quality-tier2-hotpath` 66b9b788 … fe439fc0 (merged to develop 2026-09-12).
+- **Status:** fixed (2026-09-12) — `ForwardSampler::rebuild_noise_tables` builds one `SobolPrecomputed` per `(noise_group_id, noise_method)` and per class once per iteration (`ClassNoiseTables::refill`, `sampling/tables.rs`); `scrambled_sobol_point` reads it and is the only production generator, the direct one survives as `#[cfg(test)] scrambled_sobol_point_reference` (`sobol_point_matches_reference`). `crates/cobre-stochastic/tests/forward_sampler_golden.rs` pins the pre-change bits; `cobre-sddp/tests/forward_sampler_no_alloc.rs` asserts zero allocations across Sobol, Halton and LHS draws with a 70-entity group. `plans/quality-tier2-hotpath` 66b9b788 … fe439fc0 (merged to develop 2026-09-12).
 
 **PD-024 · Sev B · missing-seam · effort M · confidence high**
 Scoped to the OutOfSample QmcHalton forward path: the per-scenario fresh prime-sieve + nested Vec<Vec<Vec<u32>>> scramble-table allocation and recomputation is scenario-invariant and should be hoisted per (iteration, stage); because NO HaltonPrecomputed seam exists (unlike Sobol's dormant one), the precompute primitive is a cross-station dependency on the tree-noise cell and only the sampler-side wiring is this sub-station's part; determinism is preserved (tables are a pure function of the existing seed tuple).
@@ -3542,7 +3542,7 @@ Narrowed: the confirmable byte-identical duplication is make_bus (forward_sample
 - **Fix-shape:** Introduce a single shared fixture surface for the crate's cobre-core entity builders and mod-declare it once per binary, so make_bus/make_hydro/make_inflow_model/identity_correlation are authored once. Roadmap-consistent options: (a) low-risk interim — a crate-local `tests/common/` module (the yardstick §5.1 interim state before test-support collapse), each binary `mod common;` then `use crate::common::*`; (b) the yardstick's target — hoist the cobre-core entity builders behind a `test-support` cargo feature so the builders live with the type they build (§5.2). Because these construct cobre-core types (Hydro/Bus/InflowModel/CorrelationModel), cobre-core's test-support surface is the durable home; the crate-local tests/common is the safe first step. Keep the per-family make_stage variants as thin overrides. Neutral to the layering (test infra only); introduces no new production abstracti…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Queued to:** test-corpus
-- **Correction (2026-09-15):** the anchors are incomplete: `crates/cobre-stochastic/tests/forward_sampler_golden.rs` cloned the whole prelude too (`make_bus`/`make_hydro`/`identity_correlation` at `:192`/`:205`/`:292` at `3e90024f`) and the entry names only `tests/forward_sampler.rs` and `tests/conformance.rs`.
+- **Correction (2026-09-15):** the anchors are incomplete: `crates/cobre-stochastic/tests/forward_sampler_golden.rs` cloned the whole prelude too (`make_bus`/`make_hydro`/`identity_correlation` at `:192`/`:205`/`:292` at `3e90024f`) and the entry names only `crates/cobre-stochastic/tests/forward_sampler.rs` and `crates/cobre-stochastic/tests/conformance.rs`.
 - **Status:** fixed (2026-09-15) — `forward_sampler.rs`, `conformance.rs` and `forward_sampler_golden.rs` take `make_bus`/`make_hydro`/`make_inflow_model`/`identity_correlation` from `tests/common` (the eleven-helper clone md5-proved identical before deletion; `common/mod.rs` gained `method_stage`, `make_sampler_config`, `build_test_system`, `build_test_ctx`, `stages_from_system`, `tables_for`); the forward-sampler golden arrays and scalars byte-identical; eight of nine binaries on the prelude (ticket-017). `feat/quality-tier45-closeout` 2bf30ece + 59c5c09f (pending merge).
 
 **TD-025 · Sev B · duplication · effort S · confidence high**
@@ -3642,7 +3642,7 @@ The duplication narrows to the byte-identical make_bus/make_stage/make_hydro/ide
 - **Fix-shape:** Coverage-neutral de-duplication (no test deleted, per yardstick §7): hoist the shared engine-neutral entity builders into a single test-support surface and have all three seam test regions consume it. Yardstick-canonical home (§5.2 'helpers live with the type they build') is cobre-core's `test-support` feature, since make_bus/make_stage/make_hydro/make_inflow_model/identity_correlation construct cobre-core entities (Bus/Stage/Hydro/InflowModel/CorrelationModel) — the two inline `#[cfg(test)]` modules use them via `#[cfg(test)]` and the integration binary via a `test-support` dev-dependency feature. A lighter, L1-safe alternative that stays inside this crate is a crate-internal `#[cfg(any(test, feature = "test-support"))] mod test_support` in cobre-stochastic exposing the builders so tests/reproducibility.rs can reach them; it has 3+ consumers (both inline modules plus the integration bi…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Queued to:** test-corpus
-- **Status:** fixed (2026-09-15) — `tests/reproducibility.rs` consumes the `tests/common` prelude (ticket-017) and the `context.rs`/`provenance.rs`/`seeds.rs` inline `make_bus`/`make_hydro`/`make_stage` are thin wrappers over `cobre_core::test_support` (`BusSpec`/`HydroSpec`/`StageSpec`) (ticket-014); no test deleted. The in-`src` `identity_correlation` copies were deliberately NOT folded (five remain; recorded in the Tier-4/5 reconciliation subsection). `feat/quality-tier45-closeout` 2bf30ece + 59c5c09f (pending merge).
+- **Status:** fixed (2026-09-15) — `crates/cobre-stochastic/tests/reproducibility.rs` consumes the `tests/common` prelude (ticket-017) and the `context.rs`/`provenance.rs`/`seeds.rs` inline `make_bus`/`make_hydro`/`make_stage` are thin wrappers over `cobre_core::test_support` (`BusSpec`/`HydroSpec`/`StageSpec`) (ticket-014); no test deleted. The in-`src` `identity_correlation` copies were deliberately NOT folded (five remain; recorded in the Tier-4/5 reconciliation subsection). `feat/quality-tier45-closeout` 2bf30ece + 59c5c09f (pending merge).
 
 **TD-033 · Sev C · duplication · effort S · confidence high**
 The test adds zero behavioral coverage beyond the existing helper-level unit tests (season_period_window/nth_previous_occurrence/cast each already tested at 687-986); its only residual function is to pin season_occurrence's delegation to those three helpers, an implementation-detail change-detector rather than a contract, so the residue is remove-or-reduce (not that the test is wholly inert: it would fire if the wrapper stopped delegating).
@@ -3683,7 +3683,7 @@ The test adds zero behavioral coverage beyond the existing helper-level unit tes
 - crates/cobre-stochastic/tests/saa_golden_value.rs GOLDEN_S0_* constants (lines 25-30) and their assert_eq guards in saa_golden_value_regression — Six f64 constants pinning the base_seed=42 SAA opening-tree output, asserted bit-exact - a legitimate golden bit-exact regression guard, not a wire-byte pin duplicating a const. This is the only const-pin in the sampling test/integration s… (sanctioned by docs/design/testing-architecture.md 3.1 (golden bit-exact tier) and 5.10 (keep SHA/bit-exact for the small deliberate golden set))
 - crates/cobre-stochastic/src/sampling/external.rs mod sample_moment_reduction_proptests (line 3147; derive_external_sample_moments_is_declaration_order_invariant at 3157) — A declaration-order-invariance property test over derive_external_sample_moments - exactly the proptest expansion the yardstick asks the suite to grow toward for its sort/reduction invariants, so it is worth protecting, not trimming. (sanctioned by docs/design/testing-architecture.md 5.9 (expand proptest to cover declaration-order/reduction-order invariants))
 - The extensive-form / branching-value oracle harness under crates/cobre-sddp/tests (mirror entry) — Cross-reference only: the integration-prelude duplication in candidate 2 is the cobre-stochastic analogue of the recorded oracle-harness duplication; cited here rather than restated, and my candidate 2 is anchored in cobre-stochastic/tests… (sanctioned by docs/design/reserved-seams-and-deferred-debt.md L285 (Oracle test-harness duplication) / prior-register.md Oracle entry, disposition cross-reference)
-- All 15 non-generated tree-noise files (tree/{mod,generate,lhs,opening_tree,qmc_halton/mod,qmc_sobol/mod}.rs, noise/*, normal/*, correlation/*) — Paradigm-leakage clean: git grep -niE '(sddp|benders|cut|cost.to.go|state.space)' over the full manifest yields a single hit, generate.rs:46, which is the substring 'cut' inside 'conseCUTive' — not an engine noun. No decomposition-engine t… (sanctioned by scripts/ci/check-infra-genericity.sh (L1 purity guardrail))
+- All 15 non-generated tree-noise files (tree/{mod,generate,lhs,opening_tree,qmc_halton/mod,qmc_sobol/mod}.rs, noise/_, normal/_, correlation/*) — Paradigm-leakage clean: git grep -niE '(sddp|benders|cut|cost.to.go|state.space)' over the full manifest yields a single hit, generate.rs:46, which is the substring 'cut' inside 'conseCUTive' — not an engine noun. No decomposition-engine t… (sanctioned by scripts/ci/check-infra-genericity.sh (L1 purity guardrail))
 - crates/cobre-stochastic/src/normal/precompute.rs PrecomputedNormal::build typed on cobre_core::scenario::LoadModel — The 'normal noise' precompute binds to LoadModel specifically; this is roadmap-consistent rather than a smell — the target layering has LoadModel leaving System for the cobre-stochastic uncertainty store (target-layering-brief Part-I item… (sanctioned by prior-register.md (LoadModel conflation = not-ours, cobre-core))
 - tree/qmc_sobol/sobol_directions.rs (21229 lines, generated Joe-Kuo table) — Excluded from any density / god-module / LOC-share claim over tree-noise per the inventory correction (60.3% of the crate's non-test lines, 88.3% of the tree-noise sweep). No architecture finding is raised against it; its size is the gener… (sanctioned by inventory.json corrections[1])
 - Phase-1 (Switchable<T> uncertainty store) alignment note — OpeningTree (tree/opening_tree.rs), DecomposedCorrelation (correlation/resolve.rs), PrecomputedNormal (normal/precompute.rs) — These read-only generation-side caches are the tree-noise pieces that would migrate into the Part IV/V Switchable<T> uncertainty store when the stochastic representation is lifted off System/Stage (target-layering-brief Part-I item 1). Rec… (sanctioned by target-layering-brief.md Part-I item 1 (advances-1))
@@ -3733,43 +3733,43 @@ Alignment hints only (Epic 9 adjudicates). The seam findings tagged `advances-1`
 
 Ratified 2026-09-08 in the main session over plans/architecture-debt-audit/stations/stochastic/gate.md. All 35 confirmed entries accepted as recorded; no downgrade, reject, defer or override; the 7 prior-register dispositions stand as recorded; the `cut_points` needs-human item is recorded not-a-finding. Severity is shown as `new (reviewer: original)` on any downgrade (none here). No timing number is asserted.
 
-| ID | Decision | Severity | Alignment | Rationale (owner) | Trigger / override | Queue |
-| -- | -------- | -------- | --------- | ----------------- | ------------------ | ----- |
-| CD-064 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | none |
-| PD-021 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| PD-020 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| TD-025 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
-| TD-024 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
-| CD-066 | accept | B (A-risk) | neutral | accepted as recorded (Sev-B batch) | — | none |
-| CD-065 | accept | B | advances-1 | accepted as recorded (Sev-B batch) | — | alignment |
-| OD-029 | accept | B (A-risk) | neutral | accepted as recorded (Sev-B batch) | — | none |
-| OD-028 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | none |
-| PD-023 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| PD-025 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| PD-024 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| TD-028 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
-| CD-070 | accept | B (A-risk) | advances-1 | accepted as recorded (Sev-B batch) | — | alignment |
-| CD-068 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | none |
-| CD-067 | accept | B (A-risk) | neutral | accepted as recorded (Sev-B batch) | — | none |
-| PD-027 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| PD-026 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | perf |
-| TD-030 | accept | B | neutral | accepted as recorded (Sev-B batch) | — | test-debt |
-| OD-027 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| OD-026 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| PD-022 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| TD-027 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
-| TD-026 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
-| TD-029 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
-| CD-071 | accept | C | advances-1 | accepted as recorded (Sev-C batch) | — | alignment |
-| OD-031 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| PD-029 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| PD-030 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| TD-032 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
-| TD-033 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
-| CD-069 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| OD-030 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| PD-028 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | none |
-| TD-031 | accept | C | neutral | accepted as recorded (Sev-C batch) | — | test-debt |
+| ID     | Decision | Severity   | Alignment  | Rationale (owner)                  | Trigger / override | Queue     |
+| ------ | -------- | ---------- | ---------- | ---------------------------------- | ------------------ | --------- |
+| CD-064 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | none      |
+| PD-021 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| PD-020 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| TD-025 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | test-debt |
+| TD-024 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | test-debt |
+| CD-066 | accept   | B (A-risk) | neutral    | accepted as recorded (Sev-B batch) | —                  | none      |
+| CD-065 | accept   | B          | advances-1 | accepted as recorded (Sev-B batch) | —                  | alignment |
+| OD-029 | accept   | B (A-risk) | neutral    | accepted as recorded (Sev-B batch) | —                  | none      |
+| OD-028 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | none      |
+| PD-023 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| PD-025 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| PD-024 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| TD-028 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | test-debt |
+| CD-070 | accept   | B (A-risk) | advances-1 | accepted as recorded (Sev-B batch) | —                  | alignment |
+| CD-068 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | none      |
+| CD-067 | accept   | B (A-risk) | neutral    | accepted as recorded (Sev-B batch) | —                  | none      |
+| PD-027 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| PD-026 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | perf      |
+| TD-030 | accept   | B          | neutral    | accepted as recorded (Sev-B batch) | —                  | test-debt |
+| OD-027 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| OD-026 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| PD-022 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| TD-027 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | test-debt |
+| TD-026 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | test-debt |
+| TD-029 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | test-debt |
+| CD-071 | accept   | C          | advances-1 | accepted as recorded (Sev-C batch) | —                  | alignment |
+| OD-031 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| PD-029 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| PD-030 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| TD-032 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | test-debt |
+| TD-033 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | test-debt |
+| CD-069 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| OD-030 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| PD-028 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | none      |
+| TD-031 | accept   | C          | neutral    | accepted as recorded (Sev-C batch) | —                  | test-debt |
 
 **Prior-register dispositions ratified (as recorded):** Stage-calendar crate home → keep; External-noise take/fill glue duplication → not-ours; Deterministic (σ = 0) AR(p > 0) external inflow stays rejected → keep; `LoadModel` conflates physical load with its stochastic model → not-ours; Cross-path static-RHS contract not yet in `.claude/rules/sddp.md` → not-ours; Oracle test-harness duplication → cross-reference; CD-001 — setup config-projection sprawl / CLI non-root reconstruction → resolved.
 
@@ -3815,12 +3815,12 @@ The 112 ratified findings were re-derived against source (`PRIORITIES.md`, c03c0
 fixes found while executing it (19521701, 3b363161 on `fix/quality-tier1-followups`) are pending
 merge. Each closed entry carries a `- **Status:** fixed` bullet with current-tree evidence.
 
-| Finding    | Resolution                                                                                                                                                                                                                                                                         |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **OD-011** | FIXED — the NCS column fill reads the resolved per-(source, stage) curtailment penalty like its three siblings.                                                                                                                                                                     |
+| Finding    | Resolution                                                                                                                                                                                                                                                                               |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OD-011** | FIXED — the NCS column fill reads the resolved per-(source, stage) curtailment penalty like its three siblings.                                                                                                                                                                          |
 | **CD-056** | FIXED — one table-driven stage-axis rule (rule 49) over all six bound families, declared-id set membership; rule 16 retired. Its "padded region makes thermal legitimately family-specific" clause was wrong (correction bullet on the entry). CD-053's NCS half deliberately untouched. |
-| **CD-051** | FIXED — `validate_config` resolves both scenario sources; validate and run agree; Python parity test added.                                                                                                                                                                        |
-| **CD-058** | FIXED — atomic payload/manifest/CSV writes; a rewrite removes the old manifest, then every stale payload, before writing. The reader's directory enumeration made stale payloads a release-build silent hazard (correction bullet on the entry).                                   |
+| **CD-051** | FIXED — `validate_config` resolves both scenario sources; validate and run agree; Python parity test added.                                                                                                                                                                              |
+| **CD-058** | FIXED — atomic payload/manifest/CSV writes; a rewrite removes the old manifest, then every stale payload, before writing. The reader's directory enumeration made stale payloads a release-build silent hazard (correction bullet on the entry).                                         |
 
 Register corrections from `PRIORITIES.md` §3 were folded into their entries as
 `- **Correction (2026-09-11):**` bullets (PD-007, PD-023/024/025, CD-045, CD-047, CD-054, CD-058,
@@ -3853,15 +3853,15 @@ Fourteen tickets in two epics, every ticket bit-for-bit neutral (goldens capture
 code in `crates/cobre-stochastic/tests/forward_sampler_golden.rs`). Each closed entry carries a
 `- **Status:** fixed` bullet with current-tree evidence.
 
-| Finding                    | Resolution                                                                                                                                                                                                                                                       |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Finding                    | Resolution                                                                                                                                                                                                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **PD-023, PD-024, PD-025** | FIXED — per-iteration noise tables (`ForwardNoiseTables`, one table per class and `(noise_group_id, noise_method)`), rebuilt by each driver and shared by reference through the sample request; Sobol wires its dormant precompute, Halton and LHS gain one each. |
 | **PD-026, PD-028**         | FIXED — positions resolved once at `DecomposedCorrelation::build`; profile and group slice resolved once per draw / per stage.                                                                                                                                    |
 | **PD-027**                 | FIXED — caller-owned correlation scratch (`ScratchBuffers.corr_scratch`) replaces the permutation scratch; no allocation at any group width, pinned by a counting-allocator guard.                                                                                |
-| **CD-068**                 | FIXED — the full-vector applier, the scan fallback and their differential oracles are deleted; one applier remains.                                                                                                                                              |
-| **CD-069**                 | FIXED — one `NoisePointSpec`.                                                                                                                                                                                                                                    |
-| **CD-067**                 | FIXED — `EntityClass` parsed once at build; the correlation side is typed end to end.                                                                                                                                                                            |
-| **CD-066**                 | PARTIAL — the enum exists; the sampler-side `class_name: &str` gate is still open (status bullet on the entry).                                                                                                                                                  |
+| **CD-068**                 | FIXED — the full-vector applier, the scan fallback and their differential oracles are deleted; one applier remains.                                                                                                                                               |
+| **CD-069**                 | FIXED — one `NoisePointSpec`.                                                                                                                                                                                                                                     |
+| **CD-067**                 | FIXED — `EntityClass` parsed once at build; the correlation side is typed end to end.                                                                                                                                                                             |
+| **CD-066**                 | PARTIAL — the enum exists; the sampler-side `class_name: &str` gate is still open (status bullet on the entry).                                                                                                                                                   |
 
 Found and fixed inside the wave (not register findings): the hoist moved Sobol construction ahead
 of the draw-time dimension check, so a class wider than the direction table panicked in the rebuild
@@ -3915,6 +3915,7 @@ keep local helpers whose shapes differ. The cobre-sddp side already had `tests/c
 - **Evidence:** `cargo test -p cobre-sddp --features test-support --test forward_sampler_no_alloc -- --list` showed four tests before the `#[path]` include; nextest's process-per-test isolation hid the coupling on every per-ticket gate, and only the threaded `cargo test` harness (which `ci.yml` runs) exposed it.
 - **Fix-shape:** move `permute.rs`'s tests to a binary of their own (or to a `#[cfg(test)]` module gated behind a cargo feature the aggregator does not enable), so `mod common;` never adds tests to a consumer; then the guard can use the aggregator and drop its include-level allow. Fold into the test-support surface work (Tier 4) that already owns `common/`.
 - **Alignment:** neutral
+- **Status:** fixed (2026-09-15) — `permute.rs`'s tests moved to their own binary, `crates/cobre-sddp/tests/permute_helpers.rs`, so `mod common;` adds no tests to a consumer; the allocation guard `forward_sampler_no_alloc.rs` declares `mod common;` like every other binary and its `--list` shows the one guard test. Closed by `plans/quality-tier45-closeout` ticket-013 (epic-03), commit range `3e90024f..54ab986a` on `develop`; recorded at the Tier-4/5 reconciliation after the register merge exposed the id.
 
 ### Tier-3 fix wave (2026-09-14) — `plans/quality-tier3-footguns`, base `fe439fc0`, merged to `develop` at `3e90024f`
 
@@ -3923,18 +3924,18 @@ bit-for-bit neutral for every deck cobre-io can load; two BREAKING CHANGELOG ent
 public type; a new validation error plus a fallible setter). Waves W2 and W4 of `PRIORITIES.md` §5
 are closed. Each closed entry carries a `- **Status:** fixed` bullet with current-tree evidence.
 
-| Finding                      | Resolution                                                                                                                                                                                                                                            |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **CD-040**                   | FIXED — `HydroStagePenalties` deleted outright (owner chose deletion over the alias); the resolved table stores `HydroPenalties`; the sixteen-field copy is a move.                                                                                    |
-| **CD-043**                   | FIXED — the builder assigns `Stage.index` after its sort; the loader loop is gone. The boundary review caught a pre-build reader (inflow-seeding validation → lag transitions); the window is now position-based, which also fixes a latent over-skip. |
-| **CD-045**                   | FIXED — validate-not-sort: `ValidationError::UnsortedModelTable`, `with_scenario_models` fallible. Exposed 31 stage-major test fixtures and an unsorted `run_partial_estimation` table, both corrected.                                                |
-| **CD-048**                   | FIXED — `SystemBuilder::build` is the one doc owner; sixteen sites are pointers (seven parser docs added with owner approval).                                                                                                                         |
-| **CD-057, OD-019**           | FIXED — keyed `InputFile` registry; `FileManifest::present(InputFile)` is the single read; the positional zip and the 43-field struct are gone.                                                                                                        |
-| **CD-066**                   | FIXED — `EntityClass` carried through the factory; the class seed derives from `EntityClass::as_str`, both pinned constants unchanged.                                                                                                                |
-| **OD-028**                   | FIXED — per-class `InflowSource` / `ClassSource` built inside the factory from the unchanged public config; `MissingScenarioSource` text and order byte-identical; diagnostics stay in the factory (owner).                                            |
-| **OD-029**                   | FIXED — `DerivedSeed<'a>` through six signatures (11→8, 13→10 ×5); all six suppressions kept, rationales true.                                                                                                                                        |
-| **CD-073**                   | FIXED — `NoisePointSpec.stream_id`, named for the seed-tuple slot; the genuine stage-id carriers are untouched.                                                                                                                                       |
-| **PD-031**                   | FIXED — one warning per out-of-sample class at sampler construction; the draw arms are silent; `FreshNoiseSpec.stage_id` deleted with its last production reader.                                                                                     |
+| Finding            | Resolution                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **CD-040**         | FIXED — `HydroStagePenalties` deleted outright (owner chose deletion over the alias); the resolved table stores `HydroPenalties`; the sixteen-field copy is a move.                                                                                    |
+| **CD-043**         | FIXED — the builder assigns `Stage.index` after its sort; the loader loop is gone. The boundary review caught a pre-build reader (inflow-seeding validation → lag transitions); the window is now position-based, which also fixes a latent over-skip. |
+| **CD-045**         | FIXED — validate-not-sort: `ValidationError::UnsortedModelTable`, `with_scenario_models` fallible. Exposed 31 stage-major test fixtures and an unsorted `run_partial_estimation` table, both corrected.                                                |
+| **CD-048**         | FIXED — `SystemBuilder::build` is the one doc owner; sixteen sites are pointers (seven parser docs added with owner approval).                                                                                                                         |
+| **CD-057, OD-019** | FIXED — keyed `InputFile` registry; `FileManifest::present(InputFile)` is the single read; the positional zip and the 43-field struct are gone.                                                                                                        |
+| **CD-066**         | FIXED — `EntityClass` carried through the factory; the class seed derives from `EntityClass::as_str`, both pinned constants unchanged.                                                                                                                 |
+| **OD-028**         | FIXED — per-class `InflowSource` / `ClassSource` built inside the factory from the unchanged public config; `MissingScenarioSource` text and order byte-identical; diagnostics stay in the factory (owner).                                            |
+| **OD-029**         | FIXED — `DerivedSeed<'a>` through six signatures (11→8, 13→10 ×5); all six suppressions kept, rationales true.                                                                                                                                         |
+| **CD-073**         | FIXED — `NoisePointSpec.stream_id`, named for the seed-tuple slot; the genuine stage-id carriers are untouched.                                                                                                                                        |
+| **PD-031**         | FIXED — one warning per out-of-sample class at sampler construction; the draw arms are silent; `FreshNoiseSpec.stage_id` deleted with its last production reader.                                                                                      |
 
 Found and fixed inside the wave (not register findings): (1) `cobre-io`'s semantic validation runs
 `precompute_stage_lag_transitions` on pre-build `StagesData`, so removing the parser's index loop
@@ -3955,7 +3956,7 @@ was on the cobre-io validation path, not only post-build; OD-029 — six signatu
 CD-066's PRIORITIES re-rating (C) stands; it is closed as part of the same epic.
 
 Process observations carried to memory (not register findings): a ticket that deletes a field's
-writer must enumerate every *caller of every reader* across crates (the missed `validate_inflow_seeding`
+writer must enumerate every _caller of every reader_ across crates (the missed `validate_inflow_seeding`
 path), and a ticket that changes a `pub` signature must grep `tests/` binaries for direct callers
 (`par_a_historical_replay.rs` was named in ticket-008's Integration Tests section but omitted from
 its frontmatter). Two owner-approved scope widenings and one rejected workaround (keeping
@@ -3972,25 +3973,26 @@ no production consumer (cobre-sddp station). TD-034 stays in W5.
 
 **Baseline for the next reconciliation: `develop` @ `3e90024f` (the Tier-3 merge).**
 
-### Tier-4/5 fix wave (2026-09-15) — validated at `3e90024f`, fixed on `feat/quality-tier45-closeout`
+### Tier-4/5 fix wave (2026-09-15) — validated at `3e90024f`, fixed on `feat/quality-tier45-closeout`, merged to `develop` at `54ab986a`
 
-Waves W5 (test-support surface, sixteen ids) and W6 (dead-surface sweep, twenty-four ids) of
-`PRIORITIES.md` §5 were executed as one plan of thirty-nine code tickets in six epics on
-`feat/quality-tier45-closeout` (branched from `develop` @ `3e90024f`; pending merge — the branch
-carries `fix/quality-tier1-followups` and `fix/out-of-sample-class-seed`, so their pending merges
-resolve with it). Each closed entry carries a `- **Status:** fixed (2026-09-15)` bullet naming the
+Waves W5 (test-support surface, seventeen ids with TD-034) and W6 (dead-surface sweep, twenty-four
+ids) of `PRIORITIES.md` §5 were executed as one plan of thirty-nine code tickets in six epics on
+`feat/quality-tier45-closeout` (branched from `develop` @ `3e90024f`, fast-forwarded into `develop`
+at `54ab986a` on 2026-09-15 and merged back into this register branch at `6ea69a02`). The plan ran
+against `develop`, which does not carry this branch's Tier-2/Tier-3 reconciliation commits, so two
+of its closeout observations were written from a stale register and are corrected below. Each closed entry carries a `- **Status:** fixed (2026-09-15)` bullet naming the
 mechanism, any deliberate non-doing and the closing epic's completion and boundary commits. D1(a)
 ratified `docs/design/testing-architecture.md` §5.2 (the uniform `test-support` convention) and
 only §5.2; §5.1's binary consolidation and homing threshold stay a proposal.
 
-| Finding                                                                                                                                 | Resolution                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **W5 / epic-01** — TD-002, TD-005, TD-004                                                                                               | FIXED — `cobre-core` `test_support`: uniform penalty constructors, one spec-plus-`make_*` entity/stage builder family, `..`-free exhaustive bit comparators over the shared `f64_bits_eq`/`opt_f64_bits_eq`. `7c28de14` + `5e06c30e` + `16ca7c66`.                                                                                                                                              |
-| **W5 / epic-02** — TD-023, TD-016, TD-007, TD-014, TD-018, TD-020, TD-009                                                               | FIXED — `parquet_helpers` contract tests first; `crates/cobre-io/src/test_support.rs` behind `test-support` owns the writers, the minimal-case corpus, the phase fixtures, the output trio, `read_first_batch` and the stats-parser template. `ac2e608a` + `bd29eb5e` + `9c5bbf5a`.                                                                                                             |
-| **W5 / epic-03** — TD-028, TD-025, TD-030, TD-029, TD-024, TD-032                                                                       | FIXED — stochastic entity literals route through `cobre-core`'s builders; `cobre-stochastic` gains its own `test-support` surface (`uniform_tree`, season maps, `InflowModelSpec`); `tests/common/mod.rs` is the integration prelude for eight of nine binaries; goldens byte-identical. `2bf30ece` + `59c5c09f`.                                                                              |
-| **W6 / epic-04** — OD-010, CD-041, OD-012, OD-013, PD-008                                                                               | FIXED — the two unconstructed `ValidationError` variants and the unread `buses` argument gone; the population-statistics arm of `WelfordAccumulator` gone; `NetworkTopology` deleted and `cascade` serde-skipped with a bit-equal rebuild guard. `dd03c153` + `8a72c69d`.                                                                                                                     |
+| Finding                                                                                                                                   | Resolution                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **W5 / epic-01** — TD-002, TD-005, TD-004                                                                                                 | FIXED — `cobre-core` `test_support`: uniform penalty constructors, one spec-plus-`make_*` entity/stage builder family, `..`-free exhaustive bit comparators over the shared `f64_bits_eq`/`opt_f64_bits_eq`. `7c28de14` + `5e06c30e` + `16ca7c66`.                                                                                                                                                                                                |
+| **W5 / epic-02** — TD-023, TD-016, TD-007, TD-014, TD-018, TD-020, TD-009                                                                 | FIXED — `parquet_helpers` contract tests first; `crates/cobre-io/src/test_support.rs` behind `test-support` owns the writers, the minimal-case corpus, the phase fixtures, the output trio, `read_first_batch` and the stats-parser template. `ac2e608a` + `bd29eb5e` + `9c5bbf5a`.                                                                                                                                                               |
+| **W5 / epic-03** — TD-028, TD-025, TD-030, TD-029, TD-024, TD-032, TD-034                                                                 | FIXED — stochastic entity literals route through `cobre-core`'s builders; `cobre-stochastic` gains its own `test-support` surface (`uniform_tree`, season maps, `InflowModelSpec`); `tests/common/mod.rs` is the integration prelude for eight of nine binaries; goldens byte-identical. `2bf30ece` + `59c5c09f`.                                                                                                                                 |
+| **W6 / epic-04** — OD-010, CD-041, OD-012, OD-013, PD-008                                                                                 | FIXED — the two unconstructed `ValidationError` variants and the unread `buses` argument gone; the population-statistics arm of `WelfordAccumulator` gone; `NetworkTopology` deleted and `cascade` serde-skipped with a bit-equal rebuild guard. `dd03c153` + `8a72c69d`.                                                                                                                                                                         |
 | **W6 / epic-05** — OD-014, OD-015, OD-018, OD-016, OD-017, OD-020, OD-021, OD-022, PD-017, CD-052, OD-024, OD-025, CD-047, CD-063, CD-049 | FIXED — the `cobre-io` dead surface (free serializers, scalar-parameter loaders, scenario entry point, `default_severity`, `_config` parameter, serde defaults privatised, setup-timing columns, `partitions_written`, `CrossReferenceError`, f32 decoder, pipeline wrappers) removed; `open_record_batch_reader`, `ensure_parent_dir` + `write_batch_atomic` and the generic factor resolver are the one-owner helpers. `09381faa` + `883c022e`. |
-| **W6 / epic-06** — OD-026, OD-027, OD-030, OD-031                                                                                       | FIXED — `ParValidationReport`/`ParWarning`, the three bare season-map forwarders, `SweepDirection` and the three unconstructed `StochasticError` variants deleted; the fatal PAR check and the descending solve order unchanged. `719ed408` + `858e3ad7`.                                                                                                                                      |
+| **W6 / epic-06** — OD-026, OD-027, OD-030, OD-031                                                                                         | FIXED — `ParValidationReport`/`ParWarning`, the three bare season-map forwarders, `SweepDirection` and the three unconstructed `StochasticError` variants deleted; the fatal PAR check and the descending solve order unchanged. `719ed408` + `858e3ad7`.                                                                                                                                                                                         |
 
 Register corrections found while refining and executing the plan (the seam map's
 `[SPEC CORRECTION]`s and the tickets' completion notes) were folded into their entries as
@@ -4002,13 +4004,11 @@ module declaration landed above it, the bullet names the commit at which each va
 
 New observations recorded at this reconciliation (no IDs minted outside a gate):
 
-- **`TD-034` was never a register id.** The `permute.rs` relocation out of the `cobre-sddp` test
-  aggregator (`crates/cobre-sddp/tests/permute_helpers.rs`; the allocation guard now declares
-  `mod common;` like every other binary) was planned as `TD-034` and assigned to ticket-013, but
-  `PRIORITIES.md` §5 W5 lists sixteen ids, Tier 4 lists the same sixteen, and the highest test-bloat
-  id the register mints is `TD-033`. The work landed; no entry closes. **Decided (owner,
-  2026-09-15):** record the phantom id here and mint nothing — id minting is an owner or gate
-  action, not a closeout ticket's.
+- **`TD-034` is a register id after all — closed by ticket-013.** The closeout recorded it as a
+  phantom because `develop` @ `3e90024f` carried neither the entry (minted 2026-09-12 at the Tier-2
+  reconciliation on this branch) nor the `PRIORITIES.md` W5 row that lists it. The relocation of
+  `permute.rs` out of the `cobre-sddp` test aggregator is exactly its fix-shape; the entry now
+  carries its status bullet and the W5 count above includes it.
 - **The `identity_correlation` fixture family still has five in-`src` copies** in
   `crates/cobre-stochastic/src`: `provenance.rs`, `context.rs` and `sampling/mod.rs` return
   `CorrelationModel`; `tree/generate.rs` and `sampling/out_of_sample.rs` return
@@ -4043,23 +4043,25 @@ New observations recorded at this reconciliation (no IDs minted outside a gate):
 - **Anchor drift on entries this plan did not close**, from a HEAD-resolving pass
   (`python3 plans/architecture-debt-audit/tools/check-anchors.py core-io --baseline HEAD --allow-drift`
   → `checked 345 anchors, 82 failing` at `858e3ad7`; `stochastic` → `checked 118 anchors, 0 failing`;
-  the 40 closed entries' anchors are missing by design and are not drift): CD-056
+  the 40 closed entries' anchors are missing by design and are not drift; after the register merge,
+  `6ea69a02`, the same pass reads `checked 365 anchors, 87 failing`, and CD-046 and TD-017 are the
+  only open entries among the failures): CD-056
   (`check_thermal_bounds_override_stage_range`, retired with rule 16), CD-057 and OD-019
   (`manifest_fields_mut`, `FILE_ENTRIES`, deleted by the Tier-3 wave), CD-040 (`HydroStagePenalties`,
   deleted by the Tier-3 wave), TD-017 (all five thermal test anchors, retired by the rule-49 rewrite
   — re-anchor or close as moot before the test-corpus sweep), and CD-048 (its two
   `resolution/{load,ncs}_factors.rs` anchors moved to `resolution/factors.rs` by this wave's CD-049
-  fold — re-anchor). CD-040, CD-057 and OD-019 are closed in the tree yet carry no status bullet, so
-  a status-bullet pass over the Tier-2/Tier-3 waves is owed. **Decided (owner, 2026-09-15):** record
-  that gap as a follow-up item here and do not write those three bullets in this closeout. That
-  pass is out of the closeout's declared scope and gets its own item.
+  fold — re-anchor). The closeout also recorded CD-040, CD-057 and OD-019 as closed without a
+  status bullet; that was the stale-register view — all three carry `fixed (2026-09-14)` bullets
+  from the Tier-3 reconciliation on this branch, so no status-bullet pass is owed. TD-017 is the one
+  entry in this list still without a bullet (re-anchor or close as moot before the test-corpus sweep).
 
 Withdrawn — two previously queued follow-ups that do not reproduce:
 
 - **`PD-023`'s anchor prefix drift.** All three anchors carry the `crates/cobre-stochastic/` prefix
-  (`grep -n -A6 '^\*\*PD-023 ·' BACKLOG.md | grep Anchors`), the register holds no
-  `forward_sampler_golden.rs` anchor at all (`grep -c forward_sampler_golden BACKLOG.md` → 0), and
-  the HEAD-resolving `stochastic` anchor pass reports zero failures. Not carried.
+  (`grep -n -A6 '^\*\*PD-023 ·' BACKLOG.md | grep Anchors`), no `Anchors:` line in the
+  register names `forward_sampler_golden.rs` (the Tier-2 status bullet mentions it in prose only), and
+  the HEAD-resolving `stochastic` anchor pass reports zero failures at `6ea69a02`. Not carried.
 - **`Severity` is not dead.** The Tier-5 removal (ticket-024) took `ErrorKind::default_severity`
   only; `Severity` keeps production readers across `crates/cobre-io/src/validation/mod.rs` and its
   crate-root export in `crates/cobre-io/src/lib.rs` (`grep -rn Severity crates/cobre-io/src/validation/mod.rs`
@@ -4070,7 +4072,7 @@ sweep" sections became two ID-free `### Fixed — … (2026-09-15)` sections in 
 entry; `docs/design/testing-architecture.md` reads `Partially adopted (§5.2); the rest Proposal`
 with `docs/design/README.md`'s row matching.
 
-**Baseline for the next reconciliation: `develop` after `feat/quality-tier45-closeout` merges (it carries `fix/quality-tier1-followups` and `fix/out-of-sample-class-seed`, whose pending merges resolve with it).**
+**Baseline for the next reconciliation: `develop` @ `54ab986a` (the Tier-4/5 fast-forward; every earlier fix branch is already in). Waves W1–W6 are closed; W7–W10 remain.**
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 

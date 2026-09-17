@@ -37,6 +37,12 @@ register entry. Finding IDs are owned by `BACKLOG.md`; every ID below links to i
 - **Not yet a roadmap:** `tools/check-roadmap-dag.py` reads `- **Status:**` bullets on entries
   (only the fixed Tier-1/2/3 entries carry one; every other entry parses as `open`), so the Waves table
   in §5 is an _interim_ schedule in the checker's vocabulary, for the unified-roadmap station to lift.
+- **Reconciliation 2026-09-17 (`develop` `2a14fe56..077dbe2c`, merged at `e3535a47`):** two feature plans
+  landed, neither a debt wave — boundary policy by calendar date, and the CLI simplification + cobre-python
+  review. No ID minted or closed; **CD-029 moves to partial** (Python-parity half fixed), **CD-025 stays
+  open with hardened detection** (golden CLI-vs-Python determinism test, import-resolving parity gate).
+  Anchor drift on open entries: TD-017 only (pre-existing). Details in the register's post-plan section.
+  Next baseline `develop` @ `077dbe2c`.
 
 ---
 
@@ -193,9 +199,13 @@ fixing Tier 1 were added to the table below at the same time.
 | TD-031 (`:3519`)                                                        | 16 modules exceed 500 inline test LOC (e.g. `sampling/external.rs` 2312); anchor list is under-scoped.                                                                                                                                                                                                                                                                                  |
 
 New observations not in the register (candidates for the sddp / cli-python stations):
-`EventConfig.checkpoint_interval` (`cobre-sddp/src/config.rs:183`) has no production consumer;
-`SobolPrecomputed::new` (`qmc_sobol/mod.rs:181`) had zero callers including tests (resolved 2026-09-12);
-`out_of_sample.rs:44` "No heap allocation" was a false doc claim (removed 2026-09-12).
+`EventConfig.checkpoint_interval` (`cobre-sddp/src/config.rs:183`) has no production consumer
+(re-confirmed 2026-09-17); `SobolPrecomputed::new` (`qmc_sobol/mod.rs:181`) had zero callers including
+tests (resolved 2026-09-12); `out_of_sample.rs:44` "No heap allocation" was a false doc claim (removed
+2026-09-12). Added 2026-09-17 (cli-python / build-ci): the `training/hydro_models.json` and
+`training/model_provenance.json` sidecars lost their only consumer with `cobre summary` and are kept under
+the parity rule; `cobre-python` has `doc = false`, so its intra-doc links are never gated; the CLI plan's
+parity matrices and fix list under `plans/cli-simplification-python-review/` are ready station inputs.
 
 ---
 
@@ -213,6 +223,12 @@ New observations not in the register (candidates for the sddp / cli-python stati
 cobre-sddp (the largest crate) has not been re-evaluated in this pass; the August audit's Waves 4–7
 remain open there (`BACKLOG.md:1898–1922`): setup lifecycle redesign (CD-002/003/004/005), CLI/Python
 output hand-mirror (CD-025), inline-test giants (CD-007), god functions (CD-012, CD-014).
+
+The table above is the 2026-09-11 snapshot. Since then (to `077dbe2c`) cobre-cli lost a net 2.3k lines
+(two subcommands, three test binaries, the test-only summary oracle) and cobre-python gained a net 0.5k
+(golden parity test, checkpoint round-trip tests, `Study` native lifecycle); cobre-sddp grew a net 5.2k
+with the date-driven boundary work. Regenerate the table at the next station's inventory step rather
+than hand-editing it.
 
 ---
 
@@ -234,3 +250,21 @@ Milestones as in `BACKLOG.md:33–51`; `gnl-import` is SATISFIED (`44e72b76`, `9
 | 10   | W10-alignment-hold          | CD-061, CD-065, CD-070, CD-071                                                                                                                                                                 | W4-typed-class-and-seam    | serves 1 | -      | generalization-alignment station (Epic 9) adjudicates; no code before                        |
 
 Every one of the 112 ratified IDs appears in exactly one wave (verified mechanically when this file was written).
+
+---
+
+## 6. Next steps (proposed 2026-09-17, after the reconciliation)
+
+Nine of eleven stations are unrun. Ordered by what the tree just made cheap or urgent:
+
+| # | Step | Why now | Inputs already in hand |
+| --- | --- | --- | --- |
+| 1 | **Re-pin the evaluation baseline** to `develop` @ `077dbe2c` for the remaining stations (`tools/pin-baseline.sh`; the ratified core-io and stochastic stations keep `a136840d`). | Every remaining station reads a surface the two merged plans rewrote; evaluating at the old pin would re-find fixed defects. | `pin-baseline.sh` exit codes 2–4 guard the pre-conditions. |
+| 2 | **cli-python station** (cobre-cli + cobre-python, four lenses). | The surface is freshly settled and pre-audited: 48 argument rows, 30 behaviour rows, 128 docstring claims and a 26-item fix list exist; the station's job is to ratify residuals and mint IDs, not to discover. Re-adjudicate the 16 justified-as-is rows, the orphaned sidecars, CD-025's owner question, and the `doc = false` gate gap. | `plans/cli-simplification-python-review/{parity-arguments,parity-behaviour,docstring-audit,fix-list}.md`; the core-io prompt templates under `stations/core-io/prompts/`. |
+| 3 | **sddp station** (cobre-sddp, the largest crate, never re-evaluated in this pass). | Holds the largest open cluster: Wave 4 setup redesign (CD-002/003/004/005), god functions CD-012/CD-014, CD-023 prep inversion, CD-028 orchestration mirror, and the unrecorded `checkpoint_interval` seam; the boundary-policy plan just added 5k lines here. | August Station 1–4 entries (`BACKLOG.md:139–1057`) as the prior register; `measurements/CAL*` bounds for the perf lens. |
+| 4 | **W8 setup-perf, opportunistic** (PD-009 first). | Unblocked since W6; no dedicated push. | §Deprioritized list. |
+| 5 | **build-ci + test-corpus stations**, then **generalization-alignment** (adjudicates W10 and CD-044's home) and **unified-roadmap** (lifts §5 into the checker's vocabulary). | Order by dependency: test-corpus needs `testing-architecture.md` §5.1 ratified; W10 needs the alignment station. | `tools/check-roadmap-dag.py` for the roadmap section. |
+
+Owner decisions this ordering assumes: the remaining stations evaluate at the new pin (step 1); the
+cli-python station may cite the plan's matrices as prior evidence instead of re-deriving them; CD-025's
+hoist stays Wave 5 (not folded into the cli-python station's fixes).

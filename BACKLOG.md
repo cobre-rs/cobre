@@ -925,6 +925,18 @@ identical `CheckpointParams`, `write_solver_stats`, `write_row_selection_records
   cobre-io); the `_if_any` helpers prove the shape. The Python-parity hard rule existing AT ALL is
   the evidence this drifts. North-star: model the output-set as one owner with typed variation
   points (error type, progress sink, `OutputContext` source), not two hand-synced copies.
+- **Note (2026-09-17):** still OPEN, structure unchanged, risk narrowed. The CLI/Python plan merged at
+  `develop` `24e76cdb` collapsed the Python side to ONE internal owner (`cobre.run.run` is a thin wrapper over
+  `Study::{new,train,load_policy,simulate}_native`; the `_if_any` helpers are called from `Study::train_native`
+  only), but the cross-crate hand-mirror is intact: `write_training_outputs` (`cobre-cli/.../run/outputs.rs:58`)
+  re-inlines the fpha/evaporation writes (`:95`, `:107`) and the census `scenario_summary` reshape is still
+  copied (`outputs.rs:221` ↔ `cobre-python/src/run.rs:799`). What changed is the DETECTION: a golden test
+  (`cobre-python/tests/test_cli_python_determinism_parity.py`) now runs `examples/1dtoy` through both entry
+  points and compares the whole output tree value-for-value under two literal wall-clock masks, an
+  import-resolving parity gate (`scripts/ci/check_python_parity.py`, 18 shared writers) replaced the grep, and
+  the two content divergences the test would have exposed were fixed rather than masked (CLI simulation
+  `solver_version`; the Python `setup` timings section). Drift is now caught in CI; the owner is still two.
+  Fix-shape unchanged (hoist to a crate both depend on); Wave 5 of the 2026-08-22 table.
 
 **CD-026 · Sev C · god-fn by repetition / duplication · effort S–M · confidence high** — OWNER-AGREED
 `SimulationParquetWriter::write_scenario` (`cobre-io/.../simulation_writer.rs:627`, ~247 lines)
@@ -1234,6 +1246,13 @@ abstraction entirely (`cobre-cli/.../commands/validate.rs:255-287`, its own ad-h
 no boundary references). Two defects in one: the abstraction oversells a "shared validation-phase"
 contract that covers 3 of 4 phases, and the 4th escapes the Python-parity discipline. Fix: fold the
 boundary check into `PrepPhase` (or correct the doc to "three") and mirror it in the Python binding.
+- **Status:** partial (2026-09-17) — the Python-parity half is FIXED: `cobre.io.validate` runs the boundary
+  reconciliation as its phase 11 (`cobre-python/src/io.rs:167`, via the shared `reconcile_boundary_policy`),
+  so a boundary configuration `cobre validate` rejects is rejected by the binding too (CLI/Python plan
+  ticket, `develop` `fc81427a`). The abstraction half is OPEN: `PrepPhase` still has three variants
+  (`cobre-sddp/src/validate_phases.rs:33`) under a doc that says "four SDDP preparation steps" (`:20`),
+  and both front ends still run the boundary check outside `PrepPhase`/`prep_phase_metadata`. Remaining
+  fix: fold the boundary check into `PrepPhase` or correct the doc to three.
 
 **CD-030 · Sev C · duplication (minor) · effort S · confidence high**
 `mark_own_paths` (`simulation/enumerated.rs:123-140`) reimplements the same ~10-line path-marking
@@ -4117,6 +4136,69 @@ outside `referential.rs` and the `Rule N` convention's extension to future check
 doc-drift residue; no new ids minted.
 
 **Baseline for the next reconciliation: `develop` @ `2a14fe56`. Waves W1–W7 are closed; W8–W10 remain.**
+
+## ★ POST-PLAN RECONCILIATION (2026-09-17) — `develop` `2a14fe56..077dbe2c` merged into the register branch at `e3535a47`
+
+Two workstreams landed on `develop` since the W7 baseline; neither was a scheduled debt wave, so this
+section records their debt impact and refreshes the picture. **No new ID minted; no entry closed outright;
+one entry moves to partial.**
+
+**What landed (23 commits, 140 files, +14,956 / −10,299):**
+
+- **Boundary policy by calendar date** (`220f96b9` … `d4dcef72`, cobre-sddp +8.6k/−3.4k, cobre-io
+  +1.8k/−0.9k): dated self-describing checkpoint wire format (pools and slots stamped with real dates,
+  transit buckets on the extended arrival calendar), boundary cuts selected and reconciled by date,
+  `policy.boundary.source_stage` replaced by a strict-superset switch with report-only tallies, the season
+  descriptor validated at decode time and the season gate relaxed to referenced seasons. Station 2 (policy
+  load) stays the positive reference; CD-039's writer half (per-family slot-reservation channel) is
+  untouched by construction — the change is on the read/reconcile path.
+- **CLI simplification + cobre-python review** (`797ba443` … `24e76cdb`, cobre-cli +0.8k/−3.1k,
+  cobre-python +2.3k/−1.9k): `cobre report`/`cobre summary` and their Python and cobre-io mirrors deleted
+  (`commands/report.rs`, `commands/summary.rs`, `output/convergence_reader.rs`, four public readers, three
+  CLI test binaries); `cobre.run.run` re-implemented over the `Study` lifecycle; typed error leaves
+  (`InternalError`), `threads=0` rejected, boundary reconciliation in the Python validator, checkpoint
+  `season_manifest` round-trip, CLI simulation metadata `solver_version`, Python `setup` timings, golden
+  CLI-vs-Python determinism test, run-summary `Option` fields tightened (12 of 25) with the test-only
+  renderer oracle deleted, dead-code audit clean, CHANGELOG/README/notebook refreshed.
+
+**Debt impact:**
+
+| Entry | Effect |
+| --- | --- |
+| **CD-025** (CLI/Python output hand-mirror, Wave 5) | OPEN, unchanged in structure; detection hardened (golden parity test + import-resolving gate). Note bullet on the entry. |
+| **CD-029** (`PrepPhase` doc + boundary bypass + Python parity) | **PARTIAL** — Python-parity half fixed (phase 11); abstraction half open. Status bullet on the entry. |
+| **CD-009** (policy-dir guard ×3) | OPEN, unchanged: `run/policy.rs:173`, `:202`, `:335` still three `!exists()` guards. |
+| **CD-011** (`PolicyStageManifest` naming) | OPEN, unchanged (9 occurrences in `policy_load.rs`). |
+| **CD-047 / TD-018 / TD-020** (fixed 2026-09-15) | Their bullets cite `output/convergence_reader.rs`, deleted by the CLI plan (its two readers had no production caller). Historical anchors; nothing to re-open. |
+| **CD-051** (fixed 2026-09-11) | Its parity mechanism held: the CLI plan's Python validator gained phase 11 through the shared reconciler, not a second admission gate. |
+| Anchor drift (`tools/check-anchors.py core-io --baseline HEAD`) | 31 entries fail at HEAD, 30 of them FIXED entries whose baseline anchors moved with their fixes (expected). The one OPEN entry with drifted anchors is **TD-017** (thermal boundary tests), pre-existing since the Tier-4/5 merge. `stochastic`: 126/126 anchors resolve. |
+
+**Candidates for the pending stations (recorded, not minted — the station mints):**
+
+- *cli-python:* the plan's own audits are ready-made station inputs — `plans/cli-simplification-python-review/`
+  `parity-arguments.md` (48 rows, 6-verdict vocabulary), `parity-behaviour.md` (30 rows + output-file-set,
+  gate-coverage and error-mapping sections), `docstring-audit.md` (128 claims) and `fix-list.md` (26 items,
+  all fixed; 16 justified-as-is rows that the station should re-adjudicate). Residual observations: the
+  `training/hydro_models.json` / `training/model_provenance.json` sidecars were written for the deleted
+  `cobre summary` and now have no in-repo consumer (kept under the parity rule — an OD candidate);
+  `write_training_outputs` ↔ `write_training_artifacts` still mirror by hand (CD-025); the run-summary
+  `TrainingSummary` keeps nine `Option` timing fields beside twelve tightened counters by owner decision
+  (recorded so the station does not re-raise it as an asymmetry).
+- *sddp:* `EventConfig.checkpoint_interval` (`cobre-sddp/src/config.rs:183`) still has no production
+  consumer (re-confirmed at `077dbe2c`; only docs and doctests read it).
+- *build-ci:* the Python CI job now builds the CLI and requires it (`--require-cli-binary`), runs the
+  bindings crate's Rust tests with `LD_LIBRARY_PATH` from `sysconfig`, and `check-comment-line-refs.sh`
+  scans `.py`/`.pyi`; `cobre-python` has `doc = false`, so `cargo doc -D warnings` never checks its
+  intra-doc links (a gate-coverage gap in the §3.6 sense).
+
+**Self-accounting (the two plans' own contribution):** new test infrastructure only (`tests/_cobre_cli.py`,
+`conftest.py`, the golden module, four checkpoint round-trip tests); no new production abstraction beyond
+the `PySeasonManifest` mirror of the existing graph-manifest pair; one new dependency edge (`chrono` in
+cobre-python, already a sibling dependency); `cargo machete` clean; no `#[allow(dead_code)]` in the plan's
+file set. No new CD / OD / PD / TD.
+
+**Baseline for the next reconciliation: `develop` @ `077dbe2c`.** Waves W1–W7 closed; W8–W10 open;
+the 2026-08-22 Waves 4–7 (setup redesign, output single owner, retrofit sweep, C-tier batch) unscheduled.
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 

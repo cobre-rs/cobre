@@ -47,13 +47,14 @@ reconciliation. Amend in place; do not fork a second copy.
    - Release mechanics: full local CI bar; schema regen if the run summary gains the
      tally field; Python parity for that field; CHANGELOG describes behaviour only.
 
-4. **Reconcile the SpecForge spec against the live tree** before any station resumes (provisional table below; backend was down on 2026-09-17):
+4. **Reconcile the SpecForge spec against the live tree** before any station resumes — DONE 2026-09-17, per-ticket table below:
    list every remaining ticket, mark each as done-on-develop / still-valid / obsolete,
    and decide per ticket whether to close, rewrite, or keep. Outcome recorded in
    `stations/` and in this file (see "SpecForge reconciliation" below once done).
 
-5. **Re-pin the evaluation baseline after the CD-074 fix merges**, not before — every
-   remaining station reads a surface the fix will touch.
+5. **Re-pin the evaluation baseline.** Original sequencing: after the CD-074 fix merges. Proposed
+   amendment (see "Owner decisions" §2 below, owner to confirm): pin once, now, at `077dbe2c`, and
+   record CD-074 at the pin with a later fixed-status bullet.
 
 6. **sddp station with one extra lens:** CD-074 is a specimen of a class — a pinned state
    coupled by an equality to a bounded column, reconciled ad hoc for one family. Audit
@@ -63,49 +64,110 @@ reconciliation. Amend in place; do not fork a second copy.
 7. **Remaining stations in the existing order:** cli-python, W8 setup-perf
    (opportunistic), build-ci + test-corpus, generalization-alignment, unified-roadmap.
 
-## SpecForge reconciliation
+## SpecForge reconciliation (2026-09-17, ticket bodies read)
 
-Spec `46c31993-82c2-4371-9447-b4f5aba7f75a` "Quality evaluation" (project `27f2e2e0`), 11 epics /
-76 tickets, planned 2026-09-05/06 against baseline `a136840d`.
+Spec `46c31993-82c2-4371-9447-b4f5aba7f75a` "Quality evaluation" (project `27f2e2e0`): 11 epics, 76
+tickets, 19 done, 1 active (E03-6), 56 pending, 0 actionable. Every pending ticket body was read on
+2026-09-17 and its baseline facts re-checked against `origin/develop` @ `077dbe2c`. The earlier
+provisional table (written while the backend returned 502) is superseded by this section.
 
-**Status 2026-09-17: PROVISIONAL.** The SpecForge backend answered `502` (`/health` →
-`Internal server error`) for the whole session, so the ticket bodies were not re-read; every
-row below is derived from the local tree, the register, and the session record, and must be
-confirmed against the ticket text before a station is started or a ticket closed.
+### Cross-cutting staleness (affects many tickets at once)
 
-**What moved under the spec** (`a136840d..077dbe2c` on `develop`: 99 commits, 327 files,
-+30,042 / −25,384 across `crates docs scripts .github schemas`; per crate: cobre-io 107 files,
-cobre-sddp 70, cobre-stochastic 51, cobre-python 44, cobre-cli 22, cobre-core 19,
-cobre-solver 1, cobre-comm 0):
-
-- The spec's premise "evaluation + ranked roadmap only, no fixes" no longer holds: Tier 1–5 and
-  W7 fix waves (`PRIORITIES.md` §5, W1–W7 closed) were executed from the two ratified
-  stations, plus two unrelated plans (boundary policy by date; CLI simplification + Python
-  review) landed. `BACKLOG.md` "POST-PLAN RECONCILIATION (2026-09-17)" is the register-side
-  reconciliation of those.
-- The evaluation branch `chore/quality-evaluation` is at `develop` (0 commits behind).
-
-| Epic | Spec premise | Live state | Provisional disposition |
+| # | Spec premise | Live state | Consequence |
 | --- | --- | --- | --- |
-| E01 harness | tools + calibration at `a136840d` | DONE, ratified. `CAL`/`CAL-ENUM` bounds measured at `a136840d` on the profiling binary. | Closed. Bounds are stale for any station evaluating at the new pin → re-run calibration (E10 or a re-opened E01-5 note), not a new ticket. |
-| E02 core+io | station at `a136840d` | DONE, ratified 2026-09-08; most Sev A/B entries since FIXED by Tiers 1–5 / W7. | Closed as-is; the fixes are register-side status bullets, not spec work. |
-| E03 stochastic | station at `a136840d` | Work complete & committed; **E03-6 owner gate still blocked** on the webapp file-delivery step (two queue files declared `modifies` but correctly unchanged; owner chose to fix in the webapp). | Owner flips the two queues to `reads` (or waives) + approves the two candidate-`reads` deviations → `complete_work_session` with `worktree=/home/rogerio/git/cobre`. No re-work. |
-| E04 solver+comm | inventory at `a136840d` | Surface nearly untouched since the pin (cobre-solver 1 file, cobre-comm 0). | **Still valid as written**, only the pin changes. Cheapest station; can run before the CD-074 fix merges. |
-| E05 sddp | inventory at `a136840d`; `lp-inventory.json` (E05-2) already produced | cobre-sddp +8.6k/−3.4k from the boundary-policy plan; CD-074 will touch `commitment_reconcile`/`stage_solve_prep`; `lp-inventory.json` must be regenerated at the new pin. | **Valid in method, stale in inputs.** Re-pin after CD-074 merges; regenerate `lp-inventory.json`; add the CD-074 "pinned-state vs bounded-column drift" lens (roadmap step 6). Ticket text likely needs the baseline sha and the inventory regeneration noted as deviations, not rewrites. |
-| E06 cli+python | attacker discovers from scratch | Surface rewritten: `report`/`summary` deleted, `cobre.run.run` over `Study`, 48+30+128-row parity/docstring matrices and a 26-item fix list exist in `plans/cli-simplification-python-review/`. | **Rewrite the attacker inputs**: the station ratifies residuals from the plan's matrices (16 justified-as-is rows, orphaned `hydro_models`/`model_provenance` sidecars, CD-025 owner question, `doc = false` gate gap) instead of discovering. Method/tickets otherwise stand. |
-| E07 build/CI/docs/schemas | at `a136840d` | scripts 4 files, `.github` 1, docs 7, schemas 1 changed; Python CI job now builds the CLI, runs the bindings' Rust tests, `check-comment-line-refs.sh` scans `.py`/`.pyi`. | Valid; small. Pin change only, plus the `doc = false` intra-doc-link gap as a seeded candidate. |
-| E08 test corpus | yardstick `testing-architecture.md` §5.1 (Proposal) | Tier-4/5 test-support surface work + `permute_helpers.rs` split landed; `testing-architecture.md` now reads "Partially adopted (§5.2); the rest Proposal"; 15 TD findings from core-io/stochastic already closed. | **Valid but re-scoped**: the yardstick section must be ratified first (PRIORITIES §6 step 5 dependency); the station's prior register is the TD- ledger, most of which is closed. |
-| E09 generalization alignment | Part-I re-verification + lp/ classification + alignment tags | Not started. Part-I cross-refs exist in both ratified stations; `plans/generalizing/` untouched (HTML + `mermaid.min.js` + build script still present — the E11 consolidation never ran). | **Valid as written.** Inputs: the two stations' `partI-handoff.json`, `tools/target-layering-brief.md`. |
-| E10 perf sweep | measure Sev-A/B perf claims at `a136840d`, protocol 4t/2t/2x2 | `perf-queue.json` exists for core-io + stochastic only; Tier-2 hot-path wave changed cobre-stochastic forward sampling (byte-neutral, perf not re-measured); `claim-table.json` absent. | **Valid but must re-calibrate** `CAL`/`CAL-ENUM` at the new pin before any claim is measured; several queued PD- claims are already FIXED (Tier 2) → measure the fix, not the claim. |
-| E11 reconciliation / roadmap / doc consolidation / mirror | E11-1 Wave 4–7 re-verify (sddp + cli-python), E11-2 dedup, E11-3/4 doc inventory, E11-10 final gate, E11-5..8 execute deletions, E11-9 verify, E11-11 commit | `PRIORITIES.md` (outside the spec) already ranks and its §5 waves W1–W7 are executed; POST-PLAN section already re-verified CD-025/029; **doc consolidation not done** (`docs/design/anticipated-fixed-post-horizon-commitments.md` and `external-scenarios-are-authoritative.md` still present; `plans/generalizing/*.html`, `mermaid.min.js`, `build_beyond_sddp_html.py` still present). | **Split**: E11-1/2 largely superseded by `PRIORITIES.md` + the POST-PLAN section (fold, don't redo); the roadmap tickets must ingest W1–W7 as closed and `PRIORITIES.md` §6 as the ranking input; E11-3..9/11 (doc consolidation + mirror) **still fully valid**. |
+| X1 | One baseline `a136840d`, cited by every station; scaffold headings and ticket section titles carry it literally | `develop` is 99 commits past it | Re-pin once (`tools/pin-baseline.sh`); keep the scaffold headings as-is (the checkers resolve sections by slug, not by sha) and let each entry carry its own `Baseline:` field, exactly as CD-072/CD-073 already do. No ticket text needs the sha edited. |
+| X2 | "No fixes in this spec"; "the only tracked file written is the mirror"; "BACKLOG.md stays gitignored" | Tier 1–5 + W7 fixes were executed (outside the spec, on fix branches); `plans/architecture-debt-audit/` is tracked on `develop` since 2026-09-06 (owner decision) | The guardrail still binds spec tickets. Every ticket that asserts "zero tracked change because plans/ is gitignored" (E11-5, E11-11, E11-9's documentation-only allowlist) must treat `plans/architecture-debt-audit/**` as a tracked, allowed write path. |
+| X3 | `cobre summary` reads a run's phase split | The subcommand was deleted by the CLI plan; `src/summary.rs` only prints the post-run block of `cobre run`; per-iteration timings live in `training/timing/iterations.parquet` (`time_cut_sync_ms`, `time_mpi_allreduce_ms` still present) | E10-2/3/4 take the phase split from the run's own stdout summary (not under `--quiet`) or from the timing parquet; the "one extra untimed replay for `cobre summary`" edge case is obsolete. |
+| X4 | cobre-python's 22 Rust `#[test]` are invisible to CI | The Python CI job now builds the CLI (`--require-cli-binary`) and runs the bindings crate's Rust tests with `LD_LIBRARY_PATH` | E06-4/5/6 and E08-2/4 lose that candidate; the mirror item "Python-binding Rust tests invisible to CI" is a retirement for E11-8, not a dup-of target. The new `doc = false` intra-doc-link gap (cobre-python `Cargo.toml:18`) is the replacement seed for E07. |
+| X5 | ID floors CD-040/PD-006/OD-010/TD-001 | Live max: CD-074, PD-031, OD-031, TD-034 | Harmless: every calibrate ticket reads the floor at run time. E08-5's title "open the TD class" is moot (opened by core-io). |
+| X6 | Test-corpus and perf queues are fresh | 15 TD and several PD rows from core-io/stochastic are already FIXED (Tiers 2–5) | E08-3 and E10-1 filter seeds by register status; a fixed PD is measured as its fix, or dropped with the reason. |
+| X7 | CD-074 did not exist | Sev A bug minted 2026-09-17 in `commitment_reconcile` | E05-4 adds the pinned-state-vs-bounded-column lens; E05-5's contract screen must NOT dismiss drift-margin candidates by citing the contract CD-074 re-opened; E05-6 merges any restatement as dup-of CD-074. |
 
-**Decisions the owner must take once SpecForge is reachable** (recorded here so they are not
-re-derived): (1) whether the remaining stations run under the existing tickets with
-deviation notes (pin sha, regenerated inventories) or the spec is reopened — reopening was
-declined once for E03-6's blast radius, so the default is deviation notes; (2) whether E11-1/2
-are closed as superseded or executed as a thin fold of `PRIORITIES.md`; (3) whether CD-074's
-fix plan lives outside the spec (recommended: it is a fix, and the spec is evaluation-only).
+### Per-ticket verdicts
 
-**Next action when the backend is up:** `list tickets --epicId` for E04..E11, diff each
-ticket's `filesToBeReferenced`/`filesToBeModified` and baseline sha against this table, and
-replace "PROVISIONAL" with per-ticket close / deviate / rewrite verdicts.
+Vocabulary: **run** = valid as written, only the pin and re-measured figures change (step notes);
+**deviate** = method valid, the named premises are stale and go into step notes; **rewrite** = a
+premise the ticket is built on no longer holds (needs owner text change or an explicit deviation
+approval); **supersede** = outcome already produced outside the spec, close with a pointer;
+**blocked-owner** = waiting on an owner action.
+
+| Ticket | Verdict | What changed / what to note |
+| --- | --- | --- |
+| E03-6 gate (stochastic) `01M1SSND5B…` | **blocked-owner** | Work complete & committed (`60fb2204`, `Gate: RETURNED 2026-09-08` in `stations/stochastic/gate.md`). Blocked on the webapp file-delivery step: flip `perf-queue.json`/`td-queue.json` to `reads` (or waive) + approve the two candidate-`reads` deviations, then `complete_work_session` with `worktree=/home/rogerio/git/cobre`. Unblocks all 56. |
+| E04-1 inventory | **run** | 23 + 7 src files unchanged; prior-register anchors unchanged (`cut_sync.rs` fns still at 243/400/495/581). Line counts re-measured. |
+| E04-2 Part-I item 8 | **run** | `types.rs` fields still at 270–297; `cut_nz_per_col` still in `freeze.rs`; `SCAN_DIRS` (5 crates), `EXCLUDED_FILES=()`, `PATTERN` unchanged. |
+| E04-3 attackers | **run** | — |
+| E04-4 ingest | **run** | — |
+| E04-5 calibrate | **deviate** | X1 (entry `Baseline:` = new pin), X5. |
+| E04-6 verify | **run** | `verify-station.sh` exists; pre-station porcelain snapshot instead of `.gitignore` carry-in. |
+| E04-7 gate | **run** | — |
+| E05-1 inventory | **deviate** | 163 src files still; tests now 56 files / 40 binaries (was 53/37); the four sub-station line totals re-measured; `policy/` grew (boundary-policy plan). |
+| E05-2 lp-inventory (done @ `00abd53a`) | **deviate** | Regenerate `measurements/lp-inventory.json` at the new pin (`tools/lp-inventory.py`); record the re-run in E05-1's notes since the ticket is closed. Path set is still 30. |
+| E05-3 Wave 4/6/7 re-verify | **run** | All 22 owned dispositions still open in the register; anchors are symbol-only by design so the boundary-policy drift is absorbed. `stage_solve_prep.rs` still under `training/`, `solve/` exists, `workspace/workspace.rs` exists — the CD-021/CD-023 traps hold. |
+| E05-4 attackers | **deviate** | X7 lens; figures (187,059 lines, `policy_load.rs` 3,769) stale; CD-074 pre-listed so it is sharpened, not re-derived. |
+| E05-5 ingest | **deviate** | X7 contract-screen carve-out. |
+| E05-6 calibrate | **deviate** | X1, X5, X7 (CD-074 dup-of); section title `STATION 5 — cobre-sddp (2026-09)`. |
+| E05-7 verify | **deviate** | 163 files holds; lp-inventory regenerated; timing-literal grep unchanged. |
+| E05-8 gate | **run** | — |
+| E06-1 inventory | **rewrite** (figures) | 18 CLI src files (was 20: `commands/report.rs`, `commands/summary.rs` deleted); S6b diagnostics = `validate.rs` + `src/summary.rs` only; CLI test binaries 14 (was 16); pytest files 37 (was 32); `cobre.run.run` rebuilt over `Study`; writer/parity figures all re-measured. The three "supersessions" in the text are themselves superseded. Method (three sub-surfaces, set equality) stands. |
+| E06-2 Wave 5 + I.5 | **deviate** | CD-029 Python-parity half FIXED (phase 11 via the shared reconciler) — disposition is sharpen/partial, not keep; `validate_phases.rs:20` still says "four" (drift stands); `StudyParams::from_config` still 5 non-test callers (`broadcast.rs:144`, `validate.rs:384`, `io.rs:254`, `run.rs:994`, `setup/mod.rs:378`); the `report.rs` sub-claim is moot (file gone). |
+| E06-3 attackers | **deviate** | Owner decision (PRIORITIES §6): feed `plans/cli-simplification-python-review/{parity-arguments,parity-behaviour,docstring-audit,fix-list}.md` as prior evidence; re-adjudicate the 16 justified-as-is rows, the orphaned `hydro_models`/`model_provenance` sidecars, the `TrainingSummary` Option asymmetry (owner-decided, do not re-raise). |
+| E06-4 ingest | **deviate** | X4: the runtime parity test no longer skips (CLI binary required in CI) and the Rust tests run — `enforcement-measurements.json` must record the NEW state; `check_python_parity.py` still present. |
+| E06-5 calibrate | **deviate** | X1, X5; CD-029 partial; X4 turns the "re-raise-blocked Cleared xref" into a retirement. |
+| E06-6 verify | **deviate** | The "three known stale figures" are stale again; `cargo check` premise fine; CI-invisibility premise gone (X4). |
+| E06-7 gate | **deviate** | CD-025 hoist stays Wave 5 (owner); parity routing to E07 unchanged. |
+| E07-1 inventory | **deviate** | `scripts/ci` = 18 files (was 17); `check-comment-line-refs.sh` scans `.py/.pyi`; Python job changed (X4); seed `doc = false`. 8 workflows / 14 jobs / 18 schemas / trigger asymmetry unchanged. |
+| E07-2 attackers | **run** | Headline facts hold (SCAN_DIRS, PATTERN, EXCLUDED_FILES, MPICH ×8, README rows 26–27); `cobre-cli/Cargo.toml` slow-tests line 56→57. |
+| E07-3 ingest | **run** | — |
+| E07-4 calibrate | **deviate** | X1, X5. |
+| E07-5 verify | **deviate** | Hard-coded "17 gate files" → re-measure (18). |
+| E07-6 gate | **run** | — |
+| E08-1 re-measure figures | **deviate** | Its job is re-measurement, so mostly run; literal pairs in text (sddp 37/53, io 12/13) are now 40/56 and 12/13; yardstick status line now "Partially adopted (§5.2); the rest Proposal"; `.config/nextest.toml` still absent; shuffle cron still commented; cobre-comm still no `test-support`. |
+| E08-2 prior register | **deviate** | X4 retires one of the three mirror items; StubComm census moved (`test_support.rs:3555`, new copies at `training/training/tests.rs:173`, `examples/dhat_baseline.rs:44`); `permute_helpers.rs` exists (TD-034 fixed). Precondition from PRIORITIES §6: ratify `testing-architecture.md` §5.1 first. |
+| E08-3 lenses | **deviate** | X6 seed filtering; 15 TD rows already closed. |
+| E08-4 ingest | **deviate** | X4; §5.8 census updated. |
+| E08-5 calibrate | **deviate** | X1, X5 (title moot). |
+| E08-6 verify | **deviate** | Literal pairs and the "13 tracked slow-tests files" figure re-measured. |
+| E08-7 gate | **run** | — |
+| E09-1 Part-I consolidation | **run** | Item 3 (no `struct PolicyGraph`; `PolicyGraphType` in 4 files), item 5 (`training_event.rs` 938 lines), item 6 (`EXCLUDED_FILES=()`) all hold; item 7 `BroadcastConfig` line drifted (`broadcast.rs:87`→`:32`). Needs the five station handoffs first. |
+| E09-2 lp/ classification | **deviate** | 30 files hold; non-test totals (11,675 / 44,374) and trap line numbers re-measured after the boundary-policy plan. |
+| E09-3 adjudicate Alignment | **run** | Universe parsed from the register at run time (now includes the reconciliation/W7 sections). |
+| E09-4 verify | **deviate** | Literals (11,675/11,396; 79/95 refs; `broadcast.rs:87`) re-measured. |
+| E09-5 gate | **run** | — |
+| E10-1 binary + claim table | **deviate** | `[profile.profiling]` intact; queues exist only for core-io/stochastic until stations run; X6; **CAL/CAL-ENUM must be re-measured at the new pin first** (perf-run.sh refuses a HEAD off the pin). |
+| E10-2 PD-004 | **deviate** | `run_enumerated_backward` present; BACKLOG line refs (`:1255`, `:1696`, `:1881`) drifted; X3. |
+| E10-3 4t | **deviate** | X3 (edge case (c) obsolete); all six anchors still resolve; Tier-2-fixed stochastic claims are measured post-fix. |
+| E10-4 2x2 | **deviate** | X3; `time_cut_sync_ms`/`time_mpi_allreduce_ms` still in the timing parquet; all anchors resolve. |
+| E10-5 write blocks | **run** | — |
+| E10-6 verify | **deviate** | `env.txt` sha = new pin. |
+| E11-1 Wave 4–7 re-verify | **deviate / partly superseded** | Headings still at BACKLOG `1888`/`1917`; the POST-PLAN section already re-verified CD-025 (open), CD-029 (partial), CD-009, CD-011 (open); PRIORITIES §5 closed W1–W7 of the 2026-09 waves (a different roster). Fold, do not redo; 28-unit count stands. |
+| E11-2 dedup + checks | **run** | — |
+| E11-3 unified roadmap | **deviate** | Must ingest PRIORITIES.md §5 (W1–W7 closed) and §6 (ranking) and the ROADMAP.md sequence; exactly one Milestones block already exists (header) — repoint, do not duplicate. |
+| E11-4 doc inventory | **deviate** | 43 tracked `.md` outside `plans/` holds (85 with the now-tracked register — X2); HEAD≠pin abort → re-pin first. |
+| E11-5 fold plans/ | **deviate** | Nothing folded yet (3 loose `plans/*.md`, `refinement-todo.md`, `decomp-program-reconciliation.md`, HTML + `mermaid.min.js` + builder all present); X2 makes BACKLOG edits tracked commits. |
+| E11-6 fold-and-delete design docs | **deviate** | Both docs still present with the sixth status; `post-horizon-input-unification.md` still has no README row; NEW: `testing-architecture.md` row reads "Partially adopted (§5.2); the rest Proposal" — a further out-of-vocabulary status to normalize. |
+| E11-7 dedup root docs | **run** | All named duplications persist (CONTRIBUTING `### Building` 18, `### Testing cobre-solver` 121, `### Testing cobre-sddp` 174, `### Project Structure` 329, `### Improving Documentation` 424, `### General` 471, `### Python Parity` 485); CLAUDE.md unsafe bullet still names only `gemm.rs`; 4 crates override `unsafe_code`. Lines re-resolved. |
+| E11-8 mirror-check + mirror | **deviate** | Mirror already gained 2026-09 `### Fixed —` H3s from the Tier waves (projection rule: still no new H2); the two bare "ticket" lines persist (token layer premise holds); X4 retirement. |
+| E11-9 verify | **deviate** | X2: documentation-only allowlist must admit `plans/architecture-debt-audit/**`. |
+| E11-10 final gate | **run** | — |
+| E11-11 commit | **rewrite** | "Branch off `main` at the pinned baseline" is wrong: `main` = v0.15.0 = `a136840d`, work bases on `develop` @ the new pin; "everything under plans/ staying untracked" is false (X2). No push / no PR / no CHANGELOG rules stand. |
+
+### Owner decisions (SpecForge-side)
+
+1. **Deviation notes, not reopen.** Every `deviate` row is recorded in the ticket's step notes at
+   `start_work_session`; the two `rewrite` rows (E06-1 figures, E11-11 branch base) are either
+   re-approved as heavy deviations at their gates or edited by the owner in the webapp.
+   `reopen_specification` is not proposed (declined once for E03-6's blast radius).
+2. **Pin once, now.** Amendment to step 5 above (owner to confirm): re-pin to `077dbe2c`
+   immediately rather than after the CD-074 fix merges. The spec assumes one sha for all stations,
+   E04 is otherwise idle, and the sddp station should *record* CD-074 at the pin (the bug is present
+   there) and mark it fixed by status bullet later — the same way every Tier fix was recorded.
+3. **CD-074 fix stays outside the spec** (guardrail "no fixes in this spec"); its plan is its own
+   SpecForge spec or a plain `plans/` plan, tracked by the register's status bullet.
+4. **E11-1/E11-2 fold** the existing PRIORITIES.md and POST-PLAN reconciliation rather than redoing it.
+
+### Order of operations once E03-6 clears
+
+E03-6 finalize → re-pin (`pin-baseline.sh`) + re-calibrate `CAL`/`CAL-ENUM` → E04 (run) → E05 (with
+CD-074 lens; regenerate lp-inventory) → E06 (matrices as prior evidence) → E07 → E08 (after §5.1
+ratification) → E09 → E10 → E11.

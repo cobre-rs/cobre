@@ -72,6 +72,14 @@ SURFACE_RE = re.compile(
 )
 CARRIED_IN = (".gitignore",)
 MARKER = "## Station-specific checks — solver-comm"
+# Subsections where the seam identifiers may legitimately appear: never inside an id'd entry.
+READ_ONLY_HEADINGS = (
+    "↩︎ Cleared",
+    "Positives",
+    "Prior-register",
+    "Owner gate — decisions",
+    "Informational (recorded, no severity, no id)",
+)
 
 
 class Row:
@@ -143,11 +151,11 @@ def check_polarity(
             h
             for h in re.findall(r"^#### (.+)$", text, re.M)
             if ident in subsection(text, f"#### {h}")
-            and not h.startswith(("↩︎ Cleared", "Positives", "Prior-register"))
+            and not h.startswith(READ_ONLY_HEADINGS)
         ]
         if outside:
             problems.append(
-                f"shared-memory identifier {ident!r} appears outside Cleared/Positives/Prior-register: {outside}"
+                f"shared-memory identifier {ident!r} appears outside the read-only subsections: {outside}"
             )
     if "Superseded cut-sync public methods" not in cleared:
         problems.append("Cleared subsection does not record the cut-sync dup-of")

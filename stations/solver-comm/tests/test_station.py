@@ -1954,7 +1954,7 @@ class CalibrationTests(sc.StationCase):
         for tag in ("E9", "E7", "E5", "E10"):
             self.assertIn(f"**{tag} — ", handoffs)
 
-    def test_section_skeleton_cleared_and_owner_gate_empty(self) -> None:
+    def test_section_skeleton_and_cleared(self) -> None:
         pos = [self.section.find(h) for h in SECTION_SKELETON]
         self.assertTrue(
             all(p >= 0 for p in pos),
@@ -1977,9 +1977,12 @@ class CalibrationTests(sc.StationCase):
                 rf"^\*\*(?:CD|PD|OD|TD)-\d{{3}}[^\n]*\n[^\n]*\b{sym}\b",
                 msg=sym,
             )
+        # The owner-gate heading is the gate ticket's: either the calibration placeholder or the
+        # filled decision table (GateTests owns the filled form).
         gate = self.section.split("#### Owner gate — decisions", 1)[1]
-        self.assertIn("_(filled by the gate ticket)_", gate)
-        self.assertNotIn("**Decision:", gate)
+        self.assertTrue(
+            "_(filled by the gate ticket)_" in gate or "**Gate: RETURNED " in gate
+        )
 
 
 GENERIC_CHECKS = (
@@ -2105,6 +2108,196 @@ class SectionVerifyTests(sc.StationCase):
             [22, 137, 138, 141, 188],
             "cut_nz_per_col production hits moved or vanished",
         )
+
+
+DECISION_VERBS = {
+    "accept",
+    "amend-fields",
+    "downgrade",
+    "reject",
+    "defer",
+    "override-conflicts",
+}
+GATE_DATE = "2026-09-18"
+
+
+class GateTests(sc.StationCase):
+    """The owner gate (E04-7): gate.md, decisions.json, the BACKLOG owner-gate H3 and the marker."""
+
+    SLUG = "solver-comm"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.gate = cls.station_dir().joinpath("gate.md").read_text(encoding="utf-8")
+        cls.rec = sc.load_json(cls.station_dir() / "decisions.json")
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.handoffs = sc.load_json(cls.station_dir() / "handoffs.json")
+        cls.perf = sc.load_json(cls.station_dir() / "perf-queue.json")
+        register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
+        scaffold = "## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — solver-comm"
+        cls.section = register.split(scaffold, 1)[1].split("\n## ", 1)[0]
+        cls.owner_gate = cls.section.split("#### Owner gate — decisions", 1)[1]
+
+    def test_gate_md_carries_one_decision_line_and_the_presentation_leads_with_part_i(
+        self,
+    ) -> None:
+        lines = [ln for ln in self.gate.splitlines() if ln.startswith("**Decision: ")]
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0], r"^\*\*Decision: (ratified|returned)\*\*")
+        table = self.gate.split("### 1.1 Actionable entries", 1)[1].split("\n###", 1)[0]
+        first = next(ln for ln in table.splitlines() if ln.startswith("| 1 |"))
+        self.assertIn("| CD-079 |", first)
+        self.assertIn("I.3-8", first)
+        for heading in (
+            "### 1.2 Holds",
+            "### 1.3 Cleared and dup-of — presented read-only, no decision taken",
+            "### 1.5 Worker needs-human items",
+            "## 2. Round plan",
+            "## 3. Decision record",
+            "### 3.3 Worker needs-human answers",
+            "### 3.4 Presented, no decision taken",
+            "## 4. Handoffs after the gate",
+        ):
+            self.assertIn(heading, self.gate)
+        for sym in SHARED_MEMORY:
+            self.assertIn(sym, self.gate)
+        self.assertIn("reserved-seams-and-deferred-debt.md", self.gate)
+
+    def test_decisions_cover_every_calibrated_entry_and_needs_human_item(self) -> None:
+        ids = {d["id"] for d in self.rec["decisions"]}
+        self.assertEqual(ids, {r["id"] for r in self.cal["assigned"]})
+        for d in self.rec["decisions"]:
+            self.assertIn(d["decision"], DECISION_VERBS, d["id"])
+            self.assertTrue(d["rationale"].strip(), d["id"])
+            if d["decision"] == "defer":
+                self.assertTrue(
+                    d["deferTrigger"], f"{d['id']}: defer without a trigger"
+                )
+            if d["decision"] == "override-conflicts":
+                self.assertTrue(d["overrideRationale"], d["id"])
+            if d["decision"] == "reject":
+                self.assertTrue(d["clearedMoved"], d["id"])
+            if d["decision"] == "downgrade":
+                self.assertNotEqual(d["newSeverity"], d["reviewerSeverity"])
+        answered = [n for n in self.rec["needsHuman"] if n.get("answer")]
+        self.assertEqual(len(answered), len(self.rec["needsHuman"]))
+        self.assertEqual(len(answered), self.rec["counts"]["needsHumanAnswered"])
+        self.assertGreaterEqual(len(answered), 14)
+        self.assertTrue(self.rec["returned"])
+        counts = self.rec["counts"]
+        verbs = [d["decision"] for d in self.rec["decisions"]]
+        self.assertEqual(counts["accepted"], verbs.count("accept"))
+        self.assertEqual(counts["downgraded"], verbs.count("downgrade"))
+        self.assertEqual(counts["rejected"], verbs.count("reject"))
+        self.assertEqual(counts["deferred"], verbs.count("defer"))
+        self.assertEqual(counts["overridden"], verbs.count("override-conflicts"))
+        self.assertEqual(counts["presented"], len(verbs))
+
+    def test_backlog_owner_gate_h3_carries_the_table_the_marker_and_the_ratified_line(
+        self,
+    ) -> None:
+        self.assertIn(
+            f"**Ratified {GATE_DATE}** — owner gate; baseline `{self.baseline()[:8]}`",
+            self.section,
+        )
+        marker = re.search(
+            rf"^\*\*Gate: RETURNED {GATE_DATE}\*\* — baseline `{self.baseline()[:8]}`; "
+            r"accepted (\d+), amended (\d+), downgraded (\d+), rejected (\d+), deferred (\d+), overridden (\d+)\.",
+            self.owner_gate,
+            re.M,
+        )
+        self.assertIsNotNone(marker, "Gate: RETURNED marker missing or malformed")
+        assert marker is not None
+        counts = self.rec["counts"]
+        self.assertEqual(
+            [int(marker.group(i)) for i in range(1, 7)],
+            [
+                counts[k]
+                for k in (
+                    "accepted",
+                    "amended",
+                    "downgraded",
+                    "rejected",
+                    "deferred",
+                    "overridden",
+                )
+            ],
+        )
+        for d in self.rec["decisions"]:
+            self.assertEqual(
+                self.owner_gate.count(f"| {d['id']} | {d['decision']} |"), 1, d["id"]
+            )
+            # the reviewer's rating is shown only where the house rating is BELOW it (a
+            # downgrade); the A-risk uplift on CD-079 is not a downgrade
+            rank = {"A": 3, "B (A-risk)": 2.5, "B": 2, "C": 1}
+            if rank[d["newSeverity"]] < rank[d["reviewerSeverity"]]:
+                self.assertIn(
+                    f"| {d['id']} | {d['decision']} | {d['newSeverity']} (reviewer: {d['reviewerSeverity']}) |",
+                    self.owner_gate,
+                )
+            else:
+                self.assertNotIn(
+                    f"| {d['id']} | {d['decision']} | {d['newSeverity']} (reviewer:",
+                    self.owner_gate,
+                )
+        self.assertIn("**Presented read-only, no decision taken:**", self.owner_gate)
+        # a defer row must carry a trigger, never a bare `-`
+        self.assertNotRegex(self.owner_gate, r"\| defer \|[^\n]*\| *- *\|\s*$")
+        # every overridden entry carries its rationale beneath the Alignment field; every held
+        # (conflicts) entry has an owner disposition — none of either exists at this station
+        held = [r for r in self.cal["assigned"] if r["alignmentHint"] == "conflicts"]
+        self.assertEqual(held, [])
+        self.assertEqual(
+            [d for d in self.rec["decisions"] if d["decision"] == "override-conflicts"],
+            [],
+        )
+
+    def test_fix_shape_directions_are_written_on_their_entries(self) -> None:
+        for d in self.rec["decisions"]:
+            if d.get("fixShapeDirection"):
+                block = self.section.split(f"**{d['id']} · ", 1)[1].split("\n**", 1)[0]
+                self.assertIn(
+                    f"- **Owner decision ({GATE_DATE}, {d['fixShapeDirection']['round']}):** {d['fixShapeDirection']['choice']}",
+                    block,
+                )
+
+    def test_perf_queue_and_handoffs_reflect_the_ratified_state(self) -> None:
+        kept = {
+            d["id"]
+            for d in self.rec["decisions"]
+            if (d.get("perfQueue") or {}).get("effect") == "kept"
+        }
+        self.assertEqual({q["id"] for q in self.perf["queue"]}, kept)
+        for q in self.perf["queue"]:
+            self.assertIn(q["layout"], LAYOUTS)
+            self.assertEqual(q["status"], "UNMEASURED")
+            self.assertEqual(q["gateDecision"], "accept")
+            self.assertTrue(q["shapingQuestion"])
+            self.assertIn(f"| {q['id']} | accept |", self.owner_gate)
+            self.assertIn(f"E10: {q['layout']}, UNMEASURED", self.owner_gate)
+        self.assertEqual(self.handoffs["gate"]["decision"], "ratified")
+        self.assertEqual(self.handoffs["gate"]["returned"], GATE_DATE)
+        e9 = self.handoffs["E9"]["block"]
+        self.assertEqual(set(e9["perFieldDisposition"].values()), {"retire"})
+        self.assertEqual(e9["ownerQuestion"]["answer"], "E9 decides")
+        self.assertFalse(e9["ownerQuestion"]["dispositionsChanged"])
+        self.assertEqual(len(self.handoffs["E7"]["observations"]), 2)
+        self.assertIsNone(self.handoffs["E5"]["idAssigned"])
+        self.assertIsNone(self.handoffs["E11"]["block"]["idAssigned"])
+        self.assertIn("TD-037", self.handoffs["E8"]["block"])
+
+    def test_checkers_still_exit_zero_after_the_gate(self) -> None:
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            result = subprocess.run(
+                [sys.executable, str(sc.TOOLS / tool), self.SLUG],
+                capture_output=True,
+                text=True,
+                cwd=sc.REPO,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode, 0, f"{tool}: {result.stdout}{result.stderr}"
+            )
 
 
 class CleanTreeTests(unittest.TestCase):

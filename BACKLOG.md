@@ -3815,6 +3815,8 @@ Ratified 2026-09-08 in the main session over plans/architecture-debt-audit/stati
 
 ### Station 4 — cobre-solver + cobre-comm (2026-09, baseline 077dbe2c)
 
+**Ratified 2026-09-18** — owner gate; baseline `077dbe2c`; accepted 20, downgraded 0, rejected 0, deferred 0, overridden 0; informational kept 1; 14 needs-human answered.
+
 **Station.** cobre-solver + cobre-comm — the two L0 crates of the target layering (LP backend boundary behind `SolverInterface`; communicator trait/factory). **Method.** Four lenses (architecture, performance, over-engineering, test-bloat), one attacker per lens over BOTH crates, one read-only defender per surviving candidate; reserved seams applied as ingest FILTERS (the shared-memory communicator hierarchy, the superseded cut-sync methods) before any defender.
 
 **Baseline.** `077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c` (pinned 2026-09-17; the E01 scaffold heading above keeps its minted `a136840d`). Read-only station: no tracked file under `crates/`, `scripts/` or `.github/` was modified. 24 attacker candidates: 21 defended, 20 confirmed, 1 dismissed, 2 dup-of, 1 informational; every anchor resolves at the baseline (`anchor-probe.md`, 109 checked / 0 failing + 1 `.c` anchor by direct grep). Calibration: 20 entries — 1 × B (A-risk), 7 × B, 12 × C; reviewer downgraded on 1 (recorded per entry). Alignment hints are provisional — Epic 9 adjudicates.
@@ -3832,6 +3834,7 @@ Narrowed to the mechanism at this station only: because a crate-level `[lints]` 
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver / cobre-comm)
 - **Calibration:** CD-009 precedent (a hand-copied table with a bounded, checker-shaped fix): Cargo forbids the `lints.workspace = true` overlay beside a per-lint override, so the copies are forced and the debt is manifest-level drift, not spreading structure.
 - **Reviewer rating:** B — recalibrated to C because blast radius is two manifests and the fix is a checker or a shared include, not a structural change — CD-009 duplication precedent, Sev C.
+- **Owner decision (2026-09-18, R9):** Keep forbid + checker — the workspace `unsafe_code = forbid` stays the unoverridable default (CLAUDE.md hard rule); a scripts/ci checker diffs each per-crate `[lints]` copy against the workspace tables so drift is red CI; the four FFI crates keep their audited overrides.
 
 **CD-076 · Sev C · leaky-boundary · effort S · confidence high**
 Three of the seven put above-L0 vocabulary in the normative sentence itself with no adjacent generic restatement: highs/solver.rs:477 ('the primary warm-start mechanism for the backward pass', an L3 traversal phase with no L0 referent), trait_def.rs:212 (the public determinism guarantee scoped to 'a scenario's result' and 'which scenarios a worker happened to process' instead of to the solver handle), and trait_def.rs:95 (the qualifier 'scenario' on solve's otherwise crate-owned 'patches' precondition). The other four restate the L0 fact in the same sentence, mark the caller boundary as an 'e.g.', or duplicate a trait-level anchor, and the gate's inability to see any of them is not part of the defect.
@@ -3843,6 +3846,7 @@ Three of the seven put above-L0 vocabulary in the normative sentence itself with
 - **Fix-shape:** Restate each of the seven in terms the solver itself owns, and be explicit about which sentences are load-bearing. The three determinism sentences (clp/interface.rs:66 and trait_def.rs:207,212) are correctness contracts and must survive the rewrite, restated as a property of the solver handle — a solve's result must not depend on which models the same handle solved before it — rather than of the caller's loop; that phrasing is strictly stronger, because it binds any caller and not just the present one. clp/retry.rs:74 and highs/solver.rs:320,477 lose nothing: a numerically delicate LP that is in fact feasible, a per-solve cost that makes an option unusable when one handle is reused for thousands of solves, and a warm-start mechanism whose value is that no solver-clear call is issued, are all statements about LPs and handles. trait_def.rs:95 should state its precondition against the trait's own methods rather than the caller's patch vocabulary. Record the boundary honestly for the owner gate: the project's hard genericity rule enumerates `sddp`/`SDDP`/`Benders`, none of which appears…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** doc-only vocabulary in an L0 crate with no type or behaviour change; CD-064 (stochastic phase-vocabulary reword) is the nearest recorded precedent and sits at B only because it spans a whole L1 kernel — here three sentences.
+- **Owner decision (2026-09-18, R10):** Now-fix reword — same treatment as stochastic CD-064: a pure doc reword in the generic register, no type or behaviour change, independent of the phase-1 shed; CD-076 stays neutral, Sev C.
 
 **CD-077 · Sev C · asymmetry · effort S · confidence high**
 At `clp/mod.rs:25` the `pub(crate) use retry::LADDER_RUNGS` re-export has no non-test consumer -- `interface.rs:6` reads the constant through its owning path `super::retry`, which is equally reachable from the sibling `clp/tests.rs` -- so that facade line and the `not(test)` suppression above it exist only to give the test module a shallower import path; the claim does not extend to a HiGHS/CLP facade-rule divergence (HiGHS defines no module-level rung constant) nor to the suppression's form, which is minimum-scope, rationale-carrying and mirrored at `cobre-sddp/src/workspace/mod.rs:31`.
@@ -3890,6 +3894,7 @@ Narrowed off ffi/mod.rs and off any harm claim: the CLP-only build's carried HiG
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** expression asymmetry between the two halves of basis_status.rs plus a README line; the defender conceded every harm claim.
 - **Needs-human (owner gate):** Owner picks the residue's direction: keep the canonical mapping unconditional and correct README.md:106-107, or name the CLP codes in ffi::clp and gate each half - the latter also makes BasisStatus::to_highs_code/from_highs_code and the legacy-checkpoint agreement test (basis_status.rs:280-289) HiGHS-only.
+- **Owner decision (2026-09-18, R5):** Keep mapping unconditional; fix README — the canonical BasisStatus mapping stays feature-independent; name the CLP codes in ffi::clp for symmetry and correct README.md:106-107 — smallest blast radius, no test becomes HiGHS-only.
 
 **CD-081 · Sev C · leaky-boundary (naming) · effort S · confidence high**
 The private, contract-unpinned FreezeScratch.cut_nz_per_col -- declaration at crates/cobre-solver/src/freeze.rs:22 plus its four production uses at 137, 138, 141 and 188 -- is an unsanctioned L0 vocabulary residue, narrowly because it carries no serialized key and therefore falls outside the deliberate key/type divergence that crates/cobre-io/src/config/training.rs documents for cut_selection and that output/mod.rs applies to cuts_active. The gate half of the title does not survive: the word-character evasion is already recorded in partI-handoff.json's genericityGateBlindSpot and owned by E7, and the #[cfg(test)] truncation is a documented intentional exclusion rather than a second blind spot.
@@ -3956,6 +3961,7 @@ At the baseline ExecutionTopology::is_homogeneous (crates/cobre-comm/src/topolog
 - **Fix-shape:** Drop the predicate and its four unit tests and let the caller that eventually needs a heterogeneity decision express it where the policy lives; today the only consumer of layout information is cobre-cli, which formats the layout from num_hosts and leader_hostname and needs no boolean. If the owner intends a heterogeneous-topology guard, the missing artifact is a reserved-seam entry with an activating milestone and an owner, mirroring how the shared-memory hierarchy is registered, not an unregistered unconsumed accessor. Either way the heterogeneity policy stays out of L0: cobre-comm reports the topology it measured and does not decide what an uneven rank distribution means.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-comm)
 - **Calibration:** one public predicate with zero in-workspace readers and no register entry — the delete-or-register disposition the mirror's dead-surface standard requires.
+- **Owner decision (2026-09-18, R8):** Delete — leftover, not a planned heterogeneous-layout guard; drop the predicate and its four unit tests, the eventual caller re-adds it beside its use.
 
 **OD-033 · Sev B · speculative-generality · effort M · confidence high**
 Only the acquire half of the CLP hot-start lifecycle - the shim/extern pair cobre_clp_mark_hot_start plus cobre_clp_solve_from_hot_start and the two safe methods at crates/cobre-solver/src/backends/clp/solver.rs:350 and :394 - has no production caller and is absent from the reserved-seam register, so the defect is the missing register entry (owner plus consuming milestone) for that pair alone; the release half (unmark_hot_start, its three interface.rs call sites and Drop) is production-wired and the determinism harness is a contract-pinning exerciser, so neither is part of the unwired surface nor needs registering.
@@ -3968,6 +3974,7 @@ Only the acquire half of the CLP hot-start lifecycle - the shim/extern pair cobr
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** an acquire/solve pair built through the C++ shim, the extern block and the safe wrapper with no production caller and no reserved-seam entry; bounded to the CLP backend but spanning three layers — Sev B pending the owner's milestone or retirement.
 - **Needs-human (owner gate):** Owner must supply the activating milestone for the CLP hot-start acquire/solve pair, or rule it retired at the next licensed public-API break; the register admits an entry only with both an owner and a consuming milestone, and this station cannot invent one.
+- **Owner decision (2026-09-18, R6):** Retire at the next licensed public-API break — OD-033 stays accepted at Sev B; the fix-shape becomes 'delete the acquire half (shim, extern, wrapper, harness) at the next licensed API break' — no reserved-seam entry, no wiring.
 
 **OD-034 · Sev C · duplication · effort S · confidence high**
 The 12-value agreement between `HighsProfile::default()` and the `default_options()` table (config.rs:58-77 against 168-238) is a load-bearing invariant for the delta-only dispatch in `ProfiledSolver::new`/`set_profile` (profiled.rs:38-58) that no test or compile-time assert pins; the defect is the missing guard alone, not the second surface, since the 17-entry table carries 5 non-profile options and remains the sole installer on the fresh-handle and retry-restore paths and so cannot be collapsed into the profile.
@@ -4033,6 +4040,7 @@ Only the four in-src declarations are unjustified duplication: crates/cobre-solv
 - **Yardstick:** docs/design/testing-architecture.md §5.2 uniform test-support feature convention (not a dedicated test crate) (see `td-queue.json`).
 - **Needs-human (owner gate):** Owner call on the four integration binaries: either give cobre-solver a tests/common shared-fixture module (the cobre-sddp idiom, no feature gate) or accept that a test-support-gated fixture makes the documented clp-only invocations (CONTRIBUTING.md:71, crates/cobre-solver/README.md:84) run zero cobre-solver integration tests.
 - **Queued to:** test-corpus, alignment
+- **Owner decision (2026-09-18, R7):** tests/common shared module — the four in-src copies collapse into one in-crate cfg(test) module; the four integration binaries share a tests/common fixture module (the cobre-sddp idiom, testing-architecture §5.1), no feature gate, so the documented clp-only invocations keep running the integration tests; test_support stays the seam for cross-crate consumers.
 
 **TD-038 · Sev C · duplication · effort S · confidence high**
 Narrower residue: test_research_probe_limit_status_on_ss11_lp (highs/tests.rs:846) asserts neither of the two model_status values it exists to observe (:857, :872 are printed only), so it cannot fail if a future HiGHS release lets SS1.1 reach the time or iteration limit — the exact premise the module comment's larger_lp justification rests on at :791-794. Dropped from the title: 'no behavioural assertion' (the two null-handle checks at :853/:867 and the helper's pass_lp == HIGHS_STATUS_OK at :833 do fail), and 'the fact is already prose' as a full substitute (the comment carries the conclusion, not the two observed status codes). The in-module fix precedent is the sibling test_research_partial_solution_availability (:1030), which asserts both statuses at :1044/:1065 while printing only the objective.
@@ -4059,6 +4067,7 @@ Narrowed to two anchors: the module-doc guarantee at clp_only_smoke.rs:3-4 is fa
 - **Calibration:** a whole solver-linked test binary whose module-doc guarantee is already met by the clp-gated conformance tests CI runs under the same feature set.
 - **Yardstick:** docs/design/testing-architecture.md §5.1 canonical per-crate layout (integration binaries are expensive; group into one binary) (see `td-queue.json`).
 - **Queued to:** test-corpus
+- **Owner decision (2026-09-18, R11):** Retire the binary — clp_only_smoke.rs is retired; the clp-gated section of conformance.rs is the clp-only guard (testing-architecture §5.1: a solver-linked binary must earn its link cost).
 
 **TD-040 · Sev C · duplication · effort S · confidence high**
 Only test_fixture_stage_template_data (conformance.rs:137-158) is I.3-8 collateral - its assertions at :153-157 re-encode the five shed fields; test_fixture_row_batch_data (:160-170) carries none of them, so the title's second half holds for one of the two tests. What holds for both is narrower than the title: each asserts a same-file struct-literal builder against its own transcription, adds no relation the builder does not already contain, and invokes no SolverInterface method, while the objective and primal assertions at :72 and :176 already pin the same fixture against an LP-derived oracle.
@@ -4076,6 +4085,7 @@ Only test_fixture_stage_template_data (conformance.rs:137-158) is I.3-8 collater
 
 #### Informational (recorded, no severity, no id)
 
+- **LocalCommKind placement (owner gate R14, no id).** `LocalCommKind` (`crates/cobre-comm/src/traits.rs:275`) makes the trait-definition module import both concrete backends (`crates/cobre-comm/src/traits.rs:21`, `crates/cobre-comm/src/traits.rs:23`, behind the `shared-memory` feature) while `CommBackend` in `crates/cobre-comm/src/factory.rs:62` already does the identical enum dispatch in the module that owns concrete-backend enumeration. A placement question for whoever activates the shared-memory seam (mirror :79); the ratified seam itself is untouched.
 - **SC-ARCH-009 / architecture-09 — solver capability / feature-query trait.** `SolverInterface` (`crates/cobre-solver/src/trait_def.rs:41`) carries no capability or feature query; the `compile_error!` pair (`crates/cobre-solver/src/lib.rs:44`, `crates/cobre-solver/src/lib.rs:50`) makes exactly one of `highs`/`clp` compile and `ActiveSolver`/`ActiveProfile` alias the winner, so the trait's only backend-varying surface is the opaque `Profile` associated type. Roadmap cross-reference: plans/generalizing/beyond-sddp-generalization.md § III.6 (per-feature capability traits arrive with their second consumer). **Alignment:** neutral. **Held as conflicts (L0 purity test):** the variant that builds the capability trait NOW has exactly one implementation — the one-consumer-abstraction condition — so it is tagged `conflicts`, HELD for owner override and excluded from the actionable set; roadmap-consistent alternative: keep this record, grow the trait when two backends must coexist in one binary (III.6). No such variant was raised at this baseline.
 
 #### Positives (recorded so the report is not a defect-only list)
@@ -4134,6 +4144,10 @@ Propagation sites: `crates/cobre-solver/src/freeze.rs:158` (production, lines 15
 
 #### Handoff queues
 
+- **E11 — reconciliation follow-up** (owner gate R12, no id): the HiGHS retry ladder branches on wall-clock time (`crates/cobre-solver/src/backends/highs/retry.rs:40`, `crates/cobre-solver/src/backends/highs/retry.rs:52`, `crates/cobre-solver/src/backends/highs/retry.rs:84`) while the CLP ladder documents no time-dependent branching (`crates/cobre-solver/src/backends/clp/retry.rs:4`); routed as a reproducibility follow-up for the HiGHS backend.
+- **E7 — doc drift** (owner gate R16): `crates/cobre-comm/tests/local_conformance.rs:4` cites a `backend-testing.md` that does not exist at the baseline; the docs station owns the correction.
+- **E9 — owner question** (owner gate R13): whether I.3-8 sheds into the engine now (geometry moves again at the 0b carve) or waits for the carve and sheds once — E9 decides; CD-079's dispositions are unchanged.
+- **E10 — shaping questions** (owner gate R15): PD-032/PD-034 — does the CLP API expose an index-scoped bound writer and a bulk basis-status accessor that preserve the factorization; PD-033 — must the retained mirror stay fully merged; both answered by the fix ticket against the profile, not here.
 - **E9 — alignment** (3): item I.3-8 per-field dispositions (five fields `retire`), the three propagation sites, proposed Alignment `advances-1`; entries CD-079, TD-037, TD-040 — `handoffs.json` E9.
 - **E7 — build-ci gate blind spot** (1): `scripts/ci/check-infra-genericity.sh` reports clean on `cut_nz_per_col` (`crates/cobre-solver/src/freeze.rs:22`) because `_` is a word character and the pattern is `\bcut\b`; a second blind spot — the awk prefilter skips every in-src `#[cfg(test)]` region — and the `.claude/rules/sddp.md` doc drift travel with it. Entry CD-081. No script edit proposed here — `handoffs.json` E7.
 - **E5 — cut-sync dup-of** (2 candidates, 0 ids): `sync_cuts` / `pack_local_records` / `sync_packed_records` at their cobre-sddp anchors, superseded by `sync_level_records`; `assignedId` stays null — `handoffs.json` E5 + records[].
@@ -4142,7 +4156,40 @@ Propagation sites: `crates/cobre-solver/src/freeze.rs:158` (production, lines 15
 
 #### Owner gate — decisions
 
-_(filled by the gate ticket)_
+Ratified 2026-09-18 in the main session over the digest in `stations/solver-comm/gate.md` (gitignored plans tree, not an anchor) (16 AskUserQuestion rounds: Part-I first, two severity batches, the informational note, twelve needs-human items). All 20 calibrated entries accepted as recorded; no downgrade, reject, defer or override at the gate (CD-075's B→C is the calibration's house rating, accepted). Severity would read `new (reviewer: original)` on an owner downgrade; perf rows keep their layout and stay UNMEASURED until E10.
+
+| ID | Decision | Severity | Alignment | Rationale (owner) | Trigger / override / handoff |
+| -- | -- | -- | -- | -- | -- |
+| OD-032 | accept | C | neutral | as recorded (R3) | direction: Delete |
+| TD-035 | accept | C | neutral | as recorded (R3) | E8 |
+| TD-036 | accept | C | neutral | as recorded (R3) | E8 |
+| CD-075 | accept | C (reviewer: B) | neutral | as recorded (R3) | direction: Keep forbid + checker |
+| CD-076 | accept | C | neutral | as recorded (R3) | direction: Now-fix reword |
+| CD-077 | accept | C | neutral | as recorded (R3) | - |
+| CD-078 | accept | B | neutral | as recorded (R2) | - |
+| CD-079 | accept | B (A-risk) | advances-1 | as recorded (R1) | E9: dispositions unchanged |
+| CD-080 | accept | C | neutral | as recorded (R3) | direction: Keep mapping unconditional; fix README |
+| CD-081 | accept | C | neutral | as recorded (R3) | - |
+| OD-033 | accept | B | neutral | as recorded (R2) | direction: Retire at the next licensed public-API break |
+| OD-034 | accept | C | neutral | as recorded (R3) | - |
+| OD-035 | accept | B | neutral | as recorded (R2) | - |
+| PD-032 | accept | B | neutral | as recorded (R2) | E10: 4t, UNMEASURED |
+| PD-033 | accept | B | neutral | as recorded (R2) | E10: 4t, UNMEASURED |
+| PD-034 | accept | B | neutral | as recorded (R2) | E10: 4t, UNMEASURED |
+| TD-037 | accept | B | neutral | as recorded (R2) | E9 cross-ref; E8; direction: tests/common shared module |
+| TD-038 | accept | C | neutral | as recorded (R3) | E8 |
+| TD-039 | accept | C | neutral | as recorded (R3) | E8; direction: Retire the binary |
+| TD-040 | accept | C | advances-1 | as recorded (R3) | E9 cross-ref; E8 |
+
+**Informational kept:** SC-ARCH-009 capability trait (R4) — no id, III.6 cross-reference, one-consumer hold stands; LocalCommKind placement (R14) recorded above.
+
+**Cleared by this gate (do not re-raise):** none — no entry was rejected.
+
+**Presented read-only, no decision taken:** the ratified shared-memory hierarchy (`SharedMemoryProvider`, `SharedRegion<T>`, `LocalCommunicator`, `LocalCommKind`, `HeapRegion<T>`, `FerrompiBackend::split_local`) stays sanctioned (mirror :79); the superseded cut-sync methods stay a dup-of handoff to E5 with no id (mirror :334, CD-019); the basis-validation asymmetry stays intended behaviour.
+
+**Needs-human answers (14/14):** see `gate.md` §3.3 — CD-080 keep the mapping unconditional and fix the README; OD-033 retire the hot-start acquire half at the next licensed API break; TD-037 tests/common shared module for the integration binaries; OD-032 delete; CD-075 keep the workspace forbid and add a checker; CD-076 now-fix reword; TD-039 retire the binary; HiGHS wall-clock retry → E11 reproducibility follow-up; I.3-8 landing → E9 decides; LocalCommKind placement → informational; CLP API / retained-mirror questions → E10; stale `backend-testing.md` citation → E7.
+
+**Gate: RETURNED 2026-09-18** — baseline `077dbe2c`; accepted 20, amended 0, downgraded 0, rejected 0, deferred 0, overridden 0.
 
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — sddp
 

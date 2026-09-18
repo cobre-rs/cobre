@@ -56,11 +56,18 @@
       "calibratedSeverity": "C — CD-011 precedent",
       "secondBlindSpot": "the awk prefilter leaves every in-src #[cfg(test)] region unscanned (defender of architecture-08)"
     },
-    "observation": {
-      "kind": "doc-drift",
-      "anchor": ".claude/rules/sddp.md:446",
-      "text": "states the CLP/HiGHS basis-validation asymmetry is unpinned by any test; at this baseline crates/cobre-solver/tests/conformance.rs pins it (test_solver_highs_solve_rejects_inconsistent_basis_status_combination :1672, test_solver_clp_solve_accepts_inconsistent_basis_status_combination_silently :1724, and the undersized-row pair :1601/:1636). Recorded in prior-register.md; not a solver finding."
-    }
+    "observations": [
+      {
+        "kind": "doc-drift",
+        "anchor": ".claude/rules/sddp.md:446",
+        "text": "states the CLP/HiGHS basis-validation asymmetry is unpinned by any test; at this baseline crates/cobre-solver/tests/conformance.rs pins it (test_solver_highs_solve_rejects_inconsistent_basis_status_combination :1672, test_solver_clp_solve_accepts_inconsistent_basis_status_combination_silently :1724, and the undersized-row pair :1601/:1636). Recorded in prior-register.md; not a solver finding."
+      },
+      {
+        "kind": "doc-drift",
+        "anchor": "crates/cobre-comm/tests/local_conformance.rs:4",
+        "text": "cites backend-testing.md for the SS1.1-SS1.8 contract sections; no file of that name exists at the baseline. Owner gate R16: the docs station owns the correction."
+      }
+    ]
   },
   "E9": {
     "filledBy": "Part-I item 8 re-verification ticket",
@@ -130,7 +137,13 @@
           "note": "a StageTemplate struct-literal fixture inside the highs-gated test module; the ticket text's :137 resolves to :138 at this baseline"
         }
       ],
-      "calibratedSeverity": "B (A-risk) — CD-010 precedent"
+      "calibratedSeverity": "B (A-risk) — CD-010 precedent",
+      "ownerQuestion": {
+        "round": "R13",
+        "question": "I.3-8 landing: shed into the engine now vs wait for the 0b carve",
+        "answer": "E9 decides",
+        "dispositionsChanged": false
+      }
     }
   },
   "E10": {
@@ -151,7 +164,9 @@
           "crates/cobre-sddp/src/lp/builder/entries.rs:5893"
         ],
         "status": "UNMEASURED",
-        "byteNeutral": true
+        "byteNeutral": true,
+        "gateDecision": "accept",
+        "shapingQuestion": "does the CLP C/C++ API expose an index-scoped bound writer that preserves the factorization (else the subset write is a cobre-shim addition)?"
       },
       {
         "entryId": "PD-033",
@@ -166,7 +181,9 @@
           "crates/cobre-sddp/src/training/lower_bound.rs:158"
         ],
         "status": "UNMEASURED",
-        "byteNeutral": true
+        "byteNeutral": true,
+        "gateDecision": "accept",
+        "shapingQuestion": "must the retained column-major mirror stay fully merged, or may the append path keep base + appended blocks and merge only on reload?"
       },
       {
         "entryId": "PD-034",
@@ -180,7 +197,9 @@
           "crates/cobre-sddp/src/training/forward/enumerated.rs:442"
         ],
         "status": "UNMEASURED",
-        "byteNeutral": true
+        "byteNeutral": true,
+        "gateDecision": "accept",
+        "shapingQuestion": "does the CLP API expose a bulk basis-status accessor (else the bulk transfer is a cobre-shim addition)?"
       }
     ],
     "layoutContract": "4t = solver-side / FFI-boundary claims (--threads 4); 2x2 = collective claims (mpiexec -n 2 x --threads 2)"
@@ -253,5 +272,42 @@
       "note": "assignedId stays null on purpose — a new OD/CD id here is a check-reraise failure; the candidate's own fixShape/evidence stays in candidates.<lens>.json for E5 to read"
     }
   ],
-  "calibratedAt": "2026-09-18"
+  "calibratedAt": "2026-09-18",
+  "gate": {
+    "decision": "ratified",
+    "returned": "2026-09-18",
+    "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+    "counts": {
+      "presented": 20,
+      "accepted": 20,
+      "amended": 0,
+      "downgraded": 0,
+      "rejected": 0,
+      "deferred": 0,
+      "overridden": 0,
+      "informationalKept": 1,
+      "needsHumanAnswered": 14
+    }
+  },
+  "E8": {
+    "filledBy": "owner gate",
+    "block": {
+      "TD-037": {
+        "integrationFixtureHome": "tests/common shared module (no feature gate); in-src copies collapse into one in-crate cfg(test) module",
+        "round": "R7"
+      },
+      "TD-039": {
+        "disposition": "retire clp_only_smoke.rs; conformance.rs's clp-gated section is the clp-only guard",
+        "round": "R11"
+      }
+    }
+  },
+  "E11": {
+    "filledBy": "owner gate",
+    "block": {
+      "kind": "reproducibility-follow-up",
+      "idAssigned": null,
+      "text": "HiGHS retry ladder branches on wall-clock time (highs/retry.rs:40 overall_budget, :52 elapsed break, :84 budget_exceeded) while the CLP ladder documents no time-dependent branching (clp/retry.rs:4-5); owner gate R12 routes it as a reproducibility follow-up for the HiGHS backend, no station finding."
+    }
+  }
 }

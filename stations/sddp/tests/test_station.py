@@ -1109,8 +1109,8 @@ class CandidateEnvelopeTests(sc.StationCase):
             self.assertNotIn("pending", line)
             self.assertNotIn("0/0/0", line)
             self.assertNotIn("FAIL", line)
-        for lens in LENSES:
-            self.assertRegex(matrix, rf"^\| {re.escape(lens)}\s+\|", f"{lens} row")
+        lens_rows = [line.split("|")[1].strip() for line in rows[1:]]
+        self.assertEqual(sorted(lens_rows), sorted(LENSES))
         for lens in LENSES:
             for sub in SUBSTATIONS:
                 self.assertIn(

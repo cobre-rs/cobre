@@ -1395,6 +1395,403 @@ class CandidateEnvelopeTests(sc.StationCase):
                 )
 
 
+INGEST_STATES = {
+    "accepted",
+    "rejected-anchor",
+    "rejected-reserved-seam",
+    "rejected-defender",
+    "merged",
+    "unresolved",
+    "handed-off",
+    "blocked",
+}
+DISMISSAL_BASES = {
+    "sanctioned-seam",
+    "premise-false-at-pin",
+    "deliberate-and-documented",
+    "contract",
+    "cost-accepted-by-rule",
+}
+SANCTIONED_BY_CLOSED_SET = (
+    "CLI/Python output orchestration hand-mirror",
+    "Setup config-projection sprawl + CLI non-root reconstruction",
+    "`#[allow(...)]` census — Load-bearing / Reserved-seam / Symmetry-or-test-retention classes",
+    "Unwired config is reserved, not dead",
+    "Umbrella crate reserved for a future single-dependency convenience re-export",
+    "Python parity hard rule",
+)
+BYTE_NEUTRAL = {"asserted", "needs-rebaseline", "n/a"}
+PROBE_TITLE = "INGEST ANCHOR PROBE — cli-python (2026-09, baseline)"
+INGEST_LOG_HEADINGS = (
+    "## Candidate census",
+    "## Anchor rejections",
+    "## Re-route and dup-of",
+    "## Cleared (sanctioned)",
+    "## Dup-of merges",
+    "## Re-raise rejections",
+    "## Blocked pending measurement",
+    "## Measure-then-claim",
+    "## Contract dismissals",
+    "## Cross-lens overlaps — decisions",
+    "## Defender summary",
+    "## Per-candidate roster",
+)
+STOP_WORDS = frozenset(
+    "a an and are as at be by for from has have in into is it its no not of on or that the this to was were with without vs via per than then their there these those over under one two three four five six seven eight nine ten".split()
+)
+THIRD_LAYER = (
+    "crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes"
+)
+
+
+def claim_tokens(text: str) -> set[str]:
+    return {
+        w
+        for w in re.split(r"[^\w-]+", text.replace("`", " ").lower())
+        if len(w) >= 3 and w not in STOP_WORDS and not w.isdigit()
+    }
+
+
+def derived_state(entry: dict[str, Any]) -> str:
+    d = entry["disposition"]
+    if d == "dup-of":
+        return "merged"
+    if d == "anchor-missing":
+        return "rejected-anchor"
+    if d == "out-of-station":
+        return "handed-off"
+    if d == "blocked-pending-measurement":
+        return "blocked"
+    if entry["verdict"] == "confirmed":
+        return "accepted"
+    if entry["verdict"] == "dismissed":
+        return (
+            "rejected-reserved-seam"
+            if entry["dismissalBasis"] == "sanctioned-seam"
+            else "rejected-defender"
+        )
+    return "unresolved"
+
+
+class IngestTests(sc.StationCase):
+    """The ingest (E06-4): verdicts.json, ingest-log.md and enforcement-measurements.json.
+
+    One verdict per candidateRef of the four lens files; every state is derivable from
+    disposition + verdict + dismissalBasis; accepted anchors resolve at the pin; the two
+    enforcement-gap verdicts carry the ingest-measured evidence; the measurements re-measure.
+    """
+
+    SLUG = "cli-python"
+    SECTION_TITLE = "cli-python"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.doc = sc.load_json(cls.station_dir() / "verdicts.json")
+        cls.verdicts = cls.doc["verdicts"]
+        cls.meas = sc.load_json(cls.station_dir() / "enforcement-measurements.json")
+        cls.log = (cls.station_dir() / "ingest-log.md").read_text(encoding="utf-8")
+        cls.brief = (cls.station_dir() / "defender-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        cls.candidates = {}
+        for lens in LENSES:
+            counters = {sub: 0 for sub in SUBSTATIONS}
+            for c in sc.load_json(cls.station_dir() / f"candidates-{lens}.json")[
+                "candidates"
+            ]:
+                sub = c["subSurface"]
+                cls.candidates[f"{sub}-{lens}-{counters[sub]:02d}"] = c
+                counters[sub] += 1
+
+    def defended(self) -> list[dict[str, Any]]:
+        return [e for e in self.verdicts.values() if e["disposition"] == "defended"]
+
+    def test_exactly_one_verdict_per_candidate_ref(self) -> None:
+        self.assertEqual(set(self.verdicts), set(self.candidates))
+        for ref, entry in self.verdicts.items():
+            self.assertEqual(entry["candidateRef"], ref)
+            self.assertEqual(entry["title"], self.candidates[ref]["title"])
+            self.assertEqual(entry["lens"], ref.split("-", 2)[1])
+            self.assertEqual(entry["subStation"], ref.split("-", 1)[0])
+            self.assertEqual(
+                entry.get("partIRef"), self.candidates[ref].get("partIRef")
+            )
+            own_wave = self.candidates[ref].get("waveRef")
+            if entry.get("waveRef") != own_wave:
+                self.assertIsNone(own_wave, ref)
+                inherited = {
+                    self.candidates[m].get("waveRef")
+                    for m in entry.get("mergedFrom") or []
+                }
+                self.assertIn(entry["waveRef"], inherited, ref)
+        self.assertEqual(self.doc["counts"]["received"], len(self.candidates))
+        self.assertEqual(self.doc["baseline"], self.baseline())
+        self.assertEqual(self.doc["baseline"], header_baseline())
+
+    def test_every_verdict_has_a_known_state_and_the_counts_sum(self) -> None:
+        counts = self.doc["counts"]
+        states = []
+        for entry in self.verdicts.values():
+            with self.subTest(ref=entry["candidateRef"]):
+                self.assertIn(entry["state"], INGEST_STATES)
+                self.assertEqual(entry["state"], derived_state(entry))
+                states.append(entry["state"])
+                if entry["disposition"] == "defended" and entry["verdict"] is None:
+                    self.assertTrue(entry["_needsHuman"])
+        self.assertEqual(
+            counts["received"],
+            counts["malformed"]
+            + counts["anchorRejected"]
+            + counts["outOfStation"]
+            + counts["dupOf"]
+            + counts["blocked"]
+            + counts["defended"],
+        )
+        self.assertEqual(
+            counts["defended"],
+            counts["confirmed"] + counts["dismissed"] + counts["unresolved"],
+        )
+        self.assertEqual(states.count("merged"), counts["dupOf"])
+        self.assertEqual(states.count("accepted"), counts["confirmed"])
+        self.assertEqual(states.count("unresolved"), counts["unresolved"])
+        self.assertEqual(
+            states.count("rejected-reserved-seam"), counts["sanctionedSeam"]
+        )
+        self.assertEqual(
+            states.count("rejected-reserved-seam") + states.count("rejected-defender"),
+            counts["dismissed"],
+        )
+        self.assertEqual(counts["unresolved"], 0, "a defender never resolved")
+
+    def test_accepted_anchors_are_in_station_and_resolve_at_the_baseline(self) -> None:
+        tree = self.tree()
+        accepted = [e for e in self.verdicts.values() if e["state"] == "accepted"]
+        self.assertTrue(accepted)
+        for entry in accepted:
+            for a in entry["anchors"]:
+                with self.subTest(ref=entry["candidateRef"], anchor=a):
+                    self.assertTrue(a["path"].startswith(STATION_PREFIXES), a)
+                    anchor = (
+                        f"`{a['path']}::{a['symbol']}`"
+                        if "symbol" in a
+                        else f"`{a['path']}:{a['line']}`"
+                    )
+                    self.assertTrue(sc.anchor_exists(anchor, tree), a)
+
+    def test_anchor_probe_resolves_with_the_harness_checker(self) -> None:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "check-anchors.py"),
+                PROBE_TITLE,
+                "--register",
+                str(self.artifact("anchor-probe.md")),
+                "--baseline",
+                self.baseline(),
+                "--json",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["failures"], [])
+        self.assertEqual(
+            report["checked"], sum(len(e["anchors"]) for e in self.verdicts.values())
+        )
+
+    def test_dismissals_carry_a_basis_and_seams_cite_the_closed_set(self) -> None:
+        for text in SANCTIONED_BY_CLOSED_SET:
+            self.assertIn(text, self.brief)
+        self.assertEqual(
+            list(self.doc["sanctionedByClosedSet"]), list(SANCTIONED_BY_CLOSED_SET)
+        )
+        dismissed = [e for e in self.defended() if e["verdict"] == "dismissed"]
+        self.assertTrue(dismissed)
+        for entry in dismissed:
+            with self.subTest(ref=entry["candidateRef"]):
+                self.assertIn(entry["dismissalBasis"], DISMISSAL_BASES)
+                self.assertTrue(str(entry["basisCitation"]).strip())
+                self.assertIsNone(entry["survivingClaim"])
+                self.assertEqual(entry["byteNeutral"], "n/a")
+                if entry["dismissalBasis"] == "sanctioned-seam":
+                    self.assertIn(entry["sanctionedBy"], SANCTIONED_BY_CLOSED_SET)
+                else:
+                    self.assertIsNone(entry["sanctionedBy"])
+                if entry["dismissalBasis"] == "contract":
+                    self.assertTrue(str(entry["contractCited"]).strip())
+        for entry in self.defended():
+            if entry["verdict"] == "confirmed":
+                self.assertIsNone(entry["dismissalBasis"])
+                self.assertIsNone(entry["sanctionedBy"])
+
+    def test_confirmed_verdicts_narrow_the_title_and_tags_are_consistent(self) -> None:
+        for entry in self.defended():
+            with self.subTest(ref=entry["candidateRef"]):
+                self.assertIn(entry["byteNeutral"], BYTE_NEUTRAL)
+                self.assertIn(entry["alignmentHint"], ALIGN)
+                self.assertIsInstance(entry["conflicts"], bool)
+                self.assertEqual(
+                    entry["conflicts"], entry["alignmentHint"] == "conflicts"
+                )
+                self.assertEqual(
+                    bool(entry["conflictsRule"]),
+                    entry["conflicts"],
+                    entry["candidateRef"],
+                )
+                self.assertGreaterEqual(len(entry["argument"]), 120)
+                blob = entry["argument"] + " " + (entry["survivingClaim"] or "")
+                self.assertNotIn("```", blob)
+                if entry["verdict"] == "confirmed":
+                    claim = entry["survivingClaim"]
+                    self.assertTrue(claim and len(claim) >= 40)
+                    title_tokens = claim_tokens(entry["title"])
+                    tokens = claim_tokens(claim)
+                    self.assertNotEqual(title_tokens, tokens)
+                    self.assertLess(
+                        len(title_tokens & tokens) / len(title_tokens | tokens), 0.85
+                    )
+                if entry["lens"] == "performance":
+                    self.assertIsNone(TIMING_NUMBER.search(blob), blob[:120])
+                if entry["priorRelation"] == "sharpens":
+                    self.assertIn(entry["priorId"], OWNED)
+
+    def test_enforcement_gap_verdicts_carry_the_measured_evidence(self) -> None:
+        source = self.meas["sourceLayer"]
+        runtime = self.meas["runtimeLayer"]
+        gap = [e for e in self.defended() if e["claimsEnforcementGap"]]
+        self.assertEqual(
+            sorted(e["candidateRef"] for e in gap), sorted(self.meas["claims"])
+        )
+        self.assertTrue(gap)
+        for entry in gap:
+            with self.subTest(ref=entry["candidateRef"]):
+                me = entry["measuredEvidence"]
+                self.assertIsInstance(me, dict)
+                self.assertEqual(
+                    set(me["sourceLayerNames"]["cli"]), set(source["cliNames"])
+                )
+                self.assertEqual(
+                    set(me["sourceLayerNames"]["python"]), set(source["pythonNames"])
+                )
+                self.assertEqual(me["runtimeTest"]["outcome"], runtime["outcome"])
+                self.assertEqual(me["runtimeTest"]["ciExecutes"], runtime["ciExecutes"])
+                self.assertEqual(me["thirdLayer"], THIRD_LAYER)
+                self.assertTrue(me["writerCallSites"])
+        for entry in self.defended():
+            if not entry["claimsEnforcementGap"]:
+                self.assertIsNone(entry["measuredEvidence"], entry["candidateRef"])
+        self.assertEqual(self.meas["blockedPendingMeasurement"], [])
+        self.assertEqual(runtime["outcome"], "passed")
+        self.assertEqual(runtime["ciExecutes"], "yes")
+
+    def test_merged_entries_name_a_defended_survivor(self) -> None:
+        merged = [e for e in self.verdicts.values() if e["state"] == "merged"]
+        self.assertTrue(merged)
+        for entry in merged:
+            with self.subTest(ref=entry["candidateRef"]):
+                self.assertIsNone(entry["verdict"])
+                self.assertIn(entry["priorRelation"], {"restates", "intra-station"})
+                self.assertTrue(str(entry["argument"]).strip(), "a fold needs a reason")
+                if entry["priorRelation"] == "intra-station":
+                    survivor = self.verdicts[entry["priorId"]]
+                    self.assertEqual(survivor["disposition"], "defended")
+                    self.assertIn(entry["candidateRef"], survivor["mergedFrom"])
+                    self.assertNotEqual(survivor["lens"], entry["lens"])
+                else:
+                    self.assertIn(entry["priorId"], OWNED)
+        for entry in self.defended():
+            for ref in entry["mergedFrom"] or []:
+                self.assertEqual(self.verdicts[ref]["priorId"], entry["candidateRef"])
+
+    def test_ingest_log_has_one_roster_row_per_candidate(self) -> None:
+        for heading in INGEST_LOG_HEADINGS:
+            self.assertIn(heading, self.log)
+        header = HEADER_BASELINE.search(self.log.replace("`", ""))
+        assert header is not None
+        self.assertEqual(header.group(1), header_baseline())
+        roster = log_section(self.log, "## Per-candidate roster")
+        refs = re.findall(
+            r"^\| (S6[abc]-(?:architecture|performance|over-engineering|test-bloat)-\d{2}) \|",
+            roster,
+            re.M,
+        )
+        self.assertEqual(sorted(refs), sorted(self.candidates))
+        self.assertEqual(len(refs), len(set(refs)))
+        cleared = log_section(self.log, "## Cleared (sanctioned)")
+        self.assertIn("crates/cobre/src/lib.rs", cleared)
+        self.assertIn("commands/broadcast.rs", cleared)
+        summary = log_section(self.log, "## Defender summary")
+        self.assertIn("Retry history", summary)
+        self.assertIn(str(self.doc["counts"]["confirmed"]) + " confirmed", summary)
+
+    def test_enforcement_measurements_re_measure_at_the_pin(self) -> None:
+        tree = self.tree()
+        source = self.meas["sourceLayer"]
+        proc = subprocess.run(
+            [
+                "python3",
+                "scripts/ci/check_python_parity.py",
+                "--max",
+                "0",
+                "--root",
+                ".",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, source["exitCode"])
+        self.assertIn(source["summaryLine"], proc.stdout + proc.stderr)
+        self.assertEqual(source["sharedCount"], len(source["inBoth"]))
+        self.assertGreaterEqual(source["sharedCount"], source["minSharedFloor"])
+        writer = self.meas["writerSurface"]
+        run_dir = tree.rs_files("crates/cobre-cli/src/commands/run")
+        cli_calls = [
+            m
+            for p in run_dir
+            for m in re.findall(r"write_[a-z_0-9]*\(", tree.read_text(p))
+        ]
+        py_calls = re.findall(
+            r"write_[a-z_0-9]*\(", tree.read_text("crates/cobre-python/src/run.rs")
+        )
+        self.assertEqual(len(cli_calls), writer["cliCallSites"])
+        self.assertEqual(cli_calls.count("write_line("), writer["cliTerminalWriteLine"])
+        self.assertEqual(len(py_calls), writer["pythonCallSites"])
+        self.assertEqual(
+            sum(1 for c in py_calls if c.endswith("_if_any(")),
+            writer["pythonIfAnyHelpers"],
+        )
+        ci_vis = self.meas["ciVisibility"]
+        per_file = {
+            p.rsplit("/", 1)[-1]: tree.read_text(p).count("#[test]")
+            for p in tree.rs_files("crates/cobre-python/src")
+            if "#[test]" in tree.read_text(p)
+        }
+        self.assertEqual(per_file, ci_vis["perFile"])
+        self.assertEqual(sum(per_file.values()), ci_vis["cobrePythonRustTests"])
+        ci = tree.read_text(".github/workflows/ci.yml")
+        for needle in (
+            "--require-cli-binary",
+            "cargo build --release -p cobre-cli",
+            "cargo test --manifest-path crates/cobre-python/Cargo.toml",
+            "check_python_parity.py --max 0",
+        ):
+            self.assertIn(needle, ci)
+        conftest = tree.read_text("crates/cobre-python/tests/conftest.py")
+        self.assertIsNotNone(re.search(r"^def cli_binary\(", conftest, re.M))
+        self.assertIsNotNone(
+            re.search(
+                r"^def resolve_cli_binary\(",
+                tree.read_text("crates/cobre-python/tests/_cobre_cli.py"),
+                re.M,
+            )
+        )
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_under_an_evaluated_surface_is_modified(self) -> None:
         out = subprocess.run(

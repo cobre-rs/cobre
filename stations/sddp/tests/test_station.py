@@ -9,6 +9,7 @@ tickets append their own stage classes here; the station verification runs the m
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import pathlib
 import re
@@ -1789,6 +1790,245 @@ class CalibrationTests(sc.StationCase):
         queued = self.section.split("#### Queued out", 1)[1].split("\n#### ", 1)[0]
         self.assertIn("perf-queue.json", queued)
         self.assertIn("td-queue.json", queued)
+
+
+GENERIC_CHECKS = (
+    "check-anchors",
+    "check-reraise",
+    "fields-check",
+    "register",
+    "inventory-set-equality",
+    "infra-genericity",
+    "read-only-workspace",
+)
+STATION_CHECKS = (
+    "partition",
+    "dispositions",
+    "lp-reconciliation",
+    "no-timing",
+    "read-only-snapshot",
+)
+SCAFFOLD_TITLE = SCAFFOLD[3:]
+LP_SRC = "crates/cobre-sddp/src/lp"
+RETIRED_ROWS = ("CD-001", "CD-003-construction-hop", "CD-006")
+TIMING_DECOYS = (
+    "163 module paths",
+    "30 records",
+    "L1727",
+    "`077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c`",
+    "resolved by `b051c410`",
+    "layout `2x2`",
+    "--threads 4",
+    "mpiexec -n 2 x --threads 2",
+    "PD-035",
+    "19 × B",
+    "exists at the baseline (721)",
+    "2026-09-18",
+    "-n 1/2",
+    "5a-performance-00",
+    "entries.rs 10,093 lines",
+    "2-opt",
+)
+TIMING_FIGURES = (
+    "12 ms",
+    "0.8 s",
+    "3.2x faster",
+    "40 LP/s",
+    "1.5 GiB/s",
+    "a speed-up of 2",
+    "12% faster",
+    "45 min",
+    "2 iterations per second",
+)
+
+
+def load_verifier() -> Any:
+    path = sc.STATIONS / "sddp" / "verify-sddp.py"
+    spec = importlib.util.spec_from_file_location("verify_sddp", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SectionVerifyTests(sc.StationCase):
+    """Executable proof of the station verification (E05-7).
+
+    verify-station.sh runs this module, so nothing here may invoke it (recursion); the shared
+    verifier's checks are re-asserted directly and its rendered verification.md is read when it
+    exists. The station driver is invoked with --no-shared for the same reason.
+    """
+
+    SLUG = "sddp"
+    SECTION_TITLE = "sddp"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.verifier = load_verifier()
+        cls.inv = sc.load_json(cls.station_dir() / "inventory.json")
+        cls.lp = sc.load_json(sc.AUDIT / "measurements" / "lp-inventory.json")
+        cls.lines = backlog_parse.read_register(sc.BACKLOG)
+        cls.section = backlog_parse.find_section(cls.lines, SCAFFOLD_TITLE)
+        cls.entries = backlog_parse.iter_entries(cls.section)
+
+    def run_driver(self, *argv: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(self.artifact("verify-sddp.py")), *argv],
+            capture_output=True,
+            text=True,
+            cwd=sc.REPO,
+            check=False,
+        )
+
+    def test_three_harness_checkers_exit_zero_over_the_section_title(self) -> None:
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            self.assertEqual(sc.run_checker(tool, SCAFFOLD_TITLE), 0, tool)
+
+    def test_no_tracked_file_modified(self) -> None:
+        self.assertEqual(sc.tracked_modifications(), [])
+
+    def test_inventory_module_set_equals_the_tree_at_the_baseline(self) -> None:
+        listed = [f["path"] for f in self.inv["src"]["files"]]
+        self.assertEqual(len(listed), len(set(listed)))
+        actual = set(self.tree().rs_files(SRC))
+        self.assertEqual(
+            sorted(set(listed) - actual), [], "listed but absent at the baseline"
+        )
+        self.assertEqual(
+            sorted(actual - set(listed)), [], "present at the baseline but unlisted"
+        )
+        self.assertEqual(len(actual), 163)
+
+    def test_lp_inventory_lists_every_lp_module_once_with_wc_l_line_counts(
+        self,
+    ) -> None:
+        tree = self.tree()
+        listed = [f["path"] for f in self.lp["files"]]
+        self.assertEqual(sorted(listed), sorted(set(listed)))
+        self.assertEqual(sorted(listed), sorted(tree.rs_files(LP_SRC)))
+        self.assertEqual(len(listed), 30)
+        for f in self.lp["files"]:
+            self.assertEqual(f["total_lines"], sc.raw_lines(f["path"], tree), f["path"])
+            self.assertTrue(f["top_symbols"], f["path"])
+            self.assertLessEqual(f["non_test_lines"], f["total_lines"], f["path"])
+
+    def test_verify_sddp_exits_zero_with_every_station_check_passing(self) -> None:
+        result = self.run_driver(SCAFFOLD_TITLE, "--no-shared")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "PASS (5/5 station-specific checks; shared verifier skipped)", result.stdout
+        )
+        for check in STATION_CHECKS:
+            self.assertIsNotNone(
+                re.search(rf"^\| {check} \| .* \| 0 \| PASS \|$", result.stdout, re.M),
+                check,
+            )
+        self.assertIsNotNone(
+            re.search(
+                r"^\| shared-verifier \| .* \| - \| SKIP \|$", result.stdout, re.M
+            )
+        )
+
+    def test_section_title_must_resolve_to_exactly_one_heading(self) -> None:
+        for name in (SCAFFOLD_TITLE, "sddp"):
+            self.assertEqual(
+                len(self.verifier.matching_headings(self.lines, name)), 1, name
+            )
+        twice = [
+            "## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — sddp",
+            "prose",
+            "## ★ QUALITY EVALUATION (2026-10, baseline deadbeef) — sddp",
+        ]
+        self.assertEqual(len(self.verifier.matching_headings(twice, "sddp")), 2)
+        self.assertEqual(self.verifier.matching_headings(twice, "core-io"), [])
+        result = self.run_driver("no-such-station", "--no-shared")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("matches 0 headings in BACKLOG.md", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_partition_names_a_doubly_assigned_path_even_when_the_union_holds(
+        self,
+    ) -> None:
+        tree = sorted(f["path"] for f in self.inv["src"]["files"])
+        self.assertEqual(self.verifier.partition_lists(self.inv, tree), ([], [], []))
+        doubled = json.loads(json.dumps(self.inv))
+        victim = next(f for f in doubled["src"]["files"] if f["substation"] == "5c")
+        doubled["src"]["files"].append({**victim, "substation": "5b"})
+        doubly, unassigned, phantom = self.verifier.partition_lists(doubled, tree)
+        self.assertEqual((unassigned, phantom), ([], []), "the union still holds")
+        self.assertEqual(doubly, [f"{victim['path']} <- 5c x2, 5b"])
+        rolled = json.loads(json.dumps(self.inv))
+        rolled["substation_rollup"]["5d"]["modules"].append("lp")
+        doubly, _, _ = self.verifier.partition_lists(rolled, tree)
+        self.assertEqual(len(doubly), 30)
+        self.assertTrue(all(d.endswith("<- 5b, 5d") for d in doubly))
+        thinned = json.loads(json.dumps(self.inv))
+        dropped = thinned["src"]["files"].pop()
+        thinned["src"]["files"].append({**dropped, "path": f"{SRC}/phantom.rs"})
+        self.assertEqual(
+            self.verifier.partition_lists(thinned, tree),
+            ([], [dropped["path"]], [f"{SRC}/phantom.rs"]),
+        )
+
+    def test_timing_regexes_ignore_the_known_decoys_and_catch_figures(self) -> None:
+        for decoy in TIMING_DECOYS:
+            self.assertEqual(self.verifier.timing_hits(decoy), [], decoy)
+        for figure in TIMING_FIGURES:
+            self.assertNotEqual(self.verifier.timing_hits(figure), [], figure)
+        self.assertEqual(self.verifier.timing_hits("\n".join(self.section.lines)), [])
+
+    def test_retired_items_and_pd_004_never_surface_as_live_entries(self) -> None:
+        live = {e.id for e in self.entries}
+        self.assertTrue(live.isdisjoint({"CD-001", "CD-003", "CD-006", "PD-004"}))
+        table = next(
+            t
+            for t in backlog_parse.parse_tables(self.section)
+            if t and "ID" in t[0] and "Disposition" in t[0]
+        )
+        by_id = {row["ID"]: row for row in table}
+        self.assertEqual(len(table), len(by_id), "one disposition-table row per id")
+        for rid in RETIRED_ROWS:
+            self.assertEqual(by_id[rid]["Disposition"], "retire", rid)
+        resolved = {
+            rid: next(v for k, v in by_id[rid].items() if k.startswith("Superseded"))
+            for rid in RETIRED_ROWS
+        }
+        self.assertIn("`b051c410`", resolved["CD-001"])
+        self.assertIn("`4075c4e8`", resolved["CD-003-construction-hop"])
+        self.assertTrue(by_id["PD-004"]["Disposition"].startswith("existence-only"))
+        self.assertTrue(
+            (
+                sc.REPO / "crates/cobre-sddp/src/training/backward_pass_state.rs"
+            ).is_file()
+        )
+
+    def test_verification_report_carries_both_tables_all_passing(self) -> None:
+        report_path = self.artifact("verification.md")
+        if not report_path.exists():
+            # verify-station.sh runs this module BEFORE rendering the report, so the very
+            # first run has nothing to read; the next run (on the committed report) asserts it.
+            self.skipTest("verification.md not rendered yet (bootstrap run)")
+        report = report_path.read_text(encoding="utf-8")
+        self.assertIn(f"Station baseline: `{self.baseline()}`", report)
+        for i, check in enumerate(GENERIC_CHECKS, 1):
+            self.assertIsNotNone(
+                re.search(
+                    rf"^\| {i} \| {check} \| `[^`]+` \| 0 \| PASS \|$", report, re.M
+                ),
+                check,
+            )
+        self.assertIn("## Station-specific checks — sddp", report)
+        self.assertIsNotNone(
+            re.search(r"^\| shared-verifier \| .* \| 0 \| PASS \|$", report, re.M)
+        )
+        for check in STATION_CHECKS:
+            self.assertIsNotNone(
+                re.search(rf"^\| {check} \| .* \| 0 \| PASS \|$", report, re.M), check
+            )
+        self.assertNotIn("| FAIL |", report)
+        self.assertNotIn("Failures:", report)
+        # The "Test suite: …" line is written AFTER this module runs and reflects this very
+        # run, so asserting it here would be circular; only the check rows are asserted.
 
 
 class CleanTreeTests(unittest.TestCase):

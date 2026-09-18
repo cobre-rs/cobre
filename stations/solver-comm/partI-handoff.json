@@ -1,0 +1,187 @@
+{
+  "station": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "producedAt": "2026-09-17",
+  "resolutionRule": "every path:line below was re-resolved with `git show <baseline>:<path>`; the ticket text's lines were computed at the superseded pin a136840d and every one of them still resolves at this baseline except the profiled.rs cfg gate (137 -> 138) and the mirror's cut-sync heading (311 -> 334)",
+  "partIRef": "I.3-8",
+  "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3 item 8 (lines 351-357): cobre-solver's StageTemplate carries five multistage/domain fields, so an L0 container is multistage-decomposition-shaped",
+  "dispositionSemantics": "`dispositions[].disposition` is the Part-I CLAIM's disposition (keep / retire / sharpen the claim); `perFieldDisposition[].disposition` is what the Phase-1 fix-shape does to each FIELD (retire = the template sheds it; keep = it stays because production reads it). The claim is sharpened; every field is shed.",
+  "dispositions": [
+    {
+      "partIRef": "I.3-8",
+      "disposition": "sharpen",
+      "owningStation": "solver-comm",
+      "subStation": "solver",
+      "baselineAnchor": {
+        "path": "crates/cobre-solver/src/types.rs",
+        "symbol": "StageTemplate",
+        "line": 235
+      },
+      "fieldsReverified": ["n_state", "n_transfer", "n_dual_relevant", "n_hydro", "max_par_order"],
+      "survivingClaim": "The claim holds at baseline and is sharper than the v0.12 record on three counts: (a) the multistage vocabulary is in L0 doc prose, not only in identifiers (`N * L`, `AR lags`, `hydros`, `maximum PAR lag order`, `FPHA`, `PAR order`, `uniform lag stride`, `SIMD vectorization`); (b) the production propagation is ONE site, not three — the copy-forward in freeze_rows_into_template — the other two named sites are test fixtures; (c) all five fields are write-only workspace-wide: written once by the cobre-sddp template builder, copied forward by freeze.rs, read by no production code in any crate, and the geometry already has an owner one layer up (StateSpace, StageRowLayout).",
+      "documentedDriftRider": "crates/cobre-solver/src/types.rs:282-286 still documents n_dual_relevant as `Currently equal to n_state (= N + N*L ...)` while the only writer hard-codes it to 0 at crates/cobre-sddp/src/lp/builder/layout.rs:1355 (comment at :1353: state pinning uses column bounds, so no dual-relevant row prefix exists); the L0 doc comment describes a geometry the engine abandoned.",
+      "proposedPhase": "1",
+      "proposedAlignment": "advances-1",
+      "alignmentDestination": "alignment (Epic 9)",
+      "alignmentCites": "Part IV.5 (line 1471: `StageTemplate` sheds n_state/n_transfer/n_dual_relevant/n_hydro/max_par_order); Part-V purification row (line 1372: cobre-solver **purified + capabilities**)"
+    }
+  ],
+  "perFieldDisposition": [
+    {
+      "field": "n_state",
+      "anchor": "crates/cobre-solver/src/types.rs:270",
+      "declaredType": "usize",
+      "docVocabulary": ["state variables", "contiguous prefix of columns"],
+      "disposition": "retire",
+      "dispositionReason": "write-only at baseline: set by crates/cobre-sddp/src/lp/builder/template.rs:459 from `layout.n_state()`, copied forward by crates/cobre-solver/src/freeze.rs:158, read only by tests",
+      "ownerAfterShed": "crates/cobre-sddp/src/lp/indexer/state_space.rs:97 StateSpace.n_state",
+      "sharpenVariantRejected": "renaming to a neutral `n_leading_cols` keeps the notion of a state prefix — a multistage concept — in L0 and sheds nothing",
+      "reservedSeamsCheck": { "mirrorHits": 0, "backlogHits": 0 }
+    },
+    {
+      "field": "n_transfer",
+      "anchor": "crates/cobre-solver/src/types.rs:278",
+      "declaredType": "usize",
+      "docVocabulary": ["N * L", "Solver Abstraction SS2.1", "storage volumes", "AR lags", "ages out of the lag window"],
+      "disposition": "retire",
+      "dispositionReason": "write-only at baseline: computed by crates/cobre-sddp/src/lp/builder/template.rs:445 as `ctx.n_hydros * ctx.max_par_order` and stored at :460, copied forward by crates/cobre-solver/src/freeze.rs:159, read only by tests",
+      "ownerAfterShed": "crates/cobre-sddp/src/lp/builder/template.rs:445 (derived from StateSpace.hydro_count and StateSpace.max_par_order — no separate stored owner is needed)",
+      "sharpenVariantRejected": "renaming to `n_carried` still encodes the stage-to-stage transfer of a multistage decomposition in L0",
+      "reservedSeamsCheck": { "mirrorHits": 0, "backlogHits": 0 }
+    },
+    {
+      "field": "n_dual_relevant",
+      "anchor": "crates/cobre-solver/src/types.rs:287",
+      "declaredType": "usize",
+      "docVocabulary": ["hydros", "maximum PAR lag order", "FPHA", "Gradient coefficients"],
+      "disposition": "retire",
+      "dispositionReason": "write-only at baseline; the builder hard-codes 0 at crates/cobre-sddp/src/lp/builder/layout.rs:1355 under column-bound state pinning, while the L0 doc comment at crates/cobre-solver/src/types.rs:282-286 still claims it equals n_state",
+      "ownerAfterShed": "crates/cobre-sddp/src/lp/builder/layout.rs:509 StageRowLayout.n_dual_relevant",
+      "sharpenVariantRejected": "renaming to a neutral `n_dual_prefix` leaves a multistage concept (a dual-relevant row prefix for cut gradients) in L0",
+      "reservedSeamsCheck": { "mirrorHits": 0, "backlogHits": 0 }
+    },
+    {
+      "field": "n_hydro",
+      "anchor": "crates/cobre-solver/src/types.rs:290",
+      "declaredType": "usize",
+      "docVocabulary": ["operating hydros"],
+      "disposition": "retire",
+      "dispositionReason": "write-only at baseline: set by crates/cobre-sddp/src/lp/builder/template.rs:462 from `layout.n_h`, copied forward by crates/cobre-solver/src/freeze.rs:161; the only readers are tests (crates/cobre-sddp/tests/template_integration/penalty.rs:86 derives a column offset as `t.num_cols - 1 - 6 * t.n_hydro`)",
+      "ownerAfterShed": "crates/cobre-sddp/src/lp/indexer/state_space.rs:100 StateSpace.hydro_count",
+      "sharpenVariantRejected": "renaming to `n_entities` hides the domain noun but keeps a hydrothermal-dispatch count in a generic LP container",
+      "reservedSeamsCheck": { "mirrorHits": 0, "backlogHits": 0 }
+    },
+    {
+      "field": "max_par_order",
+      "anchor": "crates/cobre-solver/src/types.rs:297",
+      "declaredType": "usize",
+      "docVocabulary": ["PAR order", "operating hydros", "uniform lag stride", "SIMD vectorization", "contiguous state stride"],
+      "disposition": "retire",
+      "dispositionReason": "write-only at baseline: set by crates/cobre-sddp/src/lp/builder/template.rs:463 from `layout.lag_order`, copied forward by crates/cobre-solver/src/freeze.rs:162, read only by tests",
+      "ownerAfterShed": "crates/cobre-sddp/src/lp/indexer/state_space.rs:104 StateSpace.max_par_order",
+      "sharpenVariantRejected": "renaming to `lag_stride` keeps the autoregressive-lag geometry of the inflow model in L0",
+      "reservedSeamsCheck": { "mirrorHits": 0, "backlogHits": 0 }
+    }
+  ],
+  "propagationSites": [
+    {
+      "path": "crates/cobre-solver/src/freeze.rs",
+      "lines": "158-162",
+      "scope": "production",
+      "gatedBy": null,
+      "note": "freeze_rows_into_template copies the five from `base` to `out`; the file's #[cfg(test)] starts at :244"
+    },
+    {
+      "path": "crates/cobre-solver/src/trait_def.rs",
+      "lines": "380-384",
+      "scope": "test",
+      "gatedBy": "crates/cobre-solver/src/trait_def.rs:224 #[cfg(test)]",
+      "note": "a StageTemplate struct-literal fixture inside the test module"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/profiled.rs",
+      "lines": "252-256",
+      "scope": "test",
+      "gatedBy": "crates/cobre-solver/src/backends/profiled.rs:138 #[cfg(all(test, feature = \"highs\"))]",
+      "note": "a StageTemplate struct-literal fixture inside the highs-gated test module; the ticket text's :137 resolves to :138 at this baseline"
+    }
+  ],
+  "propagationSummary": "The production propagation is ONE site (freeze.rs:158-162), not the three the v0.12 record names; the other two are test fixtures and must not inflate the E9 count.",
+  "reservedSeamsCheck": {
+    "tokens": ["StageTemplate", "n_state", "n_transfer", "n_dual_relevant", "n_hydro", "max_par_order"],
+    "mirror": "docs/design/reserved-seams-and-deferred-debt.md at the baseline",
+    "mirrorHits": 0,
+    "backlog": "plans/architecture-debt-audit/BACKLOG.md",
+    "backlogHits": 0,
+    "backlogTokenHits": {
+      "StageTemplate": { "count": 1, "where": "the Milestones table row for milestone `1` (\"Purify the data model: ... StageTemplate shed ...\") — the roadmap milestone this fix-shape advances, not a finding entry, a Cleared item, or a reserved seam" },
+      "n_state": { "count": 1, "where": "the body of a core-io performance entry quoting `ws.current_state[..n_state].to_vec()` — a StateSpace field, unrelated to StageTemplate" }
+    },
+    "verdict": "no sanctioned entry, Cleared item, or reserved seam covers StageTemplate or any of the five fields at baseline; the item is a NEW finding for this station, not a re-raise and not a dup-of",
+    "checkedBefore": "every perFieldDisposition[].disposition was assigned"
+  },
+  "writeOnlyEvidence": {
+    "method": "git grep at the baseline for `.<field>` accesses across crates/, receivers grouped by token and typed from their declarations; struct-literal initialisers and declarations excluded; production scope = above the file's first #[cfg(test)] and outside tests/ and benches/",
+    "writer": "crates/cobre-sddp/src/lp/builder/template.rs:445 (n_transfer = ctx.n_hydros * ctx.max_par_order), 459-463 (n_state, n_transfer, n_dual_relevant, n_hydro, max_par_order from StageLayout)",
+    "copyForward": "crates/cobre-solver/src/freeze.rs:158-162 (freeze_rows_into_template)",
+    "defaultCtor": "crates/cobre-solver/src/types.rs:390-394 (zeros)",
+    "productionReads": 0,
+    "productionReceiversOfTheSameNames": "every other production access is on a StateSpace (`state`, `state_layout`, `global`, `idx`, `layout`), a TemplateBuildCtx (`ctx`), a RankDistribution (`ranks`), a WorkspaceSizing (`sizing`), a PatchBuffer (`self`) or a StageRowLayout (`rows`) — none on a StageTemplate value",
+    "testReaders": [
+      "crates/cobre-solver/tests/conformance.rs:154-156",
+      "crates/cobre-sddp/tests/template_integration/penalty.rs:86",
+      "crates/cobre-solver/src/types.rs:779-782 (test module gated at :546)",
+      "crates/cobre-solver/src/freeze.rs:320-324 (test module gated at :244)",
+      "crates/cobre-sddp/tests/lp_builder.rs:1516-1524",
+      "crates/cobre-sddp/tests/deterministic.rs:8204-8213"
+    ],
+    "ownerOneLayerUp": {
+      "StateSpace": "crates/cobre-sddp/src/lp/indexer/state_space.rs:97 n_state, :100 hydro_count, :104 max_par_order",
+      "StageRowLayout": "crates/cobre-sddp/src/lp/builder/layout.rs:509 n_dual_relevant (hard-coded 0 at :1355)"
+    }
+  },
+  "fixShape": "**Fix-shape (Phase 1, prose only — no edit here).** `StageTemplate` keeps the CSC triple (`col_starts`/`row_indices`/`values`), the column and row bounds, the objective and the two scale vectors (`col_scale`, `row_scale`), and sheds `n_state`, `n_transfer`, `n_dual_relevant`, `n_hydro`, `max_par_order`. The copy-forward block at `crates/cobre-solver/src/freeze.rs:158-162` goes with them. Nothing is relocated that is not already owned upstairs: `StateSpace` (`crates/cobre-sddp/src/lp/indexer/state_space.rs:97,100,104`) and `StageRowLayout` (`crates/cobre-sddp/src/lp/builder/layout.rs:509`) already carry the same numbers, and `crates/cobre-sddp/src/lp/builder/template.rs:445,459-463` is the only writer. Collateral the estimate must carry: the four StageTemplate test fixtures (`freeze.rs:275-279`, `trait_def.rs:380-384`, `backends/profiled.rs:252-256`, `types.rs` Default at 390-394) lose five lines each; the conformance assertions at `crates/cobre-solver/tests/conformance.rs:154-156` and the in-crate ones at `types.rs:779-782` and `freeze.rs:320-324` collapse; the test-only column arithmetic in `crates/cobre-sddp/tests/template_integration/penalty.rs:86` must source `n_hydro` from the engine-side geometry (`StateSpace.hydro_count`); the stale `n_dual_relevant` doc comment (`types.rs:282-286`) disappears with its field. **L0 purity test:** no engine concept enters `cobre-solver`; no dependency from `cobre-solver` onto an engine crate; no one-consumer abstraction is created — so this is `advances-1`, not `conflicts`. **Rejected sharpen variant:** renaming the five to neutral spellings keeps a multistage concept in L0 and sheds nothing.",
+  "proposedAlignment": "advances-1",
+  "alignmentCites": ["plans/generalizing/beyond-sddp-generalization.md IV.5 (heading :1460; shed line :1471)", "plans/generalizing/beyond-sddp-generalization.md Part-V purification row (:1372)"],
+  "l0PurityTest": {
+    "noEngineConceptPlacedInCobreSolver": true,
+    "noDependencyFromCobreSolverOntoAnEngineCrate": true,
+    "noOneConsumerAbstraction": true,
+    "verdict": "advances-1"
+  },
+  "genericityGateBlindSpot": {
+    "candidateClass": "L0 vocabulary leakage (architecture lens, pre-seeded)",
+    "evadingIdentifier": "cut_nz_per_col",
+    "anchor": "crates/cobre-solver/src/freeze.rs:22",
+    "declaration": "FreezeScratch.cut_nz_per_col: Vec<u32>",
+    "productionUses": [137, 138, 141, 188],
+    "cfgTestBoundary": 244,
+    "testUses": [820, 849],
+    "gateScript": "scripts/ci/check-infra-genericity.sh",
+    "patternLine": 79,
+    "patternEvaded": "\\bcut\\b",
+    "whyEvaded": "`\\b` needs a word boundary after `cut`; `_` is a word character, so `cut_nz_per_col` never matches the alternative and no other alternative (`\\bCut\\b`, `cut pool`, `CutSync[[:alnum:]_]*`, ...) covers it",
+    "gateRunAtBaseline": { "exit": 0, "stdout": "OK: no algorithm-specific vocabulary found in infrastructure crates." },
+    "changeProposed": false,
+    "note": "No gate edit is designed, proposed or applied here; the gate half is handed to E7 (build-ci/docs station) as a blind-spot record, the vocabulary half is a pre-seeded candidate for this station's architecture attacker."
+  },
+  "handoffs": [
+    {
+      "to": "E9",
+      "partIRef": "I.3-8",
+      "perFieldDisposition": "see perFieldDisposition (5 x retire)",
+      "proposedAlignment": "advances-1",
+      "alignmentCites": "Part IV.5 :1471; Part-V purification row :1372"
+    },
+    {
+      "to": "E7",
+      "gateScript": "scripts/ci/check-infra-genericity.sh",
+      "evadingIdentifier": "cut_nz_per_col",
+      "anchor": "crates/cobre-solver/src/freeze.rs:22",
+      "patternEvaded": "\\bcut\\b",
+      "gateExitAtBaseline": 0,
+      "changeProposed": false
+    }
+  ],
+  "_needsHuman": []
+}

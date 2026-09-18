@@ -532,11 +532,205 @@ class HandoffTests(sc.StationCase):
             tree.read_text(mirror_path).splitlines()[int(mirror_line) - 1],
         )
 
-    def test_reserved_slots_are_explicit_nulls_with_an_owner(self) -> None:
+    def test_every_slot_names_its_owner_and_unfilled_slots_are_explicit_nulls(self) -> None:
         for key in ("E7", "E9", "E10"):
             with self.subTest(slot=key):
-                self.assertIsNone(self.handoffs[key]["block"])
+                self.assertIn("block", self.handoffs[key])
                 self.assertTrue(self.handoffs[key]["filledBy"])
+        self.assertIsNone(self.handoffs["E10"]["block"], "E10 is the calibrate ticket's to fill")
+        self.assertIsNotNone(self.handoffs["E9"]["block"], "E9 is filled by the Part-I item 8 ticket")
+        self.assertIsNotNone(self.handoffs["E7"]["block"], "E7 is filled by the Part-I item 8 ticket")
+
+
+class PartIHandoffTests(sc.StationCase):
+    """Part-I item 8 re-verified at the station baseline (partI-handoff.json)."""
+
+    SLUG = "solver-comm"
+    SECTION_TITLE = "solver-comm"
+    FIELDS = ("n_state", "n_transfer", "n_dual_relevant", "n_hydro", "max_par_order")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.env = sc.load_json(cls.station_dir() / "partI-handoff.json")
+        cls.handoffs = sc.load_json(cls.station_dir() / "handoffs.json")
+
+    def test_exactly_item_8_with_a_valid_claim_disposition(self) -> None:
+        self.assertEqual(self.env["partIRef"], "I.3-8")
+        self.assertEqual([d["partIRef"] for d in self.env["dispositions"]], ["I.3-8"])
+        item = self.env["dispositions"][0]
+        self.assertIn(item["disposition"], {"keep", "retire", "sharpen"})
+        self.assertEqual(self.env["baseline"], self.baseline())
+        self.assertEqual(self.env["station"], "solver-comm")
+
+    def test_a_kept_or_sharpened_claim_anchors_the_definition_and_names_the_five_fields(self) -> None:
+        item = self.env["dispositions"][0]
+        tree = self.tree()
+        if item["disposition"] == "retire":
+            sha = item["retiredAt"]
+            self.assertEqual(sc._git("cat-file", "-e", f"{sha}^{{commit}}").returncode, 0, sha)
+            return
+        a = item["baselineAnchor"]
+        self.assertTrue(sc.anchor_exists(f"`{a['path']}::{a['symbol']}`", tree), a)
+        self.assertIn("pub struct StageTemplate", tree.read_text(a["path"]).splitlines()[a["line"] - 1])
+        self.assertEqual(tuple(item["fieldsReverified"]), self.FIELDS)
+        self.assertIn("Epic 9", item["alignmentDestination"])
+
+    def test_five_field_dispositions_resolve_with_their_doc_vocabulary_at_the_baseline(self) -> None:
+        tree = self.tree()
+        rows = self.env["perFieldDisposition"]
+        self.assertEqual([r["field"] for r in rows], list(self.FIELDS))
+        lines = tree.read_text("crates/cobre-solver/src/types.rs").splitlines()
+        for r in rows:
+            with self.subTest(field=r["field"]):
+                path, ln = r["anchor"].rsplit(":", 1)
+                decl = lines[int(ln) - 1]
+                self.assertRegex(decl, rf"^\s*pub {r['field']}: usize,")
+                self.assertIn(r["disposition"], {"keep", "retire", "sharpen"})
+                doc_start = int(ln) - 1
+                while doc_start > 0 and lines[doc_start - 1].strip().startswith("///"):
+                    doc_start -= 1
+                doc = " ".join(x.strip().lstrip("/").strip() for x in lines[doc_start:int(ln) - 1])
+                for token in r["docVocabulary"]:
+                    self.assertIn(token, doc, f"{r['field']}: {token!r} not in its own doc block")
+                self.assertTrue(r["dispositionReason"] and r["ownerAfterShed"] and r["sharpenVariantRejected"])
+                self.assertEqual(r["reservedSeamsCheck"], {"mirrorHits": 0, "backlogHits": 0})
+
+    def test_propagation_is_one_production_site_and_two_test_fixtures(self) -> None:
+        tree = self.tree()
+        sites = self.env["propagationSites"]
+        scopes = {s["path"]: s["scope"] for s in sites}
+        self.assertEqual(
+            scopes,
+            {
+                "crates/cobre-solver/src/freeze.rs": "production",
+                "crates/cobre-solver/src/trait_def.rs": "test",
+                "crates/cobre-solver/src/backends/profiled.rs": "test",
+            },
+        )
+        for s in sites:
+            with self.subTest(path=s["path"]):
+                lines = tree.read_text(s["path"]).splitlines()
+                lo, hi = (int(x) for x in s["lines"].split("-"))
+                span = lines[lo - 1 : hi]
+                self.assertEqual(len(span), 5)
+                for field, line in zip(self.FIELDS, span, strict=True):
+                    self.assertIn(field, line)
+                gate = next(i + 1 for i, x in enumerate(lines) if re.match(r"^#\[cfg\((all\()?test", x))
+                if s["scope"] == "production":
+                    self.assertLess(hi, gate)
+                    self.assertIsNone(s["gatedBy"])
+                else:
+                    self.assertGreater(lo, gate)
+                    self.assertIn(f"{s['path']}:{gate}", s["gatedBy"])
+        self.assertIn("ONE site", self.env["propagationSummary"])
+
+    def test_write_only_evidence_names_writer_copy_forward_and_test_readers(self) -> None:
+        tree = self.tree()
+        ev = self.env["writeOnlyEvidence"]
+        self.assertEqual(ev["productionReads"], 0)
+        writer = tree.read_text("crates/cobre-sddp/src/lp/builder/template.rs").splitlines()
+        self.assertIn("n_transfer = ctx.n_hydros * ctx.max_par_order", writer[444])
+        for field, ln in zip(self.FIELDS, range(459, 464), strict=True):
+            self.assertIn(field, writer[ln - 1])
+        freeze = tree.read_text("crates/cobre-solver/src/freeze.rs").splitlines()
+        for field, ln in zip(self.FIELDS, range(158, 163), strict=True):
+            self.assertRegex(freeze[ln - 1], rf"out\.{field} = base\.{field};")
+        self.assertGreaterEqual(len(ev["testReaders"]), 2)
+        for reader in ev["testReaders"]:
+            path, span = reader.split(" ")[0].rsplit(":", 1)
+            lo = int(span.split("-")[0])
+            with self.subTest(reader=reader):
+                self.assertTrue(tree.is_file(path), path)
+                self.assertRegex(tree.read_text(path).splitlines()[lo - 1], r"n_(state|transfer|dual_relevant|hydro)|max_par_order")
+        # the geometry's owner one layer up
+        ss = tree.read_text("crates/cobre-sddp/src/lp/indexer/state_space.rs").splitlines()
+        self.assertIn("pub n_state: usize", ss[96])
+        self.assertIn("pub hydro_count: usize", ss[99])
+        self.assertIn("pub max_par_order: usize", ss[103])
+        layout = tree.read_text("crates/cobre-sddp/src/lp/builder/layout.rs").splitlines()
+        self.assertIn("n_dual_relevant: usize", layout[508])
+        self.assertIn("let n_dual_relevant = 0_usize;", layout[1354])
+
+    def test_no_production_stage_template_read_exists_at_the_baseline(self) -> None:
+        """Every production `.field` access of the five names is on a non-StageTemplate receiver."""
+        tree = self.tree()
+        rx = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\.(n_state|n_transfer|n_dual_relevant|n_hydro|max_par_order)\b")
+        template_receivers: set[tuple[str, int, str]] = set()
+        for path in tree.files():
+            if not (path.startswith("crates/") and path.endswith(".rs")):
+                continue
+            if "/tests/" in path or "/benches/" in path or path.endswith(("tests.rs", "test_support.rs")):
+                continue
+            lines = tree.read_text(path).splitlines()
+            gate = next((i + 1 for i, x in enumerate(lines) if re.match(r"^#\[cfg\((all\()?test", x)), len(lines) + 1)
+            for i, line in enumerate(lines[: gate - 1], 1):
+                for m in rx.finditer(line):
+                    recv = m.group(1)
+                    # a receiver is a StageTemplate when its declaration in the file says so
+                    if re.search(rf"\b{re.escape(recv)}\s*:\s*&?(mut\s+)?StageTemplate\b", "\n".join(lines)):
+                        template_receivers.add((path, i, recv))
+        self.assertEqual(
+            {p for p, _, _ in template_receivers},
+            {"crates/cobre-solver/src/freeze.rs"},
+            "a production StageTemplate read appeared; a field read in production flips its disposition to keep",
+        )
+        self.assertEqual({ln for _, ln, _ in template_receivers}, set(range(158, 163)))
+
+    def test_reserved_seams_check_is_recorded_and_the_mirror_has_no_hit(self) -> None:
+        tree = self.tree()
+        check = self.env["reservedSeamsCheck"]
+        mirror = tree.read_text(backlog_parse.MIRROR)
+        self.assertEqual(sum(bool(re.search(rf"\b{tok}\b", mirror)) for tok in check["tokens"]), check["mirrorHits"])
+        self.assertEqual(check["mirrorHits"], 0)
+        self.assertEqual(check["backlogHits"], 0)
+        register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
+        entries = [e for s in backlog_parse.all_evaluation_sections(backlog_parse.read_register(sc.BACKLOG)) for e in backlog_parse.iter_entries(s)]
+        hits = [e.id for e in entries if "StageTemplate" in "\n".join([e.heading, *e.body])]
+        self.assertEqual(hits, [], "a register entry already covers StageTemplate: this is a dup-of, not a new finding")
+        self.assertIn("StageTemplate shed", register, "the milestone row the backlogTokenHits note classifies")
+        self.assertIn("NEW finding", check["verdict"])
+
+    def test_fix_shape_is_phase_1_prose_tagged_advances_1(self) -> None:
+        self.assertEqual(self.env["proposedAlignment"], "advances-1")
+        fix = self.env["fixShape"]
+        for token in ("col_starts", "row_scale", "freeze.rs:158-162", "state_space.rs:97,100,104", "layout.rs:509", "advances-1", "Rejected sharpen variant"):
+            self.assertIn(token, fix)
+        self.assertTrue(all(self.env["l0PurityTest"][k] for k in ("noEngineConceptPlacedInCobreSolver", "noDependencyFromCobreSolverOntoAnEngineCrate", "noOneConsumerAbstraction")))
+        roadmap = pathlib.Path(sc.REPO / "plans/generalizing/beyond-sddp-generalization.md")
+        if roadmap.exists():
+            lines = roadmap.read_text(encoding="utf-8").splitlines()
+            self.assertIn("StageTemplate", lines[1470])
+            self.assertIn("cobre-solver", lines[1371])
+            self.assertIn("StageTemplate", lines[351])
+
+    def test_genericity_gate_blind_spot_is_recorded_without_a_gate_edit(self) -> None:
+        tree = self.tree()
+        g = self.env["genericityGateBlindSpot"]
+        freeze = tree.read_text("crates/cobre-solver/src/freeze.rs").splitlines()
+        self.assertIn("cut_nz_per_col", freeze[21])
+        for ln in g["productionUses"]:
+            self.assertIn("cut_nz_per_col", freeze[ln - 1])
+            self.assertLess(ln, g["cfgTestBoundary"])
+        self.assertTrue(freeze[g["cfgTestBoundary"] - 1].startswith("#[cfg(test)]"))
+        gate = tree.read_text(g["gateScript"]).splitlines()
+        self.assertTrue(gate[g["patternLine"] - 1].startswith("PATTERN="))
+        self.assertIn("\\bcut\\b", gate[g["patternLine"] - 1])
+        self.assertIsNone(re.search(r"\bcut\b", "cut_nz_per_col"), "the evasion mechanism")
+        self.assertIs(g["changeProposed"], False)
+        self.assertEqual(
+            (sc.REPO / g["gateScript"]).read_text(encoding="utf-8"),
+            tree.read_text(g["gateScript"]),
+            "the gate script must be untouched in the working tree",
+        )
+        e7 = self.handoffs["E7"]["block"]
+        for key in ("gateScript", "evadingIdentifier", "anchor", "patternEvaded", "gateExitAtBaseline", "changeProposed"):
+            self.assertIn(key, e7)
+        self.assertEqual(e7["gateExitAtBaseline"], 0)
+        self.assertIs(e7["changeProposed"], False)
+        e9 = self.handoffs["E9"]["block"]
+        self.assertEqual(e9["partIRef"], "I.3-8")
+        self.assertEqual(e9["proposedAlignment"], "advances-1")
+        self.assertEqual(set(e9["perFieldDisposition"]), set(self.FIELDS))
 
 
 class CleanTreeTests(unittest.TestCase):

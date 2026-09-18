@@ -7,17 +7,47 @@
     "mirrorAnchor": "docs/design/reserved-seams-and-deferred-debt.md:334",
     "registerId": "CD-019",
     "anchors": [
-      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_cuts", "line": 243 },
-      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "pack_local_records", "line": 400 },
-      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_packed_records", "line": 495 },
-      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_level_records", "line": 581, "role": "live successor" }
+      {
+        "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+        "symbol": "sync_cuts",
+        "line": 243
+      },
+      {
+        "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+        "symbol": "pack_local_records",
+        "line": 400
+      },
+      {
+        "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+        "symbol": "sync_packed_records",
+        "line": 495
+      },
+      {
+        "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+        "symbol": "sync_level_records",
+        "line": 581,
+        "role": "live successor"
+      }
     ],
     "idAssigned": null,
     "note": "Anchors resolve in cobre-sddp, not in cobre-solver or cobre-comm (git grep over both station crates returns nothing). Merged as dup-of at ingest; no new id. Re-raising here is a check-reraise.py failure. The mirror heading sat at :311 under the superseded pin a136840d and at :334 under this baseline."
   },
   "E7": {
-    "filledBy": "attacker ticket (architecture lens) — the genericity-gate blind spot",
-    "block": null,
+    "filledBy": "Part-I item 8 re-verification ticket (gate blind spot); the doc-drift observation below came from the inventory ticket",
+    "block": {
+      "kind": "genericity-gate-blind-spot",
+      "gateScript": "scripts/ci/check-infra-genericity.sh",
+      "patternLine": 79,
+      "evadingIdentifier": "cut_nz_per_col",
+      "anchor": "crates/cobre-solver/src/freeze.rs:22",
+      "productionUses": "crates/cobre-solver/src/freeze.rs:137,138,141,188 (cfg(test) boundary at :244)",
+      "patternEvaded": "\\bcut\\b",
+      "whyEvaded": "`_` is a word character, so no `\\b` follows `cut` in `cut_nz_per_col`",
+      "gateExitAtBaseline": 0,
+      "gateStdoutAtBaseline": "OK: no algorithm-specific vocabulary found in infrastructure crates.",
+      "changeProposed": false,
+      "source": "plans/architecture-debt-audit/stations/solver-comm/partI-handoff.json#genericityGateBlindSpot"
+    },
     "observation": {
       "kind": "doc-drift",
       "anchor": ".claude/rules/sddp.md:446",
@@ -25,8 +55,28 @@
     }
   },
   "E9": {
-    "filledBy": "Part-I item 8 re-verification ticket (per-field dispositions on types.rs, freeze.rs, trait_def.rs, backends/profiled.rs)",
-    "block": null
+    "filledBy": "Part-I item 8 re-verification ticket",
+    "block": {
+      "partIRef": "I.3-8",
+      "claimDisposition": "sharpen",
+      "source": "plans/architecture-debt-audit/stations/solver-comm/partI-handoff.json",
+      "perFieldDisposition": {
+        "n_state": "retire",
+        "n_transfer": "retire",
+        "n_dual_relevant": "retire",
+        "n_hydro": "retire",
+        "max_par_order": "retire"
+      },
+      "productionPropagationSites": 1,
+      "productionReads": 0,
+      "proposedAlignment": "advances-1",
+      "alignmentCites": [
+        "beyond-sddp-generalization.md IV.5 :1471",
+        "beyond-sddp-generalization.md Part-V purification row :1372"
+      ],
+      "idAssigned": null,
+      "note": "The claim holds at baseline and is sharper than the v0.12 record: vocabulary in L0 doc prose, one production propagation site (freeze.rs:158-162), all five fields write-only with the geometry already owned by StateSpace/StageRowLayout. No id here — the calibrate ticket mints it if the ingest confirms the pre-seeded candidate."
+    }
   },
   "E10": {
     "filledBy": "calibrate/record ticket (each Sev-A/B perf claim with its 4t or 2x2 layout; the cobre-comm per_rank_counts/prefix_displs consumer list is on inventory.json files[crates/cobre-comm/src/lib.rs].perfHelpers)",

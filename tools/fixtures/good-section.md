@@ -13,6 +13,8 @@ Symbol anchor with a parenthesised visibility:
 Symbol anchor on a plain `pub struct`: `crates/cobre-solver/src/types.rs::StageTemplate`.
 Prose backticks such as `god-fn` and `Sev A` are not anchors and must not be checked.
 - **Alignment:** neutral
+- **Status:** fixed (2026-09-15) — the wider consolidation was deliberately NOT done per D11;
+  a provenance bullet may cite a resolved fork as rationale without re-raising it.
 
 ## ★ QUALITY EVALUATION (2026-09, baseline FIXTURE) — sibling
 

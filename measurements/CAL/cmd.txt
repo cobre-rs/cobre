@@ -1,11 +1,11 @@
 taskset
 -c
 0,2,4,6
-/home/rogerio/git/cobre-wt-e01-5/target/profiling/cobre
+/home/rogerio/git/cobre/target/profiling/cobre
 run
-/tmp/perf-run-CAL-QnjGZb/deck
+/tmp/perf-run-CAL-qu6ZUB/deck
 --output
-/tmp/perf-run-CAL-QnjGZb/out
+/tmp/perf-run-CAL-qu6ZUB/out
 --threads
 4
 --comm-backend

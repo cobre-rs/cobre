@@ -25,9 +25,11 @@ from lib.backlog_parse import (  # noqa: E402
     SECTION_RE,
     Entry,
     Section,
+    MIRROR,
     SectionNotFound,
     all_evaluation_sections,
     find_section,
+    finding_lines,
     git_show,
     iter_entries,
     parse_baseline,
@@ -44,16 +46,31 @@ ROOT = repo_root()
 REGISTER = ROOT / "plans" / "architecture-debt-audit" / "BACKLOG.md"
 ROADMAP = ROOT / "plans" / "generalizing" / "beyond-sddp-generalization.md"
 REFINEMENT_TODO = ROOT / "plans" / "generalizing" / "refinement-todo.md"
-MIRROR = "docs/design/reserved-seams-and-deferred-debt.md"
 
-RESOLVED_FORKS = ("D1", "D2", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15")
+RESOLVED_FORKS = (
+    "D1",
+    "D2",
+    "D7",
+    "D8",
+    "D9",
+    "D10",
+    "D11",
+    "D12",
+    "D13",
+    "D14",
+    "D15",
+)
 RETIRED_ID_RE = re.compile(r"\b(?:CD|PD|OD|TD)-\d{3}\b|\bD(?:1|2|[7-9]|1[0-5])\b")
 JACCARD_MIN = 0.6
-STOPWORDS = frozenset("""
+STOPWORDS = frozenset(
+    """
 a an and are as at be by for from has have in into is it its no not of on or that the
 this to was were with without vs via per than then their there these those over under
-""".split())
-FILE_RE = re.compile(r"`(?P<path>[\w./-]+\.(?:rs|py|sh|toml|md|json|fbs|yml|yaml))(?::\d+(?:-\d+)?)?`")
+""".split()
+)
+FILE_RE = re.compile(
+    r"`(?P<path>[\w./-]+\.(?:rs|py|sh|toml|md|json|fbs|yml|yaml))(?::\d+(?:-\d+)?)?`"
+)
 IDENT_RE = re.compile(r"`(?P<sym>[A-Za-z_][A-Za-z0-9_]{3,})`")
 DO_NOT_TOUCH_RE = re.compile(r"^\*\*Do-not-touch list[^*]*:\*\*")
 CLEARED_RE = re.compile(r"^\*\*↩︎ CLEARED[^*]*\*\*|^\*\*↩︎ CLEARED")
@@ -87,8 +104,11 @@ class CorpusMissing(RuntimeError):
 
 def tokenize(text: str) -> frozenset[str]:
     words = TOKEN_SPLIT_RE.split(text.replace("`", " ").casefold())
-    return frozenset(w.strip("-_") for w in words
-                     if len(w.strip("-_")) >= 3 and w not in STOPWORDS and not w.isdigit())
+    return frozenset(
+        w.strip("-_")
+        for w in words
+        if len(w.strip("-_")) >= 3 and w not in STOPWORDS and not w.isdigit()
+    )
 
 
 def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
@@ -98,7 +118,9 @@ def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
 
 
 def slug(text: str) -> str:
-    return re.sub(r"-+", "-", TOKEN_SPLIT_RE.sub("-", text.replace("`", "").casefold())).strip("-")
+    return re.sub(
+        r"-+", "-", TOKEN_SPLIT_RE.sub("-", text.replace("`", "").casefold())
+    ).strip("-")
 
 
 def anchor_keys(text: str) -> frozenset[str]:
@@ -121,7 +143,9 @@ def read_corpus(path: pathlib.Path) -> list[str]:
     try:
         return path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
-        raise CorpusMissing(f"{path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}: {exc.strerror}") from exc
+        raise CorpusMissing(
+            f"{path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}: {exc.strerror}"
+        ) from exc
 
 
 def read_mirror(baseline: str) -> list[str]:
@@ -133,7 +157,7 @@ def read_mirror(baseline: str) -> list[str]:
 
 def block_after(lines: list[str], start: int, stop) -> list[str]:
     out = [lines[start]]
-    for raw in lines[start + 1:]:
+    for raw in lines[start + 1 :]:
         if stop(raw):
             break
         out.append(raw)
@@ -143,7 +167,13 @@ def block_after(lines: list[str], start: int, stop) -> list[str]:
 def _entry_block(lines: list[str], entry_id: str) -> tuple[int, list[str]] | None:
     for idx, raw in enumerate(lines):
         if raw.startswith(f"**{entry_id}"):
-            return idx, block_after(lines, idx, lambda r: ENTRY_RE.match(r) or SECTION_RE.match(r) or r.strip() == "---")
+            return idx, block_after(
+                lines,
+                idx,
+                lambda r: (
+                    ENTRY_RE.match(r) or SECTION_RE.match(r) or r.strip() == "---"
+                ),
+            )
     return None
 
 
@@ -157,17 +187,40 @@ def do_not_touch_items(lines: list[str], source: str) -> list[RetiredItem]:
         for ref in RETIRED_ID_RE.findall(para):
             found = _entry_block(lines, ref)
             if found is None:
-                items.append(RetiredItem(ref, "do-not-touch", ref, frozenset(), frozenset(), f"{source}:{idx + 1}"))
+                items.append(
+                    RetiredItem(
+                        ref,
+                        "do-not-touch",
+                        ref,
+                        frozenset(),
+                        frozenset(),
+                        f"{source}:{idx + 1}",
+                    )
+                )
                 continue
             at, block = found
             head = block[0].strip("*").strip()
-            items.append(RetiredItem(ref, "do-not-touch", head, tokenize(head),
-                                     anchor_keys("\n".join(block)), f"{source}:{at + 1}"))
+            items.append(
+                RetiredItem(
+                    ref,
+                    "do-not-touch",
+                    head,
+                    tokenize(head),
+                    anchor_keys("\n".join(block)),
+                    f"{source}:{at + 1}",
+                )
+            )
         if "reserved-seam census" in para:
-            items.append(RetiredItem("reserved-seam-census", "do-not-touch",
-                                     "sanctioned reserved-seam census",
-                                     tokenize("sanctioned reserved-seam census"), frozenset(),
-                                     f"{source}:{idx + 1}"))
+            items.append(
+                RetiredItem(
+                    "reserved-seam-census",
+                    "do-not-touch",
+                    "sanctioned reserved-seam census",
+                    tokenize("sanctioned reserved-seam census"),
+                    frozenset(),
+                    f"{source}:{idx + 1}",
+                )
+            )
         break
     return items
 
@@ -177,15 +230,32 @@ def cleared_items(lines: list[str], source: str) -> list[RetiredItem]:
     for idx, raw in enumerate(lines):
         if CLEARED_RE.match(raw):
             block = block_after(lines, idx, lambda r: not r.strip())
-            title = raw.split("**", 2)[1].replace("↩︎ CLEARED", "").strip(" —-()") if raw.count("**") >= 2 else raw
-            items.append(RetiredItem(f"cleared:{slug(title)[:60]}", "cleared", title, tokenize(title),
-                                     anchor_keys("\n".join(block)), f"{source}:{idx + 1}"))
+            title = (
+                raw.split("**", 2)[1].replace("↩︎ CLEARED", "").strip(" —-()")
+                if raw.count("**") >= 2
+                else raw
+            )
+            items.append(
+                RetiredItem(
+                    f"cleared:{slug(title)[:60]}",
+                    "cleared",
+                    title,
+                    tokenize(title),
+                    anchor_keys("\n".join(block)),
+                    f"{source}:{idx + 1}",
+                )
+            )
     try:
-        section = find_section(lines, "Fix-wave CLEAN verdicts (checked-and-clear — do not re-raise)")
+        section = find_section(
+            lines, "Fix-wave CLEAN verdicts (checked-and-clear — do not re-raise)"
+        )
     except SectionNotFound as exc:
-        raise CorpusMissing(f"{source}: section 'Fix-wave CLEAN verdicts' not found") from exc
+        raise CorpusMissing(
+            f"{source}: section 'Fix-wave CLEAN verdicts' not found"
+        ) from exc
     bullet: list[str] = []
     bullets: list[tuple[int, list[str]]] = []
+    start = section.start + 2
     for offset, raw in enumerate(section.lines):
         if raw.startswith("- "):
             if bullet:
@@ -201,8 +271,16 @@ def cleared_items(lines: list[str], source: str) -> list[RetiredItem]:
     for at, block in bullets:
         text = " ".join(b.strip() for b in block)
         title = text.split("**", 2)[1] if text.count("**") >= 2 else text[:80]
-        items.append(RetiredItem(f"cleared:{slug(title)[:60]}", "cleared", title, tokenize(title),
-                                 anchor_keys(text), f"{source}:{at}"))
+        items.append(
+            RetiredItem(
+                f"cleared:{slug(title)[:60]}",
+                "cleared",
+                title,
+                tokenize(title),
+                anchor_keys(text),
+                f"{source}:{at}",
+            )
+        )
     return items
 
 
@@ -214,8 +292,16 @@ def mirror_items(lines: list[str], source: str) -> list[RetiredItem]:
             continue
         title = m.group("title").replace("`", "")
         block = block_after(lines, idx, lambda r: SECTION_RE.match(r) is not None)
-        items.append(RetiredItem(f"mirror:{slug(title)}", "mirror", title, tokenize(title),
-                                 anchor_keys("\n".join(block)), f"{source}:{idx + 1}"))
+        items.append(
+            RetiredItem(
+                f"mirror:{slug(title)}",
+                "mirror",
+                title,
+                tokenize(title),
+                anchor_keys("\n".join(block)),
+                f"{source}:{idx + 1}",
+            )
+        )
     return items
 
 
@@ -225,10 +311,22 @@ def resolved_fork_items(lines: list[str], source: str) -> list[RetiredItem]:
         m = FORK_RE.match(raw)
         if not m or m.group("id") not in RESOLVED_FORKS:
             continue
-        block = block_after(lines, idx, lambda r: FORK_RE.match(r) is not None or SECTION_RE.match(r) is not None)
+        block = block_after(
+            lines,
+            idx,
+            lambda r: FORK_RE.match(r) is not None or SECTION_RE.match(r) is not None,
+        )
         title = re.split(r"\*\*|\. |_\(", m.group("title"), maxsplit=1)[0].strip(" .")
-        items.append(RetiredItem(m.group("id"), "resolved-fork", title, tokenize(title),
-                                 anchor_keys("\n".join(block)), f"{source}:{idx + 1}"))
+        items.append(
+            RetiredItem(
+                m.group("id"),
+                "resolved-fork",
+                title,
+                tokenize(title),
+                anchor_keys("\n".join(block)),
+                f"{source}:{idx + 1}",
+            )
+        )
     return items
 
 
@@ -237,10 +335,12 @@ def load_retired_corpus(baseline: str) -> list[RetiredItem]:
     read_corpus(REFINEMENT_TODO)
     roadmap = read_corpus(ROADMAP)
     mirror = read_mirror(baseline)
-    return (do_not_touch_items(register, "BACKLOG.md")
-            + cleared_items(register, "BACKLOG.md")
-            + mirror_items(mirror, MIRROR)
-            + resolved_fork_items(roadmap, "beyond-sddp-generalization.md"))
+    return (
+        do_not_touch_items(register, "BACKLOG.md")
+        + cleared_items(register, "BACKLOG.md")
+        + mirror_items(mirror, MIRROR)
+        + resolved_fork_items(roadmap, "beyond-sddp-generalization.md")
+    )
 
 
 def entry_title(entry: Entry) -> str:
@@ -267,10 +367,12 @@ def anchors_overlap(item: RetiredItem, keys: frozenset[str]) -> bool:
 
 
 def match_entry(entry: Entry, corpus: list[RetiredItem]) -> list[Hit]:
-    raw = "\n".join([entry.heading, *entry.body])
+    raw = "\n".join([entry.heading, *finding_lines(entry.body)])
     body_ids = set(RETIRED_ID_RE.findall(raw))
     justified = set(RETIRED_ID_RE.findall(entry.fields.get("Re-raise-of", "")))
-    justified |= {slug(x) for x in re.split(r"[;,]", entry.fields.get("Re-raise-of", ""))}
+    justified |= {
+        slug(x) for x in re.split(r"[;,]", entry.fields.get("Re-raise-of", ""))
+    }
     keys = entry_anchor_keys(entry)
     title = entry_title(entry)
     tokens = tokenize(title)
@@ -289,14 +391,18 @@ def match_entry(entry: Entry, corpus: list[RetiredItem]) -> list[Hit]:
     return hits
 
 
-def resolve_target(arg: str, register: pathlib.Path | None) -> tuple[pathlib.Path, str | None]:
+def resolve_target(
+    arg: str, register: pathlib.Path | None
+) -> tuple[pathlib.Path, str | None]:
     candidate = pathlib.Path(arg)
     if candidate.is_file():
         return candidate, None
     return register or REGISTER, arg
 
 
-def evaluate(register: pathlib.Path, section_name: str | None, baseline: str) -> tuple[int, dict]:
+def evaluate(
+    register: pathlib.Path, section_name: str | None, baseline: str
+) -> tuple[int, dict]:
     lines = read_register(register)
     try:
         if section_name is None:
@@ -315,16 +421,30 @@ def evaluate(register: pathlib.Path, section_name: str | None, baseline: str) ->
         counts[item.corpus] = counts.get(item.corpus, 0) + 1
     entries = iter_entries(section)
     hits = [h for e in entries for h in match_entry(e, corpus)]
-    report = {"section": section.heading, "baseline": baseline, "corpora": counts,
-              "checked": len(entries),
-              "hits": [{"id": h.id, "title": h.title, "retiredRef": h.retired_ref,
-                        "corpus": h.corpus, "kind": h.kind, "justified": h.justified}
-                       for h in hits]}
+    report = {
+        "section": section.heading,
+        "baseline": baseline,
+        "corpora": counts,
+        "checked": len(entries),
+        "hits": [
+            {
+                "id": h.id,
+                "title": h.title,
+                "retiredRef": h.retired_ref,
+                "corpus": h.corpus,
+                "kind": h.kind,
+                "justified": h.justified,
+            }
+            for h in hits
+        ],
+    }
     code = EXIT_HIT if any(not h.justified for h in hits) else EXIT_OK
     return code, report
 
 
-def run(arg: str, register: pathlib.Path | None, baseline: str | None, as_json: bool) -> int:
+def run(
+    arg: str, register: pathlib.Path | None, baseline: str | None, as_json: bool
+) -> int:
     baseline = baseline or parse_baseline(read_register(REGISTER))
     target, section_name = resolve_target(arg, register)
     try:
@@ -339,9 +459,13 @@ def run(arg: str, register: pathlib.Path | None, baseline: str | None, as_json: 
     else:
         for h in report["hits"]:
             if not h["justified"]:
-                print(f"re-raise[{h['kind']}] {h['id']} -> {h['retiredRef']} (corpus {h['corpus']})")
+                print(
+                    f"re-raise[{h['kind']}] {h['id']} -> {h['retiredRef']} (corpus {h['corpus']})"
+                )
         unjustified = sum(1 for h in report["hits"] if not h["justified"])
-        print(f"checked {report['checked']} entries, {unjustified} unjustified re-raise(s)")
+        print(
+            f"checked {report['checked']} entries, {unjustified} unjustified re-raise(s)"
+        )
     return code
 
 
@@ -361,8 +485,12 @@ def self_test(baseline: str) -> int:
     code, report = evaluate(fx / "reraise-seeded.md", None, baseline)
     unjust = [h for h in report.get("hits", []) if not h["justified"]]
     corpora = sorted(h["corpus"] for h in unjust)
-    expect("reraise-seeded.md two unjustified hits (do-not-touch + mirror)", code, EXIT_HIT,
-           len(unjust) == 2 and corpora == ["do-not-touch", "mirror"])
+    expect(
+        "reraise-seeded.md two unjustified hits (do-not-touch + mirror)",
+        code,
+        EXIT_HIT,
+        len(unjust) == 2 and corpora == ["do-not-touch", "mirror"],
+    )
     saved, MIRROR = MIRROR, "docs/design/no-such-mirror.md"
     try:
         evaluate(fx / "good-section.md", None, baseline)
@@ -377,8 +505,12 @@ def self_test(baseline: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("section", nargs="?", help="register section name, or a fixture file path")
-    ap.add_argument("--register", type=pathlib.Path, help="register file when `section` is a name")
+    ap.add_argument(
+        "section", nargs="?", help="register section name, or a fixture file path"
+    )
+    ap.add_argument(
+        "--register", type=pathlib.Path, help="register file when `section` is a name"
+    )
     ap.add_argument("--baseline", help="override the SHA pinned in the register header")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--self-test", action="store_true")

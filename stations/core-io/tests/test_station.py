@@ -31,10 +31,25 @@ FIELD_RE = re.compile(r"^- \*\*(?P<label>[^*]+?):\*\*\s*(?P<value>.*)$")
 OUT_OF_STATION_IDS = {"CD-031", "CD-039", "CD-025", "CD-029", "CD-004", "CD-001"}
 
 
-def sh(cmd: str) -> str:
+def sh(cmd: str, cwd: pathlib.Path = sc.REPO) -> str:
     return subprocess.run(
-        cmd, shell=True, cwd=sc.REPO, capture_output=True, text=True, check=True
+        cmd, shell=True, cwd=cwd, capture_output=True, text=True, check=True
     ).stdout
+
+
+def station_artifact_baselines() -> dict[str, str]:
+    """The `baseline` field of every station artifact that carries one, by file name."""
+    station = sc.STATIONS / "core-io"
+    names = [
+        "inventory.json",
+        "partI-handoff.json",
+        "calibration.json",
+        "verdicts.json",
+        "perf-queue.json",
+        "td-queue.json",
+        *(f"candidates-{sub}.json" for sub in "ABCD"),
+    ]
+    return {name: str(sc.load_json(station / name)["baseline"]) for name in names}
 
 
 def prior_register_entries(text: str) -> list[dict[str, str]]:
@@ -89,19 +104,30 @@ class InventoryTests(sc.StationCase):
         ):
             self.assertIn(key, self.inv["commands"])
 
-    def test_baseline_is_the_register_pin_and_matches_head_under_the_drift_rule(self):
-        pin = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
-        self.assertEqual(self.inv["baseline"], pin)
+    def test_baseline_is_a_register_pin_and_every_artifact_and_entry_agrees(self):
+        base = self.inv["baseline"]
         self.assertTrue(
-            backlog_parse.baseline_matches_head(self.inv["baseline"]),
-            f"baseline-drift pinned={pin} head={backlog_parse.head_sha()}",
+            sc.is_register_pin(base),
+            f"{base[:12]} is neither the register pin nor a superseded one: {sc.pin_history()}",
         )
+        for name, sha in station_artifact_baselines().items():
+            self.assertEqual(sha, base, f"{name}: baseline differs from inventory.json")
+        section = backlog_parse.find_section(
+            backlog_parse.read_register(sc.BACKLOG), self.SECTION_TITLE
+        )
+        pins = backlog_parse.entry_baselines(section.lines)
+        self.assertTrue(
+            pins, "no entry in the station section carries a Baseline field"
+        )
+        off_pin = {eid: sha for eid, sha in pins.items() if not base.startswith(sha)}
+        self.assertEqual(off_pin, {}, "entries evaluated at a different baseline")
 
     def test_every_module_path_exists_exactly_once(self):
+        tree = self.tree()
         paths = [m["path"] for m in self.modules()]
         self.assertEqual(len(paths), len(set(paths)))
         for path in paths:
-            self.assertTrue((sc.REPO / path).exists(), path)
+            self.assertTrue(tree.exists(path), path)
         expected_dirs = {
             "crates/cobre-core/src/" + d
             for d in (
@@ -134,34 +160,29 @@ class InventoryTests(sc.StationCase):
             {m["path"] for m in self.modules() if m["kind"] == "directory"},
             expected_dirs,
         )
-        top = set(
-            sh(
-                "find crates/cobre-core/src crates/cobre-io/src -maxdepth 1 -name '*.rs'"
-            ).split()
-        )
+        top: set[str] = set()
+        for root in ("crates/cobre-core/src", "crates/cobre-io/src"):
+            files, _ = tree.children(root)
+            top |= {f for f in files if f.endswith(".rs")}
         self.assertEqual(
             {m["path"] for m in self.modules() if m["kind"] == "file"}, top
         )
 
     def test_each_module_carries_both_counts_and_matches_the_tree(self):
+        tree = self.tree()
         for m in self.modules():
             with self.subTest(path=m["path"]):
                 self.assertIn("linesRaw", m)
                 self.assertIn("linesNonTest", m)
                 self.assertIn("commandRef", m)
-                if m["kind"] == "directory":
-                    wc = int(
-                        sh(
-                            f"find {m['path']} -name '*.rs' -print0 | xargs -0 wc -l | tail -1"
-                        ).split()[0]
-                    )
-                else:
-                    wc = int(sh(f"wc -l < {m['path']}"))
-                self.assertEqual(m["linesRaw"], wc)
-                self.assertEqual(m["linesNonTest"], sc.non_test_lines(m["path"]))
+                self.assertEqual(m["linesRaw"], sc.raw_lines(m["path"], tree))
+                self.assertEqual(
+                    m["linesNonTest"], sc.non_test_lines(m["path"], tree=tree)
+                )
                 self.assertLessEqual(m["linesNonTest"], m["linesRaw"])
 
     def test_crate_totals_reconcile_with_wc_and_loc_stats(self):
+        tree = self.tree()
         expected = {"cobre-core": (18671, 9228), "cobre-io": (104066, 45915)}
         for crate, (raw, non_test) in expected.items():
             with self.subTest(crate=crate):
@@ -171,30 +192,34 @@ class InventoryTests(sc.StationCase):
                 self.assertEqual(block["linesRaw"], raw)
                 self.assertEqual(
                     block["reconciliation"]["linesRaw"],
-                    sc.raw_lines(f"crates/{crate}/src"),
+                    sc.raw_lines(f"crates/{crate}/src", tree),
                 )
                 self.assertEqual(
                     sum(m["linesNonTest"] for m in top), block["linesNonTest"]
                 )
                 self.assertEqual(block["linesNonTest"], non_test)
-                self.assertEqual(block["linesNonTest"], sc.loc_stats(crate)["prod_all"])
+                self.assertEqual(
+                    block["linesNonTest"], sc.loc_stats(crate, tree)["prod_all"]
+                )
 
     def test_integration_binaries_are_rs_scoped_and_explain_the_naive_count(self):
         bins = self.inv["integrationBinaries"]
-        for crate, count in (("cobre-core", 2), ("cobre-io", 12)):
-            with self.subTest(crate=crate):
-                self.assertEqual(bins[crate]["count"], count)
-                self.assertEqual(len(bins[crate]["files"]), count)
-                self.assertEqual(int(sh(bins[crate]["command"])), count)
-                self.assertEqual(
-                    sorted(
-                        pathlib.Path(p).name
-                        for p in sh(
-                            f"find crates/{crate}/tests -maxdepth 1 -name '*.rs'"
-                        ).split()
-                    ),
-                    bins[crate]["files"],
-                )
+        tree = self.tree()
+        with tree.checkout() as root:
+            for crate, count in (("cobre-core", 2), ("cobre-io", 12)):
+                with self.subTest(crate=crate):
+                    self.assertEqual(bins[crate]["count"], count)
+                    self.assertEqual(len(bins[crate]["files"]), count)
+                    self.assertEqual(int(sh(bins[crate]["command"], cwd=root)), count)
+                    files, _ = tree.children(f"crates/{crate}/tests")
+                    self.assertEqual(
+                        sorted(
+                            pathlib.PurePosixPath(p).name
+                            for p in files
+                            if p.endswith(".rs")
+                        ),
+                        bins[crate]["files"],
+                    )
         self.assertEqual(bins["cobre-io"]["naiveCount"], 14)
         self.assertIn("fixtures/", bins["cobre-io"]["note"])
         self.assertIn("helpers/", bins["cobre-io"]["note"])
@@ -206,15 +231,11 @@ class InventoryTests(sc.StationCase):
         self.assertEqual(set(subs), {"A", "B", "C", "D"})
         assigned = [p for s in subs.values() for p in s["paths"]]
         self.assertEqual(len(assigned), len(set(assigned)), "path assigned twice")
-        tree = set(
-            sh("find crates/cobre-core/src crates/cobre-io/src -maxdepth 1").split()
-        ) - {"crates/cobre-core/src", "crates/cobre-io/src"}
-        tree = {p for p in tree if p.endswith(".rs") or (sc.REPO / p).is_dir()}
-        tree |= set(
-            sh(
-                "find crates/cobre-core/src crates/cobre-io/src -mindepth 1 -type d"
-            ).split()
-        )
+        tree: set[str] = set()
+        for root in ("crates/cobre-core/src", "crates/cobre-io/src"):
+            files, dirs = self.tree().children(root)
+            tree |= {f for f in files if f.endswith(".rs")} | set(dirs)
+            tree |= set(self.tree().dirs(root))
         self.assertEqual(set(assigned), tree)
         for m in self.modules():
             owners = [k for k, s in subs.items() if m["path"] in s["paths"]]
@@ -257,7 +278,8 @@ class PriorRegisterTests(sc.StationCase):
                 self.assertTrue(anchors, "no backticked anchor")
                 for a in anchors:
                     self.assertTrue(
-                        sc.anchor_exists(a), f"anchor does not resolve: {a}"
+                        sc.anchor_exists(a, self.tree()),
+                        f"anchor does not resolve at the station baseline: {a}",
                     )
 
     def test_cd_010_is_retired_because_resolved_with_live_anchors(self):
@@ -347,9 +369,14 @@ PHASES = {"0a", "0b", "1"}
 
 
 def validate_partI_envelope(env: dict) -> list[str]:
-    """Structural validation of partI-handoff.json; every failure names the offending partIRef."""
+    """Structural validation of partI-handoff.json; every failure names the offending partIRef.
+
+    Anchors resolve in the tree at the envelope's own `baseline`, the tree the dispositions
+    were taken against.
+    """
     bad: list[str] = []
     base = env.get("baseline", "")
+    tree = sc.Tree(base) if base else sc.WORKTREE
     refs = [d.get("partIRef") for d in env.get("dispositions", [])]
     if sorted(refs) != sorted(OWNED_PART_I):
         bad.append(f"owned set mismatch: {sorted(refs)} != {sorted(OWNED_PART_I)}")
@@ -378,15 +405,10 @@ def validate_partI_envelope(env: dict) -> list[str]:
             bad.append(f"{ref}: no alignmentDestination")
         anchor = d.get("baselineAnchor") or {}
         path, symbol = anchor.get("path"), anchor.get("symbol")
-        if (
-            not path
-            or subprocess.run(
-                ["git", "show", f"{base}:{path}"], cwd=sc.REPO, capture_output=True
-            ).returncode
-        ):
+        if not path or not tree.is_file(path):
             bad.append(f"{ref}: anchor path does not resolve at {base[:12]}: {path}")
-        elif symbol and not sc.anchor_exists(f"`{path}::{symbol}`"):
-            bad.append(f"{ref}: symbol {symbol} unresolved in {path}")
+        elif symbol and not sc.anchor_exists(f"`{path}::{symbol}`", tree):
+            bad.append(f"{ref}: symbol {symbol} unresolved in {path} at {base[:12]}")
     handoffs = env.get("handoffs", [])
     if len(handoffs) != 2:
         bad.append(
@@ -395,8 +417,10 @@ def validate_partI_envelope(env: dict) -> list[str]:
     for h in handoffs:
         ref = f"handoff {h.get('partIRef')}/{h.get('owningStation')}"
         anchor = h.get("baselineAnchor") or {}
-        if not sc.anchor_exists(f"`{anchor.get('path')}::{anchor.get('symbol')}`"):
-            bad.append(f"{ref}: anchor unresolved {anchor}")
+        if not sc.anchor_exists(
+            f"`{anchor.get('path')}::{anchor.get('symbol')}`", tree
+        ):
+            bad.append(f"{ref}: anchor unresolved at {base[:12]}: {anchor}")
         if h.get("proposedPhase") not in PHASES:
             bad.append(f"{ref}: bad proposedPhase")
         if not str(h.get("alignmentDestination", "")).strip():
@@ -416,17 +440,15 @@ class PartIHandoffTests(sc.StationCase):
     def test_envelope_validates(self):
         self.assertEqual(validate_partI_envelope(self.env), [])
 
-    def test_contains_exactly_the_owned_items(self):
+    def test_contains_exactly_the_owned_items_at_the_station_baseline(self):
         self.assertEqual(set(self.by_ref), OWNED_PART_I)
         self.assertEqual(len(self.env["dispositions"]), 6)
-        self.assertEqual(
-            self.env["baseline"],
-            backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG)),
-        )
+        self.assertEqual(self.env["baseline"], self.baseline())
 
     def test_each_disposition_is_keep_retire_or_sharpen_with_the_required_evidence(
         self,
     ):
+        tree = self.tree()
         for ref, d in self.by_ref.items():
             with self.subTest(ref=ref):
                 self.assertIn(d["disposition"], ("keep", "retire", "sharpen"))
@@ -442,25 +464,25 @@ class PartIHandoffTests(sc.StationCase):
                     )
                 else:
                     self.assertTrue(
-                        sc.anchor_exists(f"`{anchor['path']}::{anchor['symbol']}`"),
+                        sc.anchor_exists(
+                            f"`{anchor['path']}::{anchor['symbol']}`", tree
+                        ),
                         anchor,
                     )
                     self.assertEqual(
                         anchor["line"],
-                        self._decl_line(anchor["path"], anchor["symbol"]),
+                        self._decl_line(anchor["path"], anchor["symbol"], tree),
                     )
                 self.assertIn("Epic 9", d["alignmentDestination"])
 
     @staticmethod
-    def _decl_line(path: str, symbol: str) -> int:
+    def _decl_line(path: str, symbol: str, tree: sc.Tree) -> int:
         pattern = re.compile(
             r"^\s*(pub(\([^)]*\))?\s+)?(async\s+)?(fn|struct|enum|trait|type|const|static|mod|impl)\s+"
             + re.escape(symbol)
             + r"\b"
         )
-        for i, line in enumerate(
-            (sc.REPO / path).read_text(encoding="utf-8").splitlines(), 1
-        ):
+        for i, line in enumerate(tree.read_text(path).splitlines(), 1):
             if pattern.match(line):
                 return i
         return -1
@@ -566,13 +588,13 @@ def candidate_refs() -> dict[str, dict]:
     return out
 
 
-def anchor_resolves(anchor: dict) -> bool:
+def anchor_resolves(anchor: dict, tree: sc.Tree) -> bool:
     """An anchor resolves if its symbol resolves as a declaration/field OR its line is in range."""
     path = anchor["path"]
-    if anchor.get("symbol") and sc.anchor_exists(f"`{path}::{anchor['symbol']}`"):
+    if anchor.get("symbol") and sc.anchor_exists(f"`{path}::{anchor['symbol']}`", tree):
         return True
     if anchor.get("line") is not None and sc.anchor_exists(
-        f"`{path}:{anchor['line']}`"
+        f"`{path}:{anchor['line']}`", tree
     ):
         return True
     return False
@@ -632,19 +654,20 @@ class IngestTests(sc.StationCase):
                     f"{ref}: dismissed without argument",
                 )
 
-    def test_accepted_candidate_anchors_resolve(self):
+    def test_accepted_candidate_anchors_resolve_at_the_station_baseline(self):
+        tree = self.tree()
         for ref, e in self.verdicts["verdicts"].items():
             if e["disposition"] == "defended" and e.get("verdict") == "confirmed":
                 for anchor in self.candidates[ref]["anchors"]:
                     self.assertTrue(
-                        anchor_resolves(anchor),
+                        anchor_resolves(anchor, tree),
                         f"{ref}: anchor does not resolve through anchor_exists: {anchor}",
                     )
 
-    def test_sanctioned_cites_mirror_entry(self):
-        mirror = (
-            sc.REPO / "docs" / "design" / "reserved-seams-and-deferred-debt.md"
-        ).read_text(encoding="utf-8")
+    def test_sanctioned_cites_mirror_entry_as_of_the_station_baseline(self):
+        # The defender consulted the mirror at the station's baseline; a seam it cited must
+        # have been registered THERE, whatever the mirror says today.
+        mirror = self.tree().read_text(backlog_parse.MIRROR)
         for ref, e in self.verdicts["verdicts"].items():
             if e["disposition"] == "sanctioned":
                 cite = e.get("sanctionedBy") or ""
@@ -878,17 +901,15 @@ class SectionVerifyTests(sc.StationCase):
                 proc.returncode, 0, f"station_verify {sub}:\n{proc.stdout}"
             )
 
-    def test_inventory_census_reconstructs_the_tree(self):
+    def test_inventory_census_reconstructs_the_tree_at_the_station_baseline(self):
         inv = sc.load_json(self.artifact("inventory.json"))
         listed = station_verify.reconstruct_listed(inv)
         roots = station_verify.crate_src_roots(inv)
-        tree = subprocess.run(
-            ["git", "ls-files", "--", *(f"{r}/*.rs" for r in roots)],
-            cwd=sc.REPO,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
+        tree = self.tree().ls_files(*(f"{r}/*.rs" for r in roots))
+        self.assertEqual(
+            tree,
+            sorted(station_verify.baseline_rs_files(sc.REPO, inv["baseline"], roots)),
+        )
         expected = sum(c["srcFiles"] for c in inv["crates"].values())
         self.assertEqual(
             len(tree), expected, "tree .rs count drifted from inventory srcFiles"

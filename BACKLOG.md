@@ -10,7 +10,8 @@ full lifecycle of a `cobre run` command from `main()` to the last output write.
   contract comments, determinism contracts, perf micro-optimization.
 - **Status**: read-only investigation. No repo mutation outside this gitignored file.
 
-Baseline: a136840d4f2ea137f685f0af6dac04254b983b60 (pinned 2026-09-05)
+Baseline: 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c (pinned 2026-09-17)
+Previous baselines: a136840d (pinned 2026-09-05, superseded 2026-09-17)
 Ledger: this file is the sole home of finding IDs (`CD-` / `PD-` / `OD-` / `TD-`).
 Workers return JSON only; the main session is the sole writer. The 2026-09 quality
 evaluation writes exactly two tracked surfaces: the ID-free mirror
@@ -18,12 +19,15 @@ evaluation writes exactly two tracked surfaces: the ID-free mirror
 (`plans/architecture-debt-audit/`, tracked on the evaluation branch so its work
 sessions carry git evidence); no crate, docs, script, CI or schema file is touched
 (amends the Status bullet above).
-Protocol bound: 234.781 s (median of 3 timed runs after one warm-up, layout `4t`,
-deck `~/git/cobre-bridge/example/cobre_reduzido_2`; measured 2026-09-06 at the
-pinned baseline on the profiling-profile binary — see `measurements/CAL/`).
-Protocol bound (enumerated): 32.589 s (layout `2t`, deck
+Protocol bound: 228.319 s (median of 3 timed runs after one warm-up, layout `4t`,
+deck `~/git/cobre-bridge/example/cobre_reduzido`; measured 2026-09-17 at the
+pinned baseline on the profiling-profile binary — see `measurements/CAL/`. The deck
+was re-sanctioned 2026-09-17 by owner decision after the original `cobre_reduzido_2`
+was lost; the superseded bound at `a136840d` on that deck was 234.781 s).
+Protocol bound (enumerated): 30.434 s (layout `2t`, deck
 `~/git/cobre-bridge/example/cobre-mar-26-rv2-reduced`, owner-limited to two workers;
-see `measurements/CAL-ENUM/`).
+measured 2026-09-17 at the pinned baseline — see `measurements/CAL-ENUM/`; the
+superseded bound at `a136840d` was 32.589 s).
 Only those decks at those worker budgets are sanctioned: `--threads 4` (`4t`) or
 `mpiexec -n 2 … --threads 2` (`2x2`) on the sampled deck, `--threads 2` (`2t`) on
 the enumerated deck. A run past 3x its bound is killed and its claim tagged
@@ -2371,7 +2375,7 @@ The wire-reproducibility rationale in the System serde(skip) comment (mod.rs:64)
 - **Evidence:** cobre-core states the same rule three times and enforces it three different ways: `serde(skip)` on the seven index maps with an explicit wire-reproducibility rationale, a hand-written `Serialize` that sorts its composite keys, and a `BTreeMap` chosen over `HashMap` for the correlation profiles.
 - **Fix-shape:** Give the rule one owner instead of three restatements. State once, in the crate root or the system module, that anything reachable from the System payload must serialize in a content-determined order, and satisfy it uniformly — the cheapest route is switching these six fields to an ordered map, since all six are keyed by an already-`Ord` entity id or stage id and none is on a hot path where the lookup cost would matter.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
-- **Correction (2026-09-15):** narrowed by the Tier-4/5 wave, not closed: the `crates/cobre-core/src/topology/network.rs::NetworkTopology` anchor is gone with the type (`dd03c153`), and the `CascadeTopology` half is now `#[serde(skip)]` and rebuilt on deserialize with a bit-equality round-trip guard (`postcard_roundtrip_rebuilds_cascade_topology_bit_equal`), so only the `HorizonGraph` map fields remain unguarded. Re-anchor or re-scope the entry before the doc-drift sweep (W7); do not close it on this evidence.
+- **Correction (2026-09-15):** narrowed by the Tier-4/5 wave, not closed: the `topology/network.rs::NetworkTopology` anchor is gone with the type (`dd03c153`), and the `CascadeTopology` half is now `#[serde(skip)]` and rebuilt on deserialize with a bit-equality round-trip guard (`postcard_roundtrip_rebuilds_cascade_topology_bit_equal`), so only the `HorizonGraph` map fields remain unguarded. Re-anchor or re-scope the entry before the doc-drift sweep (W7); do not close it on this evidence.
 - **Status:** fixed (2026-09-15) — after the Tier-4/5 narrowing the only unordered map on the wire was `HorizonGraph::stage_discount_rate_overrides`; it is a `BTreeMap<i32, f64>` (public field type change, Rust-API line in the CHANGELOG), the rule is stated once on the `System` struct doc (derived maps are `serde(skip)` and rebuilt unconditionally; anything that stays on the wire is key-ordered) with the per-field skip comment reduced to a pointer that keeps the `rebuild_indices` contract, and `postcard_wire_bytes_are_identical_regardless_of_discount_override_insertion_order` (`system/mod.rs`, `serde`-gated, runs under the workspace gate) pins byte identity across insertion orders. `develop` @ `eb0b82ef`.
 
 **CD-047 · Sev C · asymmetry · effort S · confidence high**
@@ -2384,7 +2388,7 @@ Six numeric extractors in extensions/{hydro_geometry,hydro_energy_productivity,t
 - **Fix-shape:** Extend `parquet_helpers.rs` past column extraction to cover the reader itself: one helper that takes a path and returns the batch reader with the three error mappings applied, so each parser opens with a single call and keeps only its own column reads and row loop. Delete the six copied extractors in `extensions/` in favour of the shared pair, accepting the one-word change in the missing-column message or reconciling the two spellings first.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Correction (2026-09-11):** 77 `try_new` prologue sites in 29 files (tests included), not 28 in 19.
-- **Correction (2026-09-15):** there are 30 production reader prologues in 20 files, of which 28 in 19 share the `LoadError` mapping shape and adopted the helper; the two in `crates/cobre-io/src/output/convergence_reader.rs` map to `OutputError` / `Option` and were excluded. The heading's `28× across 19 files` is therefore the adopting count and the 2026-09-11 correction's `77 in 29` is the with-tests total; both stand.
+- **Correction (2026-09-15):** there are 30 production reader prologues in 20 files, of which 28 in 19 share the `LoadError` mapping shape and adopted the helper; the two in `output/convergence_reader.rs` (since deleted with the report subcommand) map to `OutputError` / `Option` and were excluded. The heading's `28× across 19 files` is therefore the adopting count and the 2026-09-11 correction's `77 in 29` is the with-tests total; both stand.
 - **Status:** fixed (2026-09-15) — `pub(crate) open_record_batch_reader(path)` in `parquet_helpers.rs` (+3 tests) owns the open → build prologue with the `LoadError` mappings; 28 prologues in 19 files fold onto it and the `constraints/mod.rs`/`extensions/mod.rs` parser recipes collapse to four steps (ticket-032); the six copied extension extractors deleted onto `extract_required_int32`/`extract_required_float64` (ticket-033, recorded under CD-063). The two `convergence_reader.rs` prologues were deliberately excluded — they map to `OutputError` / `Option`, not `LoadError`. `feat/quality-tier45-closeout` 09381faa + 883c022e (pending merge).
 
 **CD-048 · Sev B · asymmetry · effort M · confidence high**
@@ -2769,7 +2773,7 @@ The load-bearing residue is the build-time plus broadcast-wire cost of a reader-
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-1 (cross-reference; verdict travels to Epic 9).
 - **Correction (2026-09-15):** the crate-root re-export of `NetworkTopology` is not among the entry's anchors and sat at `crates/cobre-core/src/lib.rs:109` at the entry baseline and at `3e90024f`; the `test_support` module declaration added in epic-01 (`7c28de14`) moved it to `:111`, where the deletion found it. Retired with the type.
-- **Status:** fixed (2026-09-15) — `crates/cobre-core/src/topology/network.rs` deleted with `System::network`, the `BusGenerators`/`BusLineConnection`/`BusLoads` adjacency types and their crate-root exports; `SystemRepr` 26 fields; the `cobre-core` `test-support` network tests and the two integration callers deleted with it (ticket-020). `feat/quality-tier45-closeout` dd03c153 + 8a72c69d (pending merge).
+- **Status:** fixed (2026-09-15) — `topology/network.rs` deleted with `System::network`, the `BusGenerators`/`BusLineConnection`/`BusLoads` adjacency types and their crate-root exports; `SystemRepr` 26 fields; the `cobre-core` `test-support` network tests and the two integration callers deleted with it (ticket-020). `feat/quality-tier45-closeout` dd03c153 + 8a72c69d (pending merge).
 
 **OD-014 · Sev C · speculative-generality · effort S · confidence high**
 The four helper FUNCTIONS (not the Broadcast* mirror types, which setup.rs:288 genuinely consumes) are absent from the production MPI path; serialize_system/deserialize_system retain a single integration round-trip assertion (integration.rs:989-995) as their only non-file consumer and serialize_parameters/deserialize_parameters have none beyond their own doctests, so the defensible residue is that the four functions duplicate the encoding cli/broadcast.rs:419/:456 open-codes, not that the whole broadcast module is unused.
@@ -2806,7 +2810,7 @@ The zero-non-test-consumer claim holds exactly (only lib.rs:134/137 re-exports; 
 - **Alignment:** advances-1 (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-1 (cross-reference; verdict travels to Epic 9).
 - **Correction (2026-09-15):** the entry's `lib.rs:134`/`:137` re-export lines held at its baseline and at `3e90024f`; the `test_support` module declaration added in epic-02 (`ac2e608a`) moved them to `:136`/`:139`, where the deletion found them. Of the three inline tests, two were deleted as subsumed or vacuous and one was retargeted into an existing integration test, rather than all three being re-homed as the fix-shape proposes.
-- **Status:** fixed (2026-09-15) — `ScenarioData` and `load_scenarios` deleted with their `lib.rs` re-exports; the `residual_std_ratio` derivation property retargeted into `tests/integration.rs::test_inflow_history_wired_into_system` (non-vacuity guard plus the `(0, 1)` bound; inversion proved to fail at `sqrt(1 - 0.3²)`); the README sentence restated without the type (ticket-023). `feat/quality-tier45-closeout` 09381faa + 883c022e (pending merge).
+- **Status:** fixed (2026-09-15) — `ScenarioData` and `load_scenarios` deleted with their `lib.rs` re-exports; the `residual_std_ratio` derivation property retargeted into `crates/cobre-io/tests/integration.rs::test_inflow_history_wired_into_system` (non-vacuity guard plus the `(0, 1)` bound; inversion proved to fail at `sqrt(1 - 0.3²)`); the README sentence restated without the type (ticket-023). `feat/quality-tier45-closeout` 09381faa + 883c022e (pending merge).
 
 **OD-017 · Sev C · speculative-generality · effort S · confidence high**
 default_severity (validation/mod.rs:95) has no caller outside its own unit test AND its BusinessRuleViolation->Error classification contradicts the sole BusinessRuleViolation emission (add_warning at season.rs:175-177); the defensible residue is an uncalled, already-divergent parallel severity table, conceding the title's 'purports to describe the call sites' framing since the method's doc only claims a per-kind default, never a mirror of the emission sites.
@@ -2970,7 +2974,7 @@ Narrower than 'copy-pasted across five test sites': the plain zero-varying build
 - **Fix-shape:** Hoist one entity-builder family into cobre-core behind the existing `test-support` feature, next to the entities it constructs, parameterised on the axes the current copies actually vary (id, bus id, operational date, name) and defaulting the rest, so a field addition is an O(1) edit rather than an O(sites) one. Have the five in-crate sites and tests/integration.rs call it, and drop the local copies.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Correction (2026-09-15):** the axis list is incomplete: `downstream_id` and the three `max` bounds are live axes too, the mirror-unit-group state space is three-valued (on a bus / on `EntityId(0)` / absent), and no `2020`-dated no-group `Hydro` preset occurs in `cobre-core` at all — every `cobre-core` copy is `2024-01-01` and the `2020` variant lives in `cobre-stochastic`.
-- **Status:** fixed (2026-09-15) — one entity-builder family in `crates/cobre-core/src/test_support.rs` — `BusSpec`/`LineSpec`/`HydroSpec`/`ThermalSpec`/`NcsSpec`/`ContractSpec`/`PumpingSpec`/`UnitGroupSpec`/`StageSpec`, each `Default` plus a `make_*` constructor parameterised on the axes the copies varied (id, bus, downstream, dates, name, the `max` bounds, the mirror-unit-group state) — replaces the `topology/network.rs`, `system/mod.rs`, `topology/cascade.rs`, `system/builder.rs` and `tests/integration.rs` copies (ticket-002); `test_support::tests::make_hydro_mirror_unit_group_has_three_states` pins the three-valued axis. `feat/quality-tier45-closeout` 7c28de14 + 5e06c30e + 16ca7c66 (pending merge).
+- **Status:** fixed (2026-09-15) — one entity-builder family in `crates/cobre-core/src/test_support.rs` — `BusSpec`/`LineSpec`/`HydroSpec`/`ThermalSpec`/`NcsSpec`/`ContractSpec`/`PumpingSpec`/`UnitGroupSpec`/`StageSpec`, each `Default` plus a `make_*` constructor parameterised on the axes the copies varied (id, bus, downstream, dates, name, the `max` bounds, the mirror-unit-group state) — replaces the `topology/network.rs`, `system/mod.rs`, `topology/cascade.rs`, `system/builder.rs` and `crates/cobre-core/tests/integration.rs` copies (ticket-002); `test_support::tests::make_hydro_mirror_unit_group_has_three_states` pins the three-valued axis. `feat/quality-tier45-closeout` 7c28de14 + 5e06c30e + 16ca7c66 (pending merge).
 
 **TD-006 · Sev C · duplication · effort S · confidence high**
 The < 1024 bound is an undocumented magic literal asserted only against a single-bus System, giving it too much headroom to catch an encoding regression on a realistic payload; it is at most a coarse compactness canary, narrower than the title's contract-free/tier-less framing.
@@ -3066,7 +3070,7 @@ The minimal-case corpus + write_file are duplicated across two same-crate inline
 - **Evidence:** After stripping leading/trailing whitespace, comments and the `pub` qualifier, the eight `VALID_*_JSON` constants in the `validation/schema.rs` inline test module are byte-identical (57 lines) to the eight in tests/helpers/mod.rs, and the four in the `validation/referential.rs` inline test module are byte-identical to the first four of that same corpus (52 lines).
 - **Fix-shape:** Make the minimal-case corpus have exactly one owner. Hoist the eight JSON constants, `write_file` and `make_minimal_case` into a single crate-internal fixture module gated by a test-support cfg (the convention docs/design/testing-architecture.md section 5.2 prescribes: helpers live with the type they build, exposed through a `test-support` feature rather than a dedicated crate), then have both inline test modules and tests/helpers/mod.rs re-export from it instead of restating it.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
-- **Status:** fixed (2026-09-15) — the eight `VALID_*_JSON` constants, `write_file` and `make_minimal_case` have one owner in `crates/cobre-io/src/test_support.rs`; the `validation/schema.rs`, `validation/referential.rs` and `tests/helpers/mod.rs` copies were deleted outright (no re-export shim; `r#"` corpus count in the three files 0) (ticket-009). `feat/quality-tier45-closeout` ac2e608a + bd29eb5e + 9c5bbf5a (pending merge).
+- **Status:** fixed (2026-09-15) — the eight `VALID_*_JSON` constants, `write_file` and `make_minimal_case` have one owner in `crates/cobre-io/src/test_support.rs`; the `validation/schema.rs`, `validation/referential.rs` and `crates/cobre-io/tests/helpers/mod.rs` copies were deleted outright (no re-export shim; `r#"` corpus count in the three files 0) (ticket-009). `feat/quality-tier45-closeout` ac2e608a + bd29eb5e + 9c5bbf5a (pending merge).
 
 **TD-015 · Sev C · duplication · effort S · confidence high**
 test_filling_guard_no_exit_no_error (hydro.rs:1795) is identical to test_filling_guard_entry_below_horizon_no_error (1692) except its assertion message, and because make_filling_hydro never sets exit_stage_id it cannot exercise the no-exit condition it is named for -- making it a coverage-free duplicate (the guard's rejection path is covered separately at 1771).

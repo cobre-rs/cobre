@@ -31,7 +31,10 @@ REL="plans/architecture-debt-audit"
 [[ -f "$DIR/inventory.json" ]] || { echo "FAIL: no inventory.json in $DIR"; exit 2; }
 [[ -f "$DIR/partI-handoff.json" ]] || { echo "FAIL: no partI-handoff.json in $DIR"; exit 2; }
 
+# BASE is the register pin (the read-only check ties HEAD to it); STATION_BASE is the tree
+# the station evaluated (inventory.json) — the two differ once the register is re-pinned.
 BASE="$(python3 -c 'import sys,pathlib; sys.path.insert(0,sys.argv[1]); from lib import backlog_parse as b; print(b.parse_baseline(b.read_register(pathlib.Path(sys.argv[2]))))' "$TOOLS" "$BACKLOG")"
+STATION_BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseline"])' "$DIR/inventory.json")"
 
 FAILED=0
 RESULTS=()
@@ -90,7 +93,8 @@ resolved_heading="$(python3 -c 'import sys,pathlib; sys.path.insert(0,sys.argv[1
 {
   echo "# Station verification — $STATION"
   echo
-  echo "Baseline: \`$BASE\` (the register pin; the drift rule ties HEAD to it)."
+  echo "Station baseline: \`$STATION_BASE\` (inventory.json; every entry, anchor and figure is measured there)."
+  echo "Register pin: \`$BASE\` (the drift rule ties HEAD to it; provenance bullets resolve there)."
   echo "Declared section title (argv[2]): \`$SECTION\`"
   echo "Resolved by slug \`$STATION\` via the em-dash tail: \`$resolved_heading\`"
   echo

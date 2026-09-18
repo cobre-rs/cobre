@@ -70,16 +70,33 @@ def load_validate_envelope() -> types.ModuleType:
     return mod
 
 
-def anchor_resolves(anchor: dict) -> bool:
-    """Resolve an anchor by symbol OR line (core-io semantics) against HEAD == baseline."""
+def anchor_resolves(anchor: dict, tree: sc.Tree) -> bool:
+    """Resolve an anchor by symbol OR line (core-io semantics) in the station's baseline tree."""
     path = anchor["path"]
-    if anchor.get("symbol") and sc.anchor_exists(f"`{path}::{anchor['symbol']}`"):
+    if anchor.get("symbol") and sc.anchor_exists(f"`{path}::{anchor['symbol']}`", tree):
         return True
     if anchor.get("line") is not None and sc.anchor_exists(
-        f"`{path}:{anchor['line']}`"
+        f"`{path}:{anchor['line']}`", tree
     ):
         return True
     return False
+
+
+def station_artifact_baselines() -> dict[str, str]:
+    """The `baseline` field of every station artifact that carries one, by relative name."""
+    station = sc.STATIONS / "stochastic"
+    names = [
+        "inventory.json",
+        "partI-handoff.json",
+        "calibration.json",
+        "verdicts.json",
+        "perf-queue.json",
+        "td-queue.json",
+        "alignment-queue.json",
+        *(f"candidates-{sub}.json" for sub in SUB_ORDER),
+        *(f"raw/sto-{lens}-{sub}.json" for lens in LENS_ORDER for sub in SUB_ORDER),
+    ]
+    return {name: str(sc.load_json(station / name)["baseline"]) for name in names}
 
 
 def candidate_refs() -> dict[str, dict]:
@@ -103,15 +120,13 @@ def candidate_refs() -> dict[str, dict]:
     return out
 
 
-def raw_lines(rel: str) -> int:
-    return (sc.REPO / rel).read_bytes().count(b"\n")
+def raw_lines(rel: str, tree: sc.Tree) -> int:
+    return tree.read_bytes(rel).count(b"\n")
 
 
-def non_test_lines(rel: str) -> int:
+def non_test_lines(rel: str, tree: sc.Tree) -> int:
     n = 0
-    for line in (
-        (sc.REPO / rel).read_text(encoding="utf-8", errors="replace").splitlines()
-    ):
+    for line in tree.read_text(rel).splitlines():
         if CFG_TEST.match(line):
             break
         n += 1
@@ -143,32 +158,43 @@ class InventoryTests(sc.StationCase):
         self.assertEqual(self.inv["station"], "stochastic")
         self.assertEqual(self.inv["crate"], "cobre-stochastic")
 
-    def test_baseline_is_the_register_pin_and_matches_head_under_the_drift_rule(self):
-        pin = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
-        self.assertTrue(self.inv["baseline"].startswith(pin[:8]))
+    def test_baseline_is_a_register_pin_and_every_artifact_and_entry_agrees(self):
+        base = self.inv["baseline"]
         self.assertTrue(
-            backlog_parse.baseline_matches_head(self.inv["baseline"]),
-            "HEAD's evaluated surfaces must be byte-identical to the pin",
+            sc.is_register_pin(base),
+            f"{base[:12]} is neither the register pin nor a superseded one: {sc.pin_history()}",
         )
+        for name, sha in station_artifact_baselines().items():
+            self.assertEqual(sha, base, f"{name}: baseline differs from inventory.json")
+        section = backlog_parse.find_section(
+            backlog_parse.read_register(sc.BACKLOG), STATION_SECTION
+        )
+        pins = backlog_parse.entry_baselines(section.lines)
+        self.assertTrue(
+            pins, "no entry in the station section carries a Baseline field"
+        )
+        off_pin = {eid: sha for eid, sha in pins.items() if not base.startswith(sha)}
+        self.assertEqual(off_pin, {}, "entries evaluated at a different baseline")
 
-    def test_every_file_path_exists_and_line_counts_reproduce(self):
+    def test_every_file_path_exists_and_line_counts_reproduce_at_the_baseline(self):
+        tree = self.tree()
         for f in self.inv["files"]:
-            p = sc.REPO / f["path"]
-            self.assertTrue(p.is_file(), f"missing {f['path']}")
+            self.assertTrue(tree.is_file(f["path"]), f"missing {f['path']}")
             self.assertEqual(
-                f["rawLines"], raw_lines(f["path"]), f"{f['path']}: rawLines != wc -l"
+                f["rawLines"],
+                raw_lines(f["path"], tree),
+                f"{f['path']}: rawLines != wc -l",
             )
-            expected_nt = 0 if f.get("isSiblingTest") else non_test_lines(f["path"])
+            expected_nt = (
+                0 if f.get("isSiblingTest") else non_test_lines(f["path"], tree)
+            )
             self.assertEqual(
                 f["nonTestLines"], expected_nt, f"{f['path']}: nonTestLines drift"
             )
             self.assertEqual(
                 f["hasInlineTests"],
                 any(
-                    CFG_TEST.match(ln)
-                    for ln in p.read_text(
-                        encoding="utf-8", errors="replace"
-                    ).splitlines()
+                    CFG_TEST.match(ln) for ln in tree.read_text(f["path"]).splitlines()
                 ),
                 f"{f['path']}: hasInlineTests drift",
             )
@@ -287,17 +313,15 @@ class PriorRegisterTests(sc.StationCase):
             anchors = [m for m in ANCHOR_TOKEN.finditer(body)]
             self.assertTrue(anchors, f"{e['title']}: no backticked baseline anchor")
             self.assertTrue(
-                any(self._anchor_resolves(m) for m in anchors),
-                f"{e['title']}: no baseline anchor resolves in the tree",
+                any(self._anchor_resolves(m, self.tree()) for m in anchors),
+                f"{e['title']}: no baseline anchor resolves at the station baseline",
             )
 
     @staticmethod
-    def _anchor_resolves(m: re.Match) -> bool:
-        path = m.group("path")
-        p = sc.REPO / path
+    def _anchor_resolves(m: re.Match, tree: sc.Tree) -> bool:
         if m.group("sym") or m.group("line"):
-            return sc.anchor_exists(m.group(0).strip("`"))
-        return p.exists()
+            return sc.anchor_exists(m.group(0).strip("`"), tree)
+        return tree.exists(m.group("path"))
 
     def test_cd_001_is_resolved_with_live_anchors_and_an_alignment_hint(self):
         cd = next((e for e in self.entries if "CD-001" in e["title"]), None)
@@ -310,7 +334,8 @@ class PriorRegisterTests(sc.StationCase):
             "crates/cobre-stochastic/src/context.rs:601",
         ):
             self.assertTrue(
-                sc.anchor_exists(f"`{anchor}`"), f"CD-001 anchor unresolved: {anchor}"
+                sc.anchor_exists(f"`{anchor}`", self.tree()),
+                f"CD-001 anchor unresolved at the station baseline: {anchor}",
             )
         self.assertIn("docs/design/reserved-seams-and-deferred-debt.md", body)
         self.assertRegex(
@@ -349,8 +374,8 @@ class CandidateEnvelopeTests(sc.StationCase):
             for sub in SUB_IDS
         }
 
-    def test_four_files_carry_the_merged_envelope_and_the_pinned_baseline(self):
-        pin = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+    def test_four_files_carry_the_merged_envelope_and_the_station_baseline(self):
+        base = self.baseline()
         for sub, doc in self.docs.items():
             for key in (
                 "station",
@@ -366,10 +391,10 @@ class CandidateEnvelopeTests(sc.StationCase):
             self.assertEqual(
                 doc["subStation"], sub, f"candidates-{sub}.json subStation"
             )
-            self.assertTrue(doc["baseline"].startswith(pin[:8]))
-            self.assertTrue(
-                backlog_parse.baseline_matches_head(doc["baseline"]),
-                f"candidates-{sub}.json baseline drifted from HEAD's evaluated surfaces",
+            self.assertEqual(
+                doc["baseline"],
+                base,
+                f"candidates-{sub}.json baseline differs from the station's inventory.json",
             )
 
     def test_candidate_refs_are_unique_and_lens_sub_consistent(self):
@@ -410,6 +435,7 @@ class CandidateEnvelopeTests(sc.StationCase):
                 )
 
     def test_every_anchor_is_in_scope_and_resolves_at_baseline(self):
+        tree = self.tree()
         for doc in self.docs.values():
             for c in doc["candidates"]:
                 self.assertTrue(c["anchors"], f"{c['candidateRef']}: no anchors")
@@ -419,7 +445,7 @@ class CandidateEnvelopeTests(sc.StationCase):
                         f"{c['candidateRef']}: out-of-scope anchor {a['path']}",
                     )
                     self.assertTrue(
-                        anchor_resolves(a),
+                        anchor_resolves(a, tree),
                         f"{c['candidateRef']}: anchor does not resolve: {a}",
                     )
 
@@ -441,11 +467,9 @@ class CandidateEnvelopeTests(sc.StationCase):
             self.assertEqual(sum(lens_map.values()), len(doc["candidates"]))
 
     def test_raw_cells_present_and_content_preserved_in_merge(self):
-        pin = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+        base = self.baseline()
         for (lens, sub), raw in self.raw.items():
-            self.assertTrue(
-                raw["baseline"].startswith(pin[:8]), f"sto-{lens}-{sub} baseline"
-            )
+            self.assertEqual(raw["baseline"], base, f"sto-{lens}-{sub} baseline")
             merged = {
                 c["candidateRef"]: c
                 for c in self.docs[sub]["candidates"]
@@ -586,12 +610,13 @@ class IngestTests(sc.StationCase):
                 f"{ref}: bad alignmentHint {e.get('alignmentHint')!r}",
             )
 
-    def test_accepted_candidate_anchors_resolve(self):
+    def test_accepted_candidate_anchors_resolve_at_the_station_baseline(self):
+        tree = self.tree()
         for ref, e in self.verdicts["verdicts"].items():
             if e["disposition"] == "defended" and e.get("verdict") == "confirmed":
                 for anchor in self.candidates[ref]["anchors"]:
                     self.assertTrue(
-                        anchor_resolves(anchor),
+                        anchor_resolves(anchor, tree),
                         f"{ref}: anchor does not resolve through anchor_exists: {anchor}",
                     )
 
@@ -605,10 +630,10 @@ class IngestTests(sc.StationCase):
                     f"{ref}: partIRef dropped or changed at ingest",
                 )
 
-    def test_sanctioned_cites_mirror_entry(self):
-        mirror = (
-            sc.REPO / "docs" / "design" / "reserved-seams-and-deferred-debt.md"
-        ).read_text(encoding="utf-8")
+    def test_sanctioned_cites_mirror_entry_as_of_the_station_baseline(self):
+        # The defender consulted the mirror at the station's baseline; a seam it cited must
+        # have been registered THERE, whatever the mirror says today.
+        mirror = self.tree().read_text(backlog_parse.MIRROR)
         for ref, e in self.verdicts["verdicts"].items():
             if e["disposition"] == "sanctioned":
                 cite = e.get("sanctionedBy") or ""
@@ -684,8 +709,7 @@ class CalibrationTests(sc.StationCase):
 
     def test_envelope(self):
         self.assertEqual(self.cal["station"], "stochastic")
-        pin = backlog_parse.parse_baseline(self.reg_lines)
-        self.assertTrue(self.cal["baseline"].startswith(pin[:8]))
+        self.assertEqual(self.cal["baseline"], self.baseline())
         self.assertEqual(len(self.assigned), 35)
         self.assertEqual(self.cal["cleared"], [])
         self.assertEqual(self.cal["merged"], [])
@@ -918,17 +942,15 @@ class SectionVerifyTests(sc.StationCase):
                 proc.returncode, 0, f"station_verify {sub}:\n{proc.stdout}"
             )
 
-    def test_inventory_census_reconstructs_the_tree(self):
+    def test_inventory_census_reconstructs_the_tree_at_the_station_baseline(self):
         inv = sc.load_json(self.artifact("inventory.json"))
         listed = station_verify.reconstruct_listed(inv)
         roots = station_verify.crate_src_roots(inv)
-        tree = subprocess.run(
-            ["git", "ls-files", "--", *(f"{r}/*.rs" for r in roots)],
-            cwd=sc.REPO,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
+        tree = self.tree().ls_files(*(f"{r}/*.rs" for r in roots))
+        self.assertEqual(
+            tree,
+            sorted(station_verify.baseline_rs_files(sc.REPO, inv["baseline"], roots)),
+        )
         self.assertEqual(
             len(tree),
             inv["totals"]["srcFiles"],

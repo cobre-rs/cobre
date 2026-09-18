@@ -5,18 +5,18 @@
 #
 # Adaptation (owner ruling): the register section quotes no inventory figures and carries
 # no `(measured-by: …)` tags — those figures live in inventory.json — so every figure is
-# re-measured from the tree and asserted against inventory.json's recorded value (drift in
-# either direction fails). The QMC/LHS fixture-prelude diffs (0 and 52) are re-measured as
-# figures but are OUT OF THIS STATION (owned by the test-corpus station / Epic 8 per the
-# ratified TD-024 scoping), so no in-station entry quotes them.
+# re-measured from the tree the station evaluated (inventory.json's `baseline`, exported
+# from git — never the worktree, whose crates follow the moving register pin) and asserted
+# against inventory.json's recorded value (drift in either direction fails). The QMC/LHS
+# fixture-prelude diffs (0 and 52) are re-measured as figures but are OUT OF THIS STATION
+# (owned by the test-corpus station / Epic 8 per the ratified TD-024 scoping), so no
+# in-station entry quotes them.
 #
 # -e is deliberately omitted: this runs every check and aggregates a single exit code.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../../.." && pwd)"
-SRC="$ROOT/crates/cobre-stochastic/src"
-TESTS="$ROOT/crates/cobre-stochastic/tests"
 INV="$HERE/inventory.json"
 OUT="$HERE/figures.tsv"
 BACKLOG="$ROOT/plans/architecture-debt-audit/BACKLOG.md"
@@ -40,6 +40,7 @@ ext = next(
     for c in inv["corrections"]
     if "external.rs" in (c.get("claim") or "")
 )
+print(f"BASE={inv['baseline']}")
 print(f"E_SRC={t['srcFiles']}")
 print(f"E_NONTEST={t['nonTestLines']}")
 print(f"E_INLINE={t['inlineTestFiles']}")
@@ -52,12 +53,23 @@ print(f"E_EXT={ext}")
 PY
 )"
 
+# The crate as it stood at the station baseline, exported from git into a scratch dir so
+# every find/awk/grep/diff below measures that tree; the recorded command spells the
+# scratch path as <tree@sha> so figures.tsv is byte-stable across runs.
+TREE="$(mktemp -d "${TMPDIR:-/tmp}/verify-figures-stochastic.XXXXXX")"
+trap 'rm -rf "$TREE"' EXIT
+git -C "$ROOT" archive "$BASE" crates/cobre-stochastic | tar -x -C "$TREE" \
+  || { echo "verify-figures.sh: cannot export crates/cobre-stochastic at $BASE" >&2; exit 1; }
+SRC="$TREE/crates/cobre-stochastic/src"
+TESTS="$TREE/crates/cobre-stochastic/tests"
+TREE_TOKEN="<tree@${BASE:0:8}>"
+
 printf 'figure\texpected\tmeasured\tstatus\tcommand\n' >"$OUT"
 fig() { # fig <name> <expected> <command>
   local name="$1" want="$2" cmd="$3" got status
   got="$(eval "$cmd" 2>/dev/null | tr -d ' \n')"
   if [ "$got" = "$want" ]; then status=OK; else status=DRIFT; FAIL=1; fi
-  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$want" "$got" "$status" "$cmd" >>"$OUT"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$want" "$got" "$status" "${cmd//$TREE/$TREE_TOKEN}" >>"$OUT"
 }
 
 fig src_files "$E_SRC" "find $SRC -name '*.rs' | wc -l"
@@ -69,7 +81,7 @@ fig nontest_loc "$E_NONTEST" "find $SRC -name '*.rs' ! -name tests.rs -print0 | 
 fig inline_test_files "$E_INLINE" "grep -rl '^#\\[cfg(test)\\]' $SRC | wc -l"
 fig integration_bins "$E_INTEG" "find $TESTS -name '*.rs' | wc -l"
 fig external_rs_lines "$E_EXT" "wc -l < $SRC/sampling/external.rs"
-fig workspace_deps 1 "cargo tree --manifest-path $ROOT/Cargo.toml -p cobre-stochastic --depth 1 | grep '^[├└]' | grep -o 'cobre-[a-z-]*' | sort -u | wc -l"
+fig workspace_deps 1 "git -C $ROOT show $BASE:crates/cobre-stochastic/Cargo.toml | grep -oE '^cobre-[a-z-]+' | sort -u | wc -l"
 # Out-of-station (test-corpus / Epic 8): re-measured here as evidence, not quoted in any
 # in-station entry — the QMC/LHS prelude duplication belongs to the test-corpus station.
 fig qmc_prelude_diff 0 "diff <(sed -n '1,317p' $TESTS/halton_integration.rs | sed 's/halton/QMC/g;s/Halton/QMC/g') <(sed -n '1,317p' $TESTS/sobol_integration.rs | sed 's/sobol/QMC/g;s/Sobol/QMC/g') | wc -l"
@@ -79,7 +91,7 @@ column -t -s "$(printf '\t')" "$OUT" >&2
 
 # Partition, heading-resolution, perf-handoff, quoted-count and read-only — all the
 # data/logic checks in one parser-backed block.
-python3 - "$ROOT" "$INV" "$BACKLOG" "$SECTION" "$TOOLS" "$OUT" <<'PY' || FAIL=1
+python3 - "$ROOT" "$INV" "$BACKLOG" "$SECTION" "$TOOLS" "$OUT" "$TREE" <<'PY' || FAIL=1
 import collections
 import json
 import pathlib
@@ -99,15 +111,17 @@ figures = {
         for line in pathlib.Path(sys.argv[6]).read_text().splitlines()[1:]
     )
 }
+baseline_tree = pathlib.Path(sys.argv[7])
 from lib import backlog_parse as bp  # noqa: E402
 
 bad: list[str] = []
 
-# 1. Sub-station partition: every source file falls in exactly one sweep. The per-file
-# assignment lives in files[].subStation; subStations[].files is the recorded count.
+# 1. Sub-station partition: every source file (in the tree at the station baseline) falls
+# in exactly one sweep. The per-file assignment lives in files[].subStation;
+# subStations[].files is the recorded count.
 tree = {
-    str(p.relative_to(root))
-    for p in (root / "crates/cobre-stochastic/src").rglob("*.rs")
+    str(p.relative_to(baseline_tree))
+    for p in (baseline_tree / "crates/cobre-stochastic/src").rglob("*.rs")
 }
 seen: collections.Counter[str] = collections.Counter(f["path"] for f in inv["files"])
 unswept = sorted(tree - set(seen))

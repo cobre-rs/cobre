@@ -3,8 +3,8 @@
 # profiling-profile `cobre` binary over a scratch copy of the reference deck.
 #
 # usage: perf-run.sh [--dry-run] [--perf] [--bound <sec>] <ID> <4t|2x2|2t>
-#   4t  : cobre_reduzido_2, --threads 4, pinned to P-cores 0,2,4,6
-#   2x2 : cobre_reduzido_2, mpiexec -n 2 x --threads 2 (rank pinning by the sweep's wrapper)
+#   4t  : cobre_reduzido, --threads 4, pinned to P-cores 0,2,4,6
+#   2x2 : cobre_reduzido, mpiexec -n 2 x --threads 2 (rank pinning by the sweep's wrapper)
 #   2t  : cobre-mar-26-rv2-reduced (enumerated), --threads 2, pinned to 0,2
 # exit: 0 measured · 2 dirty worktree · 3 deck or binary missing · 4 killed at
 #       3x the bound (UNMEASURED timeout-3x) · 5 mpiexec absent for 2x2
@@ -13,7 +13,7 @@ set -euo pipefail
 
 AUDIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(git -C "$AUDIT_DIR" rev-parse --show-toplevel)"
-DECK_SAMPLED="$HOME/git/cobre-bridge/example/cobre_reduzido_2"
+DECK_SAMPLED="$HOME/git/cobre-bridge/example/cobre_reduzido"
 DECK_ENUMERATED="$HOME/git/cobre-bridge/example/cobre-mar-26-rv2-reduced"
 COBRE_BIN="$REPO_ROOT/target/profiling/cobre"
 RANK_WRAPPER="$AUDIT_DIR/measurements/_wrap/rank-wrapper.sh"

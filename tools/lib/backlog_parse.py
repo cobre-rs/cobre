@@ -18,6 +18,10 @@ FIELD_RE = re.compile(r"^\s*-\s+\*\*(?P<label>[^*]+?):\*\*\s*(?P<value>.*?)\s*$"
 BASELINE_RE = re.compile(
     r"^Baseline:\s+(?P<sha>[0-9a-f]{8,40})\s+\(pinned\s+(?P<pinned>\d{4}-\d{2}-\d{2})\)"
 )
+SHA_RE = re.compile(r"(?P<sha>[0-9a-f]{8,40})")
+# Entry bullets whose anchors describe the tree AFTER the entry's baseline (a fix
+# landed later, an anchor corrected later); they resolve at the register pin.
+PROVENANCE_LABELS = ("Status", "Correction")
 
 _PATH_ROOTS = r"crates|scripts|docs|plans|schemas|examples|tests|\.github|\.claude"
 _EXTS = r"rs|toml|md|json|fbs|sh|py|yml|yaml|txt|csv|parquet|lock"
@@ -27,9 +31,19 @@ ANCHOR_RE = re.compile(
 )
 
 EVALUATED_SURFACES = (
-    "crates", "docs", "scripts", ".github", "schemas",
-    "Cargo.toml", "Cargo.lock", "examples", "tests",
+    "crates",
+    "docs",
+    "scripts",
+    ".github",
+    "schemas",
+    "Cargo.toml",
+    "Cargo.lock",
+    "examples",
+    "tests",
 )
+# The ID-free mirror is the one evaluated-surface file the evaluation itself writes.
+MIRROR = "docs/design/reserved-seams-and-deferred-debt.md"
+SURFACE_PATHSPEC = (*EVALUATED_SURFACES, f":(exclude){MIRROR}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +64,9 @@ class Anchor:
     symbol: str | None
     entry_id: str | None
     lineno: int
+    # The entry's own `Baseline:` field; None resolves at the register pin (section
+    # prose, entries without the field, and the provenance bullets).
+    baseline: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,32 +114,100 @@ def find_section(lines: list[str], name: str) -> Section:
             if nxt and len(nxt.group("hashes")) <= level:
                 end = j
                 break
-        return Section(name=name, heading=title, level=level, start=idx, end=end,
-                       lines=lines[idx + 1:end])
+        return Section(
+            name=name,
+            heading=title,
+            level=level,
+            start=idx,
+            end=end,
+            lines=lines[idx + 1 : end],
+        )
     raise SectionNotFound(name)
 
 
-def parse_anchors(lines: list[str], first_lineno: int = 1,
-                  entry_id: str | None = None) -> list[Anchor]:
+def entry_baselines(lines: list[str]) -> dict[str, str]:
+    """Each entry's own `- **Baseline:** <sha>` field (first sha in the value), by entry ID."""
+    pins: dict[str, str] = {}
+    current: str | None = None
+    for raw in lines:
+        hit = ENTRY_RE.match(raw)
+        if hit:
+            current = hit.group("id")
+            continue
+        field = FIELD_RE.match(raw)
+        if current is None or current in pins or not field:
+            continue
+        if field.group("label").strip() == "Baseline":
+            sha = SHA_RE.search(field.group("value"))
+            if sha:
+                pins[current] = sha.group("sha")
+    return pins
+
+
+def is_provenance_label(label: str) -> bool:
+    return label.strip().split(" ", 1)[0] in PROVENANCE_LABELS
+
+
+def finding_lines(body: list[str]) -> list[str]:
+    """An entry body minus its provenance bullets (`Status`, `Correction`) and their continuations.
+
+    Provenance describes what happened to the finding after its baseline (a fix landed,
+    an anchor was corrected) and may cite a retired item as the reason a fix stopped
+    where it did; the finding itself is the heading plus these lines.
+    """
+    kept: list[str] = []
+    skipping = False
+    for raw in body:
+        field = FIELD_RE.match(raw)
+        if field:
+            skipping = is_provenance_label(field.group("label"))
+        elif not raw[:1].isspace():
+            skipping = False
+        if not skipping:
+            kept.append(raw)
+    return kept
+
+
+def parse_anchors(
+    lines: list[str], first_lineno: int = 1, entry_id: str | None = None
+) -> list[Anchor]:
     """Every backticked repo-rooted path in `lines`, attributed to its entry ID.
 
     Accepted forms: `crates/x/lib.rs`, `crates/x/lib.rs:412`, `crates/x/lib.rs::Sym`.
     Prose backticks (`god-fn`, `Sev A`) and the legacy abbreviated anchors
     (`run/setup.rs:405`) are not repo-rooted and never enter the check set.
     `first_lineno` is the 1-based register line of `lines[0]`; an entry heading
-    inside `lines` re-attributes the anchors that follow it.
+    inside `lines` re-attributes the anchors that follow it. An anchor carries its
+    entry's `Baseline:` sha, except inside a provenance bullet (`Status`,
+    `Correction`) or its indented continuation, which carries None (register pin).
     """
+    pins = entry_baselines(lines)
     out: list[Anchor] = []
+    provenance = False
     for offset, raw in enumerate(lines):
         hit = ENTRY_RE.match(raw)
         if hit:
             entry_id = hit.group("id")
+            provenance = False
+        field = FIELD_RE.match(raw)
+        if field:
+            provenance = is_provenance_label(field.group("label"))
+        elif not raw[:1].isspace():
+            provenance = False
+        pin = None if provenance or entry_id is None else pins.get(entry_id)
         for m in ANCHOR_RE.finditer(raw):
             line = m.group("line")
-            out.append(Anchor(raw=m.group(0).strip("`"), path=m.group("path"),
-                              line=int(line) if line else None,
-                              symbol=m.group("symbol"), entry_id=entry_id,
-                              lineno=first_lineno + offset))
+            out.append(
+                Anchor(
+                    raw=m.group(0).strip("`"),
+                    path=m.group("path"),
+                    line=int(line) if line else None,
+                    symbol=m.group("symbol"),
+                    entry_id=entry_id,
+                    lineno=first_lineno + offset,
+                    baseline=pin,
+                )
+            )
     return out
 
 
@@ -159,17 +244,28 @@ def iter_entries(section: Section) -> list[Entry]:
             f = FIELD_RE.match(raw)
             if f and f.group("label") not in fields:
                 fields[f.group("label").strip()] = f.group("value")
-        entries.append(Entry(id=entry_id, heading=heading, fields=fields,
-                             body=list(body), lineno=lineno))
+        entries.append(
+            Entry(
+                id=entry_id,
+                heading=heading,
+                fields=fields,
+                body=list(body),
+                lineno=lineno,
+            )
+        )
 
     for offset, raw in enumerate(section.lines):
         hit = ENTRY_RE.match(raw)
         if hit:
             flush()
-            current = (hit.group("id"), raw.strip().strip("*").strip(), [],
-                       section.start + 2 + offset)
+            current = (
+                hit.group("id"),
+                raw.strip().strip("*").strip(),
+                [],
+                section.start + 2 + offset,
+            )
         elif current is not None:
-            current[3 - 1].append(raw)
+            current[2].append(raw)
     flush()
     return entries
 
@@ -180,7 +276,9 @@ def parse_baseline(lines: list[str]) -> str:
         m = BASELINE_RE.match(raw.strip())
         if m:
             return m.group("sha")
-    raise LookupError("no 'Baseline: <sha> (pinned YYYY-MM-DD)' line in the register header")
+    raise LookupError(
+        "no 'Baseline: <sha> (pinned YYYY-MM-DD)' line in the register header"
+    )
 
 
 def parse_tables(section: Section) -> list[list[dict[str, str]]]:
@@ -210,7 +308,9 @@ def repo_root() -> pathlib.Path:
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", *args], cwd=repo_root(), capture_output=True, check=False)
+    return subprocess.run(
+        ["git", *args], cwd=repo_root(), capture_output=True, check=False
+    )
 
 
 def head_sha() -> str:
@@ -221,14 +321,18 @@ def baseline_matches_head(baseline: str) -> bool:
     """True when HEAD is the pin, or a descendant whose evaluated surfaces equal the pin.
 
     The evaluation branch carries non-evaluated commits (the ledger itself, the
-    mirror document), so equality of the evaluated surfaces is the drift test.
+    mirror document), so equality of the evaluated surfaces minus the mirror is
+    the drift test.
     """
     head = head_sha()
     if head.startswith(baseline) or baseline.startswith(head[:8]):
         return True
     if _git("merge-base", "--is-ancestor", baseline, "HEAD").returncode != 0:
         return False
-    return _git("diff", "--quiet", baseline, "HEAD", "--", *EVALUATED_SURFACES).returncode == 0
+    return (
+        _git("diff", "--quiet", baseline, "HEAD", "--", *SURFACE_PATHSPEC).returncode
+        == 0
+    )
 
 
 def ensure_baseline(baseline: str, allow_drift: bool) -> None:
@@ -237,7 +341,10 @@ def ensure_baseline(baseline: str, allow_drift: bool) -> None:
     head = head_sha()
     if not allow_drift:
         raise BaselineDrift(f"HEAD {head[:12]} != baseline {baseline[:12]}")
-    print(f"warning: HEAD {head[:12]} drifted from baseline {baseline[:12]}", file=sys.stderr)
+    print(
+        f"warning: HEAD {head[:12]} drifted from baseline {baseline[:12]}",
+        file=sys.stderr,
+    )
 
 
 def git_show(baseline: str, path: str) -> str | None:
@@ -299,7 +406,9 @@ def parse_table(section: Section, index: int = 0) -> Table | None:
     return tables[index] if index < len(tables) else None
 
 
-def parse_milestones(lines: list[str], section: Section | None = None) -> dict[str, Milestone]:
+def parse_milestones(
+    lines: list[str], section: Section | None = None
+) -> dict[str, Milestone]:
     """The waved Milestones table (`Milestone | Wave | Trigger`), keyed by milestone name.
 
     Searched inside `section` first, then over the whole register. A Milestones
@@ -308,7 +417,11 @@ def parse_milestones(lines: list[str], section: Section | None = None) -> dict[s
     scopes: list[Section] = []
     if section is not None:
         scopes.append(section)
-    scopes.append(Section(name="*", heading="*", level=0, start=-1, end=len(lines), lines=list(lines)))
+    scopes.append(
+        Section(
+            name="*", heading="*", level=0, start=-1, end=len(lines), lines=list(lines)
+        )
+    )
     for scope in scopes:
         idx = 0
         while (table := parse_table(scope, idx)) is not None:
@@ -326,8 +439,14 @@ def parse_milestones(lines: list[str], section: Section | None = None) -> dict[s
                 wave_text = cells[wave_col].strip("`* ")
                 if not wave_text.isdigit():
                     continue
-                trigger = cells[trig_col] if trig_col is not None and trig_col < len(cells) else ""
-                out[name] = Milestone(name=name, wave=int(wave_text), trigger=trigger, line=lineno)
+                trigger = (
+                    cells[trig_col]
+                    if trig_col is not None and trig_col < len(cells)
+                    else ""
+                )
+                out[name] = Milestone(
+                    name=name, wave=int(wave_text), trigger=trigger, line=lineno
+                )
             if out:
                 return out
     return {}
@@ -336,8 +455,12 @@ def parse_milestones(lines: list[str], section: Section | None = None) -> dict[s
 DO_NOT_TOUCH_LINE_RE = re.compile(r"^\*\*Do-not-touch list[^*]*:\*\*")
 FINDING_ID_RE = re.compile(r"\b(?:CD|PD|OD|TD)-\d{3}\b")
 STATUS_MARKERS = (
-    ("RETRACTED", "retracted"), ("REFUTED", "refuted"), ("WONTFIX", "wontfix"),
-    ("DEFERRED", "deferred"), ("FIXED", "fixed"), ("CLEARED", "cleared"),
+    ("RETRACTED", "retracted"),
+    ("REFUTED", "refuted"),
+    ("WONTFIX", "wontfix"),
+    ("DEFERRED", "deferred"),
+    ("FIXED", "fixed"),
+    ("CLEARED", "cleared"),
 )
 
 
@@ -369,7 +492,11 @@ def register_findings(lines: list[str]) -> dict[str, str]:
             continue
         field = FIELD_RE.match(raw)
         if field and field.group("label").strip() == "Status":
-            statuses[current] = field.group("value").strip("`* ").split()[0].casefold() if field.group("value").strip() else statuses[current]
+            statuses[current] = (
+                field.group("value").strip("`* ").split()[0].casefold()
+                if field.group("value").strip()
+                else statuses[current]
+            )
             continue
         if raw.startswith("**→") and statuses[current] == "open":
             for marker, token in STATUS_MARKERS:
@@ -378,7 +505,7 @@ def register_findings(lines: list[str]) -> dict[str, str]:
                     break
     for idx, raw in enumerate(lines):
         if DO_NOT_TOUCH_LINE_RE.match(raw):
-            para = " ".join(lines[idx:idx + 4]).split("**Resume protocol", 1)[0]
+            para = " ".join(lines[idx : idx + 4]).split("**Resume protocol", 1)[0]
             for fid in FINDING_ID_RE.findall(para):
                 statuses[fid] = "do-not-touch"
             break

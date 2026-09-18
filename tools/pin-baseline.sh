@@ -2,20 +2,34 @@
 # Pin the evaluation baseline and scaffold the register sections in BACKLOG.md.
 # Idempotent: a second run over an already scaffolded register exits 0 with no diff.
 #
-# usage: tools/pin-baseline.sh <full-40-hex-sha> [pin-date ISO-8601, default today]
+# usage: tools/pin-baseline.sh [--repin] <full-40-hex-sha> [pin-date ISO-8601, default today]
+# --repin: move the register pin to <sha>, recording the superseded pin on a
+#          `Previous baselines:` line. Scaffold headings keep the sha they were
+#          minted with (the checkers resolve sections by slug) and every entry keeps
+#          its own `Baseline:` field, so a ratified station stays anchored where it was
+#          evaluated; only the register pin (provenance bullets, new entries) moves.
 # exit 2: <sha> is not HEAD, nor an ancestor of HEAD with the evaluated surfaces
-#         (crates docs scripts .github schemas Cargo.* examples tests) diff-free up to HEAD;
-# exit 3: tracked modifications present outside plans/architecture-debt-audit; exit 4: register pinned to another baseline.
+#         (crates docs scripts .github schemas Cargo.* examples tests, minus the mirror
+#         the evaluation itself writes) diff-free up to HEAD;
+# exit 3: tracked modifications present outside plans/architecture-debt-audit;
+# exit 4: register pinned to another baseline and --repin not given.
 set -euo pipefail
 
-SHA="${1:?usage: pin-baseline.sh <full-sha> [pin-date]}"
+REPIN=0
+if [[ "${1:-}" == "--repin" ]]; then REPIN=1; shift; fi
+SHA="${1:?usage: pin-baseline.sh [--repin] <full-sha> [pin-date]}"
 PIN_DATE="${2:-$(date -I)}"
 BACKLOG="$(git rev-parse --show-toplevel)/plans/architecture-debt-audit/BACKLOG.md"
 SHORT="${SHA:0:8}"
+MIRROR=docs/design/reserved-seams-and-deferred-debt.md
 
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "not a full 40-hex sha: $SHA" >&2; exit 1; }
+if [[ "$REPIN" -eq 0 ]] && ! grep -qE "^Baseline: ${SHA} " "$BACKLOG" \
+    && grep -qE '^Baseline: [0-9a-f]{40} \(pinned [0-9-]{10}\)' "$BACKLOG"; then
+  echo "BACKLOG.md is pinned to a different baseline (pass --repin to move it)" >&2; exit 4
+fi
 HEAD_SHA=$(git rev-parse HEAD)
-EVALUATED=(crates docs scripts .github schemas Cargo.toml Cargo.lock examples tests)
+EVALUATED=(crates docs scripts .github schemas Cargo.toml Cargo.lock examples tests ":(exclude)$MIRROR")
 if [[ "$HEAD_SHA" != "$SHA" ]]; then
   git merge-base --is-ancestor "$SHA" HEAD \
     || { echo "baseline $SHA is not an ancestor of HEAD $HEAD_SHA" >&2; exit 2; }
@@ -40,7 +54,7 @@ evaluation writes exactly two tracked surfaces: the ID-free mirror
 sessions carry git evidence); no crate, docs, script, CI or schema file is touched
 (amends the Status bullet above).
 Perf calibration bound: TBD s (median of 3 timed runs after one warm-up, layout \`4t\`,
-deck \`~/git/cobre-bridge/example/cobre_reduzido_2\`; filled by the calibration run).
+deck \`~/git/cobre-bridge/example/cobre_reduzido\`; filled by the calibration run).
 Only that deck at 4 workers is sanctioned: \`--threads 4\` (\`4t\`) or
 \`mpiexec -n 2 … --threads 2\` (\`2x2\`). A run past 3x this bound is killed and its
 claim tagged \`UNMEASURED\`; reasons are \`timeout-3x\`, \`unexercised-path\`,
@@ -67,19 +81,38 @@ HDR
 }
 
 if ! grep -qE "^Baseline: ${SHA} " "$BACKLOG"; then
-  if grep -qE '^Baseline: [0-9a-f]{40} ' "$BACKLOG"; then
-    echo "BACKLOG.md is pinned to a different baseline" >&2; exit 4
-  fi
+  OLD_LINE=$(grep -m1 -E '^Baseline: [0-9a-f]{40} \(pinned [0-9-]{10}\)' "$BACKLOG" || true)
+  if [[ -n "$OLD_LINE" ]]; then
+    OLD_SHA=$(awk '{print $2}' <<<"$OLD_LINE")
+    OLD_DATE=$(sed -E 's/.*\(pinned ([0-9-]{10})\).*/\1/' <<<"$OLD_LINE")
+    SUPERSEDED="${OLD_SHA:0:8} (pinned ${OLD_DATE}, superseded ${PIN_DATE})"
+    python3 - "$BACKLOG" "$SHA" "$PIN_DATE" "$SUPERSEDED" <<'PY'
+import pathlib, re, sys
+path, sha, date, superseded = sys.argv[1:]
+lines = pathlib.Path(path).read_text(encoding="utf-8").split("\n")
+for i, line in enumerate(lines):
+    if re.match(r"^Baseline: [0-9a-f]{40} \(pinned ", line):
+        lines[i] = f"Baseline: {sha} (pinned {date})"
+        if i + 1 < len(lines) and lines[i + 1].startswith("Previous baselines: "):
+            lines[i + 1] += f"; {superseded}"
+        else:
+            lines.insert(i + 1, f"Previous baselines: {superseded}")
+        break
+pathlib.Path(path).write_text("\n".join(lines), encoding="utf-8")
+PY
+    echo "re-pinned BACKLOG.md to ${SHORT} (superseded ${OLD_SHA:0:8})"
+  else
   STATUS_LINE=$(grep -nE '^- \*\*Status\*\*: read-only investigation' "$BACKLOG" | head -1 | cut -d: -f1)
   [[ -n "$STATUS_LINE" ]] || { echo 'Status bullet not found' >&2; exit 1; }
-  { head -n "$STATUS_LINE" "$BACKLOG"; header_block; tail -n +"$((STATUS_LINE + 1))" "$BACKLOG"; } > "$BACKLOG.tmp"
-  mv "$BACKLOG.tmp" "$BACKLOG"
+    { head -n "$STATUS_LINE" "$BACKLOG"; header_block; tail -n +"$((STATUS_LINE + 1))" "$BACKLOG"; } > "$BACKLOG.tmp"
+    mv "$BACKLOG.tmp" "$BACKLOG"
+  fi
 fi
 
+# Scaffold headings are keyed by slug: one minted under an earlier pin is kept as-is.
 SECTIONS=(core-io stochastic solver-comm sddp cli-python build-ci test-corpus
   generalization-alignment performance-sweep reconciliation unified-roadmap)
 for name in "${SECTIONS[@]}"; do
-  heading="## ★ QUALITY EVALUATION (2026-09, baseline ${SHORT}) — ${name}"
-  grep -qF -- "$heading" "$BACKLOG" && continue
-  printf '\n%s\n\n_(no entries yet)_\n' "$heading" >> "$BACKLOG"
+  grep -qE -- "^## ★ QUALITY EVALUATION \(2026-09, baseline [0-9a-f]{8}\) — ${name}\$" "$BACKLOG" && continue
+  printf '\n## ★ QUALITY EVALUATION (2026-09, baseline %s) — %s\n\n_(no entries yet)_\n' "$SHORT" "$name" >> "$BACKLOG"
 done

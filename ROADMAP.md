@@ -75,7 +75,7 @@ provisional table (written while the backend returned 502) is superseded by this
 
 | # | Spec premise | Live state | Consequence |
 | --- | --- | --- | --- |
-| X1 | One baseline `a136840d`, cited by every station; scaffold headings and ticket section titles carry it literally | `develop` is 99 commits past it | Re-pin once (`tools/pin-baseline.sh`); keep the scaffold headings as-is (the checkers resolve sections by slug, not by sha) and let each entry carry its own `Baseline:` field, exactly as CD-072/CD-073 already do. No ticket text needs the sha edited. |
+| X1 | One baseline `a136840d`, cited by every station; scaffold headings and ticket section titles carry it literally | `develop` is 99 commits past it | DONE 2026-09-17: re-pinned to `077dbe2c` (`tools/pin-baseline.sh --repin`; the header keeps a `Previous baselines:` line). Scaffold headings keep their minted sha (checkers resolve sections by slug). Each entry's own `Baseline:` field is now authoritative for its anchors: `check-anchors` resolves an entry's Anchors/Evidence at that field and only `Status`/`Correction` provenance bullets at the register pin; `check-reraise` scans the finding, not its provenance bullets; the drift rule exempts the mirror the evaluation itself writes. Station test modules measure their own baseline through `station_checks.Tree`, never the worktree. No ticket text needs the sha edited; new stations mint entries at the register pin. |
 | X2 | "No fixes in this spec"; "the only tracked file written is the mirror"; "BACKLOG.md stays gitignored" | Tier 1–5 + W7 fixes were executed (outside the spec, on fix branches); `plans/architecture-debt-audit/` is tracked on `develop` since 2026-09-06 (owner decision) | The guardrail still binds spec tickets. Every ticket that asserts "zero tracked change because plans/ is gitignored" (E11-5, E11-11, E11-9's documentation-only allowlist) must treat `plans/architecture-debt-audit/**` as a tracked, allowed write path. |
 | X3 | `cobre summary` reads a run's phase split | The subcommand was deleted by the CLI plan; `src/summary.rs` only prints the post-run block of `cobre run`; per-iteration timings live in `training/timing/iterations.parquet` (`time_cut_sync_ms`, `time_mpi_allreduce_ms` still present) | E10-2/3/4 take the phase split from the run's own stdout summary (not under `--quiet`) or from the timing parquet; the "one extra untimed replay for `cobre summary`" edge case is obsolete. |
 | X4 | cobre-python's 22 Rust `#[test]` are invisible to CI | The Python CI job now builds the CLI (`--require-cli-binary`) and runs the bindings crate's Rust tests with `LD_LIBRARY_PATH` | E06-4/5/6 and E08-2/4 lose that candidate; the mirror item "Python-binding Rust tests invisible to CI" is a retirement for E11-8, not a dup-of target. The new `doc = false` intra-doc-link gap (cobre-python `Cargo.toml:18`) is the replacement seed for E07. |
@@ -134,7 +134,7 @@ approval); **supersede** = outcome already produced outside the spec, close with
 | E09-3 adjudicate Alignment | **run** | Universe parsed from the register at run time (now includes the reconciliation/W7 sections). |
 | E09-4 verify | **deviate** | Literals (11,675/11,396; 79/95 refs; `broadcast.rs:87`) re-measured. |
 | E09-5 gate | **run** | — |
-| E10-1 binary + claim table | **deviate** | `[profile.profiling]` intact; queues exist only for core-io/stochastic until stations run; X6; **CAL/CAL-ENUM must be re-measured at the new pin first** (perf-run.sh refuses a HEAD off the pin). |
+| E10-1 binary + claim table | **deviate** | `[profile.profiling]` intact; queues exist only for core-io/stochastic until stations run; X6; CAL/CAL-ENUM re-measured at the new pin (2026-09-17). **Deck deviation (owner decision 2026-09-17):** the sanctioned 4t/2x2 deck `cobre_reduzido_2` no longer exists (cobre-bridge `example/` is gitignored, no history); `~/git/cobre-bridge/example/cobre_reduzido` (113 monthly stages, sampled selection, 4 forward passes, `iteration_limit 5`, bridge 0.12.0) is re-sanctioned in its place — `perf-run.sh`, `verify-harness.sh` and the register header name it; every E10 ticket text naming `cobre_reduzido_2` reads as `cobre_reduzido`. The enumerated deck is unchanged. |
 | E10-2 PD-004 | **deviate** | `run_enumerated_backward` present; BACKLOG line refs (`:1255`, `:1696`, `:1881`) drifted; X3. |
 | E10-3 4t | **deviate** | X3 (edge case (c) obsolete); all six anchors still resolve; Tier-2-fixed stochastic claims are measured post-fix. |
 | E10-4 2x2 | **deviate** | X3; `time_cut_sync_ms`/`time_mpi_allreduce_ms` still in the timing parquet; all anchors resolve. |
@@ -154,20 +154,26 @@ approval); **supersede** = outcome already produced outside the spec, close with
 
 ### Owner decisions (SpecForge-side)
 
-1. **Deviation notes, not reopen.** Every `deviate` row is recorded in the ticket's step notes at
-   `start_work_session`; the two `rewrite` rows (E06-1 figures, E11-11 branch base) are either
-   re-approved as heavy deviations at their gates or edited by the owner in the webapp.
+1. **Deviation notes and tool-side resolutions, not reopen and not webapp edits.** Every
+   `deviate` row is recorded in the ticket's step notes at `start_work_session`; the two `rewrite`
+   rows (E06-1 figures, E11-11 branch base) are recorded as heavy deviations through the work
+   session itself (a `create_discovery` with `proposedOptions` for anything needing an owner
+   decision; a declared file the plan mis-named or that a full-accept gate leaves untouched is
+   `waived`, one whose content moved into another declared file is `consolidated`). The owner's
+   role in the SpecForge webapp is approval of those records, never editing declarations.
    `reopen_specification` is not proposed (declined once for E03-6's blast radius).
-2. **Pin once, now.** Amendment to step 5 above (owner to confirm): re-pin to `077dbe2c`
-   immediately rather than after the CD-074 fix merges. The spec assumes one sha for all stations,
-   E04 is otherwise idle, and the sddp station should *record* CD-074 at the pin (the bug is present
-   there) and mark it fixed by status bullet later — the same way every Tier fix was recorded.
+2. **Pin once, now — CONFIRMED and executed 2026-09-17.** Re-pinned to `077dbe2c` rather than
+   waiting for the CD-074 fix to merge. The spec assumes one sha for all stations, E04 was
+   otherwise idle, and the sddp station *records* CD-074 at the pin (the bug is present there) and
+   marks it fixed by status bullet later — the same way every Tier fix was recorded. The two
+   ratified stations stay anchored at `a136840d` through their entries' own `Baseline:` fields
+   (X1).
 3. **CD-074 fix stays outside the spec** (guardrail "no fixes in this spec"); its plan is its own
    SpecForge spec or a plain `plans/` plan, tracked by the register's status bullet.
 4. **E11-1/E11-2 fold** the existing PRIORITIES.md and POST-PLAN reconciliation rather than redoing it.
 
 ### Order of operations once E03-6 clears
 
-E03-6 finalize → re-pin (`pin-baseline.sh`) + re-calibrate `CAL`/`CAL-ENUM` → E04 (run) → E05 (with
-CD-074 lens; regenerate lp-inventory) → E06 (matrices as prior evidence) → E07 → E08 (after §5.1
-ratification) → E09 → E10 → E11.
+E03-6 finalize (DONE 2026-09-17) → re-pin (DONE) + re-calibrate `CAL`/`CAL-ENUM` (DONE, on the
+re-sanctioned deck) → E04 (run) → E05 (with CD-074 lens; regenerate lp-inventory) → E06 (matrices
+as prior evidence) → E07 → E08 (after §5.1 ratification) → E09 → E10 → E11.

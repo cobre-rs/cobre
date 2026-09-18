@@ -45,7 +45,7 @@ seeded=0; for r in "${RESULTS[@]}"; do IFS='|' read -r _ want _ <<<"$r"; [ "$wan
 [ "$seeded" -ge 5 ] || { echo "FAIL: fewer than five seeded-failure cases ran" >&2; FAIL=1; }
 
 # 3. perf-run.sh --dry-run prints the invocation, writes nothing, touches no deck
-DECK="${COBRE_PERF_DECK:-$HOME/git/cobre-bridge/example/cobre_reduzido_2}"
+DECK="${COBRE_PERF_DECK:-$HOME/git/cobre-bridge/example/cobre_reduzido}"
 deck_digest() { find "$1" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }   # same recipe as perf-run.sh
 tree_digest() { find "$AUDIT/measurements" -type f -printf '%p %s\n' 2>/dev/null | sort | sha256sum | cut -d' ' -f1; }
 deck_before="$(deck_digest "$DECK")"; tree_before="$(tree_digest)"
@@ -79,8 +79,9 @@ else
   case "$head_sha" in
     "$pinned"*) : ;;
     *) if git merge-base --is-ancestor "$pinned" HEAD \
-          && git diff --quiet "$pinned" HEAD -- crates docs scripts .github schemas Cargo.toml Cargo.lock examples tests; then
-         : # ledger-only commits above the pin: the evaluated surfaces are the pinned ones
+          && git diff --quiet "$pinned" HEAD -- crates docs scripts .github schemas Cargo.toml Cargo.lock examples tests \
+               ':(exclude)docs/design/reserved-seams-and-deferred-debt.md'; then
+         : # ledger + mirror commits above the pin: the evaluated surfaces are the pinned ones
        else
          echo "FAIL baseline-drift pinned=$pinned head=$head_sha" >&2; FAIL=1
        fi ;;

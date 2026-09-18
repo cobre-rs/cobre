@@ -8,7 +8,7 @@ caught rather than passing silently. Read-only: nothing here writes a file.
 
 Subcommands (each prints its findings and exits 0 clean / 1 violation / 3 no section):
   register   <audit-dir> <station-slug>     Alignment vocabulary + do-not-touch denylist + non-empty
-  inventory  <inventory.json> <repo-root>   frozen module census == find over the crate src roots
+  inventory  <inventory.json> <repo-root>   frozen module census == the .rs set at the census baseline
   genericity <repo-root> <partI-handoff>    the genericity gate + EXCLUDED_FILES=() + I.3-6 disposition
   readonly   <repo-root> <baseline-sha>     no station write to any evaluated surface (worktree or commit)
 """
@@ -37,7 +37,7 @@ HARD_STATUSES = frozenset(
     {"retracted", "refuted", "wontfix", "deferred", "do-not-touch"}
 )
 FINDING_ID_RE = re.compile(r"\b(?:CD|PD|OD|TD)-\d{3}\b")
-MIRROR = "docs/design/reserved-seams-and-deferred-debt.md"
+MIRROR = bp.MIRROR
 SEAM_SECTION = "Reserved-seam register"
 EVALUATED_ROOTS = (
     "crates",
@@ -221,11 +221,14 @@ def readonly_offenders(
 ) -> tuple[list[str], list[str]]:
     """(worktree offenders, committed offenders) touching an evaluated surface.
 
-    A porcelain line is `XY <path>`; the carried-in .gitignore and everything outside the
-    evaluated surfaces (i.e. the station's own plans/ writes) are exempt.
+    A porcelain line is `XY <path>`; the carried-in .gitignore, the ID-free mirror the
+    evaluation itself writes, and everything outside the evaluated surfaces (i.e. the
+    station's own plans/ writes) are exempt.
     """
 
     def on_surface(path: str) -> bool:
+        if path == MIRROR:
+            return False
         return path in EVALUATED_FILES or any(
             path.startswith(f"{root}/") for root in EVALUATED_ROOTS
         )
@@ -237,7 +240,7 @@ def readonly_offenders(
         path = line[3:].split(" -> ")[-1].strip()
         if path != ".gitignore" and on_surface(path):
             worktree.append(line.strip())
-    return worktree, [p for p in committed if p.strip()]
+    return worktree, [p for p in committed if p.strip() and p.strip() != MIRROR]
 
 
 def _git(root: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -262,6 +265,19 @@ def _cmd_register(audit: pathlib.Path, station: str) -> int:
     return EXIT_VIOLATION if bad else EXIT_OK
 
 
+def baseline_rs_files(root: pathlib.Path, baseline: str, roots: list[str]) -> list[str]:
+    """Every tracked .rs under `roots` in the tree at `baseline` (the station's evaluated tree)."""
+    out: list[str] = []
+    for src_root in roots:
+        listing = _git(root, "ls-tree", "-r", "--name-only", baseline, "--", src_root)
+        if listing.returncode != 0:
+            raise RuntimeError(
+                listing.stderr.strip() or f"{src_root} at {baseline[:8]}"
+            )
+        out += [p for p in listing.stdout.split() if p.endswith(".rs")]
+    return out
+
+
 def _cmd_inventory(inventory_path: pathlib.Path, root: pathlib.Path) -> int:
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
     listed = reconstruct_listed(inventory)
@@ -270,19 +286,12 @@ def _cmd_inventory(inventory_path: pathlib.Path, root: pathlib.Path) -> int:
         print(f"FAIL inventory self-consistency: duplicate module paths {dupes}")
         return EXIT_VIOLATION
     roots = crate_src_roots(inventory)
-    tree = _git(root, "ls-files", "--", *(f"{r}/*.rs" for r in roots)).stdout.split()
-    if not tree:
-        tree = subprocess.run(
-            ["find", *roots, "-name", "*.rs"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
+    baseline = str(inventory["baseline"])
+    tree = baseline_rs_files(root, baseline, roots)
     absent, unlisted = inventory_diff(listed, tree)
     if absent or unlisted:
         print(
-            f"FAIL inventory-set-equality: {len(absent)} listed-but-absent / "
+            f"FAIL inventory-set-equality at {baseline[:8]}: {len(absent)} listed-but-absent / "
             f"{len(unlisted)} present-but-unlisted"
         )
         for path in absent:
@@ -291,7 +300,8 @@ def _cmd_inventory(inventory_path: pathlib.Path, root: pathlib.Path) -> int:
             print(f"  present-but-unlisted {path}")
         return EXIT_VIOLATION
     print(
-        f"inventory and tree agree on {len(set(tree))} .rs files under {', '.join(roots)}"
+        f"inventory and the tree at {baseline[:8]} agree on {len(set(tree))} .rs files "
+        f"under {', '.join(roots)}"
     )
     return EXIT_OK
 

@@ -488,5 +488,43 @@
       ],
       "targetStation": "test-corpus"
     }
-  ]
+  ],
+  "gate": {
+    "date": "2026-09-18",
+    "decision": "ratified",
+    "rowsKept": [
+      "TD-041",
+      "TD-042",
+      "TD-043",
+      "TD-044",
+      "TD-045",
+      "TD-046",
+      "TD-047",
+      "TD-048",
+      "TD-049",
+      "TD-050",
+      "TD-051",
+      "TD-052",
+      "TD-053",
+      "TD-054",
+      "TD-055",
+      "TD-056"
+    ],
+    "rowsStruck": [],
+    "directions": {
+      "TD-042": "the fix stays a test-support constructor (..HydroPenalties::uniform(v) spread) with one full sixteen-field literal kept per crate as the compile-time canary; no Default derive in cobre-core",
+      "TD-044": "the in-file duplicates collapse at file scope in each binary; whether the shared class lifts into tests/common follows the E08 test-corpus convention decision",
+      "TD-045": "the shared state_layout_for lives in the test-support surface; invariance-shuffle.yml's missing --features test-support on the parity binary is handed to the build-ci station (E07) as a CI drift item",
+      "TD-046": "the lag-shift oracle leaves stochastic/noise.rs and the three production doc comments (noise.rs:211, state_space.rs:443, cut_state_projection.rs:269) describe the kernel by behaviour instead of naming the test oracle; no behaviour change",
+      "TD-047": "TD-047's split follows the three extracted-tests siblings in lp/builder (commitment_reconcile / layout / template); recorded as CD-007's convention decision",
+      "TD-048": "build_classical_fixture collapses onto build_par_a_fixture inside the binary now; folding onto two_hydro_par_system follows the E08 section 5.1 grouping decision",
+      "TD-049": "TD-049's ticket targets the O(1) Spec-layer extension to InflowModel, LoadModel and the four sizing structs, which owns the remaining fan-out; the nineteen-builder collapse lands as its first step",
+      "TD-051": "the duplicate sync_cuts count-mismatch binary is deleted now (coverage-neutral, independent of the API break); the surviving copy retires with the superseded method",
+      "TD-052": "tests/test_mpi_allgatherv_nonuniform_workers.rs is deleted (coverage-neutral); the historical nonuniform-workers bug stays traceable through git history and the surviving handshake_rejects_nonuniform_workers unit test",
+      "TD-053": "the genericity hard rule decides: Rank0Of2 names cobre-sddp's RankDistribution, so the StubComm / Rank0Of2 pair lives in cobre-sddp's test_support; a later StubComm move to a cobre-comm test-support feature is E08-2's call",
+      "TD-054": "one cfg-gated macro stamps the inert MockSolver body; the seven-to-one get_basis site and the two strict sites keep their own doubles",
+      "TD-055": "hold_k1_byte_stability_probe.rs is retired; the audited k_max partition becomes a short prose note in the testing-architecture doc; no executable gate",
+      "TD-056": "testing-architecture section 5.8 is ratified for the StubComm / Rank0Of2 pair; the merge half stays dismissed; the destination is cobre-sddp's test_support (NH25), not cobre-comm; conformance.rs:40 LocalComm's no-copy collectives are semantics by design; its rustdoc gains the single clause explaining the divergence from tests/common StubComm; no behaviour change"
+    }
+  }
 }

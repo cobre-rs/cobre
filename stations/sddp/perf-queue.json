@@ -260,5 +260,30 @@
       "queuedTo": "perf-sweep (E10-2 measures PD-004 on the enumerated deck; UNMEASURED until then)",
       "fixShape": null
     }
-  ]
+  ],
+  "gate": {
+    "date": "2026-09-18",
+    "decision": "ratified",
+    "rowsKept": [
+      "PD-036",
+      "PD-038",
+      "PD-039",
+      "PD-040",
+      "PD-041",
+      "PD-042",
+      "PD-044",
+      "PD-045",
+      "PD-047"
+    ],
+    "rowsStruck": [],
+    "existenceRow": "PD-004 unchanged (existence verdict + queue, no fix)",
+    "directions": {
+      "PD-036": "decision-tree rule 2: the cut-level decomposition becomes a NodeGraph field beside n_pools / pool_stage, reaching the backward drivers through TrainingContext; landed in the same change as the interior-cut-node accessor one-owner residue",
+      "PD-039": "PD-039's hoist is measured by the perf sweep at 4t and lands only with the parity goldens, the rank-invariance harness and the opening_order_determinism gate green; nothing asserted at the gate",
+      "PD-040": "the false 'no heap allocation' rustdoc at training/session/mod.rs:1026-1027 is made true in the same change that removes or documents run_cut_management's allocations; no extra id",
+      "PD-042": "the level-wide over-inclusion is a required correctness margin; PD-042 is exactly the byte-neutral one-block-per-level fix; narrowing each node's archive to its routed states is NOT licensed",
+      "PD-045": "PD-045's per-stage unscaled cache lives on StageContext as a load-balance-rows span (shared immutable per-stage data, the context-struct pattern); not per-worker scratch"
+    },
+    "informational": "the 5d-performance-03 dismissal stands; the two conceded setup-time FPHA-fitting residues (per-plane grid rebuild in the secant; duplicate deviation walk under the opt-in flag) are listed once as informational for E10; no setup-time track, no id, no queue row"
+  }
 }

@@ -1,0 +1,230 @@
+{
+  "station": "sddp",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "gateDate": "2026-09-18",
+  "targetEpic": "E9 alignment",
+  "rule": "every advances-* hint is provisional until the alignment epic adjudicates against the L0-L4 target layering; a `conflicts` hold enters only when overridden",
+  "rows": [
+    {
+      "id": "CD-082",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.3-7",
+      "severity": "B",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-2",
+          "choice": "Construction-time check, get stays infallible",
+          "rationale": "the fail-loud leg is enforced at the LP-build / admission-gate site riding the CD-004 single-projection carrier; ResolvedParameters::get keeps its infallible pub must_use signature"
+        }
+      ]
+    },
+    {
+      "id": "CD-085",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0b",
+      "partIRef": null,
+      "severity": "B",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-11",
+          "choice": "Bounded to seams/traits/crates; the accessor is fine",
+          "rationale": "conflicts trigger 4 does not reach a family-completing StateSpace accessor; CD-085 stays accepted at B, advances-0b, no hold; recorded on the E9 alignment queue"
+        }
+      ]
+    },
+    {
+      "id": "TD-045",
+      "kind": "new-entry",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-8",
+      "severity": "B",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-9",
+          "choice": "Consolidate behind test-support; E07 fixes the workflow",
+          "rationale": "the shared state_layout_for lives in the test-support surface; invariance-shuffle.yml's missing --features test-support on the parity binary is handed to the build-ci station (E07) as a CI drift item"
+        }
+      ]
+    },
+    {
+      "id": "CD-087",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0b",
+      "partIRef": null,
+      "severity": "C",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-27",
+          "choice": "Retire the private half now; public half in the API-break batch",
+          "rationale": "the intra-crate aliases go now; pub use policy::orchestration is removed in the same licensed public-API break as OD-037 / OD-038 / CD-083, updating cobre-cli, cobre-python, the corpus and scripts/ci/check_python_parity.py then"
+        }
+      ]
+    },
+    {
+      "id": "CD-088",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0a",
+      "partIRef": null,
+      "severity": "C",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-28",
+          "choice": "Land with 0a's shared output orchestration",
+          "rationale": "CD-088 stays accepted at C, advances-0a; the write-payload conversion moves when Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection, not as an intra-engine move 0a would undo"
+        }
+      ]
+    },
+    {
+      "id": "OD-037",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0b",
+      "partIRef": null,
+      "severity": "C",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-12",
+          "choice": "Batch with the next licensed public-API break / 0b carve",
+          "rationale": "OD-037's Col/Row removal ships in the same licensed public-API break as OD-038 and CD-083 (CD-019 batching precedent); the defect is settled, only the scheduling is batched"
+        }
+      ]
+    },
+    {
+      "id": "OD-038",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0b",
+      "partIRef": null,
+      "severity": "C",
+      "gateDecision": "accept",
+      "directions": [
+        {
+          "round": "R6-nh-13",
+          "choice": "Batch with the next licensed public-API break / 0b carve",
+          "rationale": "OD-038's FphaRowRange removal ships in the same licensed public-API break as OD-037 and CD-083; the false module doc is corrected now"
+        },
+        {
+          "round": "R6-nh-14",
+          "choice": "Joins OD-038",
+          "rationale": "one doc-correction step covers the FphaRowRange module doc and BlockGrid::advance_fpha_base's rustdoc (block_grid.rs:106-107); lands now, independent of the removal's batching"
+        }
+      ]
+    },
+    {
+      "id": "CD-003-construction-hop",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0a",
+      "partIRef": null,
+      "severity": "B",
+      "gateDecision": "ratify-as-presented",
+      "ownerDisposition": "retire",
+      "phase0aRestatement": "rank-0-executes MPI shape",
+      "directions": []
+    },
+    {
+      "id": "CD-004",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.3-7",
+      "severity": "B (A-risk)",
+      "gateDecision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "phase0aRestatement": "study-block admission-gate carrier",
+      "directions": []
+    },
+    {
+      "id": "CD-005",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0a",
+      "partIRef": null,
+      "severity": "B",
+      "gateDecision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "phase0aRestatement": "engine-tagged setup stages",
+      "directions": [
+        "re-baseline accepted (R5): Accept with re-baseline (Recommended) — CD-005 stays accepted; the fix lands only behind a parity re-baseline that names all three bars, with the NCS fields moved as one unit",
+        "R6-nh-1: Remove it and edit the rules line — StudySetup::set_budget is deleted and dropped from the .claude/architecture-rules.md accessor list; folds into the CD-005 split ticket (no public knob is kept)"
+      ]
+    },
+    {
+      "id": "CD-024-successor",
+      "kind": "prior-disposition",
+      "alignmentHint": "conflicts",
+      "partIRef": null,
+      "severity": "C",
+      "gateDecision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "phase0aRestatement": "study-block admission-gate carrier",
+      "directions": [
+        "hold closed by its alternative (R4): Take the alternative (Recommended) — die: the per-rank derivation stays; CD-024-successor rides CD-004's single Config projection; no broadcast seam, no id promoted; the hold closes as subsumed"
+      ]
+    },
+    {
+      "id": "CD-034",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0b",
+      "partIRef": null,
+      "severity": "B",
+      "gateDecision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "phase0aRestatement": null,
+      "directions": []
+    },
+    {
+      "id": "CD-007",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0b",
+      "partIRef": null,
+      "severity": "C",
+      "gateDecision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "phase0aRestatement": null,
+      "directions": []
+    }
+  ],
+  "holds": [
+    {
+      "id": "CD-024-successor",
+      "status": "CLOSED by its alternative at the owner gate (R4): the per-rank ResolvedParameters derivation stays and rides CD-004's single Config projection; no broadcast seam, no id promoted",
+      "condition": "one-consumer seam kept alive against a single hypothetical consumer ('pull, don't push', Part V §V.0)"
+    }
+  ],
+  "partI": {
+    "I.3-7": "carried by CD-004 (reused, sharpen, advances-0a) and CD-082 (advances-0a); see partI-handoff.json",
+    "I.3-8": "reaches this station through TD-045 (advances-1); owned by the solver+comm station"
+  },
+  "needsHumanForE9": [
+    {
+      "n": 11,
+      "round": "R6-nh-11",
+      "id": "CD-085",
+      "candidateRef": "5b-architecture-02",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Alignment-epic owner call: whether conflicts trigger 4 (one-consumer abstraction) reaches a purpose-named single-consumer StateSpace accessor that completes an existing five-member family, or is bounded to seams, traits and crates as its text states.",
+      "answer": "Bounded to seams/traits/crates; the accessor is fine",
+      "recommended": true,
+      "recordedAs": "conflicts trigger 4 does not reach a family-completing StateSpace accessor; CD-085 stays accepted at B, advances-0b, no hold; recorded on the E9 alignment queue"
+    },
+    {
+      "n": 28,
+      "round": "R6-nh-28",
+      "id": "CD-088",
+      "candidateRef": "5d-architecture-01",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/architecture 5d"
+      ],
+      "question": "Destination is an owner call and decides the hint: re-home inside the engine beside simulation/types.rs (a pure local cleanup, hint degrades to neutral) or leave it until Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection wholesale (target-layering-brief.md section 2, 0a bullet), which keeps advances-0a but makes the intra-engine move wasted work.",
+      "answer": "Land with 0a's shared output orchestration",
+      "recommended": true,
+      "recordedAs": "CD-088 stays accepted at C, advances-0a; the write-payload conversion moves when Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection, not as an intra-engine move 0a would undo"
+    }
+  ],
+  "lpInventory": "measurements/lp-inventory.json — 30 lp/ modules at the pin, reconciled by verify-sddp.py; the 0b-carve input; released"
+}

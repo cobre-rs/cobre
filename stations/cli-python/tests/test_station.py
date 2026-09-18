@@ -2263,6 +2263,177 @@ class CalibrationTests(sc.StationCase):
                 self.assertIn("alignment", row["queuedTo"])
 
 
+GENERIC_CHECKS = (
+    "check-anchors",
+    "check-reraise",
+    "fields-check",
+    "register",
+    "inventory-set-equality",
+    "infra-genericity",
+    "read-only-workspace",
+)
+STATION_CHECKS = (
+    "heading-resolution",
+    "figures",
+    "cross-check",
+    "supersession",
+    "wave-5-dispositions",
+    "i5-handoff",
+    "no-timing",
+    "read-only-snapshot",
+    "py-build",
+    "ci-visibility",
+)
+DATED_TITLE = SCAFFOLD_CLI[3:]
+FIGURES_HEADER = "figure\texpected\tmeasured\tstatus\tcommand"
+FIGURE_FLOOR = 17
+TREE_TOKEN = "<tree@077dbe2c>"
+
+
+class SectionVerifyTests(sc.StationCase):
+    """Executable proof of the station verification (E06-6).
+
+    verify-station.sh runs this module, so nothing here may invoke it (recursion); the
+    station driver verify-figures.sh is run once with --no-shared for the same reason, and
+    the rendered verification.md is read when it exists.
+    """
+
+    SLUG = "cli-python"
+    SECTION_TITLE = "cli-python"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.driver = cls.station_dir() / "verify-figures.sh"
+        cls.tsv_path = cls.station_dir() / "figures.tsv"
+        cls.committed_tsv = (
+            cls.tsv_path.read_text(encoding="utf-8") if cls.tsv_path.exists() else None
+        )
+        cls.driver_run = cls.run_driver(DATED_TITLE, "--no-shared")
+        cls.tsv = cls.tsv_path.read_text(encoding="utf-8")
+        cls.inv = sc.load_json(cls.station_dir() / "inventory.json")
+
+    @classmethod
+    def run_driver(cls, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(cls.driver), *args],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_checkers_exit_zero_over_the_dated_title_and_the_slug(self) -> None:
+        for arg in (DATED_TITLE, "cli-python"):
+            for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+                self.assertEqual(sc.run_checker(tool, arg), 0, f"{tool} {arg}")
+
+    def test_no_tracked_path_is_modified(self) -> None:
+        self.assertEqual(sc.tracked_modifications(), [])
+
+    def test_inventory_module_set_equals_the_rs_files_at_the_baseline(self) -> None:
+        tree = self.tree()
+        listed = [f["path"] for f in self.inv["files"]]
+        self.assertEqual(sorted(listed), sorted(set(listed)))
+        expected = sorted(p for root in ROOTS for p in tree.rs_files(root))
+        self.assertEqual(sorted(listed), expected)
+        for f in self.inv["files"]:
+            self.assertEqual(f["lines"], sc.raw_lines(f["path"], tree), f["path"])
+
+    def test_verify_figures_no_shared_exits_zero_with_every_check_passing(self) -> None:
+        out = self.driver_run.stdout
+        self.assertEqual(self.driver_run.returncode, 0, out + self.driver_run.stderr)
+        self.assertIn("## Station-specific checks — cli-python", out)
+        self.assertIsNotNone(
+            re.search(r"^\| shared-verifier \| .* \| - \| SKIP \|$", out, re.M)
+        )
+        for check in STATION_CHECKS:
+            self.assertIsNotNone(
+                re.search(rf"^\| {check} \| .* \| 0 \| PASS \|$", out, re.M), check
+            )
+        self.assertNotIn("| FAIL |", out)
+        self.assertNotIn("Failures:", out)
+        self.assertIn("Carried-in dirty tracked path: none at 077dbe2c", out)
+        self.assertIn("verify-figures.sh cli-python: PASS", self.driver_run.stdout)
+
+    def test_figures_tsv_all_ok_byte_stable_and_free_of_scratch_paths(self) -> None:
+        lines = self.tsv.splitlines()
+        self.assertEqual(lines[0], FIGURES_HEADER)
+        rows = [line.split("\t") for line in lines[1:]]
+        self.assertGreaterEqual(len(rows), FIGURE_FLOOR)
+        self.assertEqual(len({r[0] for r in rows}), len(rows))
+        for name, expected, measured, status, command in rows:
+            self.assertEqual(status, "OK", name)
+            self.assertEqual(expected, measured, name)
+            self.assertNotIn("/tmp/", command, name)
+            self.assertNotIn("verify-figures-cli-python.", command, name)
+        commands = "\n".join(r[4] for r in rows)
+        self.assertIn(TREE_TOKEN, commands)
+        for name in (
+            "src_files",
+            "src_lines",
+            "src_nontest_lines",
+            "sddp_refs",
+            "sddp_ref_files",
+            "sddp_use_lines",
+            "cli_writer_calls",
+            "py_writer_calls",
+            "cli_external_writer_names",
+            "py_external_writer_names",
+            "parity_shared_names",
+            "parity_exit",
+            "from_config_nontest_sites",
+            "cli_test_binaries",
+            "py_pytest_files",
+            "py_rust_tests",
+            "facade_lib_lines",
+            "py_cargo_check",
+            "ci_cargo_test_steps",
+        ):
+            self.assertIn(name, {r[0] for r in rows})
+        if self.committed_tsv is not None:
+            self.assertEqual(self.tsv, self.committed_tsv)
+
+    def test_bare_station_6_is_refused_as_a_selector(self) -> None:
+        for arg in ("STATION 6", "Station 6"):
+            result = self.run_driver(arg, "--no-shared")
+            self.assertEqual(result.returncode, 2, arg)
+            self.assertIn("FAIL heading-resolution", result.stderr)
+            self.assertEqual(result.stdout, "")
+        bad = self.run_driver("--bogus")
+        self.assertEqual(bad.returncode, 2)
+
+    def test_verification_report_carries_both_tables_all_passing(self) -> None:
+        report_path = self.artifact("verification.md")
+        if not report_path.exists():
+            # verify-station.sh runs this module BEFORE rendering the report, so the very
+            # first run has nothing to read; the next run (on the committed report) asserts it.
+            self.skipTest("verification.md not rendered yet (bootstrap run)")
+        report = report_path.read_text(encoding="utf-8")
+        self.assertIn(f"Station baseline: `{self.baseline()}`", report)
+        for i, check in enumerate(GENERIC_CHECKS, 1):
+            self.assertIsNotNone(
+                re.search(
+                    rf"^\| {i} \| {check} \| `[^`]+` \| 0 \| PASS \|$", report, re.M
+                ),
+                check,
+            )
+        self.assertIn("## Station-specific checks — cli-python", report)
+        self.assertIsNotNone(
+            re.search(r"^\| shared-verifier \| .* \| 0 \| PASS \|$", report, re.M)
+        )
+        for check in STATION_CHECKS:
+            self.assertIsNotNone(
+                re.search(rf"^\| {check} \| .* \| 0 \| PASS \|$", report, re.M), check
+            )
+        self.assertNotIn("| FAIL |", report)
+        self.assertNotIn("Failures:", report)
+        self.assertIn("Superseded figures (old → new", report)
+        for sn in ("SN-01", "SN-02", "SN-03", "SN-06"):
+            self.assertIn(sn, report)
+        # The "Test suite: …" line is written AFTER this module runs and reflects this very
+        # run, so asserting it here would be circular; only the check rows are asserted.
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_under_an_evaluated_surface_is_modified(self) -> None:
         out = subprocess.run(

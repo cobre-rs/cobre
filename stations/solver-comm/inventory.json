@@ -1,0 +1,1988 @@
+{
+  "station": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "producedAt": "2026-09-17",
+  "commands": {
+    "setEquality": "git ls-tree -r --name-only <baseline> -- crates/cobre-solver/src crates/cobre-comm/src | grep '\\.rs$' | sort   (== find crates/cobre-solver/src crates/cobre-comm/src -name '*.rs' | sort at a checkout of the baseline)",
+    "linesRaw": "git show <baseline>:<path> | wc -l   (station_checks.raw_lines(path, Tree(baseline)))",
+    "linesNonTest": "scripts/loc-stats.sh non-test rule applied per file (station_checks.classify_lines): tests.rs/test_support.rs and anything under tests|benches are wholly test; an inline #[cfg(test)] item is test through the } at its own indent",
+    "locStats": "bash scripts/loc-stats.sh --csv at a checkout of the baseline (station_checks.loc_stats(crate, Tree(baseline)))",
+    "topSymbols": "grep -nE '^(pub(\\([a-z]+\\))? )?(unsafe )?(fn|struct|enum|trait|type|const|static|impl|mod) ' <file>",
+    "testSurface": "git ls-tree -r --name-only <baseline> -- crates/<crate>/tests | grep '\\.rs$' | xargs -I{} sh -c 'git show <baseline>:{} | wc -l'",
+    "unsafeSites": "grep -c '\\bunsafe\\b' <file> excluding // comment lines"
+  },
+  "crates": {
+    "cobre-comm": {
+      "srcFiles": 7,
+      "linesRaw": 3071,
+      "linesNonTest": 1764,
+      "linesInSrcTest": 1307,
+      "layer": "L0",
+      "locStats": {
+        "files": 9,
+        "prod_code": 907,
+        "prod_all": 1764,
+        "test_code": 1438,
+        "test_all": 1732,
+        "test_fns": 120
+      }
+    },
+    "cobre-solver": {
+      "srcFiles": 23,
+      "linesRaw": 9608,
+      "linesNonTest": 5442,
+      "linesInSrcTest": 4166,
+      "layer": "L0",
+      "locStats": {
+        "files": 33,
+        "prod_code": 3198,
+        "prod_all": 5925,
+        "test_code": 6190,
+        "test_all": 8139,
+        "test_fns": 211
+      }
+    }
+  },
+  "files": [
+    {
+      "path": "crates/cobre-comm/src/factory.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 483,
+      "linesNonTest": 294,
+      "linesInSrcTest": 189,
+      "topSymbols": [
+        {
+          "name": "BackendKind",
+          "kind": "enum",
+          "line": 43
+        },
+        {
+          "name": "CommBackend",
+          "kind": "enum",
+          "line": 62
+        },
+        {
+          "name": "fn",
+          "kind": "const",
+          "line": 74
+        },
+        {
+          "name": "crate::Communicator for CommBackend",
+          "kind": "impl",
+          "line": 80
+        },
+        {
+          "name": "crate::SharedMemoryProvider for CommBackend",
+          "kind": "impl",
+          "line": 143
+        },
+        {
+          "name": "crate::TopologyProvider for CommBackend",
+          "kind": "impl",
+          "line": 174
+        },
+        {
+          "name": "available_backends",
+          "kind": "fn",
+          "line": 197
+        },
+        {
+          "name": "mpi_launch_detected",
+          "kind": "fn",
+          "line": 211
+        },
+        {
+          "name": "auto_detect",
+          "kind": "fn",
+          "line": 228
+        },
+        {
+          "name": "create_communicator",
+          "kind": "fn",
+          "line": 257
+        },
+        {
+          "name": "create_communicator",
+          "kind": "fn",
+          "line": 287
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 296
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-comm/src/ferrompi.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 735,
+      "linesNonTest": 482,
+      "linesInSrcTest": 253,
+      "topSymbols": [
+        {
+          "name": "FerrompiBackend",
+          "kind": "struct",
+          "line": 42
+        },
+        {
+          "name": "Send for FerrompiBackend",
+          "kind": "impl",
+          "line": 75
+        },
+        {
+          "name": "Sync for FerrompiBackend",
+          "kind": "impl",
+          "line": 76
+        },
+        {
+          "name": "FerrompiBackend",
+          "kind": "impl",
+          "line": 78
+        },
+        {
+          "name": "sanitize_library_version",
+          "kind": "fn",
+          "line": 166
+        },
+        {
+          "name": "convert_slurm_info",
+          "kind": "fn",
+          "line": 179
+        },
+        {
+          "name": "convert_slurm_info",
+          "kind": "fn",
+          "line": 190
+        },
+        {
+          "name": "crate::TopologyProvider for FerrompiBackend",
+          "kind": "impl",
+          "line": 195
+        },
+        {
+          "name": "FerrompiLocalComm",
+          "kind": "struct",
+          "line": 207
+        },
+        {
+          "name": "LocalCommunicator for FerrompiLocalComm",
+          "kind": "impl",
+          "line": 210
+        },
+        {
+          "name": "crate::SharedMemoryProvider for FerrompiBackend",
+          "kind": "impl",
+          "line": 239
+        },
+        {
+          "name": "map_ferrompi_error",
+          "kind": "fn",
+          "line": 281
+        },
+        {
+          "name": "map_reduce_op",
+          "kind": "fn",
+          "line": 328
+        },
+        {
+          "name": "to_i32_vec",
+          "kind": "fn",
+          "line": 345
+        },
+        {
+          "name": "crate::Communicator for FerrompiBackend",
+          "kind": "impl",
+          "line": 359
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 484
+        }
+      ],
+      "unsafeSites": 2,
+      "flags": [
+        "reserved-seam:shared-memory",
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols",
+      "reservedSeamAnchors": [
+        {
+          "symbol": "FerrompiLocalComm",
+          "line": 207
+        },
+        {
+          "symbol": "split_local",
+          "line": 264,
+          "note": "trait-impl method (indented), anchored by grep"
+        }
+      ],
+      "unsafeImplLines": [
+        75,
+        76
+      ],
+      "sharedMemoryProviderImplLine": 239
+    },
+    {
+      "path": "crates/cobre-comm/src/lib.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 100,
+      "linesNonTest": 100,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "factory",
+          "kind": "mod",
+          "line": 47
+        },
+        {
+          "name": "local",
+          "kind": "mod",
+          "line": 48
+        },
+        {
+          "name": "topology",
+          "kind": "mod",
+          "line": 49
+        },
+        {
+          "name": "traits",
+          "kind": "mod",
+          "line": 50
+        },
+        {
+          "name": "types",
+          "kind": "mod",
+          "line": 51
+        },
+        {
+          "name": "ferrompi",
+          "kind": "mod",
+          "line": 54
+        },
+        {
+          "name": "per_rank_counts",
+          "kind": "fn",
+          "line": 83
+        },
+        {
+          "name": "prefix_displs",
+          "kind": "fn",
+          "line": 94
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "perf-helpers"
+      ],
+      "commandRef": "topSymbols",
+      "perfHelpers": {
+        "symbols": [
+          {
+            "name": "per_rank_counts",
+            "kind": "fn",
+            "line": 83
+          },
+          {
+            "name": "prefix_displs",
+            "kind": "fn",
+            "line": 94
+          }
+        ],
+        "consumers": [
+          {
+            "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+            "line": 182,
+            "helper": "per_rank_counts"
+          },
+          {
+            "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+            "line": 186,
+            "helper": "prefix_displs"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/stats_aggregation.rs",
+            "line": 118,
+            "helper": "per_rank_counts"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/stats_aggregation.rs",
+            "line": 131,
+            "helper": "prefix_displs"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/stats_aggregation.rs",
+            "line": 159,
+            "helper": "prefix_displs"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/session/rank_distribution.rs",
+            "line": 61,
+            "helper": "per_rank_counts"
+          }
+        ],
+        "command": "grep -rn 'per_rank_counts\\|prefix_displs' --include='*.rs' crates/cobre-comm/src crates/cobre-sddp/src"
+      }
+    },
+    {
+      "path": "crates/cobre-comm/src/local.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 602,
+      "linesNonTest": 265,
+      "linesInSrcTest": 337,
+      "topSymbols": [
+        {
+          "name": "LocalBackend",
+          "kind": "struct",
+          "line": 37
+        },
+        {
+          "name": "Communicator for LocalBackend",
+          "kind": "impl",
+          "line": 39
+        },
+        {
+          "name": "HeapRegion",
+          "kind": "struct",
+          "line": 155
+        },
+        {
+          "name": "SharedMemoryProvider for LocalBackend",
+          "kind": "impl",
+          "line": 187
+        },
+        {
+          "name": "LocalCommunicator for LocalBackend",
+          "kind": "impl",
+          "line": 219
+        },
+        {
+          "name": "crate::TopologyProvider for LocalBackend",
+          "kind": "impl",
+          "line": 233
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 268
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "reserved-seam:shared-memory"
+      ],
+      "commandRef": "topSymbols",
+      "reservedSeamAnchors": [
+        {
+          "symbol": "HeapRegion",
+          "line": 155
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-comm/src/topology.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 181,
+      "linesNonTest": 83,
+      "linesInSrcTest": 98,
+      "topSymbols": [
+        {
+          "name": "ExecutionTopology",
+          "kind": "struct",
+          "line": 9
+        },
+        {
+          "name": "ExecutionTopology",
+          "kind": "impl",
+          "line": 22
+        },
+        {
+          "name": "HostInfo",
+          "kind": "struct",
+          "line": 55
+        },
+        {
+          "name": "MpiRuntimeInfo",
+          "kind": "struct",
+          "line": 64
+        },
+        {
+          "name": "SlurmJobInfo",
+          "kind": "struct",
+          "line": 75
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 85
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-comm/src/traits.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 713,
+      "linesNonTest": 419,
+      "linesInSrcTest": 294,
+      "topSymbols": [
+        {
+          "name": "CommData",
+          "kind": "trait",
+          "line": 48
+        },
+        {
+          "name": "CommData",
+          "kind": "trait",
+          "line": 58
+        },
+        {
+          "name": "Communicator",
+          "kind": "trait",
+          "line": 90
+        },
+        {
+          "name": "LocalCommunicator",
+          "kind": "trait",
+          "line": 254
+        },
+        {
+          "name": "LocalCommKind",
+          "kind": "enum",
+          "line": 275
+        },
+        {
+          "name": "LocalCommunicator for LocalCommKind",
+          "kind": "impl",
+          "line": 284
+        },
+        {
+          "name": "SharedRegion",
+          "kind": "trait",
+          "line": 320
+        },
+        {
+          "name": "SharedMemoryProvider",
+          "kind": "trait",
+          "line": 372
+        },
+        {
+          "name": "TopologyProvider",
+          "kind": "trait",
+          "line": 414
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 421
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "reserved-seam:shared-memory"
+      ],
+      "commandRef": "topSymbols",
+      "reservedSeamAnchors": [
+        {
+          "symbol": "LocalCommunicator",
+          "line": 254
+        },
+        {
+          "symbol": "LocalCommKind",
+          "line": 275
+        },
+        {
+          "symbol": "SharedRegion",
+          "line": 320
+        },
+        {
+          "symbol": "SharedMemoryProvider",
+          "line": 372
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-comm/src/types.rs",
+      "crate": "cobre-comm",
+      "kind": "source",
+      "linesRaw": 257,
+      "linesNonTest": 121,
+      "linesInSrcTest": 136,
+      "topSymbols": [
+        {
+          "name": "ReduceOp",
+          "kind": "enum",
+          "line": 8
+        },
+        {
+          "name": "CommError",
+          "kind": "enum",
+          "line": 25
+        },
+        {
+          "name": "BackendError",
+          "kind": "enum",
+          "line": 75
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 123
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/clp/config.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 62,
+      "linesNonTest": 62,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "ClpAlgorithm",
+          "kind": "enum",
+          "line": 7
+        },
+        {
+          "name": "ClpProfile",
+          "kind": "struct",
+          "line": 21
+        },
+        {
+          "name": "Default for ClpProfile",
+          "kind": "impl",
+          "line": 49
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 657,
+      "linesNonTest": 657,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "SolverInterface for ClpSolver",
+          "kind": "impl",
+          "line": 13
+        }
+      ],
+      "unsafeSites": 16,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/clp/mod.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 25,
+      "linesNonTest": 23,
+      "linesInSrcTest": 2,
+      "topSymbols": [
+        {
+          "name": "config",
+          "kind": "mod",
+          "line": 10
+        },
+        {
+          "name": "interface",
+          "kind": "mod",
+          "line": 11
+        },
+        {
+          "name": "retry",
+          "kind": "mod",
+          "line": 12
+        },
+        {
+          "name": "solver",
+          "kind": "mod",
+          "line": 13
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 15
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/clp/retry.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 147,
+      "linesNonTest": 147,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "LADDER_RUNGS",
+          "kind": "const",
+          "line": 24
+        },
+        {
+          "name": "EscalationOutcome",
+          "kind": "struct",
+          "line": 33
+        },
+        {
+          "name": "ClpSolver",
+          "kind": "impl",
+          "line": 44
+        }
+      ],
+      "unsafeSites": 5,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 535,
+      "linesNonTest": 535,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "CLP_BASIS_AT_LOWER",
+          "kind": "const",
+          "line": 18
+        },
+        {
+          "name": "CLP_BASIS_BASIC",
+          "kind": "const",
+          "line": 22
+        },
+        {
+          "name": "ClpSolver",
+          "kind": "struct",
+          "line": 45
+        },
+        {
+          "name": "Send for ClpSolver",
+          "kind": "impl",
+          "line": 94
+        },
+        {
+          "name": "ClpSolver",
+          "kind": "impl",
+          "line": 96
+        },
+        {
+          "name": "fn",
+          "kind": "const",
+          "line": 488
+        },
+        {
+          "name": "i32_from_usize",
+          "kind": "fn",
+          "line": 497
+        },
+        {
+          "name": "Drop for ClpSolver",
+          "kind": "impl",
+          "line": 505
+        },
+        {
+          "name": "clp_version",
+          "kind": "fn",
+          "line": 527
+        }
+      ],
+      "unsafeSites": 21,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/clp/tests.rs",
+      "crate": "cobre-solver",
+      "kind": "sibling-test-module",
+      "linesRaw": 911,
+      "linesNonTest": 0,
+      "linesInSrcTest": 911,
+      "topSymbols": [
+        {
+          "name": "assert_profile_bounds",
+          "kind": "fn",
+          "line": 6
+        },
+        {
+          "name": "assert_send",
+          "kind": "fn",
+          "line": 8
+        },
+        {
+          "name": "make_fixture_stage_template",
+          "kind": "fn",
+          "line": 20
+        },
+        {
+          "name": "make_fixture_row_batch",
+          "kind": "fn",
+          "line": 52
+        },
+        {
+          "name": "test_clp_profile_default_values",
+          "kind": "fn",
+          "line": 64
+        },
+        {
+          "name": "test_clp_solver_create_and_name",
+          "kind": "fn",
+          "line": 85
+        },
+        {
+          "name": "test_clp_solver_name_version_format",
+          "kind": "fn",
+          "line": 91
+        },
+        {
+          "name": "test_clp_profile_satisfies_associated_type_bounds",
+          "kind": "fn",
+          "line": 99
+        },
+        {
+          "name": "test_clp_solver_send_bound",
+          "kind": "fn",
+          "line": 104
+        },
+        {
+          "name": "test_clp_load_model_updates_dimensions",
+          "kind": "fn",
+          "line": 111
+        },
+        {
+          "name": "test_clp_load_model_accepts_infinite_bounds",
+          "kind": "fn",
+          "line": 126
+        },
+        {
+          "name": "test_clp_load_model_reload_zero_row",
+          "kind": "fn",
+          "line": 141
+        },
+        {
+          "name": "test_clp_load_model_count_accumulates",
+          "kind": "fn",
+          "line": 175
+        },
+        {
+          "name": "test_clp_add_rows_updates_dimensions",
+          "kind": "fn",
+          "line": 187
+        },
+        {
+          "name": "test_clp_set_row_bounds_patches_retained",
+          "kind": "fn",
+          "line": 224
+        },
+        {
+          "name": "test_clp_set_col_bounds_patches_retained",
+          "kind": "fn",
+          "line": 235
+        },
+        {
+          "name": "test_clp_set_bounds_empty_no_reload",
+          "kind": "fn",
+          "line": 246
+        },
+        {
+          "name": "test_clp_add_rows_then_solve_objective",
+          "kind": "fn",
+          "line": 265
+        },
+        {
+          "name": "test_clp_solve_basic_lp",
+          "kind": "fn",
+          "line": 277
+        },
+        {
+          "name": "test_clp_solve_basic_lp_primal_algorithm",
+          "kind": "fn",
+          "line": 308
+        },
+        {
+          "name": "test_clp_solve_infeasible",
+          "kind": "fn",
+          "line": 344
+        },
+        {
+          "name": "test_clp_escalation_restores_floor_after_exhaustion",
+          "kind": "fn",
+          "line": 368
+        },
+        {
+          "name": "test_clp_full_profile_survives_escalation_finalization",
+          "kind": "fn",
+          "line": 423
+        },
+        {
+          "name": "test_clp_solve_unbounded",
+          "kind": "fn",
+          "line": 460
+        },
+        {
+          "name": "test_clp_solve_twice_stats",
+          "kind": "fn",
+          "line": 501
+        },
+        {
+          "name": "test_clp_statistics_into_equals_statistics",
+          "kind": "fn",
+          "line": 518
+        },
+        {
+          "name": "test_clp_get_basis_dimensions_and_codes",
+          "kind": "fn",
+          "line": 557
+        },
+        {
+          "name": "test_clp_warm_start_roundtrip_objective",
+          "kind": "fn",
+          "line": 580
+        },
+        {
+          "name": "test_clp_solve_rejects_undersized_row_basis",
+          "kind": "fn",
+          "line": 609
+        },
+        {
+          "name": "test_clp_get_basis_without_model_panics",
+          "kind": "fn",
+          "line": 667
+        },
+        {
+          "name": "test_clp_basis_roundtrip_identity",
+          "kind": "fn",
+          "line": 673
+        },
+        {
+          "name": "test_clp_apply_default_profile_then_solve",
+          "kind": "fn",
+          "line": 692
+        },
+        {
+          "name": "test_clp_apply_tuned_pricing_profile_then_solve",
+          "kind": "fn",
+          "line": 711
+        },
+        {
+          "name": "test_clp_hot_start_mark_solve_unmark",
+          "kind": "fn",
+          "line": 736
+        },
+        {
+          "name": "test_clp_hot_start_drop_releases_token",
+          "kind": "fn",
+          "line": 758
+        },
+        {
+          "name": "test_clp_load_model_releases_live_hot_start_token",
+          "kind": "fn",
+          "line": 770
+        },
+        {
+          "name": "test_clp_add_rows_releases_live_hot_start_token",
+          "kind": "fn",
+          "line": 796
+        },
+        {
+          "name": "test_clp_add_rows_empty_batch_preserves_hot_start_token",
+          "kind": "fn",
+          "line": 819
+        },
+        {
+          "name": "test_clp_tolerance_setters_cache_profile",
+          "kind": "fn",
+          "line": 850
+        },
+        {
+          "name": "test_clp_profiled_solver_default_noop",
+          "kind": "fn",
+          "line": 865
+        },
+        {
+          "name": "test_clp_usable_as_generic_solver_bound",
+          "kind": "fn",
+          "line": 877
+        },
+        {
+          "name": "test_clp_resolve_simplex_cap_sentinel_and_explicit",
+          "kind": "fn",
+          "line": 894
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/highs/config.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 239,
+      "linesNonTest": 239,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "HighsProfile",
+          "kind": "struct",
+          "line": 13
+        },
+        {
+          "name": "Default for HighsProfile",
+          "kind": "impl",
+          "line": 58
+        },
+        {
+          "name": "PresolveKind",
+          "kind": "enum",
+          "line": 81
+        },
+        {
+          "name": "PresolveKind",
+          "kind": "impl",
+          "line": 90
+        },
+        {
+          "name": "OptionValue",
+          "kind": "enum",
+          "line": 103
+        },
+        {
+          "name": "DefaultOption",
+          "kind": "struct",
+          "line": 115
+        },
+        {
+          "name": "DefaultOption",
+          "kind": "impl",
+          "line": 120
+        },
+        {
+          "name": "default_options",
+          "kind": "fn",
+          "line": 168
+        }
+      ],
+      "unsafeSites": 2,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/highs/interface.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 546,
+      "linesNonTest": 546,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "SolverInterface for HighsSolver",
+          "kind": "impl",
+          "line": 13
+        }
+      ],
+      "unsafeSites": 9,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/highs/mod.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 24,
+      "linesNonTest": 22,
+      "linesInSrcTest": 2,
+      "topSymbols": [
+        {
+          "name": "config",
+          "kind": "mod",
+          "line": 16
+        },
+        {
+          "name": "interface",
+          "kind": "mod",
+          "line": 17
+        },
+        {
+          "name": "retry",
+          "kind": "mod",
+          "line": 18
+        },
+        {
+          "name": "solver",
+          "kind": "mod",
+          "line": 19
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 21
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/highs/retry.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 304,
+      "linesNonTest": 304,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "RetryOutcome",
+          "kind": "struct",
+          "line": 12
+        },
+        {
+          "name": "HighsSolver",
+          "kind": "impl",
+          "line": 20
+        }
+      ],
+      "unsafeSites": 14,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/highs/solver.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 652,
+      "linesNonTest": 652,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "HighsSolver",
+          "kind": "struct",
+          "line": 31
+        },
+        {
+          "name": "Send for HighsSolver",
+          "kind": "impl",
+          "line": 73
+        },
+        {
+          "name": "HighsSolver",
+          "kind": "impl",
+          "line": 75
+        },
+        {
+          "name": "Drop for HighsSolver",
+          "kind": "impl",
+          "line": 546
+        },
+        {
+          "name": "highs_version",
+          "kind": "fn",
+          "line": 565
+        },
+        {
+          "name": "HighsSolver",
+          "kind": "impl",
+          "line": 581
+        }
+      ],
+      "unsafeSites": 23,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+      "crate": "cobre-solver",
+      "kind": "sibling-test-module",
+      "linesRaw": 1371,
+      "linesNonTest": 0,
+      "linesInSrcTest": 1371,
+      "topSymbols": [
+        {
+          "name": "make_fixture_stage_template",
+          "kind": "fn",
+          "line": 19
+        },
+        {
+          "name": "make_fixture_row_batch",
+          "kind": "fn",
+          "line": 45
+        },
+        {
+          "name": "test_highs_solver_create_and_name",
+          "kind": "fn",
+          "line": 57
+        },
+        {
+          "name": "test_highs_solver_send_bound",
+          "kind": "fn",
+          "line": 64
+        },
+        {
+          "name": "test_highs_solver_statistics_initial",
+          "kind": "fn",
+          "line": 70
+        },
+        {
+          "name": "test_highs_load_model_updates_dimensions",
+          "kind": "fn",
+          "line": 82
+        },
+        {
+          "name": "test_highs_load_model_short_col_lower_panics",
+          "kind": "fn",
+          "line": 117
+        },
+        {
+          "name": "test_highs_load_model_oversized_row_scale_panics",
+          "kind": "fn",
+          "line": 129
+        },
+        {
+          "name": "test_highs_load_model_empty_row_scale_loads",
+          "kind": "fn",
+          "line": 139
+        },
+        {
+          "name": "test_highs_add_rows_updates_dimensions",
+          "kind": "fn",
+          "line": 151
+        },
+        {
+          "name": "test_highs_set_row_bounds_no_panic",
+          "kind": "fn",
+          "line": 175
+        },
+        {
+          "name": "test_highs_set_col_bounds_no_panic",
+          "kind": "fn",
+          "line": 184
+        },
+        {
+          "name": "test_highs_set_bounds_empty_no_panic",
+          "kind": "fn",
+          "line": 193
+        },
+        {
+          "name": "test_highs_solve_basic_lp",
+          "kind": "fn",
+          "line": 206
+        },
+        {
+          "name": "test_highs_solve_with_cuts",
+          "kind": "fn",
+          "line": 242
+        },
+        {
+          "name": "test_highs_solve_after_rhs_patch",
+          "kind": "fn",
+          "line": 278
+        },
+        {
+          "name": "test_highs_solve_statistics_increment",
+          "kind": "fn",
+          "line": 301
+        },
+        {
+          "name": "test_highs_solve_preserves_stats",
+          "kind": "fn",
+          "line": 321
+        },
+        {
+          "name": "test_highs_solve_iterations_positive",
+          "kind": "fn",
+          "line": 342
+        },
+        {
+          "name": "test_highs_solve_time_positive",
+          "kind": "fn",
+          "line": 353
+        },
+        {
+          "name": "test_highs_solve_statistics_single",
+          "kind": "fn",
+          "line": 370
+        },
+        {
+          "name": "test_highs_statistics_into_equals_statistics",
+          "kind": "fn",
+          "line": 385
+        },
+        {
+          "name": "test_get_basis_valid_status_codes",
+          "kind": "fn",
+          "line": 427
+        },
+        {
+          "name": "test_get_basis_resizes_output",
+          "kind": "fn",
+          "line": 465
+        },
+        {
+          "name": "test_solve_warm_start_reproduces_cold_objective",
+          "kind": "fn",
+          "line": 502
+        },
+        {
+          "name": "test_highs_solve_rejects_undersized_row_basis",
+          "kind": "fn",
+          "line": 548
+        },
+        {
+          "name": "test_solve_warm_start_non_alien_success",
+          "kind": "fn",
+          "line": 615
+        },
+        {
+          "name": "test_solve_warm_start_rejects_inconsistent_basis",
+          "kind": "fn",
+          "line": 657
+        },
+        {
+          "name": "interpret_terminal_status_reuses_scratch",
+          "kind": "fn",
+          "line": 725
+        },
+        {
+          "name": "research_tests",
+          "kind": "mod",
+          "line": 796
+        }
+      ],
+      "unsafeSites": 68,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/mod.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 13,
+      "linesNonTest": 13,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "highs",
+          "kind": "mod",
+          "line": 8
+        },
+        {
+          "name": "clp",
+          "kind": "mod",
+          "line": 11
+        },
+        {
+          "name": "profiled",
+          "kind": "mod",
+          "line": 13
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/backends/profiled.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 438,
+      "linesNonTest": 137,
+      "linesInSrcTest": 301,
+      "topSymbols": [
+        {
+          "name": "ProfiledSolver",
+          "kind": "struct",
+          "line": 30
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 139
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "partI-item-8-surface"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/basis_status.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 290,
+      "linesNonTest": 128,
+      "linesInSrcTest": 162,
+      "topSymbols": [
+        {
+          "name": "BasisStatus",
+          "kind": "enum",
+          "line": 17
+        },
+        {
+          "name": "BasisStatus",
+          "kind": "impl",
+          "line": 34
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 130
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/ffi/clp.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 380,
+      "linesNonTest": 294,
+      "linesInSrcTest": 86,
+      "topSymbols": [
+        {
+          "name": "int32_t",
+          "kind": "type",
+          "line": 10
+        },
+        {
+          "name": "CLP_STATUS_OPTIMAL",
+          "kind": "const",
+          "line": 17
+        },
+        {
+          "name": "CLP_STATUS_PRIMAL_INFEASIBLE",
+          "kind": "const",
+          "line": 19
+        },
+        {
+          "name": "CLP_STATUS_DUAL_INFEASIBLE",
+          "kind": "const",
+          "line": 21
+        },
+        {
+          "name": "CLP_STATUS_STOPPED",
+          "kind": "const",
+          "line": 23
+        },
+        {
+          "name": "CLP_STATUS_ERRORS",
+          "kind": "const",
+          "line": 25
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 296
+        }
+      ],
+      "unsafeSites": 8,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/ffi/highs.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 367,
+      "linesNonTest": 299,
+      "linesInSrcTest": 68,
+      "topSymbols": [
+        {
+          "name": "int32_t",
+          "kind": "type",
+          "line": 10
+        },
+        {
+          "name": "HIGHS_STATUS_ERROR",
+          "kind": "const",
+          "line": 17
+        },
+        {
+          "name": "HIGHS_STATUS_OK",
+          "kind": "const",
+          "line": 19
+        },
+        {
+          "name": "HIGHS_STATUS_WARNING",
+          "kind": "const",
+          "line": 21
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_SOLVE_ERROR",
+          "kind": "const",
+          "line": 28
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_OPTIMAL",
+          "kind": "const",
+          "line": 30
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_INFEASIBLE",
+          "kind": "const",
+          "line": 32
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_UNBOUNDED_OR_INFEASIBLE",
+          "kind": "const",
+          "line": 34
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_UNBOUNDED",
+          "kind": "const",
+          "line": 36
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_TIME_LIMIT",
+          "kind": "const",
+          "line": 38
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_ITERATION_LIMIT",
+          "kind": "const",
+          "line": 40
+        },
+        {
+          "name": "HIGHS_MODEL_STATUS_UNKNOWN",
+          "kind": "const",
+          "line": 42
+        },
+        {
+          "name": "HIGHS_BASIS_STATUS_LOWER",
+          "kind": "const",
+          "line": 49
+        },
+        {
+          "name": "HIGHS_BASIS_STATUS_BASIC",
+          "kind": "const",
+          "line": 51
+        },
+        {
+          "name": "HIGHS_BASIS_STATUS_UPPER",
+          "kind": "const",
+          "line": 53
+        },
+        {
+          "name": "HIGHS_BASIS_STATUS_ZERO",
+          "kind": "const",
+          "line": 55
+        },
+        {
+          "name": "HIGHS_BASIS_STATUS_NONBASIC",
+          "kind": "const",
+          "line": 57
+        },
+        {
+          "name": "HIGHS_MATRIX_FORMAT_COLWISE",
+          "kind": "const",
+          "line": 64
+        },
+        {
+          "name": "HIGHS_MATRIX_FORMAT_ROWWISE",
+          "kind": "const",
+          "line": 66
+        },
+        {
+          "name": "HIGHS_OBJ_SENSE_MINIMIZE",
+          "kind": "const",
+          "line": 73
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 301
+        }
+      ],
+      "unsafeSites": 8,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/ffi/mod.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 21,
+      "linesNonTest": 21,
+      "linesInSrcTest": 0,
+      "topSymbols": [
+        {
+          "name": "highs",
+          "kind": "mod",
+          "line": 15
+        },
+        {
+          "name": "clp",
+          "kind": "mod",
+          "line": 18
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/freeze.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 855,
+      "linesNonTest": 243,
+      "linesInSrcTest": 612,
+      "topSymbols": [
+        {
+          "name": "FreezeScratch",
+          "kind": "struct",
+          "line": 21
+        },
+        {
+          "name": "FreezeScratch",
+          "kind": "impl",
+          "line": 29
+        },
+        {
+          "name": "freeze_rows_into_template",
+          "kind": "fn",
+          "line": 57
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 245
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "partI-item-8-surface"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/lib.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 391,
+      "linesNonTest": 334,
+      "linesInSrcTest": 57,
+      "topSymbols": [
+        {
+          "name": "ffi",
+          "kind": "mod",
+          "line": 52
+        },
+        {
+          "name": "basis_status",
+          "kind": "mod",
+          "line": 57
+        },
+        {
+          "name": "trait_def",
+          "kind": "mod",
+          "line": 60
+        },
+        {
+          "name": "types",
+          "kind": "mod",
+          "line": 63
+        },
+        {
+          "name": "profile",
+          "kind": "mod",
+          "line": 68
+        },
+        {
+          "name": "freeze",
+          "kind": "mod",
+          "line": 71
+        },
+        {
+          "name": "backends",
+          "kind": "mod",
+          "line": 74
+        },
+        {
+          "name": "ActiveSolver",
+          "kind": "type",
+          "line": 95
+        },
+        {
+          "name": "ActiveSolver",
+          "kind": "type",
+          "line": 101
+        },
+        {
+          "name": "ActiveProfile",
+          "kind": "type",
+          "line": 106
+        },
+        {
+          "name": "ActiveProfile",
+          "kind": "type",
+          "line": 111
+        },
+        {
+          "name": "active_solver_version",
+          "kind": "fn",
+          "line": 117
+        },
+        {
+          "name": "active_solver_version",
+          "kind": "fn",
+          "line": 125
+        },
+        {
+          "name": "active_solver_name",
+          "kind": "fn",
+          "line": 133
+        },
+        {
+          "name": "active_solver_name",
+          "kind": "fn",
+          "line": 141
+        },
+        {
+          "name": "active_solver_metadata_id",
+          "kind": "fn",
+          "line": 150
+        },
+        {
+          "name": "active_solver_metadata_id",
+          "kind": "fn",
+          "line": 159
+        },
+        {
+          "name": "test_support",
+          "kind": "mod",
+          "line": 164
+        },
+        {
+          "name": "active_alias_tests",
+          "kind": "mod",
+          "line": 336
+        }
+      ],
+      "unsafeSites": 26,
+      "flags": [
+        "unsafe-boundary"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/profile.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 21,
+      "linesNonTest": 18,
+      "linesInSrcTest": 3,
+      "topSymbols": [
+        {
+          "name": "DEFAULT_PROFILE_HEURISTIC_SENTINEL",
+          "kind": "const",
+          "line": 8
+        },
+        {
+          "name": "DEFAULT_PROFILE_IPM_UNBOUNDED_SENTINEL",
+          "kind": "const",
+          "line": 14
+        },
+        {
+          "name": "MockProfile",
+          "kind": "struct",
+          "line": 21
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/trait_def.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 407,
+      "linesNonTest": 223,
+      "linesInSrcTest": 184,
+      "topSymbols": [
+        {
+          "name": "SolverInterface",
+          "kind": "trait",
+          "line": 41
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 225
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "partI-item-8-surface"
+      ],
+      "commandRef": "topSymbols"
+    },
+    {
+      "path": "crates/cobre-solver/src/types.rs",
+      "crate": "cobre-solver",
+      "kind": "source",
+      "linesRaw": 952,
+      "linesNonTest": 545,
+      "linesInSrcTest": 407,
+      "topSymbols": [
+        {
+          "name": "Basis",
+          "kind": "struct",
+          "line": 19
+        },
+        {
+          "name": "Basis",
+          "kind": "impl",
+          "line": 27
+        },
+        {
+          "name": "LpSolution",
+          "kind": "struct",
+          "line": 51
+        },
+        {
+          "name": "SolutionView",
+          "kind": "struct",
+          "line": 84
+        },
+        {
+          "name": "SolutionView<'_>",
+          "kind": "impl",
+          "line": 105
+        },
+        {
+          "name": "SolverStatistics",
+          "kind": "struct",
+          "line": 132
+        },
+        {
+          "name": "SolverStatistics",
+          "kind": "impl",
+          "line": 195
+        },
+        {
+          "name": "StageTemplate",
+          "kind": "struct",
+          "line": 235
+        },
+        {
+          "name": "RowBatch",
+          "kind": "struct",
+          "line": 334
+        },
+        {
+          "name": "StageTemplate",
+          "kind": "impl",
+          "line": 368
+        },
+        {
+          "name": "RowBatch",
+          "kind": "impl",
+          "line": 401
+        },
+        {
+          "name": "SolverError",
+          "kind": "enum",
+          "line": 420
+        },
+        {
+          "name": "fmt::Display for SolverError",
+          "kind": "impl",
+          "line": 502
+        },
+        {
+          "name": "std::error::Error for SolverError",
+          "kind": "impl",
+          "line": 544
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 547
+        }
+      ],
+      "unsafeSites": 0,
+      "flags": [
+        "partI-item-8-declaration"
+      ],
+      "commandRef": "topSymbols"
+    }
+  ],
+  "testSurface": {
+    "cobre-solver": {
+      "integrationBinaries": [
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "lines": 1768
+        },
+        {
+          "path": "crates/cobre-solver/tests/clp_determinism.rs",
+          "lines": 817
+        },
+        {
+          "path": "crates/cobre-solver/tests/profile_retry_composition.rs",
+          "lines": 684
+        },
+        {
+          "path": "crates/cobre-solver/tests/sentinel_inf_row_probe.rs",
+          "lines": 253
+        },
+        {
+          "path": "crates/cobre-solver/tests/_q1_sign_convention_probe.rs",
+          "lines": 148
+        },
+        {
+          "path": "crates/cobre-solver/tests/_clp_sign_convention_probe.rs",
+          "lines": 131
+        },
+        {
+          "path": "crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs",
+          "lines": 95
+        },
+        {
+          "path": "crates/cobre-solver/tests/clp_only_smoke.rs",
+          "lines": 77
+        }
+      ],
+      "integrationLines": 3973,
+      "siblingTestModules": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/tests.rs",
+          "lines": 911
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "lines": 1371
+        }
+      ],
+      "siblingTestLines": 2282,
+      "inlineTestLines": 1884,
+      "testLinesTotal": 8139,
+      "nonTestSrcLines": 5442,
+      "locStatsTestAll": 8139,
+      "denominator": "cobre-solver ships more test code than production code: 8139 test lines (3973 integration + 2282 sibling src modules + 1884 inline #[cfg(test)]) against 5442 non-test src lines — the naive 3973-vs-9608 framing hides the src-resident test code.",
+      "hoistTarget": {
+        "path": "crates/cobre-solver/src/lib.rs",
+        "line": 164,
+        "gateLine": 163,
+        "gate": "#[cfg(feature = \"test-support\")]",
+        "note": "the existing feature-gated fixture module; a new fixture crate would duplicate it"
+      },
+      "localFixtureRationale": {
+        "path": "crates/cobre-solver/tests/clp_determinism.rs",
+        "lines": [
+          13,
+          14
+        ],
+        "quote": "Fixtures are re-declared locally because an integration test cannot import the `#[cfg(test)]` builders from `src`.",
+        "note": "the stated reason the harness re-declares fixtures; the test-bloat lens argues against this reason (the test-support feature exists), not around it"
+      }
+    },
+    "cobre-comm": {
+      "integrationBinaries": [
+        {
+          "path": "crates/cobre-comm/tests/local_conformance.rs",
+          "lines": 300
+        },
+        {
+          "path": "crates/cobre-comm/tests/factory_tests.rs",
+          "lines": 125
+        }
+      ],
+      "integrationLines": 425,
+      "siblingTestModules": [],
+      "siblingTestLines": 0,
+      "inlineTestLines": 1307,
+      "testLinesTotal": 1732,
+      "nonTestSrcLines": 1764,
+      "locStatsTestAll": 1732,
+      "denominator": "cobre-comm: 1732 test lines (425 integration + 1307 inline) against 1764 non-test src lines."
+    }
+  },
+  "reconciliation": {
+    "cobre-solver": "scripts/loc-stats.sh reports PROD_ALL 5925 across 33 files because the crate row also counts build.rs (0) and examples/audit_mm_dispatch.rs (0); the src-only non-test figure is 5442 and the two are consistent (5442 + 359 + 124 = 5925).",
+    "cobre-comm": "scripts/loc-stats.sh PROD_ALL 1764 == src non-test 1764 (no build.rs, no examples)."
+  },
+  "ticketFigureDeviations": {
+    "note": "The ticket text carries figures measured at the superseded pin a136840d; the census is re-measured at the register pin. Every source figure is unchanged; only the test surface moved.",
+    "changed": [
+      {
+        "figure": "crates/cobre-solver/tests/conformance.rs lines",
+        "ticket": 1579,
+        "measured": 1768
+      },
+      {
+        "figure": "cobre-solver integration test lines",
+        "ticket": 3784,
+        "measured": 3973
+      },
+      {
+        "figure": "cobre-solver test lines total (loc-stats TEST_ALL)",
+        "ticket": 7950,
+        "measured": 8139
+      },
+      {
+        "figure": "docs/design/reserved-seams-and-deferred-debt.md 'Superseded cut-sync public methods' heading line",
+        "ticket": 311,
+        "measured": 334
+      },
+      {
+        "figure": "crates/cobre-python/Cargo.toml [lints] block",
+        "ticket": "48-53",
+        "measured": "46-55"
+      },
+      {
+        "figure": "crates/cobre-solver/src/lib.rs `pub mod test_support` line",
+        "ticket": 163,
+        "measured": 164,
+        "note": "163 is the #[cfg(feature = \"test-support\")] gate line"
+      }
+    ]
+  }
+}

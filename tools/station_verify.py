@@ -158,11 +158,13 @@ def register_violations(
 def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
     """Every .rs path the inventory's frozen census names, once each.
 
-    Two census shapes are accepted so the verifier serves every station unchanged:
-    the multi-crate `crates{}.modules[]` shape (a `file` module is one .rs path; a
-    `directory` module contributes the .rs names in its `files[]`), and the single-crate
-    `files[]` shape whose rows each carry a `path`.
+    Three census shapes are accepted so the verifier serves every station unchanged: a
+    top-level `files[]` whose rows each carry a `path` (single- or multi-crate; wins when
+    present), and the multi-crate `crates{}.modules[]` shape (a `file` module is one .rs
+    path; a `directory` module contributes the .rs names in its `files[]`).
     """
+    if "files" in inventory:
+        return [f["path"] for f in inventory["files"]]
     if "crates" in inventory:
         listed: list[str] = []
         for meta in inventory["crates"].values():
@@ -176,7 +178,7 @@ def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
                         if name.endswith(".rs")
                     ]
         return listed
-    return [f["path"] for f in inventory["files"]]
+    raise KeyError("inventory carries neither `files` nor `crates`")
 
 
 def crate_src_roots(inventory: dict[str, Any]) -> list[str]:

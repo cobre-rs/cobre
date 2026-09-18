@@ -1,0 +1,35 @@
+{
+  "station": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "producedAt": "2026-09-17",
+  "E5": {
+    "dupOf": "Superseded cut-sync public methods",
+    "mirrorAnchor": "docs/design/reserved-seams-and-deferred-debt.md:334",
+    "registerId": "CD-019",
+    "anchors": [
+      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_cuts", "line": 243 },
+      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "pack_local_records", "line": 400 },
+      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_packed_records", "line": 495 },
+      { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_level_records", "line": 581, "role": "live successor" }
+    ],
+    "idAssigned": null,
+    "note": "Anchors resolve in cobre-sddp, not in cobre-solver or cobre-comm (git grep over both station crates returns nothing). Merged as dup-of at ingest; no new id. Re-raising here is a check-reraise.py failure. The mirror heading sat at :311 under the superseded pin a136840d and at :334 under this baseline."
+  },
+  "E7": {
+    "filledBy": "attacker ticket (architecture lens) — the genericity-gate blind spot",
+    "block": null,
+    "observation": {
+      "kind": "doc-drift",
+      "anchor": ".claude/rules/sddp.md:446",
+      "text": "states the CLP/HiGHS basis-validation asymmetry is unpinned by any test; at this baseline crates/cobre-solver/tests/conformance.rs pins it (test_solver_highs_solve_rejects_inconsistent_basis_status_combination :1672, test_solver_clp_solve_accepts_inconsistent_basis_status_combination_silently :1724, and the undersized-row pair :1601/:1636). Recorded in prior-register.md; not a solver finding."
+    }
+  },
+  "E9": {
+    "filledBy": "Part-I item 8 re-verification ticket (per-field dispositions on types.rs, freeze.rs, trait_def.rs, backends/profiled.rs)",
+    "block": null
+  },
+  "E10": {
+    "filledBy": "calibrate/record ticket (each Sev-A/B perf claim with its 4t or 2x2 layout; the cobre-comm per_rank_counts/prefix_displs consumer list is on inventory.json files[crates/cobre-comm/src/lib.rs].perfHelpers)",
+    "block": null
+  }
+}

@@ -1511,8 +1511,13 @@ class IngestTests(sc.StationCase):
         for ref, entry in self.verdicts.items():
             self.assertEqual(entry["candidateRef"], ref)
             self.assertEqual(entry["title"], self.candidates[ref]["title"])
-            self.assertEqual(entry["lens"], ref.split("-", 2)[1])
-            self.assertEqual(entry["subStation"], ref.split("-", 1)[0])
+            parts = re.fullmatch(
+                r"(S6[abc])-(architecture|performance|over-engineering|test-bloat)-\d{2}",
+                ref,
+            )
+            assert parts is not None, ref
+            self.assertEqual(entry["subStation"], parts.group(1))
+            self.assertEqual(entry["lens"], parts.group(2))
             self.assertEqual(
                 entry.get("partIRef"), self.candidates[ref].get("partIRef")
             )

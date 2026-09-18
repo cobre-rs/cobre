@@ -1,0 +1,212 @@
+{
+  "station": "solver-comm",
+  "subStation": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "Part-I item 8 re-verified field by field: all five multistage fields are write-only in cobre-solver, but the handoff's collateral list undercounts the in-src fixture blocks and clips two assertion spans",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "StageTemplate", "line": 235 },
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "n_state", "line": 270 },
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "n_transfer", "line": 278 },
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "n_dual_relevant", "line": 287 },
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "n_hydro", "line": 290 },
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "max_par_order", "line": 297 },
+        { "path": "crates/cobre-solver/src/freeze.rs", "symbol": "freeze_rows_into_template", "line": 158 },
+        { "path": "crates/cobre-solver/src/backends/clp/tests.rs", "line": 33 },
+        { "path": "crates/cobre-solver/src/backends/highs/tests.rs", "line": 32 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "line": 153 }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-solver/src/types.rs | grep -nE 'pub n_state|pub n_transfer|pub n_dual_relevant|pub n_hydro|pub max_par_order|N \\* L|AR lags|maximum PAR lag order|uniform lag stride' && git grep -c 'max_par_order' 077dbe2c -- crates/cobre-solver/src crates/cobre-solver/tests",
+        "output": "270:    pub n_state: usize,\n274:    /// Equal to `N * L` per\n276:    /// This is the storage volumes plus all AR lags except the oldest\n278:    pub n_transfer: usize,\n283:    /// hydros and `L` is the maximum PAR lag order). FPHA and generic variable\n287:    pub n_dual_relevant: usize,\n290:    pub n_hydro: usize,\n294:    /// Determines the uniform lag stride: all hydros store `max_par_order`\n297:    pub max_par_order: usize,\n077dbe2c:crates/cobre-solver/src/backends/clp/tests.rs:3\n077dbe2c:crates/cobre-solver/src/backends/highs/tests.rs:4\n077dbe2c:crates/cobre-solver/src/backends/profiled.rs:1\n077dbe2c:crates/cobre-solver/src/freeze.rs:8\n077dbe2c:crates/cobre-solver/src/trait_def.rs:1\n077dbe2c:crates/cobre-solver/src/types.rs:5\n077dbe2c:crates/cobre-solver/tests/_q1_sign_convention_probe.rs:2\n077dbe2c:crates/cobre-solver/tests/clp_determinism.rs:2\n077dbe2c:crates/cobre-solver/tests/clp_only_smoke.rs:1\n077dbe2c:crates/cobre-solver/tests/conformance.rs:9\n077dbe2c:crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs:1\n077dbe2c:crates/cobre-solver/tests/profile_retry_composition.rs:1\n077dbe2c:crates/cobre-solver/tests/sentinel_inf_row_probe.rs:2",
+        "reading": "The five declarations resolve at exactly the lines the handoff records, and the doc vocabulary is present verbatim in the L0 container: `N * L`, `AR lags`, `hydros`, `maximum PAR lag order`, `FPHA`, `uniform lag stride` (and `SIMD vectorization` on the following line of the same block). The write-only disposition holds field by field: the only production propagation is the copy-forward at freeze.rs:158-162 (`out.n_state = base.n_state;` through `out.max_par_order = base.max_par_order;`), and the two other sites the handoff names (trait_def.rs:380-384, backends/profiled.rs:252-256) sit inside test fixtures; no production reader of any of the five was found in either crate or in any consumer. The census is the new fact: `max_par_order` is mentioned 22 times across six in-src files and 18 times across seven integration binaries, while the handoff's collateral list names only four in-src fixture blocks — the seven further freeze.rs blocks and every block in backends/clp/tests.rs and backends/highs/tests.rs are unlisted. Two of the three assertion spans are clipped: the conformance.rs run is 153-157 (not 154-156, `n_state` and `max_par_order` fall outside) and the types.rs run is 779-783 (not 779-782, `max_par_order` falls outside); freeze.rs:320-324 is correct.",
+        "reading_note": "same blob for both halves of the command"
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the five fields from the L0 container so it carries only the CSC arrays and the dimensions the LP itself needs; nothing in either station crate reads them, and the geometry they describe is already owned one layer up by `StateSpace` (crates/cobre-sddp/src/lp/indexer/state_space.rs:97,100,104) and `StageRowLayout` (crates/cobre-sddp/src/lp/builder/layout.rs:509), which the sole writer (crates/cobre-sddp/src/lp/builder/template.rs:445,459-463) already reads from. Because the production removal is mechanical, the whole cost of the shed is fixture collateral, so the ticket must size itself from a census rather than a hand-written list: 22 in-src mentions across six files plus 18 across the seven integration binaries, and the two clipped assertion spans widened to conformance.rs:153-157 and types.rs:779-783. Fold the doc drift into the same shed instead of carrying it forward: types.rs:282-286 still asserts `n_dual_relevant` equals `n_state`, while the only production writer hard-codes zero and says why (crates/cobre-sddp/src/lp/builder/layout.rs:1353-1355 — column bounds pin the state, so the gradient path reads reduced costs rather than a structural dual prefix), so that sentence must be deleted with the field, not migrated. If the owner chooses to rename rather than remove, that is a sharpen and not a retire: the vocabulary stays in L0, the doc drift stays live, and Part-I item 8 remains open.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-8"
+    },
+    {
+      "title": "L0 vocabulary leakage in the private `FreezeScratch.cut_nz_per_col` field survives the genericity gate because `_` is a word character",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/freeze.rs", "symbol": "cut_nz_per_col", "line": 22 },
+        { "path": "crates/cobre-solver/src/freeze.rs", "line": 137 },
+        { "path": "crates/cobre-solver/src/freeze.rs", "line": 141 },
+        { "path": "crates/cobre-solver/src/freeze.rs", "line": 188 }
+      ],
+      "evidence": {
+        "command": "sed -n '79p' scripts/ci/check-infra-genericity.sh && git show 077dbe2c:crates/cobre-solver/src/freeze.rs | awk '/^#\\[cfg\\(test\\)\\]/{exit} /cut_nz_per_col/{printf \"%d:%s\\n\",NR,$0}' && bash scripts/ci/check-infra-genericity.sh",
+        "output": "PATTERN='\\bSddp\\b|\\bsddp\\b|\\bSDDP\\b|\\bBenders\\b|\\bCut\\b|\\bcut\\b|cut pool|cutting-plane|cutting[.]plane|outer approximation|CutSync[[:alnum:]_]*|CutSelection[[:alnum:]_]*|\\bMetadataCuts\\b'\n22:    cut_nz_per_col: Vec<u32>,\n137:    scratch.cut_nz_per_col.clear();\n138:    scratch.cut_nz_per_col.resize(num_cols, 0u32);\n141:        scratch.cut_nz_per_col[col as usize] += 1;\n188:    for &count in &scratch.cut_nz_per_col {\n\nOK: no algorithm-specific vocabulary found in infrastructure crates.",
+        "reading": "Fresh gate run in this session, exit 0. Five occurrences of the engine noun live above the file's `#[cfg(test)]` boundary (line 244) — the declaration plus four production uses — and every one of them is invisible to the gate, because the alternation asks for `\\bcut\\b` and an underscore is a word character, so `cut_nz_per_col` contains no word boundary after `cut`. Two independent blind spots therefore hide the same word in this file: the `_`-joined identifier in the scanned region, and the gate's awk prefilter, which exits at the first column-0 `#[cfg(test)]` and so never scans the in-src test region below line 244 where the same noun recurs in comments."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Rename the private field and its four production uses to name what the vector actually holds — a per-column nonzero census of the rows being appended — so the identifier describes the CSC bookkeeping rather than the caller's row semantics, which is the whole point of the L0 purity rule. The field is private and never crosses the crate boundary, so the blast radius is the four production sites plus the in-src test region below freeze.rs:244; no public API, no schema and no wire format moves. Queue an E7 cross-reference recording both blind spots the rename exposes, so the gate owner sees that an `_`-joined identifier defeats a `\\b`-anchored alternation and that the awk prefilter leaves every in-src test region unscanned. No gate edit is proposed here: the gate belongs to the build-ci station, and the rename is worth doing on its own merits even if the gate never changes.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Seven production doc comments in cobre-solver carry caller-loop vocabulary that the genericity gate's pattern cannot see at all",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/backends/clp/interface.rs", "line": 66 },
+        { "path": "crates/cobre-solver/src/backends/clp/retry.rs", "line": 74 },
+        { "path": "crates/cobre-solver/src/backends/highs/solver.rs", "line": 320 },
+        { "path": "crates/cobre-solver/src/backends/highs/solver.rs", "line": 477 },
+        { "path": "crates/cobre-solver/src/trait_def.rs", "line": 95 },
+        { "path": "crates/cobre-solver/src/trait_def.rs", "line": 207 },
+        { "path": "crates/cobre-solver/src/trait_def.rs", "line": 212 }
+      ],
+      "evidence": {
+        "command": "for f in $(git ls-tree -r --name-only 077dbe2c -- crates/cobre-solver/src crates/cobre-comm/src | grep -v tests.rs); do git show 077dbe2c:$f | awk -v f=\"$f\" '/^#\\[cfg\\(test\\)\\]/{exit} /^\\s*(\\/\\/\\/|\\/\\/!|\\/\\/)/{ if ($0 ~ /scenario|backward pass|forward pass|deep-stage|stage LP|multistage/) printf \"%s:%d:%s\\n\", f, NR, $0 }'; done",
+        "output": "crates/cobre-solver/src/backends/clp/interface.rs:66:    /// depend on the order a worker processed prior scenarios — breaking\ncrates/cobre-solver/src/backends/clp/retry.rs:74:    /// numerically delicate deep-stage LPs that are in fact feasible (proven:\ncrates/cobre-solver/src/backends/highs/solver.rs:320:    /// unusable for the scenario-loop pattern (thousands of solves per\ncrates/cobre-solver/src/backends/highs/solver.rs:477:    /// mechanism for the backward pass. No `Highs_clearSolver` call is issued —\ncrates/cobre-solver/src/trait_def.rs:95:    /// Requires [`Self::load_model`] called first and scenario patches applied.\ncrates/cobre-solver/src/trait_def.rs:207:    /// independent solve sequences (e.g. at simulation/forward scenario\ncrates/cobre-solver/src/trait_def.rs:212:    /// scenario's result cannot depend on which scenarios a worker happened to",
+        "reading": "All seven sites are in the production region of their file (the scan exits at the first column-0 `#[cfg(test)]`) and all seven describe the L0 solver in terms of the caller's traversal — scenarios, a scenario loop, a backward pass, deep stages. None of `scenario`, `stage` or `backward pass` appears in the gate PATTERN, so unlike the `cut_nz_per_col` case this vocabulary is not evaded by a word-boundary accident: the gate has no pattern for it and never could flag it. The same scan over crates/cobre-comm/src returns nothing, so the leakage is one-sided — cobre-comm's production docs speak only of execution topology and ranks."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Restate each of the seven in terms the solver itself owns, and be explicit about which sentences are load-bearing. The three determinism sentences (clp/interface.rs:66 and trait_def.rs:207,212) are correctness contracts and must survive the rewrite, restated as a property of the solver handle — a solve's result must not depend on which models the same handle solved before it — rather than of the caller's loop; that phrasing is strictly stronger, because it binds any caller and not just the present one. clp/retry.rs:74 and highs/solver.rs:320,477 lose nothing: a numerically delicate LP that is in fact feasible, a per-solve cost that makes an option unusable when one handle is reused for thousands of solves, and a warm-start mechanism whose value is that no solver-clear call is issued, are all statements about LPs and handles. trait_def.rs:95 should state its precondition against the trait's own methods rather than the caller's patch vocabulary. Record the boundary honestly for the owner gate: the project's hard genericity rule enumerates `sddp`/`SDDP`/`Benders`, none of which appears in any of the seven, so this is the layering brief's broader ban on multistage vocabulary in L0 rather than a hard-rule violation today — the owner may reasonably fold it into the L0 purification instead of treating it as a gate failure.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The hand-replicated per-crate `[lints]` tables have already drifted, and the failure mode is silent: a dropped `deny` cannot make CI red",
+      "anchors": [
+        { "path": "crates/cobre-solver/Cargo.toml", "symbol": "lints.clippy", "line": 41 },
+        { "path": "crates/cobre-solver/Cargo.toml", "symbol": "lints.rust", "line": 37 },
+        { "path": "crates/cobre-comm/Cargo.toml", "symbol": "lints.clippy", "line": 39 },
+        { "path": "crates/cobre-comm/Cargo.toml", "symbol": "lints.rust", "line": 35 }
+      ],
+      "evidence": {
+        "command": "sed -n '35,45p;65,75p' Cargo.toml | grep -vE '^\\s*$|^#' && sed -n '37,47p' crates/cobre-solver/Cargo.toml && sed -n '35,45p' crates/cobre-comm/Cargo.toml && sed -n '46,56p' crates/cobre-python/Cargo.toml",
+        "output": "[workspace.lints.clippy]\nall = { level = \"warn\", priority = -1 }\npedantic = { level = \"warn\", priority = -1 }\nunwrap_used = \"deny\"\nexpect_used = \"warn\"\npanic = \"warn\"\ntoo_many_arguments = \"deny\"\n--- solver / comm (identical, 6 of 6, only unsafe_code flipped to \"allow\")\nunwrap_used = \"deny\"\nexpect_used = \"warn\"\npanic = \"warn\"\ntoo_many_arguments = \"deny\"\n--- python (5 of 6; the table ends here)\nunwrap_used = \"deny\"\nexpect_used = \"warn\"\npanic = \"warn\"",
+        "reading": "Both station replicas are faithful at this baseline — 6 of 6 clippy entries and both rust entries, with only `unsafe_code` flipped from `forbid` to `allow`, which FFI and the `unsafe impl Send/Sync` justify and which is not what this candidate is about. The third replica is the proof that the mechanism, not the current text, is the defect: crates/cobre-python/Cargo.toml carries 5 of 6 and is missing `too_many_arguments = \"deny\"`. That instance is the cli-python station's to raise; cited here only to show the hand-copy has already drifted once. The drift direction matters for severity: dropping a `deny` removes a check, so the drifted crate builds green and no gate anywhere in CI compares the three tables against the workspace table."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "The Cargo constraint is real — a manifest cannot combine `lints.workspace = true` with a per-lint override — so the fix is not deduplication but making the copies checkable, and there are two shapes with a genuine trade-off for the owner. First shape, three copies and one guard: add a CI check that parses the workspace `[workspace.lints.*]` tables and each replicating manifest and asserts set equality modulo one declared exception list (today: `unsafe_code`), failing on any key present in the workspace table and absent from a replica. This keeps `forbid` at the workspace root, costs one script, and turns a silent omission into a red build; its weakness is that the exception list is itself hand-maintained. Second shape, remove the reason the copies exist: downgrade the workspace `unsafe_code` from `forbid` to `deny`, let all three crates carry plain `lints.workspace = true`, and have each FFI crate re-admit unsafe at its own crate root with a scoped `expect` carrying the justification next to the code it licenses. That leaves exactly one table in the workspace and no drift surface at all, at the cost of `forbid`'s property that no crate can override it — the guarantee becomes per-crate-auditable rather than structurally impossible. Blast radius of the first is one new CI job and no manifest edits; of the second, three manifests plus one crate-root attribute per FFI crate, and an owner decision about giving up `forbid`. Severity is B rather than C because the observable failure is a lint that silently stops running.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The CLP per-element basis code space has four spellings and no owner, and the comment that forbids a symbolic definition rests on a premise the code contradicts",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/ffi/clp.rs", "line": 29 },
+        { "path": "crates/cobre-solver/src/basis_status.rs", "symbol": "to_clp_code", "line": 67 },
+        { "path": "crates/cobre-solver/src/basis_status.rs", "symbol": "from_clp_code", "line": 82 },
+        { "path": "crates/cobre-solver/src/backends/clp/solver.rs", "symbol": "CLP_BASIS_AT_LOWER", "line": 18 },
+        { "path": "crates/cobre-solver/src/backends/clp/solver.rs", "symbol": "CLP_BASIS_BASIC", "line": 22 },
+        { "path": "crates/cobre-solver/src/backends/clp/interface.rs", "line": 600 }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-solver/src/basis_status.rs | awk 'NR>=9&&NR<=12||NR>=67&&NR<=75{printf \"%d:%s\\n\",NR,$0}' && git show 077dbe2c:crates/cobre-solver/src/ffi/clp.rs | awk 'NR>=29&&NR<=31{printf \"%d:%s\\n\",NR,$0}' && git grep -n 'CLP_BASIS' 077dbe2c -- crates/cobre-solver/src",
+        "output": "9:use crate::ffi::highs::{\n10:    HIGHS_BASIS_STATUS_BASIC, HIGHS_BASIS_STATUS_LOWER, HIGHS_BASIS_STATUS_NONBASIC,\n11:    HIGHS_BASIS_STATUS_UPPER, HIGHS_BASIS_STATUS_ZERO,\n12:};\n67:    pub fn to_clp_code(self) -> i32 {\n68:        match self {\n69:            Self::Zero => 0,\n70:            Self::Basic => 1,\n71:            Self::Upper => 2,\n72:            Self::Lower => 3,\n73:            Self::Superbasic | Self::Nonbasic => 4,\n74:            Self::Fixed => 5,\n75:        }\n29:// 5 fixed. These are round-tripped verbatim as raw `i32` (see `ClpSolver`'s\n30:// basis capture/install paths) and never compared against named constants, so\n31:// no symbolic definitions are kept here.\n077dbe2c:crates/cobre-solver/src/backends/clp/interface.rs:600:    /// wrapper). Each native `CLP_BASIS_*` code is mapped via `from_clp_code`\n077dbe2c:crates/cobre-solver/src/backends/clp/solver.rs:18:const CLP_BASIS_AT_LOWER: i32 = 3;\n077dbe2c:crates/cobre-solver/src/backends/clp/solver.rs:22:const CLP_BASIS_BASIC: i32 = 1;",
+        "reading": "The same six-value CLP code space is written out in four places at this baseline: the C header contract (csrc/clp_wrapper.h:209-210), the ffi/clp.rs:27-31 comment, bare literals in both directions of the canonical mapping (basis_status.rs:69-74 and 84-89), and two named private constants covering two of the six values in a third module (backends/clp/solver.rs:18,22, used at :290 and :299). The comment's premise is false: the codes are not round-tripped verbatim — they are decoded into the canonical enum at backends/clp/interface.rs:624,632 and re-encoded at backends/clp/solver.rs:250,264, with folding (`Nonbasic` and `Superbasic` both leave as 4), so the numerals are interpreted, not passed through. The comment nonetheless uses that premise to justify keeping no symbolic definition, which is precisely why the numerals ended up spread across three Rust modules. The asymmetry is visible in one screen: the HiGHS half of the very same enum imports its five codes as named constants from the binding module (basis_status.rs:9-12) and is therefore anchored to the header by the compiler, while the CLP half is anchored to nothing. The dangling reference at backends/clp/interface.rs:600 shows the cost already landing on readers: it documents the mapping as being over `CLP_BASIS_*` codes, but that family exists only in a different module and covers only two of the six values, so nothing at the documented site resolves."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the CLP code space one owner in the binding module, mirroring what the HiGHS side already does: declare all six values as named constants in ffi/clp.rs next to the header they mirror, have both directions of the canonical mapping match on those names instead of bare numerals, and have the two private constants in backends/clp/solver.rs use them rather than redeclare two of the six. Rewrite the ffi/clp.rs:27-31 rationale to say what is true — the codes are interpreted in both directions, so they get names — instead of the round-tripped-verbatim premise that argued against naming them. Then backends/clp/interface.rs:600's `CLP_BASIS_*` reference resolves to something real, and the numerals stop being duplicated across three modules. This is a two-way door with no public surface change: the mapping functions keep their signatures, so the blast radius is one binding module, one enum body, and two constants. It is worth doing above C severity because the numerals are a warm-start correctness contract — a value transposed in one of the three copies mis-installs a basis silently rather than failing to compile — and because a future sixth-value change today has to be found in four places, one of which actively tells the reader not to look for names.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The sealed `ffi` boundary is asymmetric under feature selection: `mod highs` is declared un-gated, so the HiGHS binding module compiles in the CLP-only configuration that CI builds and tests",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/ffi/mod.rs", "symbol": "highs", "line": 15 },
+        { "path": "crates/cobre-solver/src/ffi/mod.rs", "symbol": "clp", "line": 18 },
+        { "path": "crates/cobre-solver/src/basis_status.rs", "line": 9 },
+        { "path": "crates/cobre-solver/src/ffi/highs.rs", "line": 5 }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-solver/src/ffi/mod.rs | grep -nE 'mod highs|mod clp|cfg' && git show 077dbe2c:crates/cobre-solver/src/ffi/highs.rs | sed -n '5p' && grep -n 'no-default-features --features \"clp' .github/workflows/ci.yml",
+        "output": "15:pub(crate) mod highs;\n17:#[cfg(feature = \"clp\")]\n18:pub(crate) mod clp;\n20:#[cfg(feature = \"highs\")]\n#![allow(dead_code)]\n219:        run: cargo check --workspace --all-targets --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\"\n221:        run: cargo clippy --workspace --all-targets --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\" -- -D warnings\n223:        run: cargo build --workspace --all-targets --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\"\n233:        run: cargo nextest run --workspace --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\" --no-fail-fast",
+        "reading": "The `clp` binding module carries `#[cfg(feature = \"clp\")]` and the flat HiGHS re-export carries `#[cfg(feature = \"highs\")]`, but the `highs` module declaration itself carries no cfg, so the whole HiGHS binding module is compiled in every configuration — including the CLP-only build that CI checks, clippy-lints, builds and runs tests against. The mechanism is not an oversight in ffi/mod.rs: basis_status.rs:9-12 imports five HiGHS constants un-gated, and it is that import which forces the un-gated declaration. The module-level `#![allow(dead_code)]` at ffi/highs.rs:5 means the CLP-only build reports nothing about the extern declarations it is carrying, so the asymmetry has no visible symptom to prompt a fix. Nothing links — the extern block is declarations only — so this is a boundary-shape defect, not a build break."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Make the two backends symmetric at the boundary so a single-backend build compiles only its own bindings: once the CLP code space has named constants in its own binding module, each half of the canonical mapping references only its own backend's module and can carry that backend's cfg, letting ffi/mod.rs gate `highs` exactly as it already gates `clp`. The blast radius is smaller than it looks and worth stating, because it is what makes the gating safe: the only consumers of the HiGHS half outside the HiGHS backend module are in a `#[cfg(test)]` module of crates/cobre-sddp/src/policy/policy_load.rs, and production cobre-sddp uses only the declaration-order-independent discriminant codec, so gating touches one backend module plus one test module. If the owner prefers to keep both mappings un-gated in one place — a defensible call, since a single conversion site is easier to audit than two — then the un-gated `mod highs` should be made deliberate rather than incidental: state in ffi/mod.rs that the HiGHS binding module is unconditional because the neutral vocabulary type depends on it, so the next reader does not treat the missing cfg as a typo and the CLP-only build's carried declarations are an accepted cost rather than an accident.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The CLP backend's module facade carries a `pub(crate)` re-export and a lint suppression whose only consumer is its own sibling test module, where the HiGHS facade carries neither",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/backends/clp/mod.rs", "line": 24 },
+        { "path": "crates/cobre-solver/src/backends/clp/mod.rs", "symbol": "LADDER_RUNGS", "line": 25 },
+        { "path": "crates/cobre-solver/src/backends/clp/interface.rs", "line": 6 },
+        { "path": "crates/cobre-solver/src/backends/highs/mod.rs", "line": 23 }
+      ],
+      "evidence": {
+        "command": "git grep -n 'LADDER_RUNGS' 077dbe2c -- crates/cobre-solver/src/backends/clp && git show 077dbe2c:crates/cobre-solver/src/backends/clp/mod.rs | awk 'NR>=20&&NR<=25{printf \"%d:%s\\n\",NR,$0}' && git show 077dbe2c:crates/cobre-solver/src/backends/highs/mod.rs | awk 'NR>=16&&NR<=24{printf \"%d:%s\\n\",NR,$0}'",
+        "output": "clp/interface.rs:6:use super::retry::LADDER_RUNGS;\nclp/mod.rs:25:pub(crate) use retry::LADDER_RUNGS;\nclp/retry.rs:24:pub(crate) const LADDER_RUNGS: usize = 5;\nclp/tests.rs:1:use crate::backends::clp::{ClpAlgorithm, ClpProfile, ClpSolver, LADDER_RUNGS, clp_version};\n20:// Rationale: the sole consumer of this re-export is the `#[cfg(test)]` `tests`\n21:// module (`interface` reads the const directly via `super::retry`), so a\n22:// non-test build sees no consumer; the allow suppresses the spurious\n23:// `unused_imports` while keeping the lint live under `--cfg test`.\n24:#[cfg_attr(not(test), allow(unused_imports))]\n25:pub(crate) use retry::LADDER_RUNGS;\n23:pub use config::{HighsProfile, PresolveKind};\n24:pub use solver::{HighsSolver, highs_version};",
+        "reading": "The comment states the situation exactly and is accurate: the re-export's only consumer is the sibling test module, and non-test code already reaches the constant by its owning path (interface.rs:6 uses `super::retry::LADDER_RUNGS`). So a test consumer is shaping the production module facade, and a lint-suppression attribute is being carried in production source to silence the consequence. The HiGHS facade re-exports only what non-test code consumes and needs no such attribute, so the two backend facades follow different rules for the same job."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Have the sibling test module import the constant by its owning path — `super::retry::LADDER_RUNGS`, exactly what interface.rs:6 already does — and delete both the re-export and the `cfg_attr` allow from the facade. That removes a lint suppression from production source, removes a production surface that exists only for tests, and restores symmetry with the HiGHS facade, which re-exports only what non-test code consumes. Blast radius is three lines: one import in the sibling tests module and the two facade lines. Note for the owner what this candidate is not: it is not a claim that the constant should be private or that the tests should stop asserting on it, only that a test's import path should not appear in the production facade when the owning path is already reachable and already used.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Informational: the solver trait has no capability-query surface and exactly one backend compiles, so building the capability trait at this baseline would be a one-consumer abstraction",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/trait_def.rs", "symbol": "SolverInterface", "line": 41 },
+        { "path": "crates/cobre-solver/src/trait_def.rs", "symbol": "Profile", "line": 49 },
+        { "path": "crates/cobre-solver/src/lib.rs", "line": 44 },
+        { "path": "crates/cobre-solver/src/lib.rs", "line": 50 }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-solver/src/lib.rs | grep -nE 'compile_error|^pub\\(crate\\) mod ffi' && git show 077dbe2c:crates/cobre-solver/src/trait_def.rs | grep -nE 'pub trait SolverInterface|type Profile'",
+        "output": "44:compile_error!(\n50:compile_error!(\"no LP backend selected: enable exactly one of `highs` or `clp`.\");\n52:pub(crate) mod ffi;\n41:pub trait SolverInterface: Send {\n49:    type Profile: Copy + PartialEq + Default + Send;\n237:        type Profile = MockProfile;\n",
+        "reading": "Both-backends and no-backend are compile errors, so exactly one backend exists in any build and no caller can ask which one it is at run time. The trait's only backend-varying surface is the `Profile` associated type, deliberately constrained to `Copy + PartialEq + Default + Send` and documented at the declaration as opaque to backend-generic consumers, with cross-backend tuning intent belonging in a backend-agnostic hint. The one other `type Profile` in the file is a test mock, so there is no second present implementation to generalize over."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Record and change nothing at this baseline. The capability surface should arrive with its second consumer, i.e. when two backends must coexist in one binary (roadmap III.6); at that point the trait grows the query a caller can branch on and the compile-time pair relaxes into a selection, and the abstraction has two implementations on the day it is written. Until then the `Profile` doc already states the correct rule for callers — treat it as opaque, put cross-backend tuning intent in a backend-agnostic hint — and the two compile errors are doing the job a capability query would otherwise do, at zero run-time cost. Any variant that builds the capability trait now has exactly one implementation and is speculative generality rather than architecture; if such a variant is proposed it should be tagged `conflicts` and held, with this record cited as the reason.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Superseded cut-sync public methods still stand beside the live single path that owns the collective partition contract",
+      "anchors": [
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_cuts", "line": 243 },
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "pack_local_records", "line": 400 },
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_packed_records", "line": 495 },
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_level_records", "line": 581 }
+      ],
+      "evidence": {
+        "command": "git grep -nE 'pub fn (sync_cuts|pack_local_records|sync_packed_records|sync_level_records)' 077dbe2c -- crates/cobre-sddp/src/cut/cut_sync.rs",
+        "output": "243:    pub fn sync_cuts<C: Communicator>(\n400:    pub fn pack_local_records(\n495:    pub fn sync_packed_records<C: Communicator>(\n581:    pub fn sync_level_records<C: Communicator>(",
+        "reading": "All four declarations resolve at the baseline, confirming the register's anchors: three superseded entry points alongside the live one. Emitted only as the E5 handoff, with no new id, per the station's dup-of disposition. The architecture reading from this station's side is that the duplication is entirely above the L0 boundary — the collective partition rule itself has a single owner in cobre-comm (`per_rank_counts`, `prefix_displs`), and all four methods sit on top of it, so no cobre-comm change is implied by removing three of them."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "At the next licensed public-API break, remove the three superseded entry points so one path owns the collective records flow end to end; nothing in either station crate is affected, because the partition rule they all call already has a single owner in cobre-comm and keeps its signature. Handed to E5 as a dup-of the registered entry rather than raised as new debt.",
+      "alignmentHint": "neutral",
+      "dupOf": "Superseded cut-sync public methods"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-comm/src/traits.rs:372 SharedMemoryProvider hierarchy (with SharedRegion:320, LocalCommunicator:254, LocalCommKind:275, local.rs:155 HeapRegion, ferrompi.rs:264 split_local)",
+      "why": "Ratified reserved seam with a named activating milestone; cleared at ingest, not a candidate, no id, no defender.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md:79 — Shared-memory communicator trait hierarchy"
+    },
+    {
+      "subject": "crates/cobre-solver/src/lib.rs:52 `pub(crate) mod ffi` with the single documented escape hatch at lib.rs:164",
+      "why": "The raw boundary is unnameable from outside the crate, and the one sanctioned exception is feature-gated, documented as verbatim pass-throughs, and named in the ffi module docs (ffi/mod.rs:10-13). An L0 crate that owns unsafe FFI and still exposes no raw handle to its consumers is the shape to protect; any future test convenience should go through the existing hatch rather than widening ffi visibility."
+    },
+    {
+      "subject": "crates/cobre-solver/src/lib.rs:44 and :50 — the both-backends and no-backend `compile_error!` pair",
+      "why": "Backend selection is resolved at compile time, so L0 carries no run-time backend enum and no dispatch. This keeps the selection concern at the layer that owns it and is why the capability trait can wait for its second consumer instead of being built now."
+    },
+    {
+      "subject": "crates/cobre-solver/src/basis_status.rs:101 to_discriminant_code / :116 from_discriminant_code",
+      "why": "The one injective code space, with explicit arms so the encoding cannot move when the enum declaration order changes, and it is the only pair production cobre-sddp uses across the checkpoint and MPI wire paths (policy_export.rs:701,706; policy_load.rs:410,415; workspace.rs:85,92). A durable cross-backend encoding that survives CLP-only statuses HiGHS cannot represent — protect the explicit arms; deriving them from the discriminant would silently re-map old checkpoints."
+    },
+    {
+      "subject": "crates/cobre-comm/src/lib.rs:83 per_rank_counts / :94 prefix_displs",
+      "why": "One owner for the allgatherv partition rule, in L0, with no engine vocabulary, serving several engine-side call sites. The single-owner shape is what lets the superseded cut-sync methods be deleted upstream without touching this crate."
+    },
+    {
+      "subject": "crates/cobre-comm/src production doc comments",
+      "why": "The multistage-vocabulary scan that finds seven sites in cobre-solver returns nothing here: cobre-comm describes itself only in terms of ranks, collectives and execution topology. The L0 genericity property already holds on this side and is worth keeping as the reference for the solver-side cleanup."
+    },
+    {
+      "subject": "crates/cobre-solver/src/backends/highs/interface.rs:487 loud BasisInconsistent vs crates/cobre-solver/src/backends/clp/solver.rs:214-216 silent accept-and-repair",
+      "why": "Intended backend behaviour, scoped by the trait contract itself (trait_def.rs:105 and :136-138 list BasisInconsistent as raised only where the backend validates, BasisRowCountMismatch as symmetric) and pinned by four conformance tests. Cited, never proposed for equalizing: the asymmetry is a property of the two solver libraries."
+    }
+  ],
+  "_needsHuman": [
+    "Where does the shed geometry land: the fields' owners today (StateSpace, StageRowLayout) both live in crates/cobre-sddp/src/lp/, which is exactly the engine-neutral region phase 0b carves into cobre-model, so the owner must say whether Part-I item 8 sheds into the engine and moves again at 0b, or waits for the carve and sheds once.",
+    "Should the LocalCommKind enum live in traits.rs at all: it makes the trait-definition module import both concrete backends (traits.rs:21,23, both behind the shared-memory feature) while the sibling factory.rs:62 CommBackend does the identical enum-dispatch job in the module that already owns concrete-backend enumeration — an ownership question about placement only, distinct from the sanctioned existence-of-the-seam ruling, which nothing here proposes to reopen.",
+    "Does the layering brief's ban on multistage vocabulary in L0 bind production doc comments today, or only at the phase-1 purification: the project's hard genericity rule enumerates sddp/SDDP/Benders and none of the seven solver-side doc sites contains any of them, so the answer decides whether that candidate is a now-fix or a purification rider.",
+    "Is giving up `unsafe_code = \"forbid\"` at the workspace root acceptable in exchange for a single lint table: the second fix shape for the lint drift removes the drift surface entirely but trades an unoverridable prohibition for a per-crate audited allowance, which is an owner call and not an engineering preference."
+  ]
+}

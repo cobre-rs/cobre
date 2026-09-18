@@ -1,0 +1,183 @@
+{
+  "station": "solver-comm",
+  "subStation": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "lenses": {
+    "sc-performance": "merged"
+  },
+  "candidates": [
+    {
+      "title": "Partition helpers hand back freshly allocated owned vectors and the partition is recomputed from scratch at every collective",
+      "anchors": [
+        {
+          "path": "crates/cobre-comm/src/lib.rs",
+          "symbol": "per_rank_counts",
+          "line": 83
+        },
+        {
+          "path": "crates/cobre-comm/src/lib.rs",
+          "symbol": "prefix_displs",
+          "line": 94
+        }
+      ],
+      "evidence": {
+        "command": "S=077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c; git show $S:crates/cobre-comm/src/lib.rs | grep -n 'pub fn per_rank_counts\\|pub fn prefix_displs\\|.collect()\\|let mut displs = vec!'; grep -rn 'per_rank_counts\\|prefix_displs' --include='*.rs' crates/cobre-sddp/src",
+        "output": "cobre-comm/src/lib.rs:\n83:pub fn per_rank_counts(total: usize, num_ranks: usize) -> Vec<usize>\n88:        .collect()\n94:pub fn prefix_displs(counts: &[usize]) -> Vec<usize>\n95:    let mut displs = vec![0usize; counts.len()];\nconsumers:\ncrates/cobre-sddp/src/cut/cut_sync.rs:182\ncrates/cobre-sddp/src/cut/cut_sync.rs:186\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:118\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:131\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:159\ncrates/cobre-sddp/src/training/session/rank_distribution.rs:61",
+        "reading": "Both helpers return an owned vector: the counts helper collects an iterator into a new allocation and the displacement helper starts from a fresh zero-filled vector. Their arguments are the total item count and the rank count, so for a fixed rank layout every call reproduces the same partition. Four of the six resolved call sites are inside per-collective code (the record sync and the forward statistics aggregation, which calls the displacement helper twice per aggregation), so the same partition is rebuilt with two fresh allocations at every collective. The remaining site in the rank-distribution setup is a once-per-run computation, which is acceptable by project rule and is not part of this claim."
+      },
+      "mechanism": "allocation per call plus recomputation of an invariant: two owned vectors allocated and a partition recomputed at each collective even though the partition is a pure function of the total item count and the rank count, both fixed for a given layout. Per-collective at the sync and aggregation sites; the setup-time site is once per run and acceptable.",
+      "measurementLayout": "2x2",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/cut/cut_sync.rs:182",
+        "crates/cobre-sddp/src/cut/cut_sync.rs:186",
+        "crates/cobre-sddp/src/training/forward/stats_aggregation.rs:118",
+        "crates/cobre-sddp/src/training/forward/stats_aggregation.rs:131",
+        "crates/cobre-sddp/src/training/forward/stats_aggregation.rs:159",
+        "crates/cobre-sddp/src/training/session/rank_distribution.rs:61"
+      ],
+      "proposedSeverity": "C",
+      "fixShape": "Keep the two helpers as the single owner of the partition rule and add a fill-into-caller-buffer form beside each: one that writes the counts into a mutable slice or a cleared vector the caller retains, and one that writes the displacements into a caller-retained buffer from a counts slice. The owning helpers stay engine-neutral and take only the total item count and the rank count, so no engine vocabulary enters this crate. Callers on a per-collective path then hold their partition buffers alongside the send and receive buffers they already retain and refill them, or hoist the partition once where the total item count does not change across the loop. Leave the returning form in place for the once-per-run setup caller, where an allocation is acceptable, and keep the arithmetic in exactly one place so the partition rule cannot drift between the two forms.",
+      "alignmentHint": "neutral",
+      "candidateRef": "SC-PERF-001",
+      "lens": "performance"
+    },
+    {
+      "title": "CLP bound writers push the entire retained bound array across the FFI on every call, while the sibling backend writes only the requested index subset",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "set_row_bounds",
+          "line": 352
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "set_col_bounds",
+          "line": 399
+        },
+        {
+          "path": "crates/cobre-solver/csrc/clp_wrapper.c",
+          "symbol": "cobre_clp_chg_bounds",
+          "line": 208
+        }
+      ],
+      "evidence": {
+        "command": "S=077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c; git show $S:crates/cobre-solver/src/backends/clp/interface.rs | grep -n 'fn set_row_bounds\\|fn set_col_bounds\\|cobre_clp_chg_row_lower(self.handle\\|cobre_clp_chg_row_upper(self.handle\\|cobre_clp_chg_column_lower(self.handle\\|cobre_clp_chg_column_upper(self.handle'; git show $S:crates/cobre-solver/src/backends/highs/interface.rs | grep -n 'fn set_row_bounds\\|fn set_col_bounds\\|change_rows_bounds_by_set\\|change_cols_bounds_by_set'; git show $S:crates/cobre-solver/csrc/clp_wrapper.c | grep -n 'static void cobre_clp_chg_bounds\\|malloc('",
+        "output": "clp/interface.rs:\n352:    fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {\n383:            clp_ffi::cobre_clp_chg_row_lower(self.handle, self.row_lower.as_ptr());\n384:            clp_ffi::cobre_clp_chg_row_upper(self.handle, self.row_upper.as_ptr());\n399:    fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {\n432:            clp_ffi::cobre_clp_chg_column_lower(self.handle, self.col_lower.as_ptr());\n433:            clp_ffi::cobre_clp_chg_column_upper(self.handle, self.col_upper.as_ptr());\nhighs/interface.rs:\n303:    fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {\n331:            ffi::cobre_highs_change_rows_bounds_by_set(\n348:    fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {\n375:            ffi::cobre_highs_change_cols_bounds_by_set(\ncsrc/clp_wrapper.c:\n208:static void cobre_clp_chg_bounds(\n217:    double* scratch = (double*)malloc((size_t)n * sizeof(double));",
+        "reading": "Both CLP setters patch the retained mirror at the requested indices and then hand the WHOLE array pointer to the wrapper; the wrapper resolves the length from Clp_getNumRows / Clp_getNumCols, heap-allocates a scratch array of that full length to translate the sentinel bounds, and frees it, once per crossing. Two crossings happen per setter call. The HiGHS realisation of the same trait method crosses once with the caller's index subset into a retained i32 scratch and allocates nothing. The declared shim surface offers no subset form: the ffi/clp.rs declarations only take a full-length pointer, and the wrapper already reaches C++-only ClpSimplex methods, so a subset entry point is a shim addition rather than a library ceiling."
+      },
+      "mechanism": "work proportional to the model dimension rather than to the number of patched indices, on every call: two FFI crossings each transferring the full retained bound array, plus one heap allocation and free of a full-length translation buffer inside the wrapper per crossing. Per-solve, not setup-time: the engine patches a handful of bounds per stage solve.",
+      "measurementLayout": "4t",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:157",
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:164",
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:246",
+        "crates/cobre-sddp/src/training/forward/stage_solve.rs:95",
+        "crates/cobre-sddp/src/training/forward/enumerated.rs:321",
+        "crates/cobre-sddp/src/lp/builder/entries.rs:5893"
+      ],
+      "proposedSeverity": "B",
+      "fixShape": "Give the CLP path a subset-scoped bound write that mirrors the shape the sibling backend already has. Add index-scoped entry points to the cobre-owned C shim that take a count, an index array and the two bound arrays, translate the sentinels into a caller-owned scratch buffer retained on the Rust side instead of a per-crossing malloc, and reach the underlying per-index or ranged setter. Keep the retained mirror updated exactly as today so the frozen reload path and reproducibility contract are untouched, and keep the whole-array form for the load path that genuinely replaces every bound. If the underlying library truly offers no index-scoped setter that preserves the factorization, the narrower fix is still available: hoist the sentinel translation out of the shim into a retained Rust-side buffer so the per-crossing allocate and free disappears even when the transfer stays dimension-wide.",
+      "alignmentHint": "neutral",
+      "candidateRef": "SC-PERF-002",
+      "lens": "performance"
+    },
+    {
+      "title": "CLP add_rows allocates five fresh vectors and replaces three retained buffers wholesale on every append, contradicting the struct's own reusable-buffer contract",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "add_rows",
+          "line": 215
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "col_starts",
+          "line": 302
+        }
+      ],
+      "evidence": {
+        "command": "S=077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c; git show $S:crates/cobre-solver/src/backends/clp/interface.rs | grep -n 'fn add_rows\\|let mut new_col_starts = Vec::with_capacity\\|let mut new_row_indices = vec!\\|let mut new_values = vec!\\|let mut write_cursor = Vec::with_capacity\\|self.col_starts = \\|self.row_indices = \\|self.values = '; git show $S:crates/cobre-solver/src/backends/highs/interface.rs | grep -n 'fn add_rows\\|resize(\\|vec!\\[\\|with_capacity('; git show $S:crates/cobre-solver/csrc/clp_wrapper.c | grep -n 'row_lower_t = (double\\*)malloc\\|row_upper_t = (double\\*)malloc'",
+        "output": "clp/interface.rs:\n215:    fn add_rows(&mut self, rows: &RowBatch) {\n259:        let mut new_col_starts = Vec::with_capacity(self.num_cols + 1);\n260:        let mut new_row_indices = vec![0_i32; merged_nz];\n261:        let mut new_values = vec![0.0_f64; merged_nz];\n265:        let mut write_cursor = Vec::with_capacity(self.num_cols);\n302:        self.col_starts = new_col_starts;\n303:        self.row_indices = new_row_indices;\n304:        self.values = new_values;\n(a fifth, per-column counting vector is allocated at :244)\nhighs/interface.rs:\n253:    fn add_rows(&mut self, rows: &RowBatch) {\n298:        self.row_value.resize(self.num_rows, 0.0);\n299:        self.row_dual.resize(self.num_rows, 0.0);\n300:        self.basis_row_i32.resize(self.num_rows, 0);\ncsrc/clp_wrapper.c:\n174:    double* row_lower_t = (double*)malloc((size_t)number * sizeof(double));\n175:    double* row_upper_t = (double*)malloc((size_t)number * sizeof(double));",
+        "reading": "Each CLP append allocates a per-column counting vector, a new column-start vector, a new row-index vector and a new value vector both sized to the merged nonzero count, and a write-cursor vector, then rebuilds the retained column-major mirror in full and assigns the three new vectors over the retained fields, discarding the capacity those fields already held. The wrapper adds two more heap allocations per append for the translated row bounds. The sibling backend's realisation of the same trait method allocates nothing: it makes one crossing and resizes retained buffers. The struct doc on the CLP solver announces pre-allocated buffers resized by the load path and reused across solves to avoid per-solve allocation, and this path does not honour it. The engine's append path calls this repeatedly against a live model, so the merged mirror is genuinely read by the next append and cannot simply be deleted."
+      },
+      "mechanism": "allocation per call plus a full rebuild pass per call: five heap allocations on the Rust side, two more inside the wrapper, three retained buffers replaced rather than reused, and a rebuild of the retained column-major mirror proportional to the merged nonzero count for an append whose payload is only the new rows. Per-solve on the training path, not setup-time; this collides with the project hard rule against allocating on hot paths.",
+      "measurementLayout": "4t",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/backward/lp_setup.rs:31",
+        "crates/cobre-sddp/src/cut/row.rs:257",
+        "crates/cobre-sddp/src/cut/row.rs:347",
+        "crates/cobre-sddp/src/training/lower_bound.rs:158"
+      ],
+      "proposedSeverity": "B",
+      "fixShape": "Move the append's working storage into caller-owned scratch on the solver struct, the way the freeze path and the sibling backend already do. Because a column-major mirror cannot absorb appended rows in place, keep two retained mirror buffer sets on the struct and swap the roles per append instead of allocating a new set and dropping the old one; keep the per-column counting vector and the write-cursor vector as retained buffers cleared and regrown without shrinking. Hoist the sentinel bound translation out of the wrapper into a retained buffer on the Rust side so the wrapper's two allocations per append disappear as well. The resulting mirror contents and the order in which nonzeros are written must be unchanged so reproducibility and order-invariance hold, and the struct doc's reusable-buffer statement then becomes true of this path too.",
+      "alignmentHint": "neutral",
+      "candidateRef": "SC-PERF-003",
+      "lens": "performance"
+    },
+    {
+      "title": "CLP basis capture and cold reset cross the FFI boundary once per column and once per row, where the sibling backend moves the whole status vector in one crossing",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "get_basis",
+          "line": 606
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+          "symbol": "reset_cold_basis",
+          "line": 280
+        }
+      ],
+      "evidence": {
+        "command": "S=077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c; git show $S:crates/cobre-solver/src/backends/clp/interface.rs | grep -n 'fn get_basis\\|cobre_clp_get_column_status\\|cobre_clp_get_row_status'; git show $S:crates/cobre-solver/src/backends/highs/interface.rs | grep -n 'fn get_basis\\|cobre_highs_get_basis'; git show $S:crates/cobre-solver/src/backends/clp/solver.rs | grep -n 'fn reset_cold_basis\\|cobre_clp_set_column_status\\|cobre_clp_set_row_status'",
+        "output": "clp/interface.rs:\n606:    fn get_basis(&mut self, out: &mut Basis) {\n623:            let code = unsafe { clp_ffi::cobre_clp_get_column_status(self.handle, c as i32) };\n631:            let code = unsafe { clp_ffi::cobre_clp_get_row_status(self.handle, r as i32) };\nhighs/interface.rs:\n500:    fn get_basis(&mut self, out: &mut Basis) {\n512:            ffi::cobre_highs_get_basis(\nclp/solver.rs:\n280:    pub(super) fn reset_cold_basis(&mut self) {\n290:                clp_ffi::cobre_clp_set_column_status(self.handle, c as i32, CLP_BASIS_AT_LOWER);\n299:                clp_ffi::cobre_clp_set_row_status(self.handle, r as i32, CLP_BASIS_BASIC);",
+        "reading": "The CLP status accessors sit inside per-index loops over every column and then every row, so one capture pays num_cols plus num_rows separate crossings; the cold reset pays the same count on the write side. The sibling backend performs the identical trait operation with a single crossing into two retained i32 buffers. The doc above the CLP loop states the cause as a wrapper property (status is reported one element at a time, no bulk array in the wrapper), and the declared shim surface confirms it: ffi/clp.rs declares only the four per-element accessors, while the HiGHS shim already calls a bulk getter. This is a call-granularity observation about the shim surface only; the documented difference in how the two libraries react to an offered basis is intended behaviour and is not in question here."
+      },
+      "mechanism": "one FFI crossing per matrix element instead of one per capture: the crossing count grows with num_cols plus num_rows on both the read and the cold-write path. Per-solve, not setup-time: the engine captures a basis on the forward and backward solve paths and resets to a cold basis between solves.",
+      "measurementLayout": "4t",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:154",
+        "crates/cobre-sddp/src/training/forward/stage_solve.rs:248",
+        "crates/cobre-sddp/src/training/forward/enumerated.rs:442"
+      ],
+      "proposedSeverity": "B",
+      "fixShape": "Add bulk status transfer to the cobre-owned CLP shim so the trait method crosses once per capture instead of once per element: one shim function that fills a caller-provided i32 array for the columns and one for the rows by looping on the C or C++ side, and the symmetric writers for the cold reset. The Rust side keeps the retained i32 buffers the sibling backend already carries and converts into the shared status vocabulary in a plain loop with no crossing. The shim already reaches methods that exist only on the C++ simplex class, so the bulk loop has somewhere to live. The status mapping and the resulting basis contents must stay byte-identical so the determinism harness continues to pass unchanged; this fix shape changes only how many times the boundary is crossed, never which statuses are produced or how a rejected offer is reported.",
+      "alignmentHint": "neutral",
+      "candidateRef": "SC-PERF-004",
+      "lens": "performance"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-comm/src/traits.rs:372 SharedMemoryProvider hierarchy, with SharedRegion at traits.rs:320, LocalCommunicator at :254, LocalCommKind at :275, HeapRegion at local.rs:155 and FerrompiBackend::split_local at ferrompi.rs:264",
+      "why": "Ratified reserved seam. Its per-region allocation (a default-filled vector at HeapRegion::new, local.rs:164, and at create_shared_region, local.rs:195) is seam construction behind a feature, not a hot-path cost, and is cleared at ingest rather than raised.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md:79 — Shared-memory communicator trait hierarchy"
+    },
+    {
+      "subject": "crates/cobre-solver/src/backends/highs/interface.rs set_row_bounds:303, set_col_bounds:348, add_rows:253 and get_basis:500",
+      "why": "This backend is the target shape for the three CLP-side candidates in this envelope: subset-scoped bound writes that cross once per batch into a retained index scratch, an append that allocates nothing and only resizes retained buffers, and a single bulk basis transfer into retained buffers. Worth protecting as the reference realisation of the trait, and worth citing as proof that the trait contract itself does not force the dimension-scaled shape."
+    },
+    {
+      "subject": "crates/cobre-solver/src/freeze.rs FreezeScratch:21 and freeze_rows_into_template:57",
+      "why": "The freeze path is already allocation-free at steady state and the module doc says so for both the output template and the scratch: both are cleared and refilled per call without shrinking, and the caller is told to reuse them. The engine honours it, holding a scratch instance in the per-iteration workspace. Freezing also removes a per-solve row-major to column-major merge from the reload path; the one rebuild that remains is documented as a one-time startup cost in the simulation state module, which is acceptable by project rule."
+    },
+    {
+      "subject": "crates/cobre-solver/src/backends/profiled.rs set_profile:52 and solve:100",
+      "why": "The delta-only option dispatch is intact and nothing hot defeats it. The setter early-returns when the incoming profile equals the current one and solve forwards without re-applying by design. The unconditional trait-level forwarder that would defeat the guard resolves only in mock and test implementations of the trait; every production entry point in the engine goes through the delta-guarded setter, and one of those call sites documents that it is delta-tracked."
+    },
+    {
+      "subject": "crates/cobre-comm/src/local.rs allgatherv:49, allreduce:97, broadcast:127 and barrier:134",
+      "why": "The single-process backend's collectives are argument validation plus one slice copy, with the two no-op collectives left as no-ops. No per-collective allocation and no partition recomputation on this path, so the single-process layout carries no collective overhead of its own."
+    },
+    {
+      "subject": "crates/cobre-comm/src/factory.rs",
+      "why": "Backend construction and the topology probe run once per run, so their allocation and environment inspection are setup-time by the project rule and are explicitly not a finding in this envelope."
+    }
+  ],
+  "dropped": [],
+  "_needsHuman": [
+    "Whether the upstream simplex library exposes an index-scoped bound writer and a bulk basis-status accessor that preserve the factorization the same way the current full-array bound calls do decides whether the first two candidates are cobre-side shim additions or an intrinsic property of that library; the shim already reaches C++-class-only methods, which suggests the former, but the owner should confirm before the fix shapes are scheduled.",
+    "Whether the retained column-major mirror on the CLP path must remain a full merged mirror, or whether the append path could keep the base and the appended blocks separately and merge only when the reload path actually needs a contiguous mirror, is an owner call about the retained-mirror contract rather than something the code alone settles."
+  ]
+}

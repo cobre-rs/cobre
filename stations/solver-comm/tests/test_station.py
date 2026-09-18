@@ -10,8 +10,10 @@ the module.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
+import subprocess
 import sys
 import unittest
 
@@ -532,14 +534,22 @@ class HandoffTests(sc.StationCase):
             tree.read_text(mirror_path).splitlines()[int(mirror_line) - 1],
         )
 
-    def test_every_slot_names_its_owner_and_unfilled_slots_are_explicit_nulls(self) -> None:
+    def test_every_slot_names_its_owner_and_unfilled_slots_are_explicit_nulls(
+        self,
+    ) -> None:
         for key in ("E7", "E9", "E10"):
             with self.subTest(slot=key):
                 self.assertIn("block", self.handoffs[key])
                 self.assertTrue(self.handoffs[key]["filledBy"])
-        self.assertIsNone(self.handoffs["E10"]["block"], "E10 is the calibrate ticket's to fill")
-        self.assertIsNotNone(self.handoffs["E9"]["block"], "E9 is filled by the Part-I item 8 ticket")
-        self.assertIsNotNone(self.handoffs["E7"]["block"], "E7 is filled by the Part-I item 8 ticket")
+        self.assertIsNone(
+            self.handoffs["E10"]["block"], "E10 is the calibrate ticket's to fill"
+        )
+        self.assertIsNotNone(
+            self.handoffs["E9"]["block"], "E9 is filled by the Part-I item 8 ticket"
+        )
+        self.assertIsNotNone(
+            self.handoffs["E7"]["block"], "E7 is filled by the Part-I item 8 ticket"
+        )
 
 
 class PartIHandoffTests(sc.StationCase):
@@ -562,20 +572,29 @@ class PartIHandoffTests(sc.StationCase):
         self.assertEqual(self.env["baseline"], self.baseline())
         self.assertEqual(self.env["station"], "solver-comm")
 
-    def test_a_kept_or_sharpened_claim_anchors_the_definition_and_names_the_five_fields(self) -> None:
+    def test_a_kept_or_sharpened_claim_anchors_the_definition_and_names_the_five_fields(
+        self,
+    ) -> None:
         item = self.env["dispositions"][0]
         tree = self.tree()
         if item["disposition"] == "retire":
             sha = item["retiredAt"]
-            self.assertEqual(sc._git("cat-file", "-e", f"{sha}^{{commit}}").returncode, 0, sha)
+            self.assertEqual(
+                sc._git("cat-file", "-e", f"{sha}^{{commit}}").returncode, 0, sha
+            )
             return
         a = item["baselineAnchor"]
         self.assertTrue(sc.anchor_exists(f"`{a['path']}::{a['symbol']}`", tree), a)
-        self.assertIn("pub struct StageTemplate", tree.read_text(a["path"]).splitlines()[a["line"] - 1])
+        self.assertIn(
+            "pub struct StageTemplate",
+            tree.read_text(a["path"]).splitlines()[a["line"] - 1],
+        )
         self.assertEqual(tuple(item["fieldsReverified"]), self.FIELDS)
         self.assertIn("Epic 9", item["alignmentDestination"])
 
-    def test_five_field_dispositions_resolve_with_their_doc_vocabulary_at_the_baseline(self) -> None:
+    def test_five_field_dispositions_resolve_with_their_doc_vocabulary_at_the_baseline(
+        self,
+    ) -> None:
         tree = self.tree()
         rows = self.env["perFieldDisposition"]
         self.assertEqual([r["field"] for r in rows], list(self.FIELDS))
@@ -589,11 +608,22 @@ class PartIHandoffTests(sc.StationCase):
                 doc_start = int(ln) - 1
                 while doc_start > 0 and lines[doc_start - 1].strip().startswith("///"):
                     doc_start -= 1
-                doc = " ".join(x.strip().lstrip("/").strip() for x in lines[doc_start:int(ln) - 1])
+                doc = " ".join(
+                    x.strip().lstrip("/").strip()
+                    for x in lines[doc_start : int(ln) - 1]
+                )
                 for token in r["docVocabulary"]:
-                    self.assertIn(token, doc, f"{r['field']}: {token!r} not in its own doc block")
-                self.assertTrue(r["dispositionReason"] and r["ownerAfterShed"] and r["sharpenVariantRejected"])
-                self.assertEqual(r["reservedSeamsCheck"], {"mirrorHits": 0, "backlogHits": 0})
+                    self.assertIn(
+                        token, doc, f"{r['field']}: {token!r} not in its own doc block"
+                    )
+                self.assertTrue(
+                    r["dispositionReason"]
+                    and r["ownerAfterShed"]
+                    and r["sharpenVariantRejected"]
+                )
+                self.assertEqual(
+                    r["reservedSeamsCheck"], {"mirrorHits": 0, "backlogHits": 0}
+                )
 
     def test_propagation_is_one_production_site_and_two_test_fixtures(self) -> None:
         tree = self.tree()
@@ -615,7 +645,11 @@ class PartIHandoffTests(sc.StationCase):
                 self.assertEqual(len(span), 5)
                 for field, line in zip(self.FIELDS, span, strict=True):
                     self.assertIn(field, line)
-                gate = next(i + 1 for i, x in enumerate(lines) if re.match(r"^#\[cfg\((all\()?test", x))
+                gate = next(
+                    i + 1
+                    for i, x in enumerate(lines)
+                    if re.match(r"^#\[cfg\((all\()?test", x)
+                )
                 if s["scope"] == "production":
                     self.assertLess(hi, gate)
                     self.assertIsNone(s["gatedBy"])
@@ -624,11 +658,15 @@ class PartIHandoffTests(sc.StationCase):
                     self.assertIn(f"{s['path']}:{gate}", s["gatedBy"])
         self.assertIn("ONE site", self.env["propagationSummary"])
 
-    def test_write_only_evidence_names_writer_copy_forward_and_test_readers(self) -> None:
+    def test_write_only_evidence_names_writer_copy_forward_and_test_readers(
+        self,
+    ) -> None:
         tree = self.tree()
         ev = self.env["writeOnlyEvidence"]
         self.assertEqual(ev["productionReads"], 0)
-        writer = tree.read_text("crates/cobre-sddp/src/lp/builder/template.rs").splitlines()
+        writer = tree.read_text(
+            "crates/cobre-sddp/src/lp/builder/template.rs"
+        ).splitlines()
         self.assertIn("n_transfer = ctx.n_hydros * ctx.max_par_order", writer[444])
         for field, ln in zip(self.FIELDS, range(459, 464), strict=True):
             self.assertIn(field, writer[ln - 1])
@@ -641,33 +679,56 @@ class PartIHandoffTests(sc.StationCase):
             lo = int(span.split("-")[0])
             with self.subTest(reader=reader):
                 self.assertTrue(tree.is_file(path), path)
-                self.assertRegex(tree.read_text(path).splitlines()[lo - 1], r"n_(state|transfer|dual_relevant|hydro)|max_par_order")
+                self.assertRegex(
+                    tree.read_text(path).splitlines()[lo - 1],
+                    r"n_(state|transfer|dual_relevant|hydro)|max_par_order",
+                )
         # the geometry's owner one layer up
-        ss = tree.read_text("crates/cobre-sddp/src/lp/indexer/state_space.rs").splitlines()
+        ss = tree.read_text(
+            "crates/cobre-sddp/src/lp/indexer/state_space.rs"
+        ).splitlines()
         self.assertIn("pub n_state: usize", ss[96])
         self.assertIn("pub hydro_count: usize", ss[99])
         self.assertIn("pub max_par_order: usize", ss[103])
-        layout = tree.read_text("crates/cobre-sddp/src/lp/builder/layout.rs").splitlines()
+        layout = tree.read_text(
+            "crates/cobre-sddp/src/lp/builder/layout.rs"
+        ).splitlines()
         self.assertIn("n_dual_relevant: usize", layout[508])
         self.assertIn("let n_dual_relevant = 0_usize;", layout[1354])
 
     def test_no_production_stage_template_read_exists_at_the_baseline(self) -> None:
         """Every production `.field` access of the five names is on a non-StageTemplate receiver."""
         tree = self.tree()
-        rx = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\.(n_state|n_transfer|n_dual_relevant|n_hydro|max_par_order)\b")
+        rx = re.compile(
+            r"([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\.(n_state|n_transfer|n_dual_relevant|n_hydro|max_par_order)\b"
+        )
         template_receivers: set[tuple[str, int, str]] = set()
         for path in tree.files():
             if not (path.startswith("crates/") and path.endswith(".rs")):
                 continue
-            if "/tests/" in path or "/benches/" in path or path.endswith(("tests.rs", "test_support.rs")):
+            if (
+                "/tests/" in path
+                or "/benches/" in path
+                or path.endswith(("tests.rs", "test_support.rs"))
+            ):
                 continue
             lines = tree.read_text(path).splitlines()
-            gate = next((i + 1 for i, x in enumerate(lines) if re.match(r"^#\[cfg\((all\()?test", x)), len(lines) + 1)
+            gate = next(
+                (
+                    i + 1
+                    for i, x in enumerate(lines)
+                    if re.match(r"^#\[cfg\((all\()?test", x)
+                ),
+                len(lines) + 1,
+            )
             for i, line in enumerate(lines[: gate - 1], 1):
                 for m in rx.finditer(line):
                     recv = m.group(1)
                     # a receiver is a StageTemplate when its declaration in the file says so
-                    if re.search(rf"\b{re.escape(recv)}\s*:\s*&?(mut\s+)?StageTemplate\b", "\n".join(lines)):
+                    if re.search(
+                        rf"\b{re.escape(recv)}\s*:\s*&?(mut\s+)?StageTemplate\b",
+                        "\n".join(lines),
+                    ):
                         template_receivers.add((path, i, recv))
         self.assertEqual(
             {p for p, _, _ in template_receivers},
@@ -680,23 +741,61 @@ class PartIHandoffTests(sc.StationCase):
         tree = self.tree()
         check = self.env["reservedSeamsCheck"]
         mirror = tree.read_text(backlog_parse.MIRROR)
-        self.assertEqual(sum(bool(re.search(rf"\b{tok}\b", mirror)) for tok in check["tokens"]), check["mirrorHits"])
+        self.assertEqual(
+            sum(bool(re.search(rf"\b{tok}\b", mirror)) for tok in check["tokens"]),
+            check["mirrorHits"],
+        )
         self.assertEqual(check["mirrorHits"], 0)
         self.assertEqual(check["backlogHits"], 0)
         register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
-        entries = [e for s in backlog_parse.all_evaluation_sections(backlog_parse.read_register(sc.BACKLOG)) for e in backlog_parse.iter_entries(s)]
-        hits = [e.id for e in entries if "StageTemplate" in "\n".join([e.heading, *e.body])]
-        self.assertEqual(hits, [], "a register entry already covers StageTemplate: this is a dup-of, not a new finding")
-        self.assertIn("StageTemplate shed", register, "the milestone row the backlogTokenHits note classifies")
+        entries = [
+            e
+            for s in backlog_parse.all_evaluation_sections(
+                backlog_parse.read_register(sc.BACKLOG)
+            )
+            for e in backlog_parse.iter_entries(s)
+        ]
+        hits = [
+            e.id for e in entries if "StageTemplate" in "\n".join([e.heading, *e.body])
+        ]
+        self.assertEqual(
+            hits,
+            [],
+            "a register entry already covers StageTemplate: this is a dup-of, not a new finding",
+        )
+        self.assertIn(
+            "StageTemplate shed",
+            register,
+            "the milestone row the backlogTokenHits note classifies",
+        )
         self.assertIn("NEW finding", check["verdict"])
 
     def test_fix_shape_is_phase_1_prose_tagged_advances_1(self) -> None:
         self.assertEqual(self.env["proposedAlignment"], "advances-1")
         fix = self.env["fixShape"]
-        for token in ("col_starts", "row_scale", "freeze.rs:158-162", "state_space.rs:97,100,104", "layout.rs:509", "advances-1", "Rejected sharpen variant"):
+        for token in (
+            "col_starts",
+            "row_scale",
+            "freeze.rs:158-162",
+            "state_space.rs:97,100,104",
+            "layout.rs:509",
+            "advances-1",
+            "Rejected sharpen variant",
+        ):
             self.assertIn(token, fix)
-        self.assertTrue(all(self.env["l0PurityTest"][k] for k in ("noEngineConceptPlacedInCobreSolver", "noDependencyFromCobreSolverOntoAnEngineCrate", "noOneConsumerAbstraction")))
-        roadmap = pathlib.Path(sc.REPO / "plans/generalizing/beyond-sddp-generalization.md")
+        self.assertTrue(
+            all(
+                self.env["l0PurityTest"][k]
+                for k in (
+                    "noEngineConceptPlacedInCobreSolver",
+                    "noDependencyFromCobreSolverOntoAnEngineCrate",
+                    "noOneConsumerAbstraction",
+                )
+            )
+        )
+        roadmap = pathlib.Path(
+            sc.REPO / "plans/generalizing/beyond-sddp-generalization.md"
+        )
         if roadmap.exists():
             lines = roadmap.read_text(encoding="utf-8").splitlines()
             self.assertIn("StageTemplate", lines[1470])
@@ -715,7 +814,9 @@ class PartIHandoffTests(sc.StationCase):
         gate = tree.read_text(g["gateScript"]).splitlines()
         self.assertTrue(gate[g["patternLine"] - 1].startswith("PATTERN="))
         self.assertIn("\\bcut\\b", gate[g["patternLine"] - 1])
-        self.assertIsNone(re.search(r"\bcut\b", "cut_nz_per_col"), "the evasion mechanism")
+        self.assertIsNone(
+            re.search(r"\bcut\b", "cut_nz_per_col"), "the evasion mechanism"
+        )
         self.assertIs(g["changeProposed"], False)
         self.assertEqual(
             (sc.REPO / g["gateScript"]).read_text(encoding="utf-8"),
@@ -723,7 +824,14 @@ class PartIHandoffTests(sc.StationCase):
             "the gate script must be untouched in the working tree",
         )
         e7 = self.handoffs["E7"]["block"]
-        for key in ("gateScript", "evadingIdentifier", "anchor", "patternEvaded", "gateExitAtBaseline", "changeProposed"):
+        for key in (
+            "gateScript",
+            "evadingIdentifier",
+            "anchor",
+            "patternEvaded",
+            "gateExitAtBaseline",
+            "changeProposed",
+        ):
             self.assertIn(key, e7)
         self.assertEqual(e7["gateExitAtBaseline"], 0)
         self.assertIs(e7["changeProposed"], False)
@@ -731,6 +839,452 @@ class PartIHandoffTests(sc.StationCase):
         self.assertEqual(e9["partIRef"], "I.3-8")
         self.assertEqual(e9["proposedAlignment"], "advances-1")
         self.assertEqual(set(e9["perFieldDisposition"]), set(self.FIELDS))
+
+
+# ---------------------------------------------------------------------------
+# Attacker fan-out: the four merged candidate envelopes and the station guards.
+# ---------------------------------------------------------------------------
+
+LENSES = ("architecture", "performance", "over-engineering", "test-bloat")
+REF_PREFIX = {
+    "architecture": "ARCH",
+    "performance": "PERF",
+    "over-engineering": "OE",
+    "test-bloat": "TB",
+}
+IN_SCOPE = ("crates/cobre-solver/", "crates/cobre-comm/")
+DUP_OF_PATH = "crates/cobre-sddp/src/cut/cut_sync.rs"
+LAYOUTS = {"4t", "2x2"}
+SHARED_MEMORY = (
+    "SharedMemoryProvider",
+    "SharedRegion",
+    "LocalCommunicator",
+    "LocalCommKind",
+    "HeapRegion",
+    "split_local",
+)
+TIMING_NUMBER = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:x\b|\u00d7|%|(?:ms|\u00b5s|us|ns|s|sec|secs|seconds|minutes|min|speedup|faster|slower)\b)",
+    re.I,
+)
+NEW_CRATE = re.compile(
+    r"\bnew\b[^.]{0,60}\b(fixture|test[- ]support|helper)s?\b[^.]{0,40}\bcrate\b", re.I
+)
+DIFF_MARKER = re.compile(r"```|^\+\+\+ |^--- |^@@ ", re.M)
+
+
+def guard_scope(cand: dict) -> str | None:
+    """The anchor-scope guard's verdict: None (kept) or the drop code."""
+    paths = [a["path"] for a in cand["anchors"]]
+    if any(p.startswith(IN_SCOPE) for p in paths):
+        return None
+    if cand.get("dupOf") and paths and all(p == DUP_OF_PATH for p in paths):
+        return None
+    return "out-of-scope-anchor"
+
+
+def guard_layout(cand: dict) -> str | None:
+    """The performance layout guard's verdict: None (kept) or the drop code."""
+    if cand.get("measurementLayout") not in LAYOUTS:
+        return "layout-missing"
+    blob = " ".join(
+        [
+            cand.get("title", ""),
+            cand.get("mechanism", ""),
+            cand.get("fixShape", ""),
+            json.dumps(cand.get("evidence", {})),
+        ]
+    )
+    return "timing-number" if TIMING_NUMBER.search(blob) else None
+
+
+def guard_fixture(fix_shape: str) -> bool:
+    """True when the test-bloat fixture guard would rewrite this fix-shape (a new fixture crate)."""
+    return bool(NEW_CRATE.search(fix_shape))
+
+
+class CandidateEnvelopeTests(sc.StationCase):
+    SLUG = "solver-comm"
+    SECTION_TITLE = "solver-comm"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.merged = {
+            lens: sc.load_json(cls.station_dir() / f"candidates.{lens}.json")
+            for lens in LENSES
+        }
+        cls.raw = {
+            lens: sc.load_json(cls.station_dir() / "raw" / f"sc-{lens}.json")
+            for lens in LENSES
+        }
+        cls.log = (cls.station_dir() / "attacker-log.md").read_text(encoding="utf-8")
+        cls.prompt = (cls.station_dir() / "attacker-prompt.md").read_text(
+            encoding="utf-8"
+        )
+
+    def candidates(self, lens: str) -> list[dict]:
+        return self.merged[lens]["candidates"]
+
+    def test_prompt_carries_the_four_lenses_the_rules_and_the_envelope(self) -> None:
+        for heading in (
+            "## Lens: architecture",
+            "## Lens: performance",
+            "## Lens: over-engineering",
+            "## Lens: test-bloat",
+        ):
+            self.assertIn(heading, self.prompt)
+        self.assertGreaterEqual(len(re.findall(r"\*\*P\d+ ", self.prompt)), 15)
+        for key in (
+            '"station"',
+            '"baseline"',
+            '"lens"',
+            '"candidates"',
+            '"positives"',
+            '"_needsHuman"',
+            '"measurementLayout"',
+        ):
+            self.assertIn(key, self.prompt)
+        rules = re.findall(r"^(\d)\. \*\*([^*]+)\*\*", self.prompt, re.M)
+        self.assertEqual([n for n, _ in rules], [str(i) for i in range(1, 9)])
+        labels = " ".join(label for _, label in rules).lower()
+        for needle in (
+            "read-only",
+            "one json object",
+            "anchor scope",
+            "reserved seams first",
+            "layout, never a number",
+            "prose",
+        ):
+            self.assertIn(needle, labels)
+        for lens in LENSES:
+            rendered = (self.station_dir() / "prompts" / f"sc-{lens}.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("{{", rendered)
+            self.assertIn(f"Lens: `{lens}`", rendered)
+            self.assertIn(self.baseline(), rendered)
+
+    def test_every_merged_and_raw_envelope_validates(self) -> None:
+        for lens in LENSES:
+            for path in (
+                self.station_dir() / f"candidates.{lens}.json",
+                self.station_dir() / "raw" / f"sc-{lens}.json",
+            ):
+                with self.subTest(file=path.name):
+                    proc = subprocess.run(
+                        [
+                            "python3",
+                            str(sc.TOOLS / "validate-envelope.py"),
+                            "--role",
+                            "attacker",
+                            "--station",
+                            "solver-comm",
+                            str(path),
+                        ],
+                        cwd=sc.REPO,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_envelope_lens_baseline_and_refs_are_consistent(self) -> None:
+        for lens in LENSES:
+            with self.subTest(lens=lens):
+                doc = self.merged[lens]
+                self.assertEqual(doc["lens"], lens)
+                self.assertEqual(doc["baseline"], self.baseline())
+                self.assertEqual(doc["station"], "solver-comm")
+                self.assertEqual(doc["lenses"], {f"sc-{lens}": "merged"})
+                refs = [c["candidateRef"] for c in doc["candidates"]]
+                self.assertEqual(
+                    refs,
+                    [f"SC-{REF_PREFIX[lens]}-{i:03d}" for i in range(1, len(refs) + 1)],
+                )
+                keys = [
+                    (sorted(a["path"] for a in c["anchors"])[0], c["title"])
+                    for c in doc["candidates"]
+                ]
+                self.assertEqual(
+                    keys,
+                    sorted(keys),
+                    "merged candidates are sorted by first anchor path then title",
+                )
+                self.assertTrue(all(c["lens"] == lens for c in doc["candidates"]))
+                self.assertEqual(
+                    len(doc["candidates"]) + len(doc["dropped"]),
+                    len(self.raw[lens]["candidates"]),
+                )
+                self.assertEqual(doc["positives"], self.raw[lens]["positives"])
+
+    def test_every_anchor_is_in_scope_or_the_single_dup_of_exception(self) -> None:
+        for lens in LENSES:
+            for c in self.candidates(lens):
+                with self.subTest(ref=c["candidateRef"]):
+                    self.assertIsNone(guard_scope(c), c["title"])
+                    for a in c["anchors"]:
+                        self.assertTrue(a.get("symbol") or a.get("line") is not None, a)
+                        if not a["path"].startswith(IN_SCOPE):
+                            self.assertEqual(a["path"], DUP_OF_PATH)
+                            self.assertEqual(
+                                c.get("dupOf"), "Superseded cut-sync public methods"
+                            )
+
+    def test_dup_of_handoff_candidates_carry_the_verified_cut_sync_anchors(
+        self,
+    ) -> None:
+        dups = [c for lens in LENSES for c in self.candidates(lens) if c.get("dupOf")]
+        self.assertTrue(dups, "at least one lens emitted the E5 dup-of handoff")
+        tree = self.tree()
+        text = tree.read_text(DUP_OF_PATH).splitlines()
+        for c in dups:
+            with self.subTest(ref=c["candidateRef"]):
+                for a in c["anchors"]:
+                    self.assertEqual(a["path"], DUP_OF_PATH)
+                    if a.get("line"):
+                        self.assertIn(a["symbol"], text[a["line"] - 1])
+
+    def test_performance_candidates_carry_a_layout_call_sites_and_no_number(
+        self,
+    ) -> None:
+        perf = self.candidates("performance")
+        self.assertTrue(perf)
+        for c in perf:
+            with self.subTest(ref=c["candidateRef"]):
+                self.assertIsNone(guard_layout(c), c["title"])
+                self.assertTrue(c.get("mechanism", "").strip())
+                self.assertTrue(
+                    c.get("exercisingCallSites"),
+                    "perf candidates list exercising call sites",
+                )
+                solver_side = all(
+                    a["path"].startswith("crates/cobre-solver/") for a in c["anchors"]
+                )
+                self.assertEqual(c["measurementLayout"], "4t" if solver_side else "2x2")
+        collective = [
+            c
+            for c in perf
+            if any(a["path"].startswith("crates/cobre-comm/") for a in c["anchors"])
+        ]
+        self.assertTrue(
+            collective,
+            "the per_rank_counts/prefix_displs probe produced a collective candidate",
+        )
+        sites = " ".join(" ".join(c["exercisingCallSites"]) for c in collective)
+        for site in (
+            "cut_sync.rs:182",
+            "stats_aggregation.rs:118",
+            "rank_distribution.rs:61",
+        ):
+            self.assertIn(site, sites)
+
+    def test_over_engineering_routes_the_shared_memory_seam_to_positives(self) -> None:
+        for lens in LENSES:
+            for c in self.candidates(lens):
+                anchored = " ".join(
+                    f"{a['path']} {a.get('symbol', '')}" for a in c["anchors"]
+                )
+                self.assertFalse(
+                    any(s in anchored for s in SHARED_MEMORY),
+                    f"{c['candidateRef']} anchors on a sanctioned shared-memory symbol",
+                )
+                self.assertNotRegex(
+                    c["fixShape"],
+                    r"(remove|delete|drop|retire)\b[^.]{0,80}\b(SharedMemoryProvider|SharedRegion|LocalCommunicator|LocalCommKind|HeapRegion|split_local)\b",
+                    f"{c['candidateRef']} proposes removing the sanctioned seam",
+                )
+        oe = self.merged["over-engineering"]
+        seam = [p for p in oe["positives"] if "SharedMemoryProvider" in p["subject"]]
+        self.assertTrue(seam)
+        self.assertIn("reserved-seams-and-deferred-debt.md:79", seam[0]["sanctionedBy"])
+        self.assertTrue(
+            any(
+                "BasisInconsistent" in json.dumps(p) or "basis" in p["subject"].lower()
+                for p in oe["positives"]
+            )
+        )
+
+    def test_architecture_reverifies_item_8_and_records_the_gate_blind_spot(
+        self,
+    ) -> None:
+        arch = self.candidates("architecture")
+        item8 = [c for c in arch if c.get("partIRef") == "I.3-8"]
+        self.assertEqual(len(item8), 1)
+        c = item8[0]
+        blob = json.dumps(c)
+        self.assertEqual(c["alignmentHint"], "advances-1")
+        types_lines = sorted(
+            a["line"]
+            for a in c["anchors"]
+            if a["path"] == "crates/cobre-solver/src/types.rs" and a.get("line")
+        )
+        for ln in (270, 278, 287, 290, 297):
+            self.assertIn(ln, types_lines)
+        for field in (
+            "n_state",
+            "n_transfer",
+            "n_dual_relevant",
+            "n_hydro",
+            "max_par_order",
+        ):
+            self.assertIn(field, blob)
+        for site in ("158", "380", "252"):
+            self.assertIn(
+                site,
+                c["fixShape"] + json.dumps(c["evidence"]),
+                f"propagation site line {site}",
+            )
+        self.assertTrue(
+            "StateSpace" in blob and "StageRowLayout" in blob,
+            "the owner after the shed is named",
+        )
+        cut = [c for c in arch if "cut_nz_per_col" in c["title"]]
+        self.assertEqual(len(cut), 1)
+        blob = json.dumps(cut[0])
+        for ln in ("137", "138", "141", "188"):
+            self.assertIn(ln, blob)
+        self.assertIn("word character", blob)
+        self.assertIn("E7", blob)
+        self.assertNotRegex(
+            cut[0]["fixShape"].lower(),
+            r"(edit|change|patch|widen|fix)\s+(the\s+)?(gate|pattern|script)",
+        )
+
+    def test_test_bloat_hoists_fixtures_into_test_support_and_protects_the_probes(
+        self,
+    ) -> None:
+        tb = self.merged["test-bloat"]
+        fixture = [
+            c
+            for c in tb["candidates"]
+            if "make_fixture_stage_template" in json.dumps(c)
+        ]
+        self.assertTrue(fixture)
+        main = max(fixture, key=lambda c: len(c["anchors"]))
+        anchors = {
+            (a["path"].rsplit("/", 1)[-1], a.get("line")) for a in main["anchors"]
+        }
+        self.assertIn(("conformance.rs", 34), anchors)
+        self.assertIn(("clp_determinism.rs", 33), anchors)
+        blob = json.dumps(main)
+        self.assertIn("sentinel_inf_row_probe", blob)
+        self.assertIn("profile_retry_composition", blob)
+        self.assertIn("test_support", main["fixShape"])
+        self.assertIn("164", main["fixShape"])
+        for c in tb["candidates"]:
+            self.assertFalse(
+                guard_fixture(c["fixShape"]),
+                f"{c['candidateRef']} proposes a new fixture crate",
+            )
+        subjects = " ".join(p["subject"] for p in tb["positives"])
+        self.assertIn("_q1_sign_convention_probe.rs", subjects)
+        self.assertIn("_clp_sign_convention_probe.rs", subjects)
+        for c in tb["candidates"]:
+            self.assertFalse(
+                any("_sign_convention_probe" in a["path"] for a in c["anchors"]),
+                c["candidateRef"],
+            )
+
+    def test_no_fix_shape_is_a_diff_or_a_code_block(self) -> None:
+        for lens in LENSES:
+            for c in self.candidates(lens):
+                self.assertIsNone(DIFF_MARKER.search(c["fixShape"]), c["candidateRef"])
+
+    def test_attacker_log_records_one_dispatch_per_lens_and_the_gaps_section(
+        self,
+    ) -> None:
+        for lens in LENSES:
+            self.assertRegex(
+                self.log,
+                re.compile(
+                    rf"^\| sc-{re.escape(lens)} \| {re.escape(lens)} \|.*\| valid", re.M
+                ),
+            )
+        rows = re.findall(r"^\| sc-[a-z-]+ \| [a-z-]+ \| ", self.log, re.M)
+        self.assertEqual(len(rows), 4)
+        self.assertIn("## Gaps carried forward", self.log)
+        self.assertIn("check-anchors.py", self.log)
+        self.assertIn("## Prior-register screen", self.log)
+
+    # --- the guards must bite on tampered input, since the real run tripped none of them ---
+
+    def test_scope_guard_drops_out_of_scope_unless_dup_of(self) -> None:
+        sddp_only = {
+            "title": "x",
+            "anchors": [{"path": "crates/cobre-sddp/src/cut/cut_sync.rs", "line": 243}],
+        }
+        self.assertEqual(guard_scope(sddp_only), "out-of-scope-anchor")
+        self.assertIsNone(
+            guard_scope({**sddp_only, "dupOf": "Superseded cut-sync public methods"})
+        )
+        other_sddp = {
+            "title": "x",
+            "dupOf": "Superseded cut-sync public methods",
+            "anchors": [
+                {"path": "crates/cobre-sddp/src/lp/builder/template.rs", "line": 445}
+            ],
+        }
+        self.assertEqual(
+            guard_scope(other_sddp),
+            "out-of-scope-anchor",
+            "dupOf licenses only cut_sync.rs",
+        )
+        self.assertIsNone(
+            guard_scope(
+                {
+                    "title": "x",
+                    "anchors": [{"path": "crates/cobre-comm/src/lib.rs", "line": 83}],
+                }
+            )
+        )
+
+    def test_layout_guard_drops_missing_layout_and_timing_numbers(self) -> None:
+        base = {
+            "title": "t",
+            "mechanism": "m",
+            "fixShape": "prose",
+            "evidence": {"command": "grep"},
+            "anchors": [],
+        }
+        self.assertEqual(guard_layout(base), "layout-missing")
+        self.assertEqual(
+            guard_layout({**base, "measurementLayout": "8t"}), "layout-missing"
+        )
+        self.assertIsNone(guard_layout({**base, "measurementLayout": "4t"}))
+        self.assertEqual(
+            guard_layout(
+                {**base, "measurementLayout": "4t", "fixShape": "saves 12 ms per solve"}
+            ),
+            "timing-number",
+        )
+        self.assertEqual(
+            guard_layout(
+                {**base, "measurementLayout": "2x2", "mechanism": "a 3x speedup"}
+            ),
+            "timing-number",
+        )
+        self.assertIsNone(
+            guard_layout(
+                {
+                    **base,
+                    "measurementLayout": "2x2",
+                    "evidence": {"command": "grep", "output": "vec![0usize; n]"},
+                }
+            ),
+            "a usize literal is not a timing",
+        )
+
+    def test_fixture_guard_rewrites_only_a_new_crate_proposal(self) -> None:
+        self.assertTrue(
+            guard_fixture(
+                "Create a new cobre-solver-fixtures crate shared by the binaries."
+            )
+        )
+        self.assertFalse(
+            guard_fixture(
+                "Add a fixtures submodule inside the shipped test_support module."
+            )
+        )
 
 
 class CleanTreeTests(unittest.TestCase):

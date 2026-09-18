@@ -1,0 +1,147 @@
+{
+  "station": "solver-comm",
+  "subStation": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "The SS1.1 stage-template fixture is declared eight times token-identically across src and tests, so every StageTemplate field change costs eight edits",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/lib.rs", "symbol": "test_support", "line": 164 },
+        { "path": "crates/cobre-solver/src/types.rs", "symbol": "make_fixture_stage_template", "line": 736 },
+        { "path": "crates/cobre-solver/src/freeze.rs", "symbol": "make_fixture_stage_template", "line": 262 },
+        { "path": "crates/cobre-solver/src/backends/clp/tests.rs", "symbol": "make_fixture_stage_template", "line": 20 },
+        { "path": "crates/cobre-solver/src/backends/highs/tests.rs", "symbol": "make_fixture_stage_template", "line": 19 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "symbol": "make_fixture_stage_template", "line": 34 },
+        { "path": "crates/cobre-solver/tests/clp_determinism.rs", "symbol": "make_fixture_stage_template", "line": 33 },
+        { "path": "crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs", "symbol": "make_fixture_stage_template", "line": 29 },
+        { "path": "crates/cobre-solver/tests/clp_only_smoke.rs", "symbol": "make_fixture_stage_template", "line": 24 },
+        { "path": "crates/cobre-solver/src/backends/clp/tests.rs", "symbol": "make_fixture_row_batch", "line": 52 },
+        { "path": "crates/cobre-solver/src/backends/highs/tests.rs", "symbol": "make_fixture_row_batch", "line": 45 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "symbol": "make_fixture_row_batch", "line": 57 },
+        { "path": "crates/cobre-solver/tests/clp_determinism.rs", "symbol": "make_fixture_row_batch", "line": 58 }
+      ],
+      "evidence": {
+        "command": "for f in crates/cobre-solver/src/types.rs crates/cobre-solver/src/freeze.rs crates/cobre-solver/src/backends/clp/tests.rs crates/cobre-solver/src/backends/highs/tests.rs crates/cobre-solver/tests/conformance.rs crates/cobre-solver/tests/clp_determinism.rs crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs crates/cobre-solver/tests/clp_only_smoke.rs; do printf '%s ' \"$(grep -n 'fn make_fixture_stage_template' \"$f\" | cut -d: -f1)\"; grep -A 20 'fn make_fixture_stage_template' \"$f\" | tr -d ' \\n' | sha256sum | cut -c1-16 | tr -d '\\n'; echo \" $f\"; done",
+        "output": "736 7c248717b0e59b48 crates/cobre-solver/src/types.rs\n262 7c248717b0e59b48 crates/cobre-solver/src/freeze.rs\n20 7c248717b0e59b48 crates/cobre-solver/src/backends/clp/tests.rs\n19 7c248717b0e59b48 crates/cobre-solver/src/backends/highs/tests.rs\n34 7c248717b0e59b48 crates/cobre-solver/tests/conformance.rs\n33 7c248717b0e59b48 crates/cobre-solver/tests/clp_determinism.rs\n29 7c248717b0e59b48 crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs\n24 7c248717b0e59b48 crates/cobre-solver/tests/clp_only_smoke.rs",
+        "reading": "One whitespace-stripped hash for all eight declaration sites: the twenty-line builder is byte-identical everywhere, four times inside src and four times inside tests. Two further builders repeat the same way (make_fixture_row_batch four times at clp/tests.rs:52, highs/tests.rs:45, conformance.rs:57, clp_determinism.rs:58; make_empty_row_batch twice at freeze.rs:286 and sentinel_inf_row_probe.rs:76). The stated justification does not close the loop and has already rotted: clp_determinism.rs:13 says fixtures are re-declared because an integration test cannot import the #[cfg(test)] builders from src, conformance.rs:4 and ffi_set_basis_non_alien_smoke.rs:26 attribute the copy to the highs.rs unit tests and to src/highs.rs, and that path does not exist at the baseline (the module is src/backends/highs/tests.rs). The claim about #[cfg(test)] is true and irrelevant, because crates/cobre-solver/src/lib.rs:163-164 already ships a feature-gated pub mod test_support and conformance.rs:31-32 already imports it from an integration binary; the module currently holds only FFI option pass-throughs, so a fixtures submodule is an open seam, not a new one. The remaining objection, that a build without --features test-support would not see the fixtures, is answered by an idiom already in this directory: profile_retry_composition.rs:23 gates its whole test module on #[cfg(feature = \"test-support\")]. Blast radius for the Phase-1 shed: 35 occurrences of n_dual_relevant: across 13 cobre-solver files (84 workspace-wide) and 51 StageTemplate literals in cobre-solver; partI-handoff.json records the test-side collateral as four fixtures plus three assertion spans, which undercounts these eight identical builders.",
+        "moreCommands": "grep -rn 'fn make_fixture_row_batch|fn make_empty_row_batch' crates/cobre-solver/src crates/cobre-solver/tests ; grep -rn 'duplicated from|re-declared locally|Duplicated from' crates/cobre-solver/tests ; test -e crates/cobre-solver/src/highs.rs || echo absent"
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Add a fixtures submodule inside the already-shipped pub mod test_support at crates/cobre-solver/src/lib.rs:164, behind the existing test-support feature, and make it the single declaration of the SS1.1 stage template, the two-row batch and the empty batch. The four integration binaries import them exactly as conformance.rs:31-32 already imports test_support; the four in-src test modules reach them through crate::test_support. A binary that must also build without the feature keeps the whole-file gate that profile_retry_composition.rs:23 already demonstrates. Sequence this before the Phase-1 StageTemplate shed so the shed edits one builder instead of eight. Do not create a fixture crate: testing-architecture.md section 5.2 keeps the test-support cargo feature for exactly this purpose, and a separate crate would add a dev-dependency cycle, split the infra-genericity gate surface, and add no capability. Leave the genuinely distinct one-off builders alone (build_two_row_template and build_three_row_template in sentinel_inf_row_probe.rs, make_minimal_template in profile_retry_composition.rs are different LPs, not copies) but note they each re-type the five shed fields. Correct the three rationale comments instead of deleting them; the surviving fact is which module owns the fixture, and two of them currently name a path that does not resolve.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-8"
+    },
+    {
+      "title": "clp_only_smoke.rs is a whole test binary whose stated reason to exist is already met by conformance.rs, and its single test is a tolerance-only clone of the conformance one",
+      "anchors": [
+        { "path": "crates/cobre-solver/tests/clp_only_smoke.rs", "symbol": "clp_only_load_model_and_solve", "line": 48 },
+        { "path": "crates/cobre-solver/tests/clp_only_smoke.rs", "line": 3 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "symbol": "test_solver_clp_load_model_and_solve", "line": 1450 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "line": 26 }
+      ],
+      "evidence": {
+        "command": "grep -c 'cfg(feature = \"clp\")' crates/cobre-solver/tests/conformance.rs; grep -n 'fn test_solver_clp' crates/cobre-solver/tests/conformance.rs; sed -n '1,8p' crates/cobre-solver/tests/clp_only_smoke.rs",
+        "output": "7\n1450:fn test_solver_clp_load_model_and_solve() {\n1487:fn test_solver_clp_solve_dual_values() {\n1521:fn test_solver_clp_add_rows_then_solve() {\n1557:fn test_solver_clp_warm_start_roundtrip() {\n1636:fn test_solver_clp_solve_rejects_undersized_row_basis() {\n1724:fn test_solver_clp_solve_accepts_inconsistent_basis_status_combination_silently() {\n//! CLP-only end-to-end smoke test.\n//!\n//! Guarantees the clp-only build (`--no-default-features --features clp`) ships\n//! at least one runnable integration test, not just `#[cfg(test)]` unit tests.\n//!\n//! The fixture is duplicated from the `#[cfg(test)]` unit tests because\n//! integration tests cannot reach module internals.\n#![cfg(feature = \"clp\")]",
+        "reading": "conformance.rs imports ClpSolver under #[cfg(feature = \"clp\")] at :26 and carries six clp-gated tests, so the clp-only build already ships runnable integration tests and the module doc claim at clp_only_smoke.rs:3-4 is false at this baseline. The assertion is also already there: test_solver_clp_load_model_and_solve (:1450) and clp_only_load_model_and_solve (:48) both build the same fixture, call load_model then solve(None), and assert objective 100.0 and primals 6.0/0.0/2.0; they differ only in the tolerance (1e-8 against 1e-9) and the panic text. The binary therefore contributes one of the eight identical fixture copies and no coverage.",
+        "moreCommands": "sed -n '/fn test_solver_clp_load_model_and_solve/,/^}/p' crates/cobre-solver/tests/conformance.rs; sed -n '47,77p' crates/cobre-solver/tests/clp_only_smoke.rs"
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Retire the binary and let the clp-gated section of conformance.rs be the clp-only guard it already is. If a standalone guard is genuinely wanted, the thing being guarded is a build-matrix property (that the clp-only feature combination still collects and links an integration binary), which belongs in the CI matrix rather than in a duplicated assertion; a surviving binary should then source its fixture from the test_support fixtures module and its module doc must be corrected, since the current wording states something conformance.rs already contradicts.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "cobre-comm tests the same public Communicator contracts twice: six name-identical collective tests exist both inline in src/local.rs and in tests/local_conformance.rs, plus renamed pairs across factory.rs and tests/factory_tests.rs",
+      "anchors": [
+        { "path": "crates/cobre-comm/src/local.rs", "symbol": "test_local_allreduce_buffer_mismatch", "line": 406 },
+        { "path": "crates/cobre-comm/tests/local_conformance.rs", "symbol": "test_local_allreduce_buffer_mismatch", "line": 198 },
+        { "path": "crates/cobre-comm/src/local.rs", "symbol": "test_local_allgatherv_recv_too_small", "line": 360 },
+        { "path": "crates/cobre-comm/tests/local_conformance.rs", "symbol": "test_local_allgatherv_recv_too_small", "line": 244 },
+        { "path": "crates/cobre-comm/src/local.rs", "symbol": "test_local_broadcast_invalid_root", "line": 453 },
+        { "path": "crates/cobre-comm/tests/local_conformance.rs", "symbol": "test_local_broadcast_invalid_root", "line": 290 },
+        { "path": "crates/cobre-comm/src/local.rs", "symbol": "test_local_allreduce_identity_sum", "line": 379 },
+        { "path": "crates/cobre-comm/tests/local_conformance.rs", "symbol": "test_local_allreduce_identity_sum", "line": 44 },
+        { "path": "crates/cobre-comm/src/local.rs", "symbol": "test_local_allgatherv_with_offset", "line": 292 },
+        { "path": "crates/cobre-comm/tests/local_conformance.rs", "symbol": "test_local_allgatherv_with_displacement", "line": 30 },
+        { "path": "crates/cobre-comm/src/factory.rs", "symbol": "test_available_backends_contains_local", "line": 303 },
+        { "path": "crates/cobre-comm/tests/factory_tests.rs", "symbol": "test_available_backends_contains_local", "line": 71 },
+        { "path": "crates/cobre-comm/src/factory.rs", "symbol": "test_create_communicator_no_feature_local", "line": 322 },
+        { "path": "crates/cobre-comm/tests/factory_tests.rs", "symbol": "test_factory_no_feature_local", "line": 11 }
+      ],
+      "evidence": {
+        "command": "for n in test_local_allgatherv_recv_too_small test_local_broadcast_invalid_root; do echo \"## $n\"; sed -n \"/fn $n(/,/^    }/p\" crates/cobre-comm/src/local.rs; sed -n \"/fn $n(/,/^}/p\" crates/cobre-comm/tests/local_conformance.rs; done; sed -n '266,272p' crates/cobre-comm/src/local.rs; sed -n '56,66p' crates/cobre-comm/src/lib.rs",
+        "output": "## test_local_allgatherv_recv_too_small\n    fn test_local_allgatherv_recv_too_small() {\n        let comm = LocalBackend;\n        let send = [1.0_f64, 2.0, 3.0];\n        let mut recv = [0.0_f64; 4];\n        let err = comm.allgatherv(&send, &mut recv, &[3], &[2]).unwrap_err();\n        assert!(matches!(err, CommError::InvalidBufferSize { operation: \"allgatherv\", expected: 5, actual: 4 }), \"unexpected error: {err:?}\");\n    }\nfn test_local_allgatherv_recv_too_small() {\n    let comm = LocalBackend;\n    let send = [1.0_f64, 2.0, 3.0];\n    let mut recv = [0.0_f64; 4];\n    let err = comm.allgatherv(&send, &mut recv, &[3], &[2]).expect_err(\"must fail\");\n    assert!(matches!(err, CommError::InvalidBufferSize { operation: \"allgatherv\", expected: 5, actual: 4 }), \"got {err:?}\");\n}\n[mod tests header] use super::LocalBackend; use crate::{CommError, Communicator, ReduceOp};\n[lib.rs] 57:pub use local::LocalBackend; 59:pub use traits::{CommData, Communicator, TopologyProvider}; 60:pub use types::{BackendError, CommError, ReduceOp};",
+        "reading": "The two versions send the same literals through the same public trait method and assert the same CommError variant with the same expected and actual values; only the assertion message differs (unexpected error against got). The inline module at local.rs:266-268 imports super::LocalBackend plus crate::{CommError, Communicator, ReduceOp}, and every one of those is publicly re-exported at lib.rs:57/59/60, so the inline copies reach no private surface that the integration binary lacks and the usual defence (the integration binary uniquely proves the public re-export path) is worth exactly one smoke test, not six. The copies have already drifted cosmetically: test_local_broadcast_root0_noop broadcasts a two-element buffer inline (local.rs:444) and a three-element buffer in the binary (local_conformance.rs:94). Deliberately excluded from this candidate under the ingest filter: the shared-memory tests (split_local, is_leader, HeapRegion, SharedRegion), even though two of them are the most literally identical pairs in the crate, because they touch the ratified reserved seam at mirror line 79.",
+        "moreCommands": "grep -c '#\\[test\\]' crates/cobre-comm/src/local.rs crates/cobre-comm/tests/local_conformance.rs"
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Name tests/local_conformance.rs the single owner of the public SS1.1-SS1.8 Communicator contract, which is the role its own module doc already claims, and retire the inline copies of contracts that are reachable through the public re-exports, keeping inline only assertions that need super:: privates. Keep test_local_collective_sequence and test_local_barrier_repeated, which have no inline counterpart, and keep one inline smoke assertion if the crate wants a test that survives with the integration binary removed. The lever here is single-owner maintenance, not link cost: testing-architecture.md section 5.1 explicitly puts the non-solver crates out of scope for binary consolidation because their binaries do not link the solver, so no consolidation of the two comm binaries is being proposed.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "test_research_probe_limit_status_on_ss11_lp is a #[test] with no behavioural assertion; the fact it observes is already prose in the module comment directly above it",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/backends/highs/tests.rs", "symbol": "test_research_probe_limit_status_on_ss11_lp", "line": 846 },
+        { "path": "crates/cobre-solver/src/backends/highs/tests.rs", "symbol": "research_tests", "line": 796 },
+        { "path": "crates/cobre-solver/src/backends/highs/tests.rs", "line": 787 }
+      ],
+      "evidence": {
+        "command": "sed -n '/fn test_research_probe_limit_status_on_ss11_lp/,/^    }/p' crates/cobre-solver/src/backends/highs/tests.rs | grep -n 'assert|eprintln|model_status ='; sed -n '786,795p' crates/cobre-solver/src/backends/highs/tests.rs",
+        "output": "6:        assert!(!highs.is_null());\n11:        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };\n13:        eprintln!(\n20:        assert!(!highs.is_null());\n27:        let model_status = unsafe { ffi::cobre_highs_get_model_status(highs) };\n29:        eprintln!(\n// These tests verify LP formulations that reliably trigger non-optimal\n// HiGHS model statuses. They use the raw FFI layer to set options not\n// exposed through SolverInterface and confirm the expected model status.\n//\n// The SS1.1 LP (3-variable, 2-constraint) is too small: HiGHS's crash\n// heuristic solves it without entering the simplex loop, so time/iteration\n// limits never fire. A 5-variable, 4-constraint \"larger_lp\" is required.",
+        "reading": "The only assertions in the test are two null-handle checks; both observed model statuses are printed and never asserted, so the test cannot fail for the property its own doc comment claims to document (it is labelled OBSERVATIONAL and says it documents that behavior). The conclusion it reaches is already recorded as durable prose at :791-794, where it justifies the existence of research_load_larger_lp, so the executable adds nothing the comment does not already carry, while costing two HiGHS create/run/destroy cycles and eleven of the module's sixty-eight unsafe sites. This is the opposite of the two protected sign-convention probes in tests/, which assert the decision they record.",
+        "moreCommands": "grep -c 'unsafe' crates/cobre-solver/src/backends/highs/tests.rs; grep -n 'fn test_research' crates/cobre-solver/src/backends/highs/tests.rs"
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Retire the #[test] and keep the module-comment sentence that records the finding, which is where the knowledge already lives. If the observed statuses must be held against a future HiGHS upgrade, give the test the assertion it lacks by pinning the two model-status codes instead of printing them; a printed value in a passing test is invisible under cargo test anyway. The other six test_research_* tests assert real properties at a layer the conformance binary cannot reach, because they set options not exposed through SolverInterface, and stay as they are.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The two fixture-contract tests in conformance.rs assert a test-local literal against its own transcription and re-encode the five StageTemplate fields Part-I item 8 sheds",
+      "anchors": [
+        { "path": "crates/cobre-solver/tests/conformance.rs", "symbol": "test_fixture_stage_template_data", "line": 138 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "symbol": "test_fixture_row_batch_data", "line": 161 },
+        { "path": "crates/cobre-solver/tests/conformance.rs", "line": 153 }
+      ],
+      "evidence": {
+        "command": "sed -n '136,170p' crates/cobre-solver/tests/conformance.rs; grep -n 'fn make_fixture_stage_template' crates/cobre-solver/tests/conformance.rs",
+        "output": "138:fn test_fixture_stage_template_data() {\n139:    let t = make_fixture_stage_template();\n140:    assert_eq!(t.num_cols, 3);\n...\n143:    assert_eq!(t.col_starts, vec![0_i32, 2, 2, 3]);\n...\n153:    assert_eq!(t.n_state, 1);\n154:    assert_eq!(t.n_transfer, 0);\n155:    assert_eq!(t.n_dual_relevant, 1);\n156:    assert_eq!(t.n_hydro, 1);\n157:    assert_eq!(t.max_par_order, 0);\n158:}\n161:fn test_fixture_row_batch_data() {\n...\n34:fn make_fixture_stage_template() -> StageTemplate {",
+        "reading": "make_fixture_stage_template is declared at :34 in the same file, one hundred lines above the test, so every assertion compares a vec literal against a hand transcription of that same literal; the test exercises no production code and cannot detect a fixture edit, because an edit to the builder is exactly the change a maintainer would mirror into the assertions. Independently, :153-157 restate all five fields the Phase-1 shed removes, while partI-handoff.json records this collateral site as conformance.rs:154-156, missing n_state at :153 and max_par_order at :157 — the site is five lines, not three.",
+        "moreCommands": "grep -rn 'fn test_fixture_stage_template_data|fn test_fixture_row_batch_data' crates/cobre-solver"
+      },
+      "proposedSeverity": "C",
+      "fixShape": "If the fixtures move into the test_support fixtures module, one contract test belongs there beside the builder, asserting once that the shared SS1.1 LP is the LP the builders promise; the per-binary copy in conformance.rs is then redundant and goes with it. If the fixtures stay per-binary, delete both tests outright, because a constructor asserted against itself in the same file has no independent oracle. Either way the Phase-1 estimate for this site should carry five lines, not three.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-8"
+    },
+    {
+      "title": "Three #[test] functions restate a Send+Sync monomorphisation that a production const fn beside them already performs on every build",
+      "anchors": [
+        { "path": "crates/cobre-comm/src/factory.rs", "symbol": "_assert_comm_backend_send_sync", "line": 74 },
+        { "path": "crates/cobre-comm/src/factory.rs", "symbol": "test_comm_backend_send_sync", "line": 419 },
+        { "path": "crates/cobre-comm/src/ferrompi.rs", "symbol": "test_ferrompi_backend_send_sync", "line": 488 },
+        { "path": "crates/cobre-comm/tests/factory_tests.rs", "symbol": "test_ferrompi_backend_send_sync", "line": 89 }
+      ],
+      "evidence": {
+        "command": "sed -n '70,77p' crates/cobre-comm/src/factory.rs; sed -n '417,422p' crates/cobre-comm/src/factory.rs; sed -n '487,491p' crates/cobre-comm/src/ferrompi.rs; sed -n '86,93p' crates/cobre-comm/tests/factory_tests.rs",
+        "output": "// Rationale: never called; its monomorphisation is the compile-time check that\n// `CommBackend: Send + Sync`, catching any future field that breaks it.\n#[allow(dead_code)]\nconst fn _assert_comm_backend_send_sync() {\n    const fn assert_send_sync<T: Send + Sync>() {}\n    assert_send_sync::<CommBackend>();\n}\n---\n#[test]\nfn test_comm_backend_send_sync() {\n    fn assert_send_sync<T: Send + Sync>() {}\n    assert_send_sync::<CommBackend>();\n}\n---\n#[test]\nfn test_ferrompi_backend_send_sync() {\n    fn assert_send_sync<T: Send + Sync>() {}\n    assert_send_sync::<FerrompiBackend>();\n}\n---\nmod compile_time_checks {\n    #[test]\n    #[cfg(feature = \"mpi\")]\n    fn test_ferrompi_backend_send_sync() {\n        fn assert_send_sync<T: Send + Sync>() {}\n        assert_send_sync::<cobre_comm::FerrompiBackend>();\n    }",
+        "reading": "factory.rs:74 is a production const fn whose recorded rationale is that its monomorphisation IS the compile-time check, so it fires on every cargo build. factory.rs:419 performs the identical monomorphisation inside #[cfg(test)], where it can only fail in a build that already failed to compile. ferrompi.rs:488 and factory_tests.rs:89 are the same body twice for FerrompiBackend, differing only in whether the type is named through crate:: or cobre_comm::. Four sites, two types, one mechanism that actually holds.",
+        "moreCommands": "grep -rn 'assert_send_sync' crates/cobre-comm"
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Keep one mechanism per type and prefer the const-fn form, because it fires without cargo test and is the one already documented as load-bearing. Retire the three #[test] restatements; if FerrompiBackend deserves the same guarantee, give it a production const-fn assertion next to its unsafe impl Send/Sync rather than two test copies, so the check and the soundness argument sit together. This is not about the unsafe impl itself, which the manifest comment justifies.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    { "subject": "crates/cobre-solver/tests/_q1_sign_convention_probe.rs", "why": "A decision record that asserts the row-equality against column-bound sign convention rather than merely observing it; its underscore prefix marks it as a probe kept deliberately, and its StageTemplate literals are a record of the convention, not fixture duplication.", "sanctionedBy": "plans/architecture-debt-audit/stations/solver-comm/prompts/sc-test-bloat.md — P14 Protected" },
+    { "subject": "crates/cobre-solver/tests/_clp_sign_convention_probe.rs", "why": "Same protected class as the Q1 probe, and it already imports cobre_solver::test_support at :21, which is the second live proof that the feature-gated module is reachable from an integration binary.", "sanctionedBy": "plans/architecture-debt-audit/stations/solver-comm/prompts/sc-test-bloat.md — P14 Protected" },
+    { "subject": "crates/cobre-comm/src/traits.rs:372 SharedMemoryProvider hierarchy (with SharedRegion, LocalCommunicator, LocalCommKind, HeapRegion, split_local)", "why": "Ratified reserved seam. Recorded here because the test-bloat sweep found that its inline and integration tests are among the most literally identical pairs in cobre-comm (split_local and is_leader), and it deliberately excluded them from the duplication candidate rather than raising anything that touches the seam.", "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md:79 — Shared-memory communicator trait hierarchy" },
+    { "subject": "crates/cobre-solver/tests/conformance.rs:1601 and :1636 against crates/cobre-solver/src/backends/highs/tests.rs:548 and crates/cobre-solver/src/backends/clp/tests.rs:609", "why": "Not duplication, and a later sweep should not collapse them. The conformance pair is the public-API pin the prior register names for the basis-validation contract; the sibling-module pair additionally asserts basis_consistency_failures and basis_offered, internal statistics an integration test cannot observe. Two different oracles for one behaviour, both earned." },
+    { "subject": "crates/cobre-solver/tests/profile_retry_composition.rs:23 whole-file #[cfg(feature = \"test-support\")] gate", "why": "The idiom that makes the fixture hoist safe: an integration binary in this very directory already compiles to nothing without the test-support feature, so gating shared fixtures on that feature introduces no new build mode." },
+    { "subject": "crates/cobre-solver/src/backends/highs/tests.rs:796 mod research_tests (the six asserting tests)", "why": "Real coverage below the wrapper: they set HiGHS options that SolverInterface does not expose and pin the non-optimal model-status mapping, which the conformance binary cannot reach through the public API. The module comment also records why the SS1.1 LP is too small for limit statuses to fire, which is knowledge that would be lost if the module were collapsed." }
+  ],
+  "_needsHuman": [
+    "crates/cobre-comm/tests/local_conformance.rs:4 cites backend-testing.md for the SS1.1-SS1.8 contract sections, and no file of that name exists anywhere in the tree at the baseline; whether the stale spec citation is this station's to fix or the docs station's (E07) needs the owner.",
+    "Whether clp_only_smoke.rs was created as a deliberate belt-and-braces guard against a future re-gating of conformance.rs, in which case the binary stays despite its assertion being already covered and only its false module doc and its fixture copy need fixing."
+  ]
+}

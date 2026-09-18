@@ -1,0 +1,124 @@
+{
+  "station": "solver-comm",
+  "subStation": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "ExecutionTopology::is_homogeneous is a public predicate with zero consumers outside its own four unit tests",
+      "anchors": [
+        { "path": "crates/cobre-comm/src/topology.rs", "symbol": "is_homogeneous", "line": 34 }
+      ],
+      "evidence": {
+        "command": "git grep -n 'is_homogeneous' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates; git grep -n 'num_hosts()\\|leader_hostname()' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-cli",
+        "output": "topology.rs:34:    pub fn is_homogeneous(&self) -> bool {\ntopology.rs:126: fn test_is_homogeneous_empty()\ntopology.rs:132: fn test_is_homogeneous_single_host()\ntopology.rs:138: fn test_is_homogeneous_equal_rank_counts()\ntopology.rs:144: fn test_is_homogeneous_unequal_rank_counts()\n--\ncobre-cli/src/commands/run/mod.rs:163:    let hostname = ctx.topology.leader_hostname().to_string();\ncobre-cli/src/commands/run/mod.rs:296:        num_hosts: u32::try_from(topology.num_hosts()).unwrap_or(u32::MAX),\ncobre-cli/src/summary.rs:135/155/159: topology.leader_hostname() / topology.num_hosts()",
+        "reading": "Workspace-wide at the baseline, the only references to is_homogeneous are its declaration and the four unit tests in the same file; no crate reads it. The judgement is on consumers, not shape: the sibling accessors on the same struct are genuinely consumed (num_hosts and leader_hostname from cobre-cli's run command and summary printer), and every MpiRuntimeInfo / SlurmJobInfo field reaches the run summary through topology.mpi / topology.slurm, so ExecutionTopology, HostInfo, MpiRuntimeInfo and SlurmJobInfo are NOT speculative. This one predicate is the only unconsumed public surface in the file, and it is not in the reserved-seam register."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Drop the predicate and its four unit tests and let the caller that eventually needs a heterogeneity decision express it where the policy lives; today the only consumer of layout information is cobre-cli, which formats the layout from num_hosts and leader_hostname and needs no boolean. If the owner intends a heterogeneous-topology guard, the missing artifact is a reserved-seam entry with an activating milestone and an owner, mirroring how the shared-memory hierarchy is registered, not an unregistered unconsumed accessor. Either way the heterogeneity policy stays out of L0: cobre-comm reports the topology it measured and does not decide what an uneven rank distribution means.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "HiGHS retry ladder hand-copies the same tolerance-floor-and-set fragment four times where the CLP ladder is one declarative rung table",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/backends/highs/retry.rs", "symbol": "apply_retry_level_options", "line": 173 },
+        { "path": "crates/cobre-solver/src/backends/highs/retry.rs", "symbol": "apply_extended_retry_options", "line": 222 },
+        { "path": "crates/cobre-solver/src/backends/highs/retry.rs", "symbol": "apply_extended_retry_options", "line": 248 },
+        { "path": "crates/cobre-solver/src/backends/highs/retry.rs", "symbol": "apply_extended_retry_options", "line": 272 }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:crates/cobre-solver/src/backends/highs/retry.rs | grep -n 'f64::max\\|cobre_highs_set_double_option'; git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:crates/cobre-solver/src/backends/clp/retry.rs | sed -n '95,104p'",
+        "output": "174:                let primal = f64::max(1e-8, self.current_profile.primal_feasibility_tolerance);\n175:                let dual = f64::max(1e-8, self.current_profile.dual_feasibility_tolerance);\n179/184:                    ffi::cobre_highs_set_double_option(\n223:                let primal = f64::max(1e-8, ...);  224: dual ...\n228/233:                    ffi::cobre_highs_set_double_option(\n249:                let primal = f64::max(1e-7, ...);  250: dual ...\n260/265:                    ffi::cobre_highs_set_double_option(\n273:                let primal = f64::max(1e-7, ...);  274: dual ...\n289/294:                    ffi::cobre_highs_set_double_option(\n--\nclp/retry.rs:95: const RUNGS: [(i32, i32, ClpAlgorithm); LADDER_RUNGS] = [ ... ];",
+        "reading": "The identical fragment -- two f64::max(floor, self.current_profile.{primal,dual}_feasibility_tolerance) bindings followed by two cobre_highs_set_double_option calls in the same order -- is written out four times (levels 3, 7, 10, 11), differing only in the floor literal (1e-8, 1e-8, 1e-7, 1e-7); the level-3 and level-7 bodies are byte-identical. Part of the HiGHS/CLP size asymmetry IS intrinsic: HiGHS exposes a string-keyed option API, which is what forces the OptionValue / DefaultOption dispatch in config.rs that CLP's typed setters do not need. This part is not intrinsic -- CLP expresses its whole ladder as data in one const RUNGS table, so four hand-copies of the same floor-and-set fragment are accreted, and a floor typo in one copy silently changes only that level's solve."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the repeated fragment one owner: a private helper that takes the floor and applies both tolerance options in the current fixed order, and express the per-level deltas (floor, scaler ints, solver string) as a static rung table analogous to the CLP ladder's, so each level is data and the FFI call sequence is written once. The constraint that makes this bounded rather than risky is that the ladder is determinism-sensitive: the refactor must reproduce the exact per-level FFI call order and the exact set of options touched -- the escalation composition tests in the solver crate are what pin that, and a rung table is only legitimate if it preserves the order verbatim. Blast radius is the HiGHS retry escalation path alone (levels 3, 7, 10, 11 of one backend). Do not build a shared ladder abstraction across the two backends: HiGHS's string-keyed options and CLP's typed setters have no common shape worth a second layer, and a cross-backend ladder trait would be a one-consumer abstraction.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "HiGHS defaults exist twice -- 12 of 14 HighsProfile field defaults hand-mirror the default_options() table, with the bit-for-bit claim stated in prose and pinned by nothing",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/backends/highs/config.rs", "symbol": "default", "line": 58 },
+        { "path": "crates/cobre-solver/src/backends/highs/config.rs", "symbol": "default_options", "line": 168 },
+        { "path": "crates/cobre-solver/src/backends/highs/config.rs", "line": 10 }
+      ],
+      "evidence": {
+        "command": "git grep -n 'default_options' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-solver",
+        "output": "backends/highs/config.rs:10:/// Field defaults match the `default_options()` table bit-for-bit, so callers\nbackends/highs/config.rs:28:    /// `4`=Equilibration); see `default_options()` for why the default is `0`.\nbackends/highs/config.rs:168:pub(super) fn default_options() -> [DefaultOption; 17] {\nbackends/highs/retry.rs:217:            // scaler (`default_options()`: Off).\nbackends/highs/solver.rs:11:use super::config::{HighsProfile, default_options};\nbackends/highs/solver.rs:76: /// Creates a new `HiGHS` solver instance with the `default_options()`\nbackends/highs/solver.rs:132: /// Applies the `default_options()` table to a fresh handle.\nbackends/highs/solver.rs:137:        for opt in &default_options() {\nbackends/highs/solver.rs:281:        for opt in &default_options() {",
+        "reading": "Every reference to default_options() is either a doc comment or one of the two apply loops in solver.rs; no test and no build step compares the table against Default for HighsProfile. Yet 12 of the 14 profile fields carry a literal twin in the 17-entry table with the same value: primal/dual_feasibility_tolerance 1e-9, simplex_scale_strategy 0, simplex_dual_edge_weight_strategy 1, presolve on, cost_perturbation 0.0 (dual_simplex_cost_perturbation_multiplier), simplex_price_strategy 1, refactor_error_tolerance 1e-6 (rebuild_refactor_solution_error_tolerance), simplex_update_limit 5000, factor_pivot_threshold 0.1, use_warm_start true, steepest_edge_devex_fallback_threshold 10.0. The doc comment at :10 asserts the two agree bit-for-bit; nothing enforces it, so the second copy is duplication whose only guard is prose. The CLP side has no parallel table at all (its 8-field profile is applied through typed setters), which is why this is a HiGHS-side accretion rather than a shared design."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Make one surface the owner of each default. Either derive HighsProfile::default() from the table by reading the typed entry for each field it names, or -- if the two types must stay separate -- state the invariant as a test that walks the table and asserts each named option's value against the corresponding profile field, so the doc comment's bit-for-bit claim is enforced instead of asserted. Nothing here should be generalized to CLP: CLP has no options table and adding one to match would be over-engineering.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "CLP hot-start snapshot lifecycle is built end to end (C++ shim, extern decls, safe wrapper, determinism harness) with no production consumer and no reserved-seam registration",
+      "anchors": [
+        { "path": "crates/cobre-solver/src/backends/clp/solver.rs", "symbol": "mark_hot_start", "line": 350 },
+        { "path": "crates/cobre-solver/src/backends/clp/solver.rs", "symbol": "solve_from_hot_start", "line": 394 }
+      ],
+      "evidence": {
+        "command": "git grep -n 'mark_hot_start\\|solve_from_hot_start' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates | grep -v 'clp/tests.rs' | grep -v 'crates/cobre-solver/tests/'; grep -rni 'hot.start\\|markHotStart' docs/design/reserved-seams-and-deferred-debt.md plans/architecture-debt-audit/BACKLOG.md",
+        "output": "csrc/clp_wrapper.h:257:void* cobre_clp_mark_hot_start(void* model);\ncsrc/clp_wrapper.h:263:int32_t cobre_clp_solve_from_hot_start(void* model, void* save_stuff);\ncsrc/clp_wrapper_cpp.cpp:71,83\nsrc/ffi/clp.rs:258,269 (extern decls)\nsrc/backends/clp/solver.rs:350 pub fn mark_hot_start / :394 pub fn solve_from_hot_start (definitions + their own doc/SAFETY text)\nsrc/backends/clp/interface.rs:82,134,240:            self.unmark_hot_start();\n(second command: no output -- neither the mirror nor the BACKLOG mentions hot-start)",
+        "reading": "Excluding the two test files, every remaining hit is either the C shim, the extern declaration, or the definition itself: no production path calls mark_hot_start or solve_from_hot_start. The release half of the same lifecycle IS production-wired -- unmark_hot_start is invoked from three call sites in clp/interface.rs and from Drop (solver.rs:509) -- so the asymmetry is real and not an artifact of my grep. The only exerciser is the determinism harness (crates/cobre-solver/tests/clp_determinism.rs, which drives the full mark / solve-from / unmark sequence and labels it a wired knob), and that file's header defines its labels in terms of what the FFI exposes, not what production reaches. The second command shows the capability is absent from both the reserved-seam mirror and the BACKLOG, so unlike the shared-memory hierarchy it carries no KEEP-RESERVED ruling, no activating milestone and no owner."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Resolve the seam's status rather than leaving it implicit. One option is to wire the acquire/solve half on the CLP re-solve path that already invalidates it -- the three unmark_hot_start call sites in clp/interface.rs mark exactly where a snapshot would have to be taken and released, so the wiring is bounded to one backend's interface file. The other is to register the whole lifecycle (C++ shim, extern declarations, the two safe methods, the harness) in the reserved-seam register with an activating milestone and an owner, exactly as the shared-memory communicator hierarchy is registered. Removal is deliberately NOT proposed: the project rule is that an unwired capability is reserved until the owner rules otherwise, so the missing artifact is the registration, not the code. Nothing here transfers to HiGHS -- the snapshot token is a CLP concept and no equivalent surface should be invented to make the backends symmetric.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Superseded cut-sync public methods still exported beside their live replacement (E5 handoff, re-verified at this baseline)",
+      "anchors": [
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_cuts", "line": 243 },
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "pack_local_records", "line": 400 },
+        { "path": "crates/cobre-sddp/src/cut/cut_sync.rs", "symbol": "sync_packed_records", "line": 495 }
+      ],
+      "evidence": {
+        "command": "git grep -n 'pub fn sync_cuts\\|pub fn pack_local_records\\|pub fn sync_packed_records\\|pub fn sync_level_records' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-sddp/src/cut/cut_sync.rs",
+        "output": "243:    pub fn sync_cuts<C: Communicator>(\n400:    pub fn pack_local_records(\n495:    pub fn sync_packed_records<C: Communicator>(\n581:    pub fn sync_level_records<C: Communicator>(",
+        "reading": "All three superseded entry points still resolve at this baseline alongside the live sync_level_records at :581, so the registered item is still true and not already fixed. It is emitted as the typed handoff only: the anchors live in cobre-sddp, not in either station crate, and the prior register already verified that none of the three resolves inside cobre-solver or cobre-comm."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "No new fix shape is owed and none is proposed here: the registered disposition already stands -- retire the three superseded entry points at the next licensed public-API break, leaving sync_level_records as the single sync path. This station contributes only the re-verified baseline line numbers so the receiving epic does not re-resolve them.",
+      "alignmentHint": "neutral",
+      "dupOf": "Superseded cut-sync public methods"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-comm/src/traits.rs:372 SharedMemoryProvider hierarchy (with SharedRegion<T> :320, LocalCommunicator :254, LocalCommKind :275, HeapRegion<T> local.rs:155, FerrompiBackend::split_local ferrompi.rs:264)",
+      "why": "Ratified reserved seam, cleared at ingest: the whole hierarchy is unconsumed outside cobre-comm at this baseline and that is the sanctioned state, with an activating milestone (intra-node scenario-library AND cut-archive sharing) rather than an open speculative-generality finding. Raised as a positive, never as a candidate.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md:79 - Shared-memory communicator trait hierarchy (BACKLOG OD-001 KEEP-RESERVED)"
+    },
+    {
+      "subject": "crates/cobre-solver/src/backends/profiled.rs:30 ProfiledSolver and its delta gate at :52-58",
+      "why": "P9 verdict: the indirection is earned on consumers, not defended on shape. ProfiledSolver is the declared solver type of the engine workspace (crates/cobre-sddp/src/workspace/workspace.rs:723 and :772) and of the DCS solve path (cut/dcs.rs:590), and set_profile is driven from four distinct production sites (simulation/state.rs:310, training/forward_pass_state.rs:505 and :601, training/backward_pass_state.rs:561 and :738). The wrapper's whole reason to exist is the equality gate at :52-58 that skips re-applying an unchanged profile, and the fourteen unchanged forwarders are what let it substitute for the bare solver -- a pass-through that carries substitutability is not a redundant layer. No candidate raised.",
+      "sanctionedBy": "P9, judged by workspace-wide consumer count at the baseline"
+    },
+    {
+      "subject": "crates/cobre-solver/src/lib.rs:164 pub mod test_support and its verbatim ffi pass-throughs",
+      "why": "P12 verdict: the probe only licenses flagging a wrapper that adds NOTHING over ffi, and this one adds visibility. mod ffi is pub(crate) (lib.rs:52), so an integration test -- a separate crate -- cannot name crate::ffi at all; the feature-gated forwards are the only legal path from a test binary to the sealed C API, and they are gated so production builds never carry them. No candidate raised.",
+      "sanctionedBy": "P12, with lib.rs:52 pub(crate) mod ffi as the reason the forwards are not redundant"
+    },
+    {
+      "subject": "crates/cobre-comm/src/ferrompi.rs:75-76 unsafe impl Send / Sync for FerrompiBackend",
+      "why": "P12 verdict: the two impls are not a redundant wrapper but a documented soundness contract. The comment above them states the three-point argument (Mpi is constructed on the calling thread, single ownership bars any other thread from reaching MPI_Finalize via Mpi::drop, and ThreadLevel::Funneled requires all MPI calls from the constructing thread) and notes that collectives go through ferrompi::Communicator, which is already Send + Sync. Removing the impls would not simplify anything -- it would make the backend unusable in the contexts that hold it. No candidate raised.",
+      "sanctionedBy": "P12, with the RAII/ownership argument recorded inline at ferrompi.rs:64-74"
+    },
+    {
+      "subject": "crates/cobre-solver/src/backends/clp/retry.rs:95 const RUNGS table (and the no-time-branching contract documented at :4-5)",
+      "why": "The CLP ladder is the shape the HiGHS ladder should converge on: the escalation is data (one fixed-order const array of five rungs), and the module doc states the determinism property it buys -- fixed rung order, no randomness, no time-dependent branching, so results stay bit-for-bit identical across thread and rank counts. Cited as the target shape in the HiGHS retry candidate rather than as a defect anywhere.",
+      "sanctionedBy": "Baseline reading of clp/retry.rs:4-5 and :95, used as the contrast case for the HiGHS candidate"
+    },
+    {
+      "subject": "HiGHS-loud / CLP-silent basis validation (highs/interface.rs:487 SolverError::BasisInconsistent against clp/solver.rs:213-216)",
+      "why": "Intended backend behaviour, cited and not raised: the divergence is a property of the two solver libraries (CLP's per-element setters accept an inconsistent offered basis and Clp_dual repairs it), the trait contract already scopes it, and four conformance tests pin both sides at this baseline. No fix shape in this envelope proposes equalizing the two backends, and the two candidates that touch backend asymmetry (retry duplication, hot-start wiring) both explicitly refuse to transfer anything across the backend boundary.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/solver-comm/prior-register.md - Intended behaviour, never a finding"
+    }
+  ],
+  "_needsHuman": [
+    "The HiGHS escalation branches on wall-clock time (overall_budget at highs/retry.rs:40, the elapsed break at :52, the budget_exceeded comparison at :84) while the CLP ladder documents at clp/retry.rs:4-5 that it has no time-dependent branching so results stay bit-for-bit identical across thread and rank counts -- whether the HiGHS ladder is deliberately exempt from that property or this is a live determinism divergence is an owner call outside the over-engineering lens.",
+    "Whether ExecutionTopology::is_homogeneous is intended for a planned heterogeneous-layout guard (in which case it needs a reserved-seam entry with an activating milestone, not deletion) or is simply left over -- the register carries no entry either way.",
+    "Whether the CLP hot-start half should be wired onto the re-solve path or registered as a reserved seam is an owner decision; the candidate deliberately proposes no removal."
+  ]
+}

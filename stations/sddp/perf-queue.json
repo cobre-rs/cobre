@@ -1,0 +1,264 @@
+{
+  "station": "sddp",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "targetStation": "perf-sweep (Epic 10)",
+  "layoutContract": "4t = single-process claims (--threads 4, P-cores 0,2,4,6); 2x2 = collective claims (mpiexec -n 2 x --threads 2); requires ∈ {none, enumerated, external-library} selects the deck",
+  "namedTargets": {
+    "cut-selection value sweep (select_for_stage → gemm_block)": [
+      "PD-040",
+      "PD-041"
+    ],
+    "backward gather + SuccessorOutcomes reification": [
+      "PD-042",
+      "PD-044",
+      "(no candidate on the reification itself — every performance cell filed it as a positive; see the section's Queued-out note)"
+    ],
+    "LP rebuild churn in the PatchBuffer fill_* family": [
+      "PD-038",
+      "PD-039"
+    ],
+    "basis reconstruct (reconstruct_basis / reconstruct_basis_uniform_basic)": [
+      "PD-043",
+      "(Sev C, not queued; 5c-performance-05 dismissed — the recount is the only unconditional runtime check)"
+    ]
+  },
+  "queue": [
+    {
+      "id": "PD-036",
+      "candidateRef": "5a-performance-01",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/setup/node_graph.rs::backward_cut_levels",
+      "anchor": "crates/cobre-sddp/src/setup/node_graph.rs::backward_cut_levels",
+      "mechanism": "redundant pass plus allocation per call — a study-invariant level decomposition recomputed by repeated whole-graph scans and freshly allocated on every backward pass",
+      "exercisingCallSites": [
+        "training/backward_pass_state.rs · run_sampled_backward (per iteration)",
+        "training/backward_pass_state.rs · run_enumerated_backward (per iteration)"
+      ],
+      "severity": "B",
+      "claim": "At `NodeGraph::backward_cut_levels` and its two per-iteration callers only (`run_sampled_backward`, `run_enumerated_backward`), the graph-invariant level partition is re-derived by evaluating the cut-generating predicate once per (stage, node) pair instead of in one bucket pass, and re-collected into a fresh outer `Vec` plus one fresh `Vec` per non-empty level, on every backward pass; `build_node_graph` is a fix site rather than a defect site, and the buffer is distinct in SUBJECT (not in named driver) from the `stage_stats` telemetry pack that the register's deferred backward-scratch item already covers for BOTH drivers.",
+      "byteNeutralFixShape": "Resolve the level decomposition once where the graph is constructed, in `build_node_graph`, and store it as a `NodeGraph` field the drivers borrow, so each backward pass reads a slice of slices instead of rescanning and reallocating. The crate already has this precedent: the enumerated plan and the nested upper-bound topology are documented as resolved once at construction rather than every training iteration, and `NodeGraph` is exactly the study-level read-only home the architecture rules name for this data. Byte-neutrality: the stored decomposition must be built by a single stable bucket pass that reproduces both orders the current code produces, the outer list descending by stage and each inner list ascending by canonical node position, because the within-level node order is the order the risk aggregation consumes and the index-order tie-break that `assemble_outcome_weights` documents for the nested risk measure depends on it. With both orders preserved the levels are element-for-element what they are today, the level driver's one state exchange and one batched cut exchange per level stay in the same sequence per `.claude/rules/sddp.md` section Per-level exchange in the backward pass, and the parity goldens in `tests/parity.rs` with `tests/common/parity_hash.rs`, the rank-invariance harness in `tests/common/permute.rs`, and `mpiexec` at one rank versus two ranks all reproduce bit-for-bit. No golden moves.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [
+        "Per-level exchange in the backward pass"
+      ],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-038",
+      "candidateRef": "5b-performance-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/lp/builder/patch.rs::fill_col_state_patches",
+      "anchor": "crates/cobre-sddp/src/lp/builder/patch.rs::fill_col_state_patches",
+      "mechanism": "redundant per-element index recomputation on every solve: a four-region linear scan with a Range reconstruction per probe plus two further region-boundary derivations per state element, where a precomputed table already exists for the twin direction and for the extraction path",
+      "exercisingCallSites": [
+        "training/stage_solve_prep.rs · StageSolvePrep::run (every prepared solve)",
+        "training/backward/* · patch_opening_bounds (per opening)"
+      ],
+      "severity": "B",
+      "claim": "Narrowed to one loop: `fill_col_state_patches` (patch.rs:257-260) re-runs `classify`'s four-way region membership test and region select once per state element on every prepared solve, for a state-dim-to-incoming-column map that is fixed at `StateSpace::new` and that both other production consumers read from a precomputed table. Stripped from the claim: (i) the twin-cache symmetry as evidence, since `state_to_lp_column_map` amortizes the outgoing lag arm's `offset % n` / `offset / n` (state_space.rs:478-479) that the incoming resolver does not contain; (ii) the filed per-element cost model of a Range reconstruction per probe plus two further boundary derivations, since those are loop-invariant through `#[inline]` accessors on non-aliasing `&StateSpace` fields; (iii) the extraction wrappers `storage_incoming_col` / `lag_incoming_col` / `bucket_incoming_col` at simulation/extraction.rs:376,920,924,2065, which run per extracted stage rather than per solve.",
+      "byteNeutralFixShape": "Give the incoming direction the cache the outgoing direction already has: an incoming twin of state_to_lp_column_map on StateSpace, filled by an incoming twin of finalize_state_column_map that calls state_to_lp_incoming_column for every j in [0, n_state) -- a pure cache of the resolver, never a second copy of its arithmetic, which is the discipline finalize_state_column_map's own rustdoc already states -- and let fill_col_state_patches read it, with storage_incoming_col / lag_incoming_col / bucket_incoming_col following the same route so the simulation extraction path benefits without a second cache. The debug_assert on the finalized length that lp_column_for_state carries transfers unchanged. .claude/rules/sddp.md Sec. State pinning uses column bounds, not equality rows is untouched: the same incoming columns are pinned with the same column bounds, and the resolver remains the single authority for the arithmetic. Byte-neutral by construction -- every offset is a pure function of (N, L, B, A, k_max) as the state_space.rs module doc states, so a table lookup returns the identical column for every j and fill_col_state_patches emits identical col_indices / col_lower / col_upper; the parity goldens (tests/parity.rs, tests/common/parity_hash.rs), the rank-invariance harness (tests/common/permute.rs) and mpiexec -n 1 vs -n 2 all see byte-identical solver submissions and no golden moves. This station executes no measurement; the perf epic profiles it on its deck.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [
+        "State pinning uses column bounds, not equality rows"
+      ],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-039",
+      "candidateRef": "5b-performance-01",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/lp/builder/patch.rs::fill_col_state_patches",
+      "anchor": "crates/cobre-sddp/src/lp/builder/patch.rs::fill_col_state_patches",
+      "mechanism": "redundant per-opening recomputation plus a repeated FFI bound-submission crossing for an opening-invariant column-bound pin and an opening-invariant commitment relaxation",
+      "exercisingCallSites": [
+        "training/backward/by_scenario.rs · patch_opening_bounds (:187, :305)",
+        "training/backward/by_node.rs · patch_opening_bounds (:284)",
+        "training/backward/replicated.rs · patch_opening_bounds (:143)"
+      ],
+      "severity": "B",
+      "claim": "For a Generated child run carrying more than one opening, the per-opening backward prep redundantly re-fills and re-submits the opening-invariant column-bound state pin from the unchanged x_hat and col_scale, costing one fill over n_state plus one set_col_bounds per opening that the CLP backend expands into a full-length col_lower and col_upper FFI push; the opening-invariant commitment relaxation is additionally re-filled per opening only when n_anticipated is nonzero and the stage has geometry, and re-submitted only when the relaxation set is nonempty. The claim is redundant call frequency alone: no pinned contract is violated, patch.rs's 'once per stage-visit' rustdoc is a value-semantics contract the current code already satisfies, and the External single-opening branch carries no redundancy.",
+      "byteNeutralFixShape": "Hoist the opening-invariant work to per-child: fill and submit the column-bound state pin (fill_col_state_patches plus its set_col_bounds) and fill the commitment relaxation once alongside load_backward_lp, and narrow the per-opening entry point to what actually varies -- the row patches from the transformed inflow/load noise and the NCS availability column patch. All three backward drivers reach this through the single helper patch_opening_bounds, so the blast radius is that helper plus a parameterization of StageSolvePrep::run (a per-child prep and a per-opening prep), with no driver-by-driver edit. Three pinned contracts govern it. .claude/rules/sddp.md Sec. State pinning uses column bounds, not equality rows: the pin stays a column-bound pin at the same incoming columns and merely recovers the once-per-stage-visit identity patch.rs's rustdoc already declares. Sec. Lower-bound evaluation must patch NCS: the NCS patch stays per opening and must not be hoisted with it. And the ordering rule reconcile_commitments carries in its rustdoc -- it runs last because the template reload and the bound patches reset the columns it relaxes -- so the hoist is valid only if the hoisted relaxation still runs after every column submission that touches the anticipated columns it relaxes; at the pin the sole remaining per-opening column submission is the NCS patch, which addresses a different column family, and the fix must verify that disjointness rather than assume it. Byte-neutrality is asserted on the data and validated, not assumed on the solver: every bound value and index in force before each solve is unchanged, but the NUMBER of set_col_bounds calls the solver sees per opening changes, which is the same class of perturbation Sec. Backward opening order is warm-start-only describes for the warm-start chain (a differently-warmed solve may settle on a different-but-equally-valid vertex at a degenerate optimum, the divergence the Cobre determinism contract permits). The fix is therefore gated on the parity goldens (tests/parity.rs, tests/common/parity_hash.rs), the rank-invariance harness (tests/common/permute.rs) and mpiexec -n 1 vs -n 2, plus the opening_order_determinism gate in tests/mpi_wire.rs; if a golden moves, the baseline is the arbiter and the hoist is reconsidered, not rebaselined.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction — asserted (bit-identical bounds already in force are simply not re-pushed); the owner gate decides whether dropping an idempotent re-push counts as a warm-start-chain change that must clear the `opening_order_determinism` gate before it lands",
+      "contractCited": [
+        "Backward opening order is warm-start-only",
+        "Lower-bound evaluation must patch NCS",
+        "State pinning uses column bounds, not equality rows"
+      ],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-040",
+      "candidateRef": "5c-performance-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/cut/cut_selection.rs::select_for_stage",
+      "anchor": "crates/cobre-sddp/src/cut/cut_selection.rs::select_for_stage",
+      "mechanism": "allocation per call and per rayon fold task inside the per-node cut-selection value sweep, plus a redundant zero-fill of a panel the gemm kernel fully overwrites",
+      "exercisingCallSites": [
+        "training/session/mod.rs · run_cut_management (per node per cut-management pass)"
+      ],
+      "severity": "B",
+      "claim": "Only two of the sweep's allocations are removable by the mechanism as filed: `m_block_starts` (cut_selection.rs:359) materialises a stride range that the following .par_iter() could take as a parallel range with no Vec at all, and `eligible` (:344) is call-local and dead at return so it can ride the TrainingSession::cut_selection_state_scratch field the caller already reuses across the same per-node loop; the Vec::new() deactivation/reactivation pair, the two per-fold-task identity buffers, the zero-fill and the run_cut_management no-allocation-contract framing do not survive.",
+      "byteNeutralFixShape": "Move the four per-call vectors and the two per-fold-task buffers onto the per-worker scratch the crate already owns for exactly this purpose, reusing them through clear/resize in the State Struct shape that .claude/architecture-rules.md prescribes for hot-path drivers, and borrow the fold identity from that scratch rather than materialising a fresh vec per task. Drop the zero-fill of the value panel, because gemm_block writes it with beta zero before any read. Byte-neutrality: the rayon fold-and-reduce keeps the same commutative associative OR-merge over the same bitmaps, so the selected slot set, the deactivation list and its order are unchanged, and cut activity therefore stays identical against the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, against the rank-invariance harness in tests/common/permute.rs, and between mpiexec -n 1 and -n 2 because selection is rank-local. .claude/rules/sddp.md section 'Cut pool is append-only; basis matches by slot identity' governs: the fix must not renumber or compact slots, only reuse the scratch that scores them.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [
+        "Cut pool is append-only; basis matches by slot identity"
+      ],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-041",
+      "candidateRef": "5c-performance-02",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/training/session/mod.rs::run_cut_management",
+      "anchor": "crates/cobre-sddp/src/training/session/mod.rs::run_cut_management",
+      "mechanism": "scalar-at-a-time gather through an indirection table per (node, trial, slot), with no contiguous copy path for the identity projection the loop's own comment names",
+      "exercisingCallSites": [
+        "training/session/mod.rs · run_cut_management L1112-1121 (per node, trial, slot)"
+      ],
+      "severity": "B",
+      "claim": "Only the absent contiguous-copy path at the single gather in `training/session/mod.rs` L1112-1121 survives, on the ground that the archive is flat and packed at one global stride so an identity pool's trial row is already the wanted contiguous run. Stripped: the fixShape premise that a dedicated projection identity predicate is mandatory because a reduced pool could match the state dimension in slot count, which cannot arise at the pin since `REGION_ORDER`'s four ranges partition [0, n_state) contiguously and `CutStateProjection::new` walks them ascending with only Storage and Lag gated, making `n_slots == n_global` already equivalent to the identity index vector and strictly better than the rustdoc `storage && inflow_lags` test, which misses an identity pool with an empty lag range. Also stripped: Sev-B, because the gather reads each archive element once while its sole consumer `select_for_stage` reads the same buffer once per populated cut inside `gemm_block`, making the residue a lower-order term inside its own pass and a minor perf-sweep item at `4t`. The claim does not reach `dot_trial_state`, which fuses the gather into a reduction and has no contiguous destination to copy into.",
+      "byteNeutralFixShape": "Give the gather a guarded fast path: when the projection is the identity, extend scratch from the contiguous trial row of global_states in one extend_from_slice, and otherwise keep the indexed loop exactly as it stands. The guard must test the projection's own identity predicate, not the slot count alone, so a reduced pool that happens to have as many slots as the state dimension cannot take the fast path. .claude/rules/sddp.md section 'The cut intercept dots the trial state through the projection, never positionally' is why the guard is mandatory rather than optional: a positional prefix is wrong for a reduced pool, and that section is the pinned reason the slow path must remain the default. Byte-neutrality: on the fast path the same f64 values land in the same buffer positions in the same order, so the value sweep, the selected set and the deactivations are bit-identical; parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 are unaffected.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [
+        "The cut intercept dots the trial state through the projection, never positionally"
+      ],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-042",
+      "candidateRef": "5c-performance-03",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/training/backward_pass_state.rs::run_one_backward_level",
+      "anchor": "crates/cobre-sddp/src/training/backward_pass_state.rs::run_one_backward_level",
+      "mechanism": "dense replication: the level's state block is copied into every sibling node's archive bucket, so both archive memory and the per-node cut-selection value sweep scale with nodes per level",
+      "exercisingCallSites": [
+        "training/backward_pass_state.rs · run_one_backward_level → training/visited_states.rs · archive_gathered_states (per level per iteration)"
+      ],
+      "severity": "B",
+      "claim": "Only the MEMORY half survives, and only on the sampled level-driver path when the archive exists (cut selection enabled or export_states) and a declared nodes[] graph puts more than one cut-generating node at a stage: each sibling's NodeStates.data holds its own extend_from_slice copy of an identical level block, removable byte-neutrally by one shared per-level block viewed per node. The value-sweep half does not survive: each interior node owns its own pool and projection, so the per-sibling walk evaluates different cuts rather than recomputing the same values, and the proposed fix leaves n_trials and the per-node projection gather unchanged.",
+      "byteNeutralFixShape": "Store the level's gathered block once and give every node in that level a view of it, so states_for_node returns the shared block instead of a per-node copy: the values every reader sees are unchanged, only the duplication disappears. The per-node retention window must be preserved, since trim_to_window currently trims each node's own vector, so a shared block needs a level-keyed trim with the same window arithmetic. .claude/rules/sddp.md section 'Per-level exchange in the backward pass' governs the level's gather and must keep owning it, and section 'Cut pool is append-only; basis matches by slot identity' is untouched because no slot is renumbered. Byte-neutrality: the trial states read back per node are identical in value and order, so cut selection, cut generation and the reported bounds are bit-identical against the parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2. Narrowing the archive to each node's OWN routed states is a separate and larger change: it would alter which trial states each pool is scored against and therefore which cuts survive selection, so it would move the goldens and is not proposed here.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [
+        "Cut pool is append-only; basis matches by slot identity",
+        "Per-level exchange in the backward pass"
+      ],
+      "measurabilityNote": "exercised only on a declared multi-node graph under SAMPLED traversal; neither protocol deck (chain sampled 4t; branching enumerated 2t) has that shape — stays UNMEASURED until the sweep adds such a deck",
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-044",
+      "candidateRef": "5c-performance-06",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/training/backward_pass_state.rs::process_stage_backward",
+      "anchor": "crates/cobre-sddp/src/training/backward_pass_state.rs::process_stage_backward",
+      "mechanism": "allocation per (backward node, rayon worker) at a return boundary: a reused workspace buffer is drained into a fresh owned vector that the caller immediately copies into another reused buffer and drops",
+      "exercisingCallSites": [
+        "training/backward_pass_state.rs · compute_one_backward_node (ByScenario arm, per node per iteration)"
+      ],
+      "severity": "B",
+      "claim": "On the default ByScenario branch, and only for a worker owning at least one routed trial point, process_stage_backward pays one payload-proportional heap allocation plus a copy in, a copy out and a free per (backward node, worker, iteration) for the owned Vec<StagedCut> it drains into at its return, which the counts-plus-canonical_scatter read-back already used by process_stage_backward_by_node removes; the workspace buffer's own capacity reuse is NOT defeated (drain leaves capacity intact and within-stage pushes stay allocation-free), and the constant-size per-node outer result vector is excluded because the sibling scheduler allocates the same shape plus its own counts vector.",
+      "byteNeutralFixShape": "Adopt the sibling scheduler's return shape: have process_stage_backward return per-worker counts and leave each staged cut in the producing worker's own staged_cuts_buf, then let the caller read them back in ascending worker-then-item order through the shared canonical_scatter primitive and extend state.staged_cuts_buf from borrowed slices, so no per-node vector is allocated. Error propagation is preserved because the by-node path already returns a Result per worker and propagates the first failure by value. Byte-neutrality: the merge already sorts by cut.trial_state_idx, the sole globally unique key, so the order in which cuts are added to the pool is unchanged and remains independent of worker count; .claude/rules/sddp.md section 'Cut pool is append-only; basis matches by slot identity' governs that add order and section 'Joint risk is applied once over the flattened successor x opening vector' is untouched because no aggregation moves. Parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 stay byte-identical.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [
+        "Cut pool is append-only; basis matches by slot identity"
+      ],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-045",
+      "candidateRef": "5d-performance-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-sddp/src/simulation/pipeline.rs::build_row_lower_unscaled",
+      "anchor": "crates/cobre-sddp/src/simulation/pipeline.rs::build_row_lower_unscaled",
+      "mechanism": "Redundant pass: an element-wise divide over the entire per-stage row_lower template is repeated on every (scenario, stage) solve, although both scaling operands are per-stage constants and only the load-balance rows differ per scenario.",
+      "exercisingCallSites": [
+        "simulation/pipeline.rs · extract_sim_stage_result ← solve_simulation_stage (per scenario per stage)"
+      ],
+      "severity": "B",
+      "claim": "Narrowed to the `row_scale` non-empty branch (every production template after `postprocess_templates`): the removable per-(scenario, stage) work in `build_row_lower_unscaled` is the element-wise division and its length/zero guard, not the buffer fill (the candidate's copy keeps a full-length pass over a capacity-retaining workspace buffer), and only the load-balance span of the result is ever read (simulation/extraction.rs:1420), so the defensible residue is a per-stage cache of that span's unscaled values under absolute row indexing, not of the whole row vector.",
+      "byteNeutralFixShape": "Compute the unscaled row_lower once per stage and, on each call, copy the cached vector into the scratch buffer and overwrite only the load-balance span that actually varies per scenario. The cache is per-stage read-only data, so it belongs on StageContext, or on SimulationState scratch if built lazily per worker, per the context-struct decision tree in .claude/architecture-rules.md; keep build_row_lower_unscaled within its recorded argument budget. Byte-neutral because each element's value is the same quotient val / scale computed from the same operands, division is deterministic, and the row order is untouched: the parity goldens in tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs (the cache is keyed by stage index, never by entity order), and mpiexec -n 1 against -n 2 all see identical bytes since the cache derives from already-broadcast templates.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-047",
+      "candidateRef": "5d-performance-02",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "enumerated",
+      "profiledSymbol": "crates/cobre-sddp/src/simulation/enumerated.rs::re_expand",
+      "anchor": "crates/cobre-sddp/src/simulation/enumerated.rs::re_expand",
+      "mechanism": "Dense reification: an already-captured per-node result carrying thirteen owned entity vectors is deep-copied once per leaf path that visits the node, instead of being moved out on its final visit.",
+      "exercisingCallSites": [
+        "simulation/enumerated.rs · run_enumerated_simulation → re_expand (per owned arena node per sweep)"
+      ],
+      "severity": "B",
+      "claim": "The avoidable copy in re_expand is one deep clone per owned distinct arena node, not one per visiting leaf path: dispatch_scenario_result takes the stage-result Vec by value and moves it into the channel, so each path must own its materialized rows and only a node's terminal visit can become a move. The bookkeeping-free subset is the final-stage clone at enumerated.rs:401, where paths.leaf is injective over the single-predecessor tree so a path's own leaf result has exactly one reader. The title's immutable-borrow causation does not survive, because the caller already holds the scratch mutably at enumerated.rs:494-499.",
+      "byteNeutralFixShape": "Take the scratch as &mut and move each node's captured result out on its last visiting path, cloning only for the earlier visitors; under the canonical enumeration the leaf paths beneath a node are contiguous, so the last visitor is identifiable from the walk itself without extra bookkeeping. Do not convert the field to a shared handle: an Arc inside SimulationStageResult would drag the serde rc feature into the output types. Byte-neutral because the value pushed is identical whether cloned or moved and the push order into stage_results is untouched, so parity goldens and the rank-invariance harness observe the same bytes; MPI reproduction is unaffected since re_expand runs per worker over its own scenario range.",
+      "byteNeutrality": "asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction",
+      "contractCited": [],
+      "measurabilityNote": null,
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido, CAL-ENUM 2t on the enumerated deck)"
+    },
+    {
+      "id": "PD-004",
+      "candidateRef": null,
+      "title": "deferred pending a profile (do-not-touch)",
+      "claimType": "single-process",
+      "layout": "2t",
+      "requires": "enumerated",
+      "profiledSymbol": "crates/cobre-sddp/src/training/backward_pass_state.rs::run_enumerated_backward",
+      "anchor": "crates/cobre-sddp/src/training/backward_pass_state.rs::run_enumerated_backward",
+      "existsAtBaseline": true,
+      "evidence": [
+        "crates/cobre-sddp/src/training/backward_pass_state.rs:721:    fn run_enumerated_backward<S, C: Communicator>("
+      ],
+      "status": "UNMEASURED",
+      "reason": "do-not-touch: DEFERRED pending a profile (register L1316; do-not-touch list L1942)",
+      "queuedTo": "perf-sweep (E10-2 measures PD-004 on the enumerated deck; UNMEASURED until then)",
+      "fixShape": null
+    }
+  ]
+}

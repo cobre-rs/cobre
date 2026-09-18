@@ -1366,6 +1366,431 @@ class IngestTests(sc.StationCase):
             self.assertIn(heading, self.log)
 
 
+CAL_ID_RE = re.compile(r"^(CD|PD|OD|TD)-(\d{3})$")
+ID_FLOORS = {"CD": 40, "PD": 6, "OD": 10, "TD": 1}
+SEVERITIES = {"A", "B", "B (A-risk)", "C"}
+LAYOUTS = {"4t", "2x2"}
+REQUIRES = {"none", "enumerated", "external-library"}
+ENTRY_HEADING = re.compile(r"^\*\*((?:CD|PD|OD|TD)-\d{3}) · Sev ", re.M)
+SCAFFOLD = "## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — sddp"
+STATION_TITLE = "STATION 5 — cobre-sddp (2026-09)"
+SUBSTATION_HEADINGS = (
+    "#### 5a — setup + policy + stochastic + config",
+    "#### 5b — lp/ (indexer, builder, template, generic constraints)",
+    "#### 5c — cut + training + solve + workspace",
+    "#### 5d — simulation + production + support",
+)
+LENS_CLASS = {
+    "architecture": "CD",
+    "performance": "PD",
+    "over-engineering": "OD",
+    "test-bloat": "TD",
+}
+RANK = {"A": 3, "B (A-risk)": 2.5, "B": 2, "C": 1}
+CONTRACT_PATHS = (
+    "/cut/",
+    "policy/policy_load.rs",
+    "lp/builder/columns.rs",
+    "lp/builder/patch.rs",
+    "lp/builder/entries.rs",
+)
+
+
+class CalibrationTests(sc.StationCase):
+    """E05-6: id assignment, house calibration, dispositions, alignment, byte-neutrality, queues, section."""
+
+    SLUG = "sddp"
+    SECTION_TITLE = "sddp"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.assigned = cls.cal["assigned"]
+        cls.by_ref = {r["candidateRef"]: r for r in cls.assigned}
+        cls.by_id = {r["id"]: r for r in cls.assigned}
+        cls.reused = {r["id"]: r for r in cls.cal["reusedIds"]}
+        cls.verdicts = sc.load_json(cls.station_dir() / "verdicts.json")["verdicts"]
+        cls.perf = sc.load_json(cls.station_dir() / "perf-queue.json")
+        cls.td = sc.load_json(cls.station_dir() / "td-queue.json")
+        cls.register = (sc.REPO / "plans/architecture-debt-audit/BACKLOG.md").read_text(
+            encoding="utf-8"
+        )
+        cls.section = cls.register.split(SCAFFOLD, 1)[1].split("\n## ", 1)[0]
+        cls.prior = cls.register.replace(cls.section, "")
+
+    def block(self, entry_id: str) -> str:
+        return self.section.split(f"**{entry_id} · ", 1)[1].split("\n**", 1)[0]
+
+    def test_envelope_baseline_and_heading_levels(self) -> None:
+        self.assertEqual(self.cal["station"], "sddp")
+        self.assertEqual(self.cal["baseline"], header_baseline())
+        self.assertEqual(self.cal["sectionTitle"], STATION_TITLE)
+        self.assertEqual(self.section.count(f"\n### {STATION_TITLE}\n"), 1)
+        level3 = re.findall(r"^### .*$", self.section, re.M)
+        self.assertEqual(level3, [f"### {STATION_TITLE}"])
+        for heading in SUBSTATION_HEADINGS + (
+            "#### Wave 4 / 6 / 7 dispositions",
+            "#### Part-I cross-references — item 7",
+            "#### Positives",
+            "#### ↩︎ Cleared",
+            "#### Queued out",
+            "#### Owner gate — decisions",
+        ):
+            self.assertIn(heading, self.section, heading)
+        gate = self.section.split("#### Owner gate — decisions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        self.assertIn("_(pending", gate)
+
+    def test_one_assigned_row_per_confirmed_new_candidate_and_none_otherwise(
+        self,
+    ) -> None:
+        confirmed_new = {
+            ref
+            for ref, e in self.verdicts.items()
+            if e["disposition"] == "defended"
+            and e["verdict"] == "confirmed"
+            and e.get("priorRelation") != "sharpens"
+        }
+        self.assertEqual(set(self.by_ref), confirmed_new)
+        sharpens = {
+            e["priorId"]: ref
+            for ref, e in self.verdicts.items()
+            if e.get("priorRelation") == "sharpens"
+        }
+        for prior_id, ref in sharpens.items():
+            if prior_id in self.reused:
+                self.assertEqual(
+                    self.reused[prior_id]["e05_5Delta"]["candidateRef"], ref
+                )
+            self.assertNotIn(ref, self.by_ref, "a sharpening must never mint an id")
+        self.assertEqual(
+            {c["candidateRef"] for c in self.cal["cleared"]},
+            {
+                ref
+                for ref, e in self.verdicts.items()
+                if e["disposition"] == "defended" and e["verdict"] == "dismissed"
+            },
+        )
+        self.assertEqual(
+            {d["candidateRef"] for d in self.cal["dupOf"]},
+            {ref for ref, e in self.verdicts.items() if e["disposition"] == "dup-of"},
+        )
+        self.assertTrue(all(d["assignedId"] is None for d in self.cal["dupOf"]))
+        for row in self.assigned:
+            claim, title = (
+                normalised_tokens(row["survivingClaim"]),
+                normalised_tokens(row["title"]),
+            )
+            self.assertTrue(claim and claim != title, row["id"])
+
+    def test_ids_well_formed_in_range_and_class_matches_lens(self) -> None:
+        for row in self.assigned:
+            m = CAL_ID_RE.match(row["id"])
+            self.assertIsNotNone(m, row["id"])
+            assert m is not None
+            cls, num = m.group(1), int(m.group(2))
+            self.assertEqual(cls, row["class"])
+            self.assertEqual(cls, LENS_CLASS[row["lens"]])
+            self.assertGreaterEqual(num, ID_FLOORS[cls])
+
+    def test_ids_contiguous_from_the_runtime_floor_per_class(self) -> None:
+        floors = self.cal["idFloorsSeen"]
+        for cls in ID_FLOORS:
+            nums = sorted(
+                int(r["id"].split("-")[1]) for r in self.assigned if r["class"] == cls
+            )
+            self.assertEqual(
+                nums, list(range(floors[cls], floors[cls] + len(nums))), cls
+            )
+            prior_max = max(
+                [int(n) for n in re.findall(rf"\b{cls}-(\d{{3}})\b", self.prior)]
+                + [ID_FLOORS[cls] - 1]
+            )
+            self.assertEqual(
+                floors[cls],
+                prior_max + 1,
+                f"{cls}: floor is not the register's next free",
+            )
+
+    def test_ids_unique_across_the_whole_register_and_reused_ids_never_re_minted(
+        self,
+    ) -> None:
+        headings = ENTRY_HEADING.findall(self.register)
+        dup = {h for h in headings if headings.count(h) > 1}
+        self.assertEqual(dup, set(), f"duplicate entry headings: {sorted(dup)}")
+        for row in self.assigned:
+            self.assertIsNone(
+                re.search(rf"\b{row['id']}\b", self.prior),
+                f"{row['id']} pre-exists in the register",
+            )
+            self.assertEqual(
+                self.section.count(f"**{row['id']} · Sev {row['severity']} · "),
+                1,
+                row["id"],
+            )
+        section_headings = ENTRY_HEADING.findall(self.section)
+        self.assertEqual(sorted(section_headings), sorted(self.by_id))
+        for rid in self.reused:
+            self.assertNotIn(rid.split("-construction")[0], section_headings)
+        self.assertTrue(all(r["priorId"] is None for r in self.assigned))
+
+    def test_severity_alignment_and_the_house_precedents(self) -> None:
+        for row in self.assigned:
+            self.assertIn(row["severity"], SEVERITIES, row["id"])
+            self.assertIn(row["alignmentHint"], ALIGN, row["id"])
+            self.assertIn(row["effort"], ("S", "M", "L"))
+            self.assertIn(row["confidence"], ("high", "med", "low"))
+            self.assertTrue(row["category"])
+        for ref in ("5c-architecture-00", "5c-performance-06"):
+            row = self.by_ref[ref]
+            self.assertTrue(row["severity"].startswith("B"), ref)
+            self.assertIn("retrofitted-variant", row["calibrationBasis"])
+            self.assertIn("CD-013", row["calibrationBasis"])
+            self.assertIn("retrofitted-variant", self.block(row["id"]))
+        ring = self.by_ref["5b-architecture-00"]
+        self.assertEqual(ring["severity"], "B (A-risk)")
+        self.assertEqual(ring["reviewerRating"], "A")
+        self.assertTrue(ring["downgradeReason"])
+        cd004 = self.reused["CD-004"]
+        self.assertEqual(cd004["severity"], "B (A-risk)")
+        self.assertEqual(cd004["alignmentHint"], "advances-0a")
+        self.assertRegex(cd004["alignmentCites"] or "", r"Part (IV|V)")
+        self.assertIn("silen", cd004["calibrationBasis"])
+        self.assertEqual(self.reused["CD-015"]["severity"], "B")
+        table = self.section.split("#### Wave 4 / 6 / 7 dispositions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        self.assertIsNotNone(
+            re.search(
+                r"^\| CD-004 \| 4 \| sharpen \|.*\| B \(A-risk\) \| advances-0a \|$",
+                table,
+                re.M,
+            )
+        )
+        self.assertIn("SILENCE of the divergence", table)
+
+    def test_downgrades_record_the_reviewer_rating(self) -> None:
+        for row in self.assigned:
+            downgraded = RANK[row["severity"]] < RANK[row["reviewerRating"]]
+            block = self.block(row["id"])
+            if downgraded:
+                self.assertTrue(row["downgradeReason"], row["id"])
+                self.assertIn(
+                    f"- **Reviewer rating:** {row['reviewerRating']} — recalibrated to {row['severity']}",
+                    block,
+                )
+            else:
+                self.assertIsNone(row["downgradeReason"], row["id"])
+        self.assertEqual(
+            self.cal["counts"]["downgrades"],
+            sum(1 for r in self.assigned if r["downgradeReason"]),
+        )
+
+    def test_conflicts_row_is_the_cd024_successor_held_with_an_alternative(
+        self,
+    ) -> None:
+        self.assertEqual([c["id"] for c in self.cal["conflicts"]], ["CD-024-successor"])
+        held = self.cal["conflicts"][0]
+        self.assertTrue(held["alternative"])
+        self.assertIn("HELD", held["status"])
+        self.assertIn("one-consumer", held["condition"])
+        self.assertFalse(self.reused["CD-024-successor"]["actionable"])
+        self.assertFalse(
+            [r for r in self.assigned if r["alignmentHint"] == "conflicts"]
+        )
+        self.assertTrue(all(r["actionable"] for r in self.assigned))
+        table = self.section.split("#### Wave 4 / 6 / 7 dispositions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        self.assertIsNotNone(
+            re.search(
+                r"^\| CD-024-successor \|.*conflicts — HELD.*activate-or-die.*\|$",
+                table,
+                re.M,
+            )
+        )
+
+    def test_byte_neutrality_and_contract_lines_on_every_entry(self) -> None:
+        for row in self.assigned:
+            block = self.block(row["id"])
+            self.assertIn("- **Byte-neutrality:**", block, row["id"])
+            self.assertIn(
+                row["byteNeutral"], ("asserted", "n/a", "needs-rebaseline"), row["id"]
+            )
+            paths = [a["path"] for a in row["anchors"]]
+            if row["class"] != "TD" and any(
+                any(cp in p for cp in CONTRACT_PATHS) for p in paths
+            ):
+                self.assertTrue(row["contractCited"], row["id"])
+                self.assertIn("- **Contract:** .claude/rules/sddp.md", block, row["id"])
+            if row["byteNeutral"] == "asserted":
+                self.assertIn("parity_hash_highs", block)
+                self.assertIn("mpiexec -n 1/2", block)
+        self.assertIn("re-baseline", self.reused["CD-005"]["byteNeutrality"])
+        table = self.section.split("#### Wave 4 / 6 / 7 dispositions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        self.assertIn("re-baseline decision at the owner gate", table)
+        headings = {
+            line.strip("# \n").replace("`", "")
+            for line in (sc.REPO / SDDP_MD).read_text(encoding="utf-8").splitlines()
+            if re.match(r"^#{2,3} ", line)
+        }
+        for row in self.assigned:
+            for cited in row["contractCited"]:
+                self.assertIn(cited.replace("`", ""), headings, row["id"])
+
+    def test_checkers_exit_zero_with_the_exact_title_and_the_slug(self) -> None:
+        for arg in (STATION_TITLE, "sddp"):
+            for tool in ("fields-check.py", "check-anchors.py", "check-reraise.py"):
+                result = subprocess.run(
+                    [sys.executable, str(sc.TOOLS / tool), arg],
+                    capture_output=True,
+                    text=True,
+                    cwd=sc.REPO,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"{tool} {arg}: {result.stdout}{result.stderr}",
+                )
+
+    def test_every_entry_carries_alignment_with_roadmap_citation_and_the_baseline(
+        self,
+    ) -> None:
+        for row in self.assigned:
+            block = self.block(row["id"])
+            m = re.search(
+                r"^- \*\*Alignment:\*\* (\S+) \(provisional; Epic 9 adjudicates .*beyond-sddp-generalization\.md",
+                block,
+                re.M,
+            )
+            self.assertIsNotNone(m, row["id"])
+            assert m is not None
+            self.assertEqual(m.group(1), row["alignmentHint"])
+            self.assertIn(f"- **Baseline:** `{header_baseline()}`", block)
+            self.assertRegex(row["alignmentCites"], r"Part (IV|V)")
+
+    def test_perf_queue_only_sev_ab_pd_with_layout_requires_call_sites_and_no_number(
+        self,
+    ) -> None:
+        ab = {
+            r["id"]
+            for r in self.assigned
+            if r["class"] == "PD" and r["severity"][0] in "AB"
+        }
+        queue = {q["id"]: q for q in self.perf["queue"]}
+        self.assertEqual(set(queue) - {"PD-004"}, ab)
+        self.assertTrue(ab)
+        for qid, q in queue.items():
+            self.assertIn(q["requires"], REQUIRES, qid)
+            self.assertEqual(q["status"], "UNMEASURED", qid)
+            if qid == "PD-004":
+                self.assertTrue(q["existsAtBaseline"])
+                self.assertIsNone(q["fixShape"])
+                continue
+            self.assertIn(q["layout"], LAYOUTS, qid)
+            self.assertIn(q["claimType"], ("single-process", "collective"))
+            self.assertTrue(q["exercisingCallSites"], qid)
+            self.assertTrue(q["byteNeutralFixShape"], qid)
+            self.assertIsNone(q.get("measured"))
+        blob = json.dumps(self.perf["queue"])
+        self.assertIsNone(
+            TIMING_NUMBER.search(blob), "perf-queue carries a timing figure"
+        )
+        for row in self.assigned:
+            if row["class"] == "PD":
+                body = self.block(row["id"]).split("\n", 1)[1]
+                self.assertIsNone(TIMING_NUMBER.search(body), row["id"])
+        self.assertIn("perf-queue.json", self.section)
+
+    def test_td_queue_every_td_with_yardstick_and_no_new_fixture_crate(self) -> None:
+        tds = {r["id"] for r in self.assigned if r["class"] == "TD"}
+        self.assertEqual({q["id"] for q in self.td["queue"]}, tds)
+        for q in self.td["queue"]:
+            self.assertTrue(q["yardstick"].startswith("§"), q["id"])
+            self.assertTrue(q["claim"])
+            self.assertIn("determinismGates", self.td["informationalGates"])
+        self.assertNotRegex(
+            self.section,
+            r"(?i)\b(introduce|create|add|extract)\w*\s+(?:a |an )?new (?:fixture|test-support) crate\b(?![^.]*(?:out of bounds|rules that out))",
+        )
+        self.assertIn("td-queue.json", self.section)
+
+    def test_disposition_table_has_one_row_per_owned_id_with_the_record_contract(
+        self,
+    ) -> None:
+        table = self.section.split("#### Wave 4 / 6 / 7 dispositions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        rows = {
+            m.group(1): m.group(0)
+            for m in re.finditer(
+                r"^\| ((?:CD|OD|PD)-\d{3}(?:-[\w-]+)?) \|.*$", table, re.M
+            )
+        }
+        expected = (OWNED - {"CD-003-construction-hop"}) | {
+            "CD-003-construction-hop",
+            "PD-004",
+        }
+        self.assertEqual(set(rows), expected)
+        self.assertEqual(len(self.cal["reusedIds"]), 22)
+        for r in self.cal["reusedIds"]:
+            row = rows[r["id"]]
+            self.assertRegex(
+                row, r"`crates/cobre-sddp/[\w/.-]+\.rs::[A-Za-z_][A-Za-z0-9_]*`"
+            )
+            if r["disposition"] == "retire":
+                self.assertTrue(r["resolvingCommit"])
+                self.assertIn(f"resolved by `{r['resolvingCommit']}`", row)
+            if r["disposition"] == "sharpen":
+                self.assertTrue(r["supersededClaim"] and r["survivingClaim"], r["id"])
+                self.assertIn("superseded:", row)
+                self.assertIn("surviving:", row)
+        self.assertIn("workspace/workspace.rs::", rows["CD-021"])
+        self.assertIn("existence-only", rows["PD-004"])
+
+    def test_section_skeleton_lenses_positives_cleared_and_queue_markers(self) -> None:
+        for heading in SUBSTATION_HEADINGS:
+            body = self.section.split(heading, 1)[1].split("\n#### ", 1)[0]
+            parts = re.split(
+                r"^\*\*(Architecture|Performance|Over-engineering|Test bloat)\*\*",
+                body,
+                flags=re.M,
+            )
+            labels, blocks = parts[1::2], parts[2::2]
+            self.assertEqual(
+                labels,
+                ["Architecture", "Performance", "Over-engineering", "Test bloat"],
+                heading,
+            )
+            for label, lens_block in zip(labels, blocks):
+                self.assertTrue(
+                    re.search(r"^\*\*(?:CD|PD|OD|TD)-\d{3} · Sev ", lens_block, re.M)
+                    or "_No confirmed NEW finding for the" in lens_block,
+                    f"{heading} / {label}",
+                )
+        cleared = self.section.split("#### ↩︎ Cleared", 1)[1].split("\n#### ", 1)[0]
+        dismissed = [
+            ref
+            for ref, e in self.verdicts.items()
+            if e["disposition"] == "defended" and e["verdict"] == "dismissed"
+        ]
+        for ref in dismissed:
+            self.assertIsNotNone(
+                re.search(rf"^- \*\*{re.escape(ref)} — .*\*\* — .+", cleared, re.M), ref
+            )
+        self.assertIn("Superseded cut-sync public methods", cleared)
+        self.assertIn("LipschitzConfig.mode", cleared)
+        positives = self.section.split("#### Positives", 1)[1].split("\n#### ", 1)[0]
+        self.assertGreater(positives.count("\n- "), 50)
+        queued = self.section.split("#### Queued out", 1)[1].split("\n#### ", 1)[0]
+        self.assertIn("perf-queue.json", queued)
+        self.assertIn("td-queue.json", queued)
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_under_an_evaluated_surface_is_modified(self) -> None:
         out = subprocess.run(

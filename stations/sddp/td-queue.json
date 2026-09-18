@@ -1,0 +1,492 @@
+{
+  "station": "sddp",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "targetStation": "test-corpus (Epic 8)",
+  "yardstick": "docs/design/testing-architecture.md",
+  "corpusFigures": {
+    "integrationBinaries": 40,
+    "integrationBinaryLines": 72356,
+    "commonHarnessFiles": 5,
+    "templateIntegrationFiles": 11,
+    "testFilesTotal": 56,
+    "testLinesTotal": 82478,
+    "srcNonTestLines": 58471,
+    "siblingTestFiles": 14,
+    "inlineTestOutliers": 14
+  },
+  "informationalGates": {
+    "parityHashGolden": {
+      "files": [
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/tests/common/parity_hash.rs",
+        "crates/cobre-sddp/tests/common/permute.rs",
+        "crates/cobre-sddp/tests/deterministic.rs",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+        "crates/cobre-sddp/tests/hydro_sim.rs",
+        "crates/cobre-sddp/tests/mpi_wire.rs",
+        "crates/cobre-sddp/tests/parity.rs",
+        "crates/cobre-sddp/tests/right_boundary_validation.rs"
+      ],
+      "disposition": "informational determinism gate — not a test-bloat candidate; a byte-for-byte gate reuses it"
+    },
+    "slowTestsGating": {
+      "attributeSites": {
+        "crates/cobre-sddp/src/test_support.rs": 1,
+        "crates/cobre-sddp/src/training/backward/tests.rs": 2,
+        "crates/cobre-sddp/tests/anticipated_core.rs": 2,
+        "crates/cobre-sddp/tests/boundary_dim_mismatch_reconcile.rs": 1,
+        "crates/cobre-sddp/tests/cut_basis.rs": 5,
+        "crates/cobre-sddp/tests/deterministic.rs": 95,
+        "crates/cobre-sddp/tests/forward_sampler_integration.rs": 4,
+        "crates/cobre-sddp/tests/hydro_sim.rs": 2,
+        "crates/cobre-sddp/tests/lp_builder.rs": 10,
+        "crates/cobre-sddp/tests/mpi_wire.rs": 32,
+        "crates/cobre-sddp/tests/node_native_backward_gate.rs": 6,
+        "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs": 1,
+        "crates/cobre-sddp/tests/parity.rs": 35
+      },
+      "disposition": "informational determinism gate — `#[cfg_attr(not(feature = \"slow-tests\"), ignore = …)]` is the local-dev tier switch, not bloat"
+    },
+    "determinismGates": {
+      "declarationOrder": "crates/cobre-sddp/src/lp/builder/entries.rs::csc_byte_identical_under_permuted_declaration_order",
+      "rankInvariance": "crates/cobre-sddp/tests/common/permute.rs",
+      "openingOrder": "crates/cobre-sddp/tests/mpi_wire.rs::opening_order_determinism",
+      "parityGoldens": "crates/cobre-sddp/tests/parity.rs (parity_hash_highs / parity_hash_clp)",
+      "disposition": "informational — a future bit-for-bit phase gate reuses them; never a test-bloat candidate"
+    }
+  },
+  "dupOfCD007": [
+    "5a-test-bloat-00",
+    "5b-test-bloat-00",
+    "5b-test-bloat-01",
+    "5c-test-bloat-04",
+    "5d-test-bloat-05"
+  ],
+  "queue": [
+    {
+      "id": "TD-041",
+      "candidateRef": "5a-test-bloat-01",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-sddp/src/setup/bucket_topology.rs::hydro",
+        "crates/cobre-sddp/src/setup/mod.rs::hydro",
+        "crates/cobre-sddp/src/setup/tests.rs::bucket_seed_hydro",
+        "crates/cobre-sddp/src/setup/bucket_topology.rs::zero_penalties",
+        "crates/cobre-sddp/src/setup/mod.rs::zero_penalties",
+        "crates/cobre-sddp/src/setup/tests.rs::bucket_seed_zero_penalties",
+        "crates/cobre-sddp/src/setup/mod.rs::date",
+        "crates/cobre-sddp/src/setup/tests.rs::bucket_seed_date"
+      ],
+      "claim": "Two of the three named helpers are a genuine triplication, not all three: the hydro(id, downstream_id, travel_time_hours) constructor and the 16-field all-zero HydroPenalties builder have bodies identical up to a binding name and a callee prefix at bucket_topology.rs:417/442, setup/mod.rs:2981/3002 and setup/tests.rs:9957/9982, and the crate's shared surface carries no reusable equivalent because geometry_hydro pins different bounds, so one pub(crate) pair added to test_support.rs beside ymd removes six declarations, not nine. The date() leg does not survive as duplication: mod.rs:2977 uses unwrap_or_else with unreachable! against .unwrap() at the other two sites, so the trio is not byte-identical, and test_support::ymd already exists, making that leg three call-site rewrites onto an existing helper.",
+      "yardstick": "§5.2 uniform test-support feature convention (shared fixtures live on the crate's own test-support surface, never a new fixture crate)",
+      "fixShape": "Hoist one transit-seed fixture trio onto the existing shared surface: add a pub neutral-penalties constructor and a pub travel-time hydro constructor to crates/cobre-sddp/src/test_support.rs beside the ymd date helper already there, under the module's existing cfg(any(test, feature = test-support)) gate, then delete the nine local declarations and call the shared ones. This is L3-internal, adds no crate and no dependency, and per the directive introduces no new fixture crate. Byte-neutral by construction: the shared constructors return the same field values the three local bodies already return, so every fixture that feeds a solve resolves to an identical System, leaving the reproducibility and order-invariance harness, the parity goldens and the rank-invariance map unchanged with no golden moved. Touches no pinned contract in .claude/rules/sddp.md.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-042",
+      "candidateRef": "5a-test-bloat-02",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-sddp/tests/common/builders.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/src/setup/tests.rs::minimal_system",
+        "crates/cobre-sddp/src/setup/tests.rs::bucket_seed_zero_penalties",
+        "crates/cobre-sddp/src/setup/mod.rs::zero_penalties",
+        "crates/cobre-sddp/src/setup/bucket_topology.rs::zero_penalties",
+        "crates/cobre-sddp/tests/common/builders.rs::neutral_hydro_penalties",
+        "crates/cobre-sddp/tests/common/builders.rs::make_hydro",
+        "crates/cobre-sddp/tests/common/builders.rs::HydroSpec"
+      ],
+      "claim": "cobre-sddp's fixtures never adopt the spread base cobre-core already exports to them: 56 zero-argument `-> HydroPenalties` helpers under 11 names re-implement `HydroPenalties::uniform`, nine of them byte-identical `default_hydro_penalties` copies inside src/setup/tests.rs alone, and no HydroPenalties literal in the crate carries a `..` base, even though `uniform` is pub behind the `cobre-core/test-support` feature the crate's dev-dependencies already enable and whose sibling `declare_mirror_unit_group` those same 35 files already call. The residue is call-site non-adoption of an existing L1 constructor, not a missing one-place constructor, not the absent Default derive, and not the tests/common/builders.rs invariant being defeated; the fix spreads `..HydroPenalties::uniform(v)` at the call sites and adds no constructor to cobre-sddp's test_support.",
+      "yardstick": "§5.2 uniform test-support feature convention (one fixture owner per type; struct-update spreads over an exported base)",
+      "fixShape": "Promote the neutral penalties constructor from tests/common/builders.rs to a pub fn on crates/cobre-sddp/src/test_support.rs under the module's existing cfg(any(test, feature = test-support)) gate, so both the src-side tests and the integration binaries reach one declaration, then rewrite the literals as struct-update expressions that name only the fields a given test actually varies. Deliberately do NOT add a Default derive to the cobre-core HydroPenalties entity: a Default there would let an omitted field default silently to zero in production construction and deserialization paths, turning a test-ergonomics cleanup into a correctness regression, so the neutral constructor stays behind the test gate. No new fixture crate, per the directive. Byte-neutral by construction: each rewritten site resolves to the identical 17 field values it spells out today, so the reproducibility and order-invariance harness, the parity goldens and the rank-invariance map are unaffected and no golden moves.",
+      "mergedFrom": [
+        "5c-test-bloat-05"
+      ],
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Whether the corpus should keep at least one literal that still spells all sixteen penalty fields as a canary: spreading `..HydroPenalties::uniform(v)` everywhere means a newly added penalty field silently defaults in every fixture instead of breaking the build, and while `uniform`'s rustdoc endorses the spread and builders.rs places its strictness on the make_<entity> literal, no artifact rules on the crate-wide loss of that compile-time signal."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-043",
+      "candidateRef": "5a-test-bloat-03",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs",
+        "crates/cobre-sddp/tests/right_boundary_output.rs",
+        "crates/cobre-sddp/tests/right_boundary_pricing.rs",
+        "crates/cobre-sddp/tests/right_boundary_validation.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs::penalties",
+        "crates/cobre-sddp/tests/right_boundary_output.rs::penalties",
+        "crates/cobre-sddp/tests/right_boundary_pricing.rs::penalties",
+        "crates/cobre-sddp/tests/right_boundary_validation.rs::penalties",
+        "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs::bounds",
+        "crates/cobre-sddp/tests/right_boundary_output.rs::bounds",
+        "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs::study_start",
+        "crates/cobre-sddp/tests/right_boundary_pricing.rs::freeze_terminal_template",
+        "crates/cobre-sddp/tests/right_boundary_validation.rs::freeze_terminal_template",
+        "crates/cobre-sddp/tests/right_boundary_pricing.rs::inject_ring_boundary",
+        "crates/cobre-sddp/tests/right_boundary_validation.rs::inject_ring_boundary"
+      ],
+      "claim": "penalties() is md5-identical across all four right_boundary_* binaries and bounds() is md5-identical in three with validation's a strict one-parameter superset, and pricing/validation share five ring-prelude functions that are code-identical modulo path qualification and one BETA-const-vs-beta-parameter split. Narrowed on four counts: study_start() is stripped as a 3-line per-fixture calendar anchor whose four calendars genuinely diverge downstream and for which test_support::ymd already exists; the destination narrows from tests/common/builders.rs to the cfg-gated src/test_support.rs that testing-architecture.md section 5.2's Adoption stamp designates, since tests/common/ is itself slated to collapse into that surface; any hoist must carry the union of pricing's three prelude rationale clauses that validation lacks; and the merged twin's premise that right_boundary_validation.rs is a parity-hash golden is false, so the twin's rank-invariance and MPI-reproduction verification burden falls away, though its fixture_priced_date x3 and leaf_positions x2 residue is verified byte-identical and rides along.",
+      "yardstick": "§5.1 canonical per-crate layout (tests/common owns shared fixture builders; integration binaries do not re-declare them)",
+      "fixShape": "Extend tests/common/builders.rs with the two resolved-layer constructors it is missing, a neutral ResolvedPenalties and a ResolvedBounds taking the one dimension the validation variant parameterizes, and move the shared ring-injection prelude into a tests/common submodule so pricing and validation call one copy. The four right_boundary_* binaries already declare mod common, so this adds no link unit and no crate, and per the directive introduces no new fixture crate. Byte-neutral by construction: the shared constructors return the same resolved field values the identical local bodies return today and the parameterized bounds variant keeps its argument, so every affected test builds the same LP, leaving the reproducibility and order-invariance harness, the parity goldens and the rank-invariance map unchanged with no golden moved. The boundary-ring pinning that these files exercise is a contract in .claude/rules/sddp.md, so the moved prelude must keep the ring slot and terminal-theta pinning assertions verbatim.",
+      "mergedFrom": [
+        "5d-test-bloat-02"
+      ],
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-044",
+      "candidateRef": "5a-test-bloat-04",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-sddp/tests/anticipated_core.rs",
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+        "crates/cobre-sddp/tests/common/builders.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/anticipated_core.rs::default_hydro_penalties",
+        "crates/cobre-sddp/tests/anticipated_core.rs::build_config",
+        "crates/cobre-sddp/tests/anticipated_core.rs::build_system",
+        "crates/cobre-sddp/tests/anticipated_core.rs::default_hydro_bounds",
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs::default_hydro_penalties",
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs::build_config",
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs::build_system",
+        "crates/cobre-sddp/tests/common/builders.rs::make_hydro"
+      ],
+      "claim": "Only the byte-identical fixture classes duplicate: in anticipated_core.rs the six default_hydro_penalties bodies (one md5), the 4-plus-2 default_hydro_bounds and 4-plus-2 default_hydro_block_bounds classes, and two build_config classes (1631/2619/6235 and 8322/8674), each collapsible to one file-scope declaration per class in the binary that owns it, with anticipated_scenarios.rs repeating that same penalties body three times and hydro_sim.rs only study_start; build_system's 13 pairwise-distinct bodies, the other nine build_config variants, and any routing through tests/common make_hydro or HydroSpec are not part of the defect.",
+      "yardstick": "§5.1 canonical per-crate layout (one declaration per fixture class per binary; whole-system builders parameterised, not copied)",
+      "fixShape": "Collapse each family to one declaration at file scope in the binary that owns it, hoisting the byte-identical default_hydro_penalties, default_hydro_bounds and default_hydro_block_bounds out of the sibling inline modules, and fold the build_config variants into one file-level builder whose parameters are exactly the fields the variants differ in. Route the hydro construction through tests/common/builders.rs make_hydro and HydroSpec, which both binaries already link via mod common, so nothing new is introduced and per the directive no fixture crate is added. Byte-neutral by construction: a hoisted declaration returns the value its six identical copies return, and a parameterized build_config called with each variant's current arguments produces the same Config, so every anticipated test builds the same study and the reproducibility and order-invariance harness, the parity goldens and the rank-invariance map are all unchanged with no golden moved. The anticipated hold-family and ring semantics these tests pin are contracts in .claude/rules/sddp.md, so the parameterization must not merge two variants that differ in a commitment or lead-stage value.",
+      "mergedFrom": [
+        "5d-test-bloat-03"
+      ],
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Scope call for the owner: the default_hydro_penalties body is one md5 across anticipated_core.rs and anticipated_scenarios.rs, and scenarios build_config at 2954 equals core build_config at 3831, so the owner must decide whether the hoist stays per-binary at file scope or lifts the shared class into tests/common (the test-corpus station owns the cross-binary convention)."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-045",
+      "candidateRef": "5a-test-bloat-05",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-sddp/tests/conformance.rs",
+        "crates/cobre-sddp/tests/integration.rs",
+        "crates/cobre-sddp/tests/load_integration.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/integration.rs::state_layout_for",
+        "crates/cobre-sddp/tests/load_integration.rs::state_layout_for",
+        "crates/cobre-sddp/tests/conformance.rs::state_layout_for",
+        "crates/cobre-sddp/tests/integration.rs::study_dims",
+        "crates/cobre-sddp/tests/load_integration.rs::study_dims"
+      ],
+      "claim": "For state_layout_for the surviving residue is narrower than the title in two ways: the seven bodies are identical only after dedent and are semantically the same StateSpace::new call as test_support::state_layout, the unreachability half of the rationale is false in all seven because each file already resolves other cobre_sddp::test_support symbols ungated, but the stale-symbol half is false in six of seven (inflow_nonnegativity.rs:69-71 names no symbol), and the duplicated symbol is imported by NONE of the seven - it is imported by name in three other binaries of the same corpus (mpi_wire.rs:1344, lp_builder.rs:1532, basis_trajectory_probe.rs:282), which is what proves reachability. From the merged 5d twin: the five all_enabled_cut_state_layouts copies survive in full, and there the cited symbol does exist (test_support.rs:657) so only the reachability claim is false, with simulation_pipeline_integration.rs:47 importing it by name while four siblings hand-copy it; the four study_dims copies survive as exact matches of test_support::study_dims (:681). The two study_dims_for locals do NOT survive as duplication: they are a five-scalar helper pinning max_deficit_segments to 1, not a copy of the &GeometryDims-taking test_support::study_dims_for (:689), so only their false doc rationale survives.",
+      "yardstick": "§5.2 uniform test-support feature convention (the exported surface already owns these helpers)",
+      "fixShape": "Delete the seven state_layout_for clones and the four study_dims clones and call cobre_sddp::test_support::state_layout and cobre_sddp::test_support::study_dims, which are already pub, already gated on the test-support feature these binaries enable, and already imported by the same files. Delete the doc comment with them rather than repairing it, since its two stated reasons are both false at the pin and a corrected copy would only re-justify the duplication. Byte-neutral by construction: the shared state_layout bottoms out in StateSpace::new with the identical eight arguments the clones pass, including the dense per-hydro effective lag vector, so patch-column resolution is unchanged and the reproducibility and order-invariance harness, the parity goldens and the rank-invariance map all hold with no golden moved. Because parity.rs is one of the seven, verify the parity hash is unmoved rather than assuming it.",
+      "mergedFrom": [
+        "5d-test-bloat-00"
+      ],
+      "crossRef": "I.3-8 (partI-handoff.json / E9)",
+      "crossStation": null,
+      "needsHuman": [
+        "Owner call outside this candidate: invariance-shuffle.yml builds cargo nextest -p cobre-sddp --test parity without the test-support feature, while parity.rs reaches cobre_sddp::test_support ungated at :894 and :1303, so either that workflow cannot build at the pin or the clones never protected a working default-feature configuration; deciding which fixes whether the consolidation must also gate these modules on the feature or the workflow gains it."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-046",
+      "candidateRef": "5a-test-bloat-06",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-sddp/src/stochastic/noise.rs::shift_lag_state",
+        "crates/cobre-sddp/src/stochastic/noise.rs::accumulate_and_shift_lag_state",
+        "crates/cobre-sddp/src/stochastic/noise.rs::tests"
+      ],
+      "claim": "Within `crates/cobre-sddp/src/stochastic/noise.rs` the `#[cfg(test)] pub(crate) fn shift_lag_state` (176-197) is the file's only test-only item declared in its 560-line production region, and both its module scope and its `pub(crate)` visibility exceed every caller: all six call sites lie inside this same file's `mod tests` (561-EOF) and no other module in the workspace calls it. The hot-path-module framing does not survive, since `stochastic/noise.rs` is not one of the files the hot-path rules enumerate; nor does rather than beside the tests, since the oracle is in the same file 384 lines above its callers.",
+      "yardstick": "§5.1 canonical per-crate layout (test-only items live with their tests)",
+      "fixShape": "Move the oracle inside the `mod tests` block that already holds its only six call sites, dropping the cfg(test) attribute and the pub(crate) visibility that module scope forced on it, so the hot-path production file contains only production code above its test module. Keep the oracle itself and every equivalence assertion verbatim, since the equivalence between the oracle and the production kernel is what pins the lag-shift behavior. Byte-neutral by construction: relocating a cfg(test) fn into the test module that already calls it changes no production symbol, so the reproducibility and order-invariance harness, the parity goldens and the rank-invariance map are untouched and no golden moves.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Scope call for this item: whether relocating the oracle should also re-word the three production doc comments that use `shift_lag_state` as the canonical lag-remap vocabulary (the bracketed reference at `noise.rs:211` plus the code spans at `lp/indexer/state_space.rs:443` and `lp/indexer/cut_state_projection.rs:269`), or leave them naming a test-module-private symbol."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-047",
+      "candidateRef": "5b-test-bloat-02",
+      "severity": "C",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-sddp/src/lp/builder/entries.rs::pumping_water_tests",
+        "crates/cobre-sddp/src/lp/builder/entries.rs::csc_byte_identical_under_permuted_declaration_order",
+        "crates/cobre-sddp/src/lp/builder/entries.rs::zero_cost_tests"
+      ],
+      "claim": "Scoped to crates/cobre-sddp/src/lp/builder/entries.rs alone: its inline module pumping_water_tests (3518-10093) is named for the least-exercised subject it contains and carries no internal partition, evidenced at the pin by 3 call sites of fill_pumping_water_entries against 25 of build_stage_matrix_entries, 36 helper fns declared from module offset 46 to 6440, and one CSC accessor duplicated about 2000 lines apart (coeff_at at 2431, csc_at at 4395), while sibling columns.rs in the same directory partitions 72 tests across 12 subject-named modules. Not conceded: the 'crate's catch-all' framing, and the fixShape's 'pure test relocation' premise, because the 72-reference module-private PumpFixtures harness must gain sibling visibility and the read_dir-based lp_builder_never_references_dual_extraction gate's scan surface depends on where the split files land.",
+      "yardstick": "§5.1 canonical per-crate layout (subject-named test homes; the section 5.1 threshold is a proposal the test-corpus station ratifies)",
+      "fixShape": "When candidate two converts entries.rs to a directory module, do not carry pumping_water_tests across as one file. Split it along the subject boundaries its own fn names already mark, one sibling file per subject (contracts, split-plant cells, FPHA crediting, transit buckets, chronological water, filling-phase rows, generic constraints, declaration-order determinism), and lift the shared fixture constructors it declares into a single sibling shared by them. Each resulting file gets a name that predicts its contents so a new test has one obvious home. The determinism gate csc_byte_identical_under_permuted_declaration_order moves verbatim and stays a gate. Pure test relocation: no non-test line of entries.rs changes, the library stays byte-identical, and the parity goldens, the rank-invariance harness and the mpiexec -n 1 versus -n 2 reproduction are unaffected. Moves no golden.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Target shape for the split is a convention call CD-007 owns: one extracted tests.rs matching commitment_reconcile/layout/template, or N subject-named files matching columns.rs's 12 inline modules. The unratified section 5.1 threshold cannot settle it."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-048",
+      "candidateRef": "5b-test-bloat-03",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs::build_classical_fixture",
+        "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs::build_par_a_fixture",
+        "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs::classical_par_has_no_lag_11_column"
+      ],
+      "claim": "build_classical_fixture (par_a_lag12_lp_coefficient.rs:347-580, 234 lines) repeats 229 lines of build_par_a_fixture verbatim to vary only the annual field at its two InflowModel sites, and the structural sameness that the control test classical_par_has_no_lag_11_column depends on is carried solely by the doc comment at 344-346; the drift exposure is confined to the raw InflowModel, LoadModel, HydroPenalties and bounds/penalties spec literals that bypass tests/common/builders.rs, since Stage, Hydro and Bus field additions are already one-place changes there, and any consolidation must additionally preserve the two per-variant builder-internal .expect labels that the fixShape mistook for test-body messages.",
+      "yardstick": "§3.2 sustainability (a fixture earns its second copy only by a delta the copy cannot express as a parameter)",
+      "fixShape": "Collapse the pair into one private builder taking the annual component as a parameter, for example an `Option<AnnualComponent>` argument, with the two existing names kept as two-line wrappers that pass Some(...) and None so the three test bodies and their assertion messages are untouched. This is test-binary-local: it changes no library code, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and the mpiexec -n 1 versus -n 2 reproduction are all unaffected, and the three tests in this binary assert the same LP coefficients as before. Moves no golden. Keep the builders in this binary rather than promoting them to tests/common, since no other binary consumes the PAR-A lag-12 shape.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Whether this binary's classical arm should be parameterized in place or instead folded onto the existing two_hydro_par_system helper when template_integration and par_a_lag12_lp_coefficient are grouped under the testing-architecture section 5.1 layout - a test-corpus station call, since that homing layout is still a proposal at the pin."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-049",
+      "candidateRef": "5b-test-bloat-04",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-sddp/tests/template_integration.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/template_integration.rs::build_hydro_one_ant_system",
+        "crates/cobre-sddp/tests/template_integration.rs::one_hydro_one_ant_system",
+        "crates/cobre-sddp/tests/template_integration.rs::two_anticipated_thermal_system",
+        "crates/cobre-sddp/tests/template_integration.rs::one_anticipated_thermal_system",
+        "crates/cobre-sddp/tests/template_integration.rs::one_bus_system_n_blks_with_generic"
+      ],
+      "claim": "Narrowed to two verified copy-paste families and a corrected cost basis: the anticipated-thermal trio (one_anticipated_thermal_system, two_thermal_one_anticipated_system, two_anticipated_thermal_system, 127 and 130 of 144 lines identical, differing only in the thermal list and the n_thermals and k_max derived from it) and the one_bus_system_n_blks / one_bus_system_n_blks_with_generic pair (111 of 117 identical, the second being the first plus two builder calls) are genuine sibling copies that one list-parameterized builder would subsume. The title's stated cost is wrong and does not survive: StageSpec plus the Default spread at all 20 sites keeps a new Stage field O(1) per the invariant documented at tests/common/builders.rs:1-9, so the per-copy fan-out is confined to the non-Spec literals, namely the four bounds and penalties sizing structs (20 copies, 55 of 80 sites without a Default spread) and the InflowModel and LoadModel literals (32 sites, none with one), which the proposed family collapse leaves at fifteen copies. Also excluded: the anticipated-hydro pair, whose members differ on state_config.inflow_lags and block layout and therefore encode two separately documented column geometries, and the one_bus_system / one_bus_system_n_blks pairing at 79 of 121 identical, which is not an 85 percent twin.",
+      "yardstick": "§5.1 canonical per-crate layout (parameterised builders, one per shape family)",
+      "fixShape": "Collapse each family into one parameterized builder in the parent module and keep the existing names as thin wrappers so the eleven submodules that reach these through `use super::*` need no edits. The three families the diffs identify are the anticipated-hydro pair, the anticipated-thermal trio and the one-bus trio; parameterize on the values the copies already differ by, namely lead stages, discount rate, block count and the optional generic constraint. Do this inside tests/template_integration.rs rather than moving the builders to tests/common/builders.rs, since only this binary consumes whole-system shapes at this granularity and common/builders.rs owns the per-entity layer below them. No library code changes, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs and the mpiexec -n 1 versus -n 2 reproduction are unaffected; the wrappers must reproduce their current field values exactly so every assertion in the eleven submodules keeps its present expected numbers. Moves no golden.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Scope call: whether the ticket is the family collapse as filed or the higher-leverage extension of the O(1) Spec layer to InflowModel, LoadModel and the four bounds/penalties sizing structs, which owns the 20-copy fan-out the collapse leaves at fifteen."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-050",
+      "candidateRef": "5b-test-bloat-07",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/tests/common/parity_hash.rs",
+        "crates/cobre-sddp/tests/lp_builder.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/lp_builder.rs::case_dir",
+        "crates/cobre-sddp/tests/common/parity_hash.rs::case_dir",
+        "crates/cobre-sddp/tests/common/mod.rs::build_setup_for_case"
+      ],
+      "claim": "Only the single-file half survives, and it is the base-path construction rather than a shared corpus helper: tests/lp_builder.rs repeats Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../examples/deterministic\") three times in one binary, as the two parameter-name-only variants of case_dir at lines 65-69 and 573-577 and as deterministic_root at line 478, all of which one file-scope base-path helper would collapse. The tests/common/parity_hash.rs site is conceded and excluded: its case_dir is already exported (pub fn inside pub mod parity_hash at common/mod.rs:27, linked from parity.rs:48) and is a closed-set golden-label-to-directory mapper with a panic! guard, not a copy of the suffix-join helper.",
+      "yardstick": "§5.1 canonical per-crate layout (one file-scope helper per binary; corpus-wide helpers live in tests/common)",
+      "fixShape": "Export one case-directory helper from tests/common/mod.rs next to the case helpers that already take that path as an argument, and have lp_builder.rs's two inline modules and common/parity_hash.rs call it instead of declaring their own. Keep it in tests/common rather than creating a fixture crate. The wider corpus-level spread across the other binaries belongs to the test-corpus station; the two in-file copies here are the part anchored in this sub-station. Pure test-harness change resolving to the same directory, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs and the mpiexec -n 1 versus -n 2 reproduction all read the same cases and stay byte-neutral. Moves no golden.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": "corpus-wide `case_dir` spread belongs to the test-corpus station (E08); only the in-file copies are anchored here",
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-051",
+      "candidateRef": "5c-test-bloat-00",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs",
+        "crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs::sync_cuts_rejects_mismatched_local_cut_count",
+        "crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs::StubComm2Rank",
+        "crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs::sync_cuts_invariant_rejected_when_cut_count_mismatches",
+        "crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs::StubComm2Rank"
+      ],
+      "claim": "Narrowed to one deletion and stripped of its two supporting claims: at the pin sync_cuts_rejects_mismatched_local_cut_count is the weakest of THREE copies of the count-mismatch assertion, not one of two, because the unit test sync_cuts_invariant_rejects_local_mismatch (src/cut/cut_sync.rs:1672) already holds the strongest copy with unreachable! collective bodies pinning that none fires; the byte-identity is confined to the struct plus six-method impl Communicator bodies (22-68 versus 25-71), the enclosing rustdoc differing; the defensible residue is deleting the single solver-linking binary test_mpi_allgatherv_nonuniform_workers.rs, whose remaining test is strictly weaker than both other copies and whose titular nonuniform-workers assertion lives at src/training/backward/tests.rs:5443. Rejected as over-reach: the section 6 count-parity gate cannot certify a deletion that drops the nextest count by one, and the fallback hoist into test_support.rs is unwarranted because tests/common/mod.rs:86 Rank0Of2 is the existing shared rank-0-of-2 helper. The survivor binary itself must stay: it hosts the real-MPI k_fan rank-invariance gate.",
+      "yardstick": "§5.1 canonical per-crate layout (integration binaries are expensive; one owner per assertion)",
+      "fixShape": "Delete the test_mpi_allgatherv_nonuniform_workers.rs binary and keep the surviving sync_cuts count-mismatch assertion in test_mpi_sync_cuts_invariant.rs, which is a strict superset of it. This is coverage-neutral, not a coverage reduction: the deleted file's titular nonuniform-workers assertion already lives in the handshake_rejects_nonuniform_workers unit test by its own module doc, and its only remaining test is the byte-for-byte same assertion as the survivor's. It removes exactly one integration binary and one static solver link, which is the per-binary cost testing-architecture.md section 7 names. No CI edit is needed: neither file is enumerated by name under .github or scripts, so the binary roster is discovered by cargo. If the owner instead wants both file names retained, then the alternative is to hoist one strict 2-rank Communicator stub into the existing cobre_sddp::test_support surface behind its current cfg(any(test, feature = 'test-support')) gate per testing-architecture.md section 5.2 and have both binaries consume it; a dedicated fixture crate is explicitly out of bounds. Byte-neutrality bar: the change is confined to crates/cobre-sddp/tests, touches no src path and no LP construction, so the parity goldens in tests/parity.rs and tests/common/parity_hash.rs are untouched, the rank-invariance harness in tests/common/permute.rs is untouched, and mpiexec -n 1 versus -n 2 is unaffected because the deleted test uses a hand-rolled stub rather than the real communicator while the survivor keeps the real-MPI K-fan gate under its test-support feature gate. Gate the change on test-count parity per testing-architecture.md section 6 so the deletion is shown to drop only the duplicated assertion.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Sequencing call for the cut-pool/training owner: delete the redundant binary now, or let it retire together with the superseded sync_cuts family at the next licensed public-API break, since all three copies of this assertion die with the method."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-052",
+      "candidateRef": "5c-test-bloat-01",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/tests/cut_basis.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/cut_basis.rs::write_test_checkpoint",
+        "crates/cobre-sddp/tests/cut_basis.rs::d01_case_dir",
+        "crates/cobre-sddp/tests/cut_basis.rs::d03_case_dir",
+        "crates/cobre-sddp/tests/cut_basis.rs::ascending_stage_end_dates",
+        "crates/cobre-sddp/tests/cut_basis.rs::build_setup",
+        "crates/cobre-sddp/tests/common/mod.rs::build_setup_for_case"
+      ],
+      "claim": "Only the three constant-valued helpers duplicate without justification: d01_case_dir at 41, 917 and 1580, d03_case_dir at 908 and 1884, and ascending_stage_end_dates at 54, 1593 and 2745 are fixed deck paths and one pure function of n_pools with no per-group tuning surface, and the d01 copies have already drifted unforced (`.unwrap()` at 41 and 1580 versus `.expect(...)` at 917, with both lint styles allowed file-wide at lines 8-9); each should be declared once at cut_basis.rs file scope. write_test_checkpoint and build_setup are excluded: the former is the assertion-feeding fixture whose baked metadata constants are per-site pinning covered by the module doc at lines 3-5 and the Layer-1 fixtures-untouched invariant, and the latter genuinely diverges in return type at 113 versus 1652. The claim that the wired `mod common` seam is the unused sharing route does not survive, since that seam is used at seven sites and its build_setup_for_case drives from_broadcast_params with patched scalar_parameters rather than StudySetup::new.",
+      "yardstick": "§5.1 canonical per-crate layout (one declaration per helper per binary)",
+      "fixShape": "Declare each of the five helpers once at cut_basis.rs file scope, above the nine inline modules that consume them, since all copies already share one compilation unit and no cfg gate separates them. Keep the two genuinely divergent variants distinguishable rather than forcing one signature: the tuple-returning setup builder and the bare-StudySetup one differ in return type and both have callers, so give the second a distinct name or have it delegate to the first and discard the System. Do not collapse the multi-pool checkpoint writer into test_support::write_synthetic_boundary, which writes a single-cut boundary checkpoint and is a different fixture. Only if a second binary later needs these helpers does ownership move to tests/common; a new fixture crate is out of bounds per testing-architecture.md section 5.2. Byte-neutrality bar: the change is confined to one file under crates/cobre-sddp/tests, so the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 are all untouched. The relocation is behavior-neutral by construction because the surviving body is the byte-identical text of the copies it replaces; gate it on test-count parity per testing-architecture.md section 6 to prove no assertion was dropped, and note that this file exercises the stored-basis path so the module docs of crates/cobre-sddp/src/cut/basis_reconstruct.rs govern which reconstruct entry point each retained test may call.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-053",
+      "candidateRef": "5c-test-bloat-02",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-sddp/tests/common/mod.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs::StubComm",
+        "crates/cobre-sddp/tests/common/mod.rs::Rank0Of2",
+        "crates/cobre-sddp/src/training/backward/tests.rs::StubComm",
+        "crates/cobre-sddp/src/training/backward_pass_state.rs::StubComm",
+        "crates/cobre-sddp/src/training/session/mod.rs::StubComm",
+        "crates/cobre-sddp/src/training/training/tests.rs::StubComm",
+        "crates/cobre-sddp/src/training/backward_pass_state.rs::Rank0Of2",
+        "crates/cobre-sddp/src/training/session/mod.rs::Rank0Of2",
+        "crates/cobre-sddp/src/cut/cut_sync.rs::ThreeRankComm",
+        "crates/cobre-sddp/src/cut/cut_sync.rs::TwoRankStubComm"
+      ],
+      "claim": "Narrowed to three bodies and no destination: session/mod.rs:1654 StubComm, training/training/tests.rs:173 StubComm and session/mod.rs:2767 Rank0Of2 are token-identical re-declarations of tests/common/mod.rs:32 and :86 that no src unit test can reach because cobre-sddp's EXPORTED test-support surface holds no Communicator double, so one shared pair is warranted. Excluded from the claim: the 'zero impl Communicator in test_support.rs' premise (a seventh token-identical copy sits at src/test_support.rs:3555-3598, private to mod trunk_fan_tests); the fix-shape's destination (testing-architecture.md section 5.2 assigns StubComm/Rank0Of2 to cobre-comm, not cobre-sddp/src/test_support.rs, so the home is an open owner call); the other three src-side bodies, which are strictness variants to preserve rather than fold (backward/tests.rs:233's unreachable broadcast AND the full-slice allreduce equal-length assertion that backward_pass_state.rs:2216 and :2258 drop); and all four cut/cut_sync.rs duplicates, which sit exclusively inside tests of the superseded sync_cuts, pack_local_records and sync_packed_records methods and dissolve pairwise at that ratified seam's trigger.",
+      "yardstick": "§5.2 uniform test-support feature convention / §5.8 (StubComm and Rank0Of2 are the kept harness doubles)",
+      "fixShape": "Move one strict single-rank Communicator double and one rank-0-of-2 double into crates/cobre-sddp/src/test_support.rs behind the cfg(any(test, feature = 'test-support')) gate it already carries, then have the src-side unit tests and tests/common/mod.rs consume that one pair instead of re-declaring it; collapse the two verbatim same-file stub pairs in cut/cut_sync.rs to one declaration each. The consolidation must preserve per-site strictness rather than average it: at least one existing copy implements broadcast as unreachable with the message that broadcast is not used in backward pass tests, and rewriting that to Ok(()) would silently weaken a live assertion, so the shared double keeps the strict body and any site that genuinely needs a permissive broadcast declares that permissiveness explicitly at the call site. Leave FailingComm, FailingBcastComm, NonUniformStubComm, Rank1Of2, StubCommN, LbReconcileStub, ReconcileStub, Rank0Of2Outcome, Rank0Of2Preserve and DualRankStubComm alone; each encodes a different failure or outcome shape and is not a duplicate. Do not introduce a dedicated fixture crate, which testing-architecture.md section 5.2 rules out. Byte-neutrality bar: the moved items are test-only and gated, so no production build changes and the parity goldens in tests/parity.rs and tests/common/parity_hash.rs are unaffected; the rank-invariance harness in tests/common/permute.rs is unaffected because no permutation input changes; mpiexec -n 1 versus -n 2 is unaffected because these are hand-rolled stubs, never the real communicator, and the real-MPI gates keep their own communicator construction. Gate on test-count parity per testing-architecture.md section 6.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": "E08-2 needs-human (StubComm/Rank0Of2 duplication: tests/common/mod.rs + private copies) and E04 TD-037 (tests/common vs test-support gate) — the src-side half is this station's; tests/common is the test-corpus station's",
+      "needsHuman": [
+        "Destination owner call for the shared StubComm/Rank0Of2 pair: testing-architecture.md section 5.2 assigns them to cobre-comm, which has no test-support feature at the pin, while section 6 phase 3 collapses tests/common into cobre-sddp's test-support surface; and Rank0Of2's load-bearing forward_passes == 1 caveat names cobre-sddp's RankDistribution, which the infrastructure-genericity hard rule would keep out of cobre-comm."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-054",
+      "candidateRef": "5c-test-bloat-03",
+      "severity": "B",
+      "binaries": [],
+      "anchors": [
+        "crates/cobre-sddp/src/training/backward/tests.rs::MockSolver",
+        "crates/cobre-sddp/src/training/backward_pass_state.rs::MockSolver",
+        "crates/cobre-sddp/src/training/forward/tests.rs::MockSolver",
+        "crates/cobre-sddp/src/training/forward_pass_state.rs::MockSolver",
+        "crates/cobre-sddp/src/training/lower_bound.rs::MockSolver",
+        "crates/cobre-sddp/src/training/session/mod.rs::MockSolver",
+        "crates/cobre-sddp/src/training/training/tests.rs::MockSolver",
+        "crates/cobre-sddp/src/workspace/workspace.rs::MockSolver"
+      ],
+      "claim": "Only the inert subset of the eleven required methods is genuine duplication across the eight sites — the ActiveProfile associated type, the empty apply_profile, the constant solver_name_version returning the literal MockSolver 0.0.0 and the no-op set_row_bounds (identical at all eight, differing only in ignored parameter names), plus the SolverStatistics::default() statistics/statistics_into pair at six of the eight — and it is that inert restatement alone that makes a new required trait method an eight-site edit here. The behavioral bodies are not duplication and do not reduce to one or two knobs: solve is four structurally distinct modes, get_basis splits seven-to-one at backward_pass_state.rs:2363, statistics is three-way, and two sites carry live strictness a shared default would erase (the copy_from_slice length check at forward_pass_state.rs:1138 and the set_col_bounds_calls == 2 * n_openings NCS per-opening assertion at lower_bound.rs:2093). The 'no solver double in test_support' premise is conceded as false: test_support.rs:1859 already impls SolverInterface for TemplateCaptureSolver and test_support.rs:140 fill_consistent_basis is already the shared basis body seven of the eight call.",
+      "yardstick": "§5.2 uniform test-support feature convention (one configurable double on the crate's test-support surface; no `Box<dyn Trait>`)",
+      "fixShape": "Put one configurable solver double in crates/cobre-sddp/src/test_support.rs behind the cfg(any(test, feature = 'test-support')) gate it already carries, implementing the 11 required SolverInterface methods once, and let each of the eight sites configure the one or two behaviors it actually varies instead of restating the whole surface. Keep it a plain struct with fields, not a trait-object or closure-per-method design, so the crate-wide ban on Box<dyn Trait> is respected and the double stays enum-or-field dispatched. Preserve each site's current strictness exactly: where a body panics or asserts on an unexpected call today, the shared double must keep a mode that still panics there rather than returning a default, because turning a panic into a silent success removes a live assertion. Leave the genuinely distinct recording and probing doubles alone, specifically the two-phase mock in cut/dcs.rs, the recording mock in the row builder, the recording solver in training/stage_solve_prep/tests.rs and the per-child probe solver in training/backward/tests.rs. Byte-neutrality bar: the change is test-only and feature-gated so no production path and no LP construction changes, leaving the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 all unaffected. Gate on test-count parity per testing-architecture.md section 6, and note that the lower-bound and backward-pass sites are covered by pinned contracts in .claude/rules/sddp.md, so no assertion about Benders cut sign, column-bound state pinning or NCS availability factors may be weakened while the doubles are consolidated.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Owner call on the shape of the inert-only consolidation: a cfg-gated declarative macro in test_support.rs versus the candidate's field-configured shared struct, since a single struct cannot express the seven-to-one get_basis split and the two strict sites without adding modes no test reads."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-055",
+      "candidateRef": "5d-test-bloat-01",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs::lead_ge2_rebaseline_contains_the_named_k2_k3_fixtures",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs::LEAD_GE2_REBASELINE",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs::K1_SURVIVORS",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs::k1_survivors_and_lead_ge2_rebaseline_are_disjoint",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs::k1_byte_stability_verdict",
+        "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs::AUDITED_FIXTURE_FILES",
+        "crates/cobre-sddp/tests/anticipated_scenarios.rs::simulation_ring_buffer_shifts_anticipated_state_k1"
+      ],
+      "claim": "Narrowed from the whole file to two of its six tests. lead_ge2_rebaseline_contains_the_named_k2_k3_fixtures (hold_k1_byte_stability_probe.rs:217-229) requires three string literals to appear in a const declared 45 lines above it in the same file, and it therefore passed green when commit 19ecadbd renamed simulation_ring_buffer_shifts_anticipated_state_k2 to simulation_commitment_hold_carries_anticipated_state_k2 in the same commit that also edited this probe, leaving lines 172 and 222 as the only two occurrences of a name that resolves to no test fn at the pin. k1_byte_stability_verdict (lines 231-250) has zero assert sites and five println!, so it has no failing path. Explicitly conceded and NOT part of the claim: the three DeliveryRing tests at lines 32-94 exercise production code and must stay; k1_survivors_and_lead_ge2_rebaseline_are_disjoint (lines 197-215) enforces a real cross-list partition invariant over all 46 entries and is not confirmed for deletion; and the k2 coverage was renamed rather than deleted, so the false confidence is in the probe's stale index, not in lost k2 coverage.",
+      "yardstick": "§3.2 sustainability (a test that restates its own literals is invisible and therefore dead)",
+      "fixShape": "Keep the three DeliveryRing primitive tests, which are the only part of this binary that touches production code. Delete k1_byte_stability_verdict, whose five println! lines carry no assertion and are invisible under a normal cargo test run, and delete the two list-shape assertions that compare in-file literals to each other. Relocate the audited k_max partition and its rationale to prose that no green test can misrepresent, either the module doc that already holds the argument or the sddp rules file, and fix or drop the rotted simulation_ring_buffer_shifts_anticipated_state_k2 entry while doing so. If the partition must stay executable, make the assertion resolve each name against the test tree rather than against a sibling literal in the same file, so a renamed or deleted fixture fails the guard. Byte-neutrality: the probe writes no output and reads no golden, and the three retained tests construct DeliveryRing directly, so nothing in the parity or rank-invariance sets is touched; the reproduction pair still runs to confirm.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": null,
+      "needsHuman": [
+        "Owner call on whether the audited k_max partition should survive in any executable form now that the shift-to-hold switchover has landed and there are zero k_max >= 2 tier-1 goldens: retire the checklist to prose, or re-home it as a script-backed gate that resolves each name against a nextest listing, since Rust cannot reflect over another integration binary's tests (the probe's own module doc, lines 25-28)."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-056",
+      "candidateRef": "5d-test-bloat-04",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/tests/conformance.rs",
+        "crates/cobre-sddp/tests/integration.rs",
+        "crates/cobre-sddp/tests/simulation_pipeline_integration.rs"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs::StubComm",
+        "crates/cobre-sddp/tests/common/mod.rs::Rank0Of2",
+        "crates/cobre-sddp/tests/simulation_pipeline_integration.rs::StubComm",
+        "crates/cobre-sddp/tests/integration.rs::ShutdownComm",
+        "crates/cobre-sddp/tests/conformance.rs::LocalComm"
+      ],
+      "claim": "Confined to tests/simulation_pipeline_integration.rs:78 - the local double reuses the harness's StubComm identifier for a type whose collective semantics are incompatible with it, inside a file that compiles `mod common;` at line 51; its rustdoc at line 77 says Single-rank while line 1173 instantiates it with `size: 2`; and its `rank` field is 0 at all 20 sites. A naming, stale-rustdoc and dead-field defect only. The three-way consolidation, the premise that the parameterized type subsumes the two harness unit structs, and the anchors common/mod.rs::StubComm, common/mod.rs::Rank0Of2, conformance.rs::LocalComm and integration.rs::ShutdownComm do not survive.",
+      "yardstick": "§5.8 (StubComm / Rank0Of2 are the kept harness doubles) / §5.1",
+      "fixShape": "Replace the three shapes with one parameterized stub communicator in the shared harness that takes rank and size and carries an explicit mode for the collectives a given path must not touch, so the pipeline tests keep their assert-unused semantics as a stated mode rather than as a separate type. The two existing unit structs become constructor calls at their 20 and 4 call sites and the local copy in simulation_pipeline_integration.rs disappears along with the name shadowing. This is not a blind delete: the unreachable! bodies are load-bearing for the pipeline tests that assert no collective fires on the frozen path, and the displs-offset copy in the 2-rank shape must survive verbatim. Byte-neutrality: communicator behaviour on every currently exercised path stays identical, so no golden moves; verify against the tier-1 parity goldens, the rank-invariance permutation harness, and a single-rank versus two-rank MPI reproduction, which is the direct check for this candidate.",
+      "mergedFrom": null,
+      "crossRef": null,
+      "crossStation": "E08-2 needs-human (communicator doubles in tests/common) — kept distinct from 5c-test-bloat-02 (harness shape vs src-side re-declaration)",
+      "needsHuman": [
+        "Owner call: whether testing-architecture.md section 5.8 (keep StubComm/Rank0Of2) plus the section 5.2 move into cobre-comm's test-support surface is the final disposition for the harness pair, or whether the test-corpus station's E08-2 needs-human item may still merge them - my dismissal of the merge half rests on section 5.8 being ratified.",
+        "Owner call: whether conformance.rs:40 LocalComm's no-copy collectives (Ok(()) without writing recv, unlike common::StubComm) are deliberate; I read the divergence as semantics-by-design, but no rustdoc states why."
+      ],
+      "targetStation": "test-corpus"
+    }
+  ]
+}

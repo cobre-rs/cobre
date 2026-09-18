@@ -1,7 +1,8 @@
 # Station verification — core-io
 
-Baseline: `a136840d4f2ea137f685f0af6dac04254b983b60` (the register pin; the drift rule ties HEAD to it).
-Declared section title (argv[2]): `★ STATION: cobre-core + cobre-io (2026-09, baseline)`
+Station baseline: `a136840d4f2ea137f685f0af6dac04254b983b60` (inventory.json; every entry, anchor and figure is measured there).
+Register pin: `077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c` (the drift rule ties HEAD to it; provenance bullets resolve there).
+Declared section title (argv[2]): `★ QUALITY EVALUATION (2026-09, baseline a136840d) — core-io`
 Resolved by slug `core-io` via the em-dash tail: `★ QUALITY EVALUATION (2026-09, baseline a136840d) — core-io`
 
 The section is resolved by the station slug, not by the spelled-out title, so the six
@@ -19,7 +20,7 @@ resolves it either way.
 | 4 | register | `python3 plans/architecture-debt-audit/tools/station_verify.py register . core-io` | 0 | PASS |
 | 5 | inventory-set-equality | `python3 plans/architecture-debt-audit/tools/station_verify.py inventory inventory.json .` | 0 | PASS |
 | 6 | infra-genericity | `python3 plans/architecture-debt-audit/tools/station_verify.py genericity . partI-handoff.json` | 0 | PASS |
-| 7 | read-only-workspace | `python3 plans/architecture-debt-audit/tools/station_verify.py readonly . a136840d4f2ea137f685f0af6dac04254b983b60` | 0 | PASS |
+| 7 | read-only-workspace | `python3 plans/architecture-debt-audit/tools/station_verify.py readonly . 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c` | 0 | PASS |
 
 Reserved-seam re-raises (no entry re-raises a ratified seam without a sanction
 citation) are enforced twice above: `check-reraise` against the mirror corpus, and

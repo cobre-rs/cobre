@@ -1,0 +1,1196 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "generatedAt": "2026-09-18",
+  "source": "stations/cli-python/prior-register.md roster (4 owned ids) + BACKLOG.md waves table (L1930 Wave 5, L1929 Wave 4, L1935 Wave 7) and entry blocks; every anchor re-resolved at 077dbe2c",
+  "dispositionVocabulary": [
+    "keep",
+    "retire",
+    "sharpen"
+  ],
+  "alignmentVocabulary": [
+    "advances-0a",
+    "advances-0b",
+    "advances-1",
+    "neutral",
+    "conflicts"
+  ],
+  "anchorRule": "baselineAnchor and anchors are {path, symbol} declarations resolved at the pin with the check-anchors DECL regex; priorAnchor keeps the register's own line anchors as provenance; anchorDrift[] records register → ticket → pin lines per symbol with the resolving command; spans[] are line-only evidence (call sites, arms), never anchors",
+  "ownedCount": 4,
+  "byDisposition": {
+    "retire": [],
+    "sharpen": [
+      "CD-025",
+      "CD-029",
+      "CD-002",
+      "CD-009"
+    ],
+    "keep": []
+  },
+  "byWave": {
+    "5": [
+      "CD-025",
+      "CD-029"
+    ],
+    "4": [
+      "CD-002"
+    ],
+    "7": [
+      "CD-009"
+    ]
+  },
+  "doNotTouch": {
+    "source": "BACKLOG.md L1942",
+    "ids": [
+      "CD-008",
+      "PD-001",
+      "PD-004"
+    ],
+    "matchesAmongOwned": [],
+    "note": "no owned id matches the do-not-touch list; nothing dropped"
+  },
+  "notOwned": [
+    {
+      "id": "CD-004",
+      "owningStation": "sddp (E05, ratified 2026-09-18)",
+      "registerLine": 192,
+      "claim": "Config → StudyParams / BroadcastConfig projection twins",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        }
+      ],
+      "note": "its BroadcastConfig half is anchored in this station's S6a files; the disposition is the sddp station's — cited here as CD-002's slot type only"
+    },
+    {
+      "id": "CD-001",
+      "owningStation": "sddp (E05) — retired at the owner gate, resolved by b051c410",
+      "registerLine": 152,
+      "claim": "CLI hand-rolled mirror of the rank-0 stochastic pipeline",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "reconstruct_stochastic_context_non_root"
+        }
+      ],
+      "note": "the thin non-root caller survives in this station's setup.rs; do not re-raise"
+    },
+    {
+      "id": "CD-003-construction-hop",
+      "owningStation": "sddp (E05) — retired at the owner gate, resolved by 4075c4e8",
+      "registerLine": 176,
+      "claim": "BroadcastConfig → ConstructionConfig hop",
+      "anchors": [],
+      "note": "ConstructionConfig deleted; the two-carrier residue is CD-004's"
+    },
+    {
+      "id": "CD-026",
+      "owningStation": "core-io (E02, ratified)",
+      "registerLine": 945,
+      "claim": "SimulationParquetWriter::write_scenario 12× write-partition skeleton",
+      "anchors": [],
+      "note": "cobre-io code; the CLI/Python call sites are consumers only"
+    },
+    {
+      "id": "CD-082",
+      "owningStation": "sddp (E05)",
+      "registerLine": 4557,
+      "claim": "scalar_parameters placeholder patched by callers",
+      "anchors": [],
+      "note": "its validate.rs context is cited by the sddp entry; the entry is sddp's"
+    }
+  ],
+  "dispositions": [
+    {
+      "id": "CD-025",
+      "wave": 5,
+      "registerId": "CD-025",
+      "registerLine": 917,
+      "priorTitle": "Training + simulation output orchestration hand-mirrored across the CLI/Python crate boundary (write_training_outputs vs write_training_artifacts); Python's *_if_any helpers live in cobre-python so the CLI re-inlines its own copies; kept aligned only by the Python-parity hard rule (★ north-star instance) — OWNER-AGREED",
+      "recordedSeverity": "B",
+      "reverifiedSeverity": "B",
+      "originalRatingKept": true,
+      "priorAnchor": {
+        "raw": [
+          "cobre-cli/.../run/outputs.rs:57",
+          "cobre-python/src/run.rs:478",
+          "run.rs:554/574/597 (three `_if_any` helpers)",
+          "outputs.rs:89-121 (re-inlined copies)",
+          "Note 2026-09-17: outputs.rs:58, :95, :107, :221 ↔ cobre-python/src/run.rs:799; `Study::train_native`"
+        ],
+        "note": "provenance only — the register's own line anchors (2026-08 audit + the 2026-09-17 Note); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+        "symbol": "write_training_outputs"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_training_artifacts"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fpha_hyperplanes_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_evaporation_models_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_generic_constraint_echo_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fixed_delivery_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fpha_deviation_points_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "train_native"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "anchorDrift": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs",
+          "recordedLine": 57,
+          "ticketLine": 58,
+          "baselineLine": 58,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n 'fn write_training_outputs'",
+          "status": "drifted (register) / resolved (ticket)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs",
+          "recordedLine": null,
+          "ticketLine": 178,
+          "baselineLine": 178,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n 'fn write_simulation_outputs'",
+          "status": "resolved (not cited by the register)"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_training_artifacts",
+          "recordedLine": 478,
+          "ticketLine": 479,
+          "baselineLine": 532,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_training_artifacts'",
+          "status": "drifted"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fpha_hyperplanes_if_any",
+          "recordedLine": 554,
+          "ticketLine": 555,
+          "baselineLine": 594,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_fpha_hyperplanes_if_any'",
+          "status": "drifted"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_evaporation_models_if_any",
+          "recordedLine": 574,
+          "ticketLine": 575,
+          "baselineLine": 614,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_evaporation_models_if_any'",
+          "status": "drifted"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_generic_constraint_echo_if_any",
+          "recordedLine": null,
+          "ticketLine": 598,
+          "baselineLine": 636,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_generic_constraint_echo_if_any'",
+          "status": "drifted (register cited three helpers; five exist)"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fixed_delivery_if_any",
+          "recordedLine": null,
+          "ticketLine": 621,
+          "baselineLine": 658,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_fixed_delivery_if_any'",
+          "status": "drifted (register cited three helpers; five exist)"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fpha_deviation_points_if_any",
+          "recordedLine": 597,
+          "ticketLine": 638,
+          "baselineLine": 675,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_fpha_deviation_points_if_any'",
+          "status": "drifted"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "train_native",
+          "recordedLine": null,
+          "ticketLine": null,
+          "baselineLine": 315,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/study.rs | grep -n 'fn train_native'",
+          "status": "resolved — the register Note names `Study::train_native` without a path; it lives in study.rs, not run.rs"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 221,
+          "needle": "write_scenario_summary(",
+          "recordedLine": 197,
+          "noteLine": 221,
+          "ticketLine": 221,
+          "what": "the simulation-summary reshape, CLI copy (inside write_simulation_outputs)"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "line": 799,
+          "needle": "write_scenario_summary(",
+          "recordedLine": 722,
+          "noteLine": 799,
+          "ticketLine": 762,
+          "what": "the simulation-summary reshape, Python copy (inside run_simulation_phase_py, :696)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 95,
+          "needle": "write_fpha_hyperplanes(",
+          "recordedLine": 95,
+          "what": "CLI re-inlined copy of write_fpha_hyperplanes_if_any"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 107,
+          "needle": "write_evaporation_models(",
+          "recordedLine": 107,
+          "what": "CLI re-inlined copy of write_evaporation_models_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "lines": [
+            359,
+            369,
+            370,
+            371,
+            372,
+            373
+          ],
+          "needles": [
+            "write_training_artifacts(",
+            "_if_any(",
+            "_if_any(",
+            "_if_any(",
+            "_if_any(",
+            "_if_any("
+          ],
+          "what": "the only callers of write_training_artifacts + the five *_if_any helpers (Study::train_native) — the Python side has one internal owner, as the 2026-09-17 Note records"
+        }
+      ],
+      "staleAnchorNote": "every register line moved: outputs.rs :57 → :58; run.rs :478 → :532; the `_if_any` family is five helpers at :594/614/636/658/675 (the register cites three at :554/574/597; the ticket's :555/575/598/621/638 are a136840d lines, stale by 39); the scenario-summary copy sits at outputs.rs:221 ↔ run.rs:799 (register :197/:722, ticket :221/:762)",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "halves": null,
+      "supersededClaim": "the 2026-08 framing of a THREE-helper `_if_any` family, of a Python side with several entry points, and of the direction wording naming cobre-sddp as a candidate home; also the ticket's premise that the parity gate sees 4 of 17 writers (import-resolving since fc81427a, 18 shared names, floor 18)",
+      "survivingClaim": "the cross-crate hand-mirror is intact at 077dbe2c: write_training_outputs (outputs.rs:58) re-inlines the fpha/evaporation/deviation/echo/fixed-delivery writes (:95, :107, :119, :134, :138) that Python factors into five `_if_any` helpers (run.rs :594/614/636/658/675) reachable only from Study::train_native (study.rs:315); write_simulation_outputs (outputs.rs:178) and run_simulation_phase_py copy the scenario-summary reshape (:221 ↔ :799); 39 write_* call sites on the CLI run path against 23 in run.rs, 17 external writer names on each side (identical sets); the owner is still two, drift is caught by a golden test and the gate, not prevented",
+      "supersededWording": {
+        "old": "hoist the shared \"which outputs + guards\" helpers to a crate BOTH already depend on (cobre-sddp or cobre-io); the `_if_any` helpers prove the shape",
+        "oldAsQuotedByTicket": "hoist the shared output helpers to a crate BOTH already depend on (cobre-sddp or cobre-io)",
+        "registerLine": 917,
+        "reason": "the cobre-sddp half of the disjunction would home front-end output policy in an engine (L3); Part IV.1 places shared output orchestration at L2 (cobre-io), and Part III.7 / V.1 name that entry point as the Phase-0a deliverable — the wording is superseded, not replaced",
+        "newDestination": "cobre-io (L2)"
+      },
+      "restatedFixShape": "shared output-orchestration entry point in cobre-io (L2): ONE call-site list — which outputs, under which config/system guards — consumed by both the CLI and the Python bindings, taking the per-engine results value plus the config/system context it needs; CLI and Python both wire through it, the five `_if_any` helpers and the three CLI orchestrators collapse into it",
+      "phase0aRestatement": {
+        "artifact": "shared output-orchestration entry point",
+        "shape": "the CD-025 hoist IS the V.1 deliverable: the entry point lands first and alone against the existing SDDP engine with byte-identical output trees from both front ends; ED (the second engine) then wires its outputs through the standing entry point",
+        "guardrail": "the shared entry point names no engine and no paradigm — it takes a per-engine results value plus the config/system context (III.7); the Engine enum stays at L4 (cobre-cli / cobre-python, IV.4); cobre-io gains no dependency on an engine crate; no seam is stood up for a single hypothetical consumer (pull, don't push, V.0) — the second consumer is the existing Python binding, already live",
+        "byteNeutralityBar": "the CLI-vs-Python golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points, whole output tree value-for-value) + the file-set parity test (tests/test_cli_python_file_set_parity.py) + the import-resolving gate (scripts/ci/check_python_parity.py --min-shared 18); SDDP output bit-for-bit unchanged is the Phase-0a gate itself (V.1 Gate)",
+        "anchorOwner": "cli-python (S6a)"
+      },
+      "alignment": "advances-0a",
+      "alignmentCitation": "plans/generalizing/beyond-sddp-generalization.md V.1 Phase 0 deliverables — \"add the shared output-orchestration entry point in `cobre-io` (the re-specified results seam, III.7) and wire ED outputs in both CLI and Python through it (Python-parity from day one)\"; III.7 (the re-specified results seam: one shared output-orchestration entry point in cobre-io, per-engine results values)",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (shared output-orchestration entry point in cobre-io, outputs wired in both CLI and Python through it); Part III.7 (the re-specified results seam); Part IV.1 (L2 owns shared output orchestration)",
+        "argument": "closing CD-025 is not a cleanup that happens to help — the single call-site list in cobre-io is the named Phase-0a deliverable, and the Python-parity gate stops being a hard rule about two copies",
+        "guardrailBreach": null
+      },
+      "conflicts": [
+        {
+          "variant": "cobre-sddp home (orchestration at L3)",
+          "rule": "Part IV.1 — L2 cobre-io owns shared output orchestration; an engine owning the front ends' output policy means the second engine (cobre-direct, V.1) would route its outputs through a sibling engine — trigger 2 of the layering brief §3 (engine-to-engine dependency) — or duplicate the list again",
+          "tag": "conflicts",
+          "presentedAsDirection": false
+        },
+        {
+          "variant": "cobre-cli-local helper (keeps the double-mirror)",
+          "rule": "Part IV.1 — L2 cobre-io owns 'shared output orchestration'; forbidden at L2: 'an engine-specific output tree hard-wired in the CLI instead of orchestrated here'; a helper in cobre-cli is unreachable from cobre-python, so the hand-mirror and the parity hard rule survive unchanged",
+          "tag": "conflicts",
+          "presentedAsDirection": false
+        }
+      ],
+      "partIRef": "I.5",
+      "evidence": {
+        "cliOrchestrators": [
+          "crates/cobre-cli/src/commands/run/outputs.rs:58 write_training_outputs",
+          "crates/cobre-cli/src/commands/run/outputs.rs:178 write_simulation_outputs",
+          "crates/cobre-cli/src/commands/run/simulation.rs:220 write_sim_outputs_on_root"
+        ],
+        "pythonHelpers": [
+          "crates/cobre-python/src/run.rs:532 write_training_artifacts",
+          "crates/cobre-python/src/run.rs:594 write_fpha_hyperplanes_if_any",
+          "crates/cobre-python/src/run.rs:614 write_evaporation_models_if_any",
+          "crates/cobre-python/src/run.rs:636 write_generic_constraint_echo_if_any",
+          "crates/cobre-python/src/run.rs:658 write_fixed_delivery_if_any",
+          "crates/cobre-python/src/run.rs:675 write_fpha_deviation_points_if_any"
+        ],
+        "pythonCallers": [
+          "crates/cobre-python/src/study.rs:359",
+          "crates/cobre-python/src/study.rs:369",
+          "crates/cobre-python/src/study.rs:370",
+          "crates/cobre-python/src/study.rs:371",
+          "crates/cobre-python/src/study.rs:372",
+          "crates/cobre-python/src/study.rs:373"
+        ],
+        "writeCallCounts": {
+          "cliRunPath": 39,
+          "pythonRunRs": 23,
+          "ticket": {
+            "cliRunPath": 41,
+            "pythonRunRs": 29
+          }
+        },
+        "writerBoundary": "inventory.json → writerBoundary (17/17 identical external names; CLI 13/3/1)",
+        "detection": [
+          "crates/cobre-python/tests/test_cli_python_determinism_parity.py (golden, examples/1dtoy through both entry points)",
+          "crates/cobre-python/tests/test_cli_python_file_set_parity.py (output-path set equality)",
+          "scripts/ci/check_python_parity.py --max 0 --root . (import-resolving, 18 shared names, --min-shared 18)",
+          "crates/cobre-cli/tests/python_parity_check.rs"
+        ],
+        "commits": {
+          "cliPythonPlan": "fc81427a 2026-09-17 feat(python): align the cobre-python bindings with the CLI run path … 24e76cdb 2026-09-17 fix: close the plan's follow-ups on setup timings, manifest URLs and summary tests",
+          "bindingsCleanup": "755f1943 2026-09-17 refactor(python): epic-boundary cleanup of the bindings crate"
+        }
+      },
+      "needsHuman": [],
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:cli-python-output-orchestration-hand-mirror",
+          "corpus": "mirror (deferred-debt entry `#### CLI/Python output orchestration hand-mirror`, docs/design/reserved-seams-and-deferred-debt.md:587 at the pin)",
+          "kind": "same-entry",
+          "justification": "CD-025 IS that mirror entry's register id; the sharpen re-anchors the entry, it does not re-raise a retired item"
+        }
+      ],
+      "notes": "OWNER-AGREED in the register; Wave 5 ('Output single owner'). The 2026-09-17 Note already narrows the Python side to one internal owner; this pass records the pin lines and the L2 destination."
+    },
+    {
+      "id": "CD-029",
+      "wave": 5,
+      "registerId": "CD-029",
+      "registerLine": 1244,
+      "priorTitle": "`PrepPhase` doc claims four SDDP preparation steps over a three-variant enum; the real 4th step — boundary-cut reconciliation — bypasses PrepPhase/prep_phase_metadata (cobre-cli validate.rs) and has zero equivalent in cobre-python/src/io.rs",
+      "recordedSeverity": "B",
+      "reverifiedSeverity": "B",
+      "originalRatingKept": true,
+      "priorAnchor": {
+        "raw": [
+          "validate_phases.rs:20",
+          "cobre-cli/.../commands/validate.rs:255-287",
+          "cobre-python/src/io.rs (grep-confirmed: no boundary references)",
+          "Status 2026-09-17: cobre-python/src/io.rs:167; validate_phases.rs:33 / :20"
+        ],
+        "note": "provenance only — the register's own line anchors; never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/validate_phases.rs",
+        "symbol": "PrepPhase"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "symbol": "PrepPhase"
+        },
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "symbol": "prep_phase_metadata"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "format_boundary_error"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "reconcile_boundary"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_boundary_check"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "reconcile_boundary_policy"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "new_with_boundary_requirements"
+        },
+        {
+          "path": "crates/cobre-sddp/src/policy/policy_load.rs",
+          "symbol": "load_boundary_cuts"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "anchorDrift": [
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "symbol": "PrepPhase",
+          "recordedLine": 33,
+          "ticketLine": 33,
+          "baselineLine": 33,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-sddp/src/validate_phases.rs | grep -n 'pub enum PrepPhase'",
+          "status": "resolved"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "format_boundary_error",
+          "recordedLine": null,
+          "ticketLine": 169,
+          "baselineLine": 204,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'fn format_boundary_error'",
+          "status": "drifted (ticket)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "reconcile_boundary",
+          "recordedLine": null,
+          "ticketLine": 186,
+          "baselineLine": 219,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'fn reconcile_boundary'",
+          "status": "drifted (ticket)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_boundary_check",
+          "recordedLine": 255,
+          "ticketLine": 256,
+          "baselineLine": 283,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'fn run_boundary_check'",
+          "status": "drifted (the register's :255-287 block)"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "reconcile_boundary_policy",
+          "recordedLine": null,
+          "ticketLine": null,
+          "baselineLine": 1192,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn reconcile_boundary_policy'",
+          "status": "new since fc81427a"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "line": 20,
+          "needle": "one of the four SDDP preparation steps",
+          "what": "the prose still says four"
+        },
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "lines": [
+            25,
+            26,
+            27
+          ],
+          "needle": "/// | [`",
+          "what": "the doc table lists exactly three rows"
+        },
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "lines": [
+            35,
+            37,
+            39
+          ],
+          "needles": [
+            "Config,",
+            "Stochastic,",
+            "HydroModels,"
+          ],
+          "what": "the three enum variants Config / Stochastic / HydroModels"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "line": 234,
+          "needle": "StudySetup::new_with_boundary_requirements(",
+          "ticketLine": 202,
+          "what": "the CLI boundary path builds the StudySetup outside PrepPhase"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "lines": [
+            387,
+            413,
+            422
+          ],
+          "needle": "PrepPhase::",
+          "ticketLines": [
+            370,
+            401,
+            416
+          ],
+          "what": "the three phases PrepPhase covers in validate.rs"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "line": 167,
+          "needle": "11. Boundary reconciliation",
+          "what": "the Python validator's phase 11 (doc)"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "line": 306,
+          "needle": "StudySetup::new_with_boundary_requirements(",
+          "what": "the Python boundary path builds the StudySetup outside PrepPhase"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "line": 322,
+          "needle": "reconcile_boundary_policy(&setup",
+          "what": "the Python validator calls its own reconciler"
+        }
+      ],
+      "staleAnchorNote": "validate.rs moved by +35 since a136840d (format_boundary_error :169 → :204, reconcile_boundary :186 → :219, new_with_boundary_requirements :202 → :234, PrepPhase:: uses :370/:401/:416 → :387/413/422); validate_phases.rs is unmoved (:20 prose, :33 enum)",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "halves": [
+        {
+          "half": "doc-drift",
+          "status": "partly retired",
+          "measured": "the doc table (crates/cobre-sddp/src/validate_phases.rs:25-27) lists exactly three rows matching the three variants (:35/37/39); the prose one paragraph above (:20) still says 'one of the four SDDP preparation steps'",
+          "command": "git show 077dbe2c:crates/cobre-sddp/src/validate_phases.rs | sed -n '18,40p'"
+        },
+        {
+          "half": "boundary-bypass",
+          "status": "stands — and is now duplicated",
+          "measured": "boundary reconciliation runs outside PrepPhase / prep_phase_metadata in BOTH front ends: cobre-cli validate.rs::reconcile_boundary (:219, with its own format_boundary_error :204, driven by run_boundary_check :283) and cobre-python run.rs::reconcile_boundary_policy (:1192, driven by io.rs:322); the two bodies share every step (state_dimension cast → terminal manifest → fixed windows → study_horizon_end → season manifest → load_boundary_cuts with the same four builders) and no shared owner — no PrepPhase::Boundary variant exists",
+          "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '219,283p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '1192,1242p'",
+          "sharedSteps": [
+            "state_dimension as u32",
+            "build_terminal_entity_manifest(system)",
+            "build_terminal_fixed_post_horizon_windows(system)",
+            "study_horizon_end(system)",
+            "build_season_manifest(system)",
+            "load_boundary_cuts(",
+            "with_fixed_windows(&fixed_windows)",
+            "with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())",
+            "with_study_seasons(&study_seasons)",
+            "with_strict(bp.strict)"
+          ]
+        },
+        {
+          "half": "python-parity",
+          "status": "fixed",
+          "resolvingCommit": "fc81427a",
+          "measured": "`cobre.io.validate` runs the boundary reconciliation as its phase 11 (io.rs:167 doc, :306-325 code); grep -c boundary over crates/cobre-python/src/io.rs returns 14, not the 0 the register and the ticket recorded",
+          "command": "git show 077dbe2c:crates/cobre-python/src/io.rs | grep -c boundary",
+          "closingCommit": "fc81427a 2026-09-17 feat(python): align the cobre-python bindings with the CLI run path"
+        }
+      ],
+      "supersededClaim": "the Python-parity half ('zero equivalent in cobre-python/src/io.rs', ticket AC: grep -c boundary returns 0) — fixed by fc81427a, the binding validator reconciles the boundary as phase 11; and the doc-drift half's table (now three rows)",
+      "survivingClaim": "PrepPhase's prose (validate_phases.rs:20) still claims four preparation steps over a three-row table and a three-variant enum, and the fourth step — boundary reconciliation — still bypasses PrepPhase / prep_phase_metadata in both front ends; since fc81427a it does so through two hand-mirrored copies (validate.rs::reconcile_boundary :219 and cobre-python run.rs::reconcile_boundary_policy :1192, same body, no shared owner), so the parity gap closed by extending the CD-025 shape to the validation path",
+      "supersededWording": null,
+      "restatedFixShape": "fold the boundary check into PrepPhase in cobre-sddp (L3) as its fourth phase — ONE engine-owned reconcile function that both front ends call and that prep_phase_metadata classifies — and correct the prose to match the variant count; the two front-end copies collapse into that single owner",
+      "phase0aRestatement": {
+        "artifact": "engine-owned preparation phases",
+        "shape": "PrepPhase is the engine's preparation-phase vocabulary the seam dispatches per engine (IV.4: the seam covers validate, not only run); a complete, single-owner phase list in cobre-sddp is what an engine-tagged setup stage can be tagged against, and the boundary admission (a checkpoint the study cannot load is a rejection, never a silent ignore) is the same admission-gate discipline V.1 names",
+        "guardrail": "PrepPhase and the reconcile owner stay in cobre-sddp (L3): every helper the reconciliation calls — load_boundary_cuts, BoundaryLoadRequest, resolve_boundary_state_requirements (policy/policy_load.rs), build_season_manifest (policy/orchestration.rs), study_horizon_end and StudySetup::new_with_boundary_requirements (setup/mod.rs), build_terminal_entity_manifest (setup/accessors.rs) — already lives there; nothing engine-shaped moves to L0-L2; the Engine enum stays at L4",
+        "byteNeutralityBar": "cobre validate and cobre.io.validate reject and accept the same boundary configurations (the register's own parity statement), the boundary fixture tests under crates/cobre-sddp/tests/right_boundary_*.rs and the Python validator tests; no solve output changes (validation only)",
+        "anchorOwner": "cli-python (S6b validate.rs half; S6c io.rs half) — the PrepPhase enum itself is a cobre-sddp declaration cited as context"
+      },
+      "alignment": "advances-0a",
+      "alignmentCitation": "plans/generalizing/beyond-sddp-generalization.md V.1 Phase 0 (the seam 'covers the full command surface — validate … SDDP-shaped today (I.5)'; engine-tagged setup stages; the typed admission gate: 'an admission-gate rejection, not a silent ignore'); IV.4",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the seam covers validate; engine-tagged setup stages; admission-gate rejection, never a silent ignore); Part IV.4 (the engine-selection seam)",
+        "argument": "a single engine-owned phase list with the boundary admission inside it is the preparation surface the per-engine dispatch of validate tags against; the two front ends stop carrying copies of engine logic",
+        "guardrailBreach": null
+      },
+      "conflicts": [
+        {
+          "variant": "cobre-io home for the boundary reconciliation",
+          "rule": "Part IV.1 — L2 forbids engine dispatch; the reconciliation is typed on cobre_sddp::StudySetup and calls cobre-sddp's policy loader, so an L2 home inverts the layering (cobre-io depending on an engine crate)",
+          "tag": "conflicts",
+          "presentedAsDirection": false
+        },
+        {
+          "variant": "keep two front-end copies (cli-local fold into run_boundary_check, Python keeps reconcile_boundary_policy)",
+          "rule": "Part IV.1 / III.7 — the hand-mirrored call-site list is the duplication mechanism the roadmap names for outputs; the same shape on the validation path keeps two owners of engine logic in L4",
+          "tag": "conflicts",
+          "presentedAsDirection": false
+        }
+      ],
+      "partIRef": "I.5",
+      "evidence": {
+        "prepPhaseDoc": [
+          "crates/cobre-sddp/src/validate_phases.rs:20 prose 'four'",
+          "crates/cobre-sddp/src/validate_phases.rs:25 table row",
+          "crates/cobre-sddp/src/validate_phases.rs:26 table row",
+          "crates/cobre-sddp/src/validate_phases.rs:27 table row",
+          "crates/cobre-sddp/src/validate_phases.rs:35 variant",
+          "crates/cobre-sddp/src/validate_phases.rs:37 variant",
+          "crates/cobre-sddp/src/validate_phases.rs:39 variant"
+        ],
+        "cliBypass": [
+          "crates/cobre-cli/src/commands/validate.rs:204 format_boundary_error",
+          "crates/cobre-cli/src/commands/validate.rs:219 reconcile_boundary",
+          "crates/cobre-cli/src/commands/validate.rs:234 StudySetup::new_with_boundary_requirements",
+          "crates/cobre-cli/src/commands/validate.rs:283 run_boundary_check",
+          "crates/cobre-cli/src/commands/validate.rs:387 PrepPhase::",
+          "crates/cobre-cli/src/commands/validate.rs:413 PrepPhase::",
+          "crates/cobre-cli/src/commands/validate.rs:422 PrepPhase::"
+        ],
+        "pythonCopy": [
+          "crates/cobre-python/src/run.rs:1192 reconcile_boundary_policy",
+          "crates/cobre-python/src/io.rs:167 phase 11 doc",
+          "crates/cobre-python/src/io.rs:306 new_with_boundary_requirements",
+          "crates/cobre-python/src/io.rs:322 reconcile call"
+        ],
+        "ioBoundaryCount": {
+          "ticket": 0,
+          "register2026-08": 0,
+          "baseline": 14
+        },
+        "helperOwners": {
+          "load_boundary_cuts": "crates/cobre-sddp/src/policy/policy_load.rs",
+          "BoundaryLoadRequest": "crates/cobre-sddp/src/policy/policy_load.rs",
+          "resolve_boundary_state_requirements": "crates/cobre-sddp/src/policy/policy_load.rs",
+          "build_season_manifest": "crates/cobre-sddp/src/policy/orchestration.rs",
+          "study_horizon_end": "crates/cobre-sddp/src/setup/mod.rs",
+          "build_terminal_entity_manifest": "crates/cobre-sddp/src/setup/accessors.rs",
+          "new_with_boundary_requirements": "crates/cobre-sddp/src/setup/mod.rs"
+        },
+        "closingCommitParityHalf": "fc81427a 2026-09-17 feat(python): align the cobre-python bindings with the CLI run path"
+      },
+      "needsHuman": [
+        {
+          "question": "The ticket (description + step 3) restates BOTH Wave-5 fix-shapes with destination = the shared output-orchestration entry point in cobre-io. CD-029's measured shape is a validation phase over cobre_sddp::StudySetup whose helpers all live in cobre-sddp, and the register's own fix is 'fold into PrepPhase' (a cobre-sddp enum). This record names cobre-sddp PrepPhase (L3) as the fold destination and tags a cobre-io home `conflicts`. Confirm, or override to cobre-io with a dated Owner-override line.",
+          "recommended": "confirm cobre-sddp PrepPhase (L3) — output orchestration (L2 rule) does not cover a validation phase",
+          "forGate": "E06-8"
+        },
+        {
+          "question": "Severity: the parity half is fixed, but the bypass half now has two hand-mirrored copies (validate.rs::reconcile_boundary and run.rs::reconcile_boundary_policy). B is kept here; downgrade to C only if the gate treats the duplicated engine logic as local cleanup.",
+          "recommended": "keep B",
+          "forGate": "E06-8"
+        }
+      ],
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:post-lifecycle-walk-findings-fresh-pass-2026-08-18",
+          "corpus": "mirror (`### Post-lifecycle-walk findings (fresh pass, 2026-08-18)`, docs/design/reserved-seams-and-deferred-debt.md:743 at the pin; its PrepPhase bullet at :754-764 IS CD-029)",
+          "kind": "anchor-overlap",
+          "justification": "CD-029 is the finding that mirror section records (the PrepPhase four-vs-three doc and the boundary check bypassing PrepPhase / prep_phase_metadata); the sharpen re-anchors that entry at the pin and records its parity half as fixed — it does not re-raise a retired item"
+        }
+      ],
+      "notes": "Register Status (2026-09-17) already records the parity half FIXED and the abstraction half OPEN; this pass adds the measurement that the fix duplicated the reconciler across the two front ends."
+    },
+    {
+      "id": "CD-002",
+      "wave": 4,
+      "registerId": "CD-002",
+      "registerLine": 168,
+      "priorTitle": "Positional 10-tuple straddling three concerns in `broadcast_and_build_setup` (raw broadcast inputs + root-only pass-throughs + load_err) with a parallel `(None×10)` non-root arm and a `(None×9, Some(e))` error arm; direction: named `RootLoadArtifacts` struct, Option on non-root",
+      "recordedSeverity": "B",
+      "reverifiedSeverity": "C",
+      "originalRatingKept": false,
+      "severityNote": "the register header rates B (bad-abstraction); the register's own 2026-08-19 roadmap (BACKLOG L1616 'Local cleanups (Sev C, batchable): CD-002/…') and the E06 tickets treat it as C-tier local cleanup; the output side was already a named struct (LoadBroadcastResult, ff6d3313) at audit time, the fix is an S-effort named input struct with no wire change — proposed C, original B recorded for the gate's `downgrade` verb",
+      "priorAnchor": {
+        "raw": [
+          "run/setup.rs:262-327",
+          ":326 (None×10)",
+          ":312-323 error arm",
+          "2026-08-18/22 refresh: broadcast_and_build_setup:274"
+        ],
+        "note": "provenance only — the register's own line anchors; never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/run/setup.rs",
+        "symbol": "broadcast_and_build_setup"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "LoadBroadcastResult"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "load_case_and_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "reconstruct_stochastic_context_non_root"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "RootLoadArtifacts",
+          "why": "the proposed named struct; does not exist yet (expected)"
+        }
+      ],
+      "anchorDrift": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup",
+          "recordedLine": 262,
+          "ticketLine": 248,
+          "baselineLine": 246,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | grep -n 'fn broadcast_and_build_setup'",
+          "status": "drifted"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "LoadBroadcastResult",
+          "recordedLine": null,
+          "ticketLine": null,
+          "baselineLine": 151,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | grep -n 'struct LoadBroadcastResult'",
+          "status": "resolved — the named OUTPUT struct (since ff6d3313, before the audit); the register's claim is about the INPUT tuple"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "line": 253,
+          "needle": "let (",
+          "what": "the positional tuple opens; 10 slots (raw_system, raw_bcast_config, root_config, root_stochastic, root_estimation_report, root_estimation_path, raw_bcast_tree, root_hydro_models, raw_scalar_parameters, load_err)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "line": 263,
+          "needle": "load_err,",
+          "ticketLine": 265,
+          "what": "the tenth slot"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "lines": [
+            303,
+            313
+          ],
+          "needles": [
+            "Err(e) => (",
+            "Some(e),"
+          ],
+          "recordedLine": "312-323",
+          "what": "the (None×9, Some(e)) error arm"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "line": 317,
+          "needle": "(None, None, None, None, None, None, None, None, None, None)",
+          "recordedLine": 326,
+          "ticketLine": 319,
+          "what": "the non-root arm"
+        }
+      ],
+      "staleAnchorNote": "fn :262 → :246 (ticket :248); load_err :263 (ticket :265); (None×10) :326 → :317 (ticket :319); error arm :312-323 → :303-313; the tuple still has exactly 10 slots",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "halves": null,
+      "supersededClaim": "'Shrinks once CD-001 lands' — CD-001 landed (b051c410, retired at the sddp gate 2026-09-18) and the tuple did NOT shrink: the non-root reconstruction moved behind reconstruct_stochastic_context_non_root (:396) but every one of the 10 slots is still positional",
+      "survivingClaim": "broadcast_and_build_setup (setup.rs:246) destructures a positional 10-tuple (:253-263: raw_system, raw_bcast_config, root_config, root_stochastic, root_estimation_report, root_estimation_path, raw_bcast_tree, root_hydro_models, raw_scalar_parameters, load_err) with a `(None×9, Some(e))` error arm (:303-313) and a `(None×10)` non-root arm (:317); a field add still edits three positional arms with no compiler help on ordering; the OUTPUT is already the named LoadBroadcastResult (:151) — only the input side is unnamed",
+      "supersededWording": null,
+      "restatedFixShape": "named input struct (`RootLoadArtifacts`, Option on non-root) replacing the three positional arms — a cobre-cli-local constructor-side change; the carrier's Phase-0a shape (which slots survive) is owned by the Wave-4 restatements: CD-004's single Config projection collapses the raw_bcast_config + root_config pair and D14 rank-0-executes (CD-003 restatement, sddp station) decides what non-roots receive at all",
+      "waveDependency": {
+        "wave": 4,
+        "registerRow": "BACKLOG L1929 — Wave 4 'Setup lifecycle redesign: … + CD-002; CD-024-successor seam activates or dies here'",
+        "note": "Wave 4 (plan greenlit 2026-08-22, BACKLOG L1916 '+ CD-002 shrink') would erase part of this shape: the CD-004 single projection removes the raw_bcast_config / root_config slot pair and the rank-0-executes MPI semantics (D14) change what the non-root arm carries. Attackers may sharpen the tuple's contents; they must not propose a second carrier or a tuple redesign that pre-empts the Wave-4 plan",
+        "crossRef": "stations/sddp/wave-dispositions.json → CD-003-construction-hop.phase0aRestatement (anchorOwner: cli-python) and CD-004"
+      },
+      "phase0aRestatement": null,
+      "alignment": "neutral",
+      "alignmentCitation": "plans/generalizing/beyond-sddp-generalization.md IV.4 (the setup stage is rank-collective; D14 rank-0-executes is the Phase-0a deliverable and is owned by the sddp restatements of CD-003/CD-004) — naming the CLI's local load tuple advances no phase and conflicts with none",
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.4 (rank-collective setup stage; the D14 shape is owned by CD-003-construction-hop / CD-004 restatements)",
+        "argument": "a constructor-side naming fix inside cobre-cli; no layer, seam or phase moves",
+        "guardrailBreach": null
+      },
+      "conflicts": [],
+      "partIRef": null,
+      "evidence": {
+        "tupleSlots": [
+          "raw_system",
+          "raw_bcast_config",
+          "root_config",
+          "root_stochastic",
+          "root_estimation_report",
+          "root_estimation_path",
+          "raw_bcast_tree",
+          "root_hydro_models",
+          "raw_scalar_parameters",
+          "load_err"
+        ],
+        "arms": {
+          "root": "crates/cobre-cli/src/commands/run/setup.rs:265-302",
+          "error": "crates/cobre-cli/src/commands/run/setup.rs:303-313",
+          "nonRoot": "crates/cobre-cli/src/commands/run/setup.rs:317"
+        },
+        "namedOutput": "crates/cobre-cli/src/commands/run/setup.rs:151 LoadBroadcastResult (introduced ff6d3313 2026-06-12 refactor(cobre-cli,cobre-sddp,cobre-io,cobre-stochastic): epic-04 structural splits)",
+        "cd001Closed": "b051c410 2026-08-22 refactor(sddp,cli): own the non-root stochastic-context rebuild in cobre-sddp",
+        "positiveContrast": [
+          "crates/cobre-cli/src/commands/run/setup.rs:468 run_pre_training",
+          "crates/cobre-cli/src/commands/run/setup.rs:525 run_root_exports"
+        ]
+      },
+      "needsHuman": [
+        {
+          "question": "Proposed downgrade B → C (register header B; register's own 2026-08-19 tiering lists CD-002 under 'Local cleanups (Sev C, batchable)'). Ratify the downgrade or keep B.",
+          "recommended": "downgrade to C",
+          "forGate": "E06-8"
+        }
+      ],
+      "retiredOverlaps": [],
+      "notes": "The CD-004 wire twin (Config → BroadcastConfig projection) is the sddp station's, ratified 2026-09-18; BroadcastConfig is cited here only as the tuple's second slot type."
+    },
+    {
+      "id": "CD-009",
+      "wave": 7,
+      "registerId": "CD-009",
+      "registerLine": 312,
+      "priorTitle": "The `policy_dir` resolve + `!exists()` guard is repeated 3× (WarmStart, Resume, load_policy_for_simulation), differing only in the trailing 'cannot X without Y' clause; direction: extract `resolve_policy_dir(ctx, setup, missing_hint) -> Result<PathBuf>`",
+      "recordedSeverity": "C",
+      "reverifiedSeverity": "C",
+      "originalRatingKept": true,
+      "priorAnchor": {
+        "raw": [
+          "run/policy.rs:151",
+          ":180",
+          ":273",
+          "2026-08-18 refresh: :167/:196/:317",
+          "2026-08-22 refresh: :167-176+",
+          "2026-09-17 reconciliation: :173/:202/:335"
+        ],
+        "note": "provenance only — the register's own line anchors; never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/run/policy.rs",
+        "symbol": "load_policy_for_simulation"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "load_policy_for_simulation"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "apply_training_policy"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "resolve_policy_dir",
+          "why": "the proposed extraction; does not exist yet (expected)"
+        }
+      ],
+      "anchorDrift": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "load_policy_for_simulation",
+          "recordedLine": null,
+          "ticketLine": null,
+          "baselineLine": 323,
+          "resolvedBy": "git show 077dbe2c:crates/cobre-cli/src/commands/run/policy.rs | grep -n 'fn load_policy_for_simulation'",
+          "status": "resolved"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "lines": [
+            172,
+            201,
+            334
+          ],
+          "needle": "let policy_dir = ctx.output_dir.join(&setup.policy_path);",
+          "recordedLines": [
+            151,
+            180,
+            273
+          ],
+          "ticketLines": [
+            167,
+            196,
+            316
+          ],
+          "what": "the three resolve sites (WarmStart arm :171, Resume arm :200, load_policy_for_simulation :323)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "lines": [
+            173,
+            202,
+            335
+          ],
+          "needle": "if !policy_dir.exists() {",
+          "what": "the three guards; the 2026-09-17 reconciliation's :173/:202/:335 are these lines"
+        }
+      ],
+      "staleAnchorNote": "register :151/:180/:273 → :172/201/334 (ticket :167/:196/:316 — a136840d lines, stale by 5/5/18); still exactly three sites",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "halves": null,
+      "supersededClaim": "only the line anchors — the register cites the 2026-08 lines and the ticket the a136840d lines; the shape is unchanged",
+      "survivingClaim": "the resolve + `!exists()` guard is repeated exactly three times at policy.rs:172/201/334 (WarmStart :171, Resume :200, load_policy_for_simulation :323) and differs only in the trailing hint — 'Cannot warm-start without a prior policy.' / 'Cannot resume without a prior checkpoint.' / 'Cannot run simulation-only mode without a trained policy.'",
+      "supersededWording": null,
+      "restatedFixShape": "cobre-cli-local `resolve_policy_dir(ctx, setup, missing_hint) -> Result<PathBuf, CliError>` — a path helper, not output orchestration: the S6a L2 destination rule does not apply and no `conflicts` variant exists; the WarmStart/Resume match arms stay separate (the register's own call)",
+      "phase0aRestatement": null,
+      "alignment": "neutral",
+      "alignmentCitation": "plans/generalizing/beyond-sddp-generalization.md IV.4 — policy load is L4 front-end plumbing over the engine's checkpoint reader; a local helper advances no phase",
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.4 (L4 owns the front-end plumbing around the engine)",
+        "argument": "a three-site path-resolution dedup inside cobre-cli; no layer, seam or phase moves",
+        "guardrailBreach": null
+      },
+      "conflicts": [],
+      "partIRef": null,
+      "evidence": {
+        "sites": [
+          "crates/cobre-cli/src/commands/run/policy.rs:172",
+          "crates/cobre-cli/src/commands/run/policy.rs:201",
+          "crates/cobre-cli/src/commands/run/policy.rs:334"
+        ],
+        "guards": [
+          "crates/cobre-cli/src/commands/run/policy.rs:173",
+          "crates/cobre-cli/src/commands/run/policy.rs:202",
+          "crates/cobre-cli/src/commands/run/policy.rs:335"
+        ],
+        "hints": [
+          "Cannot warm-start without a prior policy.",
+          "Cannot resume without a prior checkpoint.",
+          "Cannot run simulation-only mode without a trained policy."
+        ],
+        "waveRow": "BACKLOG L1935 — Wave 7 'C-tier batch: CD-007/009/…' (opportunistic)"
+      },
+      "needsHuman": [],
+      "retiredOverlaps": [],
+      "notes": "Re-anchor only. The 2026-09-17 post-plan reconciliation (BACKLOG L5649) already recorded 'OPEN, unchanged'."
+    }
+  ],
+  "existenceChecks": [],
+  "probes": {
+    "anchorProbe": {
+      "title": "WAVE ANCHOR PROBE — cli-python (2026-09, baseline)",
+      "command": "python3 plans/architecture-debt-audit/tools/check-anchors.py 'WAVE ANCHOR PROBE — cli-python (2026-09, baseline)' --register <stub> --baseline 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+      "exit": 0,
+      "lastLine": "checked 24 anchors, 0 failing",
+      "anchorsRendered": 24,
+      "renderRule": "one `**<register id> · probe · <envelope id>**` block per disposition, `- **Anchors:**` listing every {path, symbol} as `path::symbol`, `- **Baseline:**` the pin"
+    },
+    "reraiseProbe": {
+      "title": "WAVE RERAISE PROBE — cli-python (2026-09, baseline)",
+      "command": "python3 plans/architecture-debt-audit/tools/check-reraise.py 'WAVE RERAISE PROBE — cli-python (2026-09, baseline)' --register <stub> --baseline 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+      "exit": 0,
+      "lastLine": "checked 4 entries, 0 unjustified re-raise(s)",
+      "anchorsRendered": 24,
+      "renderRule": "the live (keep/sharpen) dispositions — all four here — each with its surviving claim as the title line and its retiredOverlaps rendered as the checker's `Re-raise-of:` justification"
+    }
+  },
+  "evidenceCommands": [
+    "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n 'fn write_training_outputs\\|fn write_simulation_outputs\\|write_scenario_summary('",
+    "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_training_artifacts\\|fn write_[a-z_]*_if_any\\|write_scenario_summary(\\|fn reconcile_boundary_policy'",
+    "git show 077dbe2c:crates/cobre-python/src/study.rs | grep -n 'fn train_native\\|_if_any(\\|write_training_artifacts('",
+    "git show 077dbe2c:crates/cobre-sddp/src/validate_phases.rs | sed -n '18,40p'",
+    "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'fn format_boundary_error\\|fn reconcile_boundary\\|fn run_boundary_check\\|new_with_boundary_requirements\\|PrepPhase::\\|StudyParams::from_config'",
+    "git show 077dbe2c:crates/cobre-python/src/io.rs | grep -c boundary",
+    "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | grep -n 'fn broadcast_and_build_setup\\|struct LoadBroadcastResult\\|load_err\\|(None, None, None, None, None, None, None, None, None, None)'",
+    "git show 077dbe2c:crates/cobre-cli/src/commands/run/policy.rs | grep -n 'let policy_dir = ctx.output_dir.join(&setup.policy_path);\\|if !policy_dir.exists()'"
+  ],
+  "ticketDeviations": [
+    {
+      "figure": "CD-025 write_training_artifacts line",
+      "ticket": 479,
+      "measured": 532,
+      "command": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_training_artifacts'"
+    },
+    {
+      "figure": "CD-025 *_if_any lines",
+      "ticket": [
+        555,
+        575,
+        598,
+        621,
+        638
+      ],
+      "measured": [
+        594,
+        614,
+        636,
+        658,
+        675
+      ],
+      "command": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'fn write_[a-z_]*_if_any'"
+    },
+    {
+      "figure": "CD-025 run.rs write_scenario_summary line",
+      "ticket": 762,
+      "measured": 799,
+      "command": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'write_scenario_summary('"
+    },
+    {
+      "figure": "CD-025 write_* call sites (cli run path / python run.rs)",
+      "ticket": [
+        41,
+        29
+      ],
+      "measured": [
+        39,
+        23
+      ],
+      "command": "git grep -o 'write_[a-z_0-9]*(' 077dbe2c -- 'crates/cobre-cli/src/commands/run/*.rs' | wc -l; git grep -o 'write_[a-z_0-9]*(' 077dbe2c -- crates/cobre-python/src/run.rs | wc -l"
+    },
+    {
+      "figure": "CD-029 validate.rs format_boundary_error / reconcile_boundary / new_with_boundary_requirements",
+      "ticket": [
+        169,
+        186,
+        202
+      ],
+      "measured": [
+        204,
+        219,
+        234
+      ],
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'fn format_boundary_error\\|fn reconcile_boundary\\|new_with_boundary_requirements'"
+    },
+    {
+      "figure": "CD-029 validate.rs PrepPhase:: uses",
+      "ticket": [
+        370,
+        401,
+        416
+      ],
+      "measured": [
+        387,
+        413,
+        422
+      ],
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'PrepPhase::'"
+    },
+    {
+      "figure": "CD-029 validate.rs StudyParams::from_config",
+      "ticket": 364,
+      "measured": 384,
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'StudyParams::from_config'"
+    },
+    {
+      "figure": "CD-029 grep -c boundary crates/cobre-python/src/io.rs (AC-3 premise)",
+      "ticket": 0,
+      "measured": 14,
+      "command": "git show 077dbe2c:crates/cobre-python/src/io.rs | grep -c boundary",
+      "note": "the Python-parity half was fixed by fc81427a 2026-09-17 feat(python): align the cobre-python bindings with the CLI run path; AC-3's 'returns 0' cannot hold at the pin — recorded as the parity half's closing evidence, disposition stays sharpen"
+    },
+    {
+      "figure": "CD-029 destination",
+      "ticket": "cobre-io shared output-orchestration entry point (ticket restates BOTH Wave-5 fix-shapes there)",
+      "measured": "cobre-sddp PrepPhase (L3) — the reconciliation and every helper it calls live in cobre-sddp; the L2 rule covers output orchestration only",
+      "command": "git grep -n 'pub fn load_boundary_cuts\\|pub struct BoundaryLoadRequest\\|pub fn resolve_boundary_state_requirements\\|pub fn build_season_manifest\\|pub fn study_horizon_end' 077dbe2c -- crates",
+      "note": "held as CD-029.needsHuman for the E06-8 gate, not silently applied"
+    },
+    {
+      "figure": "CD-002 broadcast_and_build_setup / load_err / (None×10) lines",
+      "ticket": [
+        248,
+        265,
+        319
+      ],
+      "measured": [
+        246,
+        263,
+        317
+      ],
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | grep -n 'fn broadcast_and_build_setup\\|load_err\\|(None, None, None, None, None, None, None, None, None, None)'"
+    },
+    {
+      "figure": "CD-009 policy_dir sites",
+      "ticket": [
+        167,
+        196,
+        316
+      ],
+      "measured": [
+        172,
+        201,
+        334
+      ],
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/policy.rs | grep -n 'let policy_dir = ctx.output_dir.join(&setup.policy_path);'"
+    },
+    {
+      "figure": "I.5 cobre_sddp:: occurrences / files / use lines",
+      "ticket": [
+        95,
+        11,
+        68
+      ],
+      "measured": [
+        97,
+        10,
+        70
+      ],
+      "command": "git grep -o 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l"
+    },
+    {
+      "figure": "item-7 run-path from_config call site (setup.rs)",
+      "ticket": 114,
+      "measured": 112,
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | grep -n 'BroadcastConfig::from_config'"
+    },
+    {
+      "figure": "I.5 validate/report/summary subcommands",
+      "ticket": "three SDDP-shaped subcommands",
+      "measured": "only validate exists — report and summary removed by 797ba443 2026-09-16 feat: remove the report and summary subcommands and their Python and cobre-io mirrors",
+      "command": "git ls-tree --name-only 077dbe2c -- crates/cobre-cli/src/commands"
+    },
+    {
+      "figure": "envelope: anchors[].line",
+      "ticket": "anchors carry recordedLine/baselineLine/line",
+      "measured": "anchors are {path, symbol} only (the station's anchor rule); line evidence lives in anchorDrift[] / spans[]",
+      "command": "-"
+    },
+    {
+      "figure": "AC-7 'gitignored plans/ paths'",
+      "ticket": "plans/ is gitignored",
+      "measured": "plans/ is TRACKED (git ls-files plans/ is non-empty); the read-only bar is 'no tracked file outside plans/ modified'",
+      "command": "git ls-files plans/architecture-debt-audit | head -1"
+    }
+  ]
+}

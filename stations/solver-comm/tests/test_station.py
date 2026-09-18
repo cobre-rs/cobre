@@ -1982,6 +1982,130 @@ class CalibrationTests(sc.StationCase):
         self.assertNotIn("**Decision:", gate)
 
 
+GENERIC_CHECKS = (
+    "check-anchors",
+    "check-reraise",
+    "fields-check",
+    "register",
+    "inventory-set-equality",
+    "infra-genericity",
+    "read-only-workspace",
+)
+STATION_CHECKS = (
+    "sanctioned-polarity",
+    "cut-sync-anchors",
+    "handoff-shape",
+    "blind-spot",
+    "read-only-workspace",
+)
+
+
+class SectionVerifyTests(sc.StationCase):
+    """Executable proof of the station verification (E04-6).
+
+    verify-station.sh runs this module, so nothing here may invoke it (recursion); the shared
+    verifier's seven checks are re-asserted directly and its rendered verification.md is read.
+    The station-specific verifier is invoked with --no-append so the test never rewrites the
+    committed report.
+    """
+
+    SLUG = "solver-comm"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.report = (
+            cls.station_dir().joinpath("verification.md").read_text(encoding="utf-8")
+        )
+
+    def test_three_harness_checkers_exit_zero_over_the_station_slug(self) -> None:
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            result = subprocess.run(
+                [sys.executable, str(sc.TOOLS / tool), self.SLUG],
+                capture_output=True,
+                text=True,
+                cwd=sc.REPO,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode, 0, f"{tool}: {result.stdout}{result.stderr}"
+            )
+
+    def test_no_tracked_file_modified(self) -> None:
+        self.assertEqual(sc.tracked_modifications(), [])
+
+    def test_inventory_module_set_equals_the_tree_at_the_baseline(self) -> None:
+        listed = {
+            f["path"] for f in sc.load_json(self.artifact("inventory.json"))["files"]
+        }
+        tree = self.tree()
+        actual = {p for root in SRC_ROOTS for p in tree.rs_files(root)}
+        self.assertEqual(
+            sorted(listed - actual), [], "listed but absent at the baseline"
+        )
+        self.assertEqual(
+            sorted(actual - listed), [], "present at the baseline but unlisted"
+        )
+        self.assertEqual(len(actual), 30)
+
+    def test_verify_handoffs_exits_zero(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(self.artifact("verify-handoffs.py")), "--no-append"],
+            capture_output=True,
+            text=True,
+            cwd=sc.REPO,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS (5/5 station-specific checks)", result.stdout)
+        for check in STATION_CHECKS:
+            self.assertRegex(result.stdout, rf"\| {check} \| .* \| 0 \| PASS \|")
+
+    def test_verification_report_carries_both_tables_all_passing(self) -> None:
+        self.assertIn(f"Station baseline: `{self.baseline()}`", self.report)
+        for i, check in enumerate(GENERIC_CHECKS, 1):
+            self.assertRegex(
+                self.report, rf"\| {i} \| {check} \| `[^`]+` \| 0 \| PASS \|"
+            )
+        self.assertIn(
+            "Test suite (`python3 -m unittest stations/solver-comm/tests/test_station.py`): PASS (exit 0)",
+            self.report,
+        )
+        self.assertIn("## Station-specific checks — solver-comm", self.report)
+        for check in STATION_CHECKS:
+            self.assertRegex(self.report, rf"\| {check} \| .* \| 0 \| PASS \|")
+        self.assertNotIn("| FAIL |", self.report)
+        self.assertIn("carried-in:", self.report)
+
+    def test_blind_spot_evidence_pair_holds(self) -> None:
+        gate = subprocess.run(
+            ["bash", "scripts/ci/check-infra-genericity.sh"],
+            capture_output=True,
+            text=True,
+            cwd=sc.REPO,
+            check=False,
+        )
+        self.assertEqual(
+            gate.returncode,
+            0,
+            "the genericity gate now reports a violation; the finding's premise broke",
+        )
+        freeze = self.tree().read_text("crates/cobre-solver/src/freeze.rs").splitlines()
+        cfg_test = next(
+            i + 1 for i, text in enumerate(freeze) if text.strip() == "#[cfg(test)]"
+        )
+        hits = [
+            i + 1
+            for i, text in enumerate(freeze)
+            if "cut_nz_per_col" in text and i + 1 < cfg_test
+        ]
+        self.assertEqual(cfg_test, 244)
+        self.assertEqual(
+            hits,
+            [22, 137, 138, 141, 188],
+            "cut_nz_per_col production hits moved or vanished",
+        )
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_modified(self) -> None:
         self.assertEqual(sc.tracked_modifications(), [])

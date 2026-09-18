@@ -158,13 +158,17 @@ def register_violations(
 def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
     """Every .rs path the inventory's frozen census names, once each.
 
-    Three census shapes are accepted so the verifier serves every station unchanged: a
+    Four census shapes are accepted so the verifier serves every station unchanged: a
     top-level `files[]` whose rows each carry a `path` (single- or multi-crate; wins when
-    present), and the multi-crate `crates{}.modules[]` shape (a `file` module is one .rs
-    path; a `directory` module contributes the .rs names in its `files[]`).
+    present), the nested `src.files[]` shape of a census split into src/ and tests/ roots
+    (the src rows are the module census; `src.root` names the tree root), and the
+    multi-crate `crates{}.modules[]` shape (a `file` module is one .rs path; a `directory`
+    module contributes the .rs names in its `files[]`).
     """
     if "files" in inventory:
         return [f["path"] for f in inventory["files"]]
+    if "files" in inventory.get("src", {}):
+        return [f["path"] for f in inventory["src"]["files"]]
     if "crates" in inventory:
         listed: list[str] = []
         for meta in inventory["crates"].values():
@@ -178,12 +182,14 @@ def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
                         if name.endswith(".rs")
                     ]
         return listed
-    raise KeyError("inventory carries neither `files` nor `crates`")
+    raise KeyError("inventory carries neither `files`, `src.files` nor `crates`")
 
 
 def crate_src_roots(inventory: dict[str, Any]) -> list[str]:
     if "crates" in inventory:
         return [f"crates/{crate}/src" for crate in inventory["crates"]]
+    if "root" in inventory.get("src", {}):
+        return [inventory["src"]["root"]]
     return [f"crates/{inventory['crate']}/src"]
 
 
@@ -314,13 +320,11 @@ def _cmd_genericity(root: pathlib.Path, handoff_path: pathlib.Path) -> int:
         ["bash", str(gate)], cwd=root, capture_output=True, text=True, check=False
     ).returncode
     handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
-    owns_item6 = any(d.get("partIRef") == "I.3-6" for d in handoff["dispositions"])
+    # A handoff lists its Part-I rows as `dispositions[]` or, for a single-item station, `entries[]`.
+    rows = handoff.get("dispositions") or handoff.get("entries") or []
+    owns_item6 = any(d.get("partIRef") == "I.3-6" for d in rows)
     disposition = next(
-        (
-            d.get("disposition")
-            for d in handoff["dispositions"]
-            if d.get("partIRef") == "I.3-6"
-        ),
+        (d.get("disposition") for d in rows if d.get("partIRef") == "I.3-6"),
         None,
     )
     broke = genericity_premises(

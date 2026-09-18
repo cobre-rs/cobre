@@ -21,6 +21,7 @@ from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "tools"))
 
+import station_verify  # noqa: E402
 from lib import backlog_parse  # noqa: E402
 from lib import station_checks as sc  # noqa: E402
 
@@ -1886,6 +1887,39 @@ class SectionVerifyTests(sc.StationCase):
 
     def test_no_tracked_file_modified(self) -> None:
         self.assertEqual(sc.tracked_modifications(), [])
+
+    def test_station_verify_subcommands_exit_zero_over_the_nested_census(self) -> None:
+        base = backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG))
+        cmds = {
+            "register": [str(sc.AUDIT), self.SLUG],
+            "inventory": [str(self.artifact("inventory.json")), str(sc.REPO)],
+            "genericity": [str(sc.REPO), str(self.artifact("partI-handoff.json"))],
+            "readonly": [str(sc.REPO), base],
+        }
+        for sub, args in cmds.items():
+            proc = subprocess.run(
+                [sys.executable, str(sc.TOOLS / "station_verify.py"), sub, *args],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                proc.returncode, 0, f"station_verify {sub}:\n{proc.stdout}{proc.stderr}"
+            )
+
+    def test_shared_tool_reconstructs_the_nested_census_and_its_root(self) -> None:
+        listed = station_verify.reconstruct_listed(self.inv)
+        roots = station_verify.crate_src_roots(self.inv)
+        self.assertEqual(roots, [SRC])
+        self.assertEqual(
+            sorted(listed), sorted(f["path"] for f in self.inv["src"]["files"])
+        )
+        tree = sorted(
+            station_verify.baseline_rs_files(sc.REPO, self.inv["baseline"], roots)
+        )
+        self.assertEqual(station_verify.inventory_diff(listed, tree), ([], []))
+        self.assertEqual(len(tree), self.inv["src"]["file_count"])
 
     def test_inventory_module_set_equals_the_tree_at_the_baseline(self) -> None:
         listed = [f["path"] for f in self.inv["src"]["files"]]

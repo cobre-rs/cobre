@@ -1099,7 +1099,11 @@ class CandidateEnvelopeTests(sc.StationCase):
             self.assertEqual(env["gate"]["kept"], len(env["candidates"]))
             self.assertEqual(env["gate"]["dropped"], len(env["dropped"]))
         matrix = section(self.log, "## Coverage matrix")
-        rows = [line for line in matrix.splitlines() if line.startswith("| ")]
+        rows = [
+            line
+            for line in matrix.splitlines()
+            if line.startswith("| ") and not line.startswith("| -")
+        ]
         self.assertEqual(len(rows), 5, "header + four lens rows")
         for line in rows[1:]:
             self.assertNotIn("pending", line)

@@ -1,0 +1,160 @@
+{
+  "station": "sddp",
+  "subStation": "5c",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "cell": "sddp/5c",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "Five public read-surface items on the stats and convergence types have no caller outside #[cfg(test)] code, and the buffer-size helper's documented job is done inline at the two sites it names",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/solver_stats.rs",
+          "symbol": "worker_opening_stats_buffer_size"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solver_stats.rs",
+          "symbol": "StageWorkerStatsBuffer"
+        },
+        {
+          "path": "crates/cobre-sddp/src/convergence/convergence.rs",
+          "symbol": "ci_95_half_width"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'StageWorkerStatsBuffer\\|worker_opening_stats_buffer_size' 077dbe2c -- crates/ | grep -v 'src/solver_stats.rs'; git grep -n -E '\\.(index|get|n_workers|n_slots)\\(' 077dbe2c -- crates/cobre-sddp/src/solver_stats.rs; git grep -n 'ci_95_half_width()' 077dbe2c -- crates/ | grep -v 'convergence/convergence.rs'",
+        "output": "077dbe2c:crates/cobre-sddp/benches/backward_stats_gather.rs:18:use cobre_sddp::solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer};\n077dbe2c:crates/cobre-sddp/benches/backward_stats_gather.rs:61:    let mut buf = StageWorkerStatsBuffer::new(n_workers, n_openings);\n077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs:41:        SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,\n077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs:212:    pub(crate) stage_worker_stats_buf: StageWorkerStatsBuffer,\n077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs:408:            stage_worker_stats_buf: StageWorkerStatsBuffer::new(n_workers_local, bwd_max_openings),\n(no line matches worker_opening_stats_buffer_size outside src/solver_stats.rs)\n077dbe2c:crates/cobre-sddp/src/solver_stats.rs:574:        let idx = self.index(worker_id, slot);\n077dbe2c:crates/cobre-sddp/src/solver_stats.rs:584:        let idx = self.index(worker_id, slot);\n077dbe2c:crates/cobre-sddp/src/solver_stats.rs:1162:        assert_eq!(buf.index(0, 0), 0);\n077dbe2c:crates/cobre-sddp/src/solver_stats.rs:1167:        assert_eq!(buf.n_workers(), 3);\n077dbe2c:crates/cobre-sddp/src/solver_stats.rs:1168:        assert_eq!(buf.n_slots(), 4);\n077dbe2c:crates/cobre-core/src/stats/welford.rs:114:            acc.sample_ci_95_half_width(),\n077dbe2c:crates/cobre-sddp/src/training/forward/stats_aggregation.rs:196:                    welford.sample_ci_95_half_width(),",
+        "reading": "Five public read-surface items have no caller outside #[cfg(test)] code (the test module in solver_stats.rs starts at line 615). (1) worker_opening_stats_buffer_size matches nothing outside its own file across crates/ (src, benches and every tests/ target); its two in-file callers are the unit tests. Its own doc says 'Use to preallocate MPI send/recv buffers at training setup', yet the two sites that do exactly that spell the product inline instead: backward_pass_state.rs:400 'n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE' and :1173 the allgatherv length debug_assert. (2) StageWorkerStatsBuffer::get has zero callers anywhere, including the unit tests. (3) n_workers and n_slots are called only at solver_stats.rs:1167-1168, inside the test module. (4) index is live internally (:574 in get, :584 in set) but its doc justifies the pub as 'pub so callers can do bulk slice arithmetic without re-deriving it' and no such caller exists in any crate. (5) ConvergenceMonitor::ci_95_half_width has no consumer: the only ci_95_half_width() calls outside convergence.rs are cobre-core's unrelated Welford accumulator method sample_ci_95_half_width, and the value production actually reads is the ForwardPassResult field (training/forward/mod.rs:105). Counter-signals checked and absent: none of the five carries #[allow(dead_code)], so none falls under the mirror's Symmetry-or-test-retention class (mirror :1272) and none appears in the OD-009 roster, which lists RuntimeHandles.export_states, RankDistribution.my_rank and ExchangeBuffers::new; grepping the mirror for solver_stats / StageWorkerStatsBuffer / worker_opening_stats returns one unrelated perf-note hit at :794, so no reserved-seam block covers them. The pub on the TYPE StageWorkerStatsBuffer is earned - benches/backward_stats_gather.rs:61 is an external crate and can only reach a pub item - but that bench exercises exactly new/reset/set/as_slice, the same four the production path uses, so it earns none of the four unused methods. NEW relative to OD-009: the pub-in-a-pub-mod form (lib.rs:44 'pub mod solver_stats', lib.rs:29 'pub mod convergence') makes rustc's dead_code lint unable to fire at all, so this instance class is invisible to the #[allow(dead_code)] census OD-009 was built from."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Narrow each item to its real reader rather than adding one. Delete StageWorkerStatsBuffer::get (no caller at all). Demote index to a private helper, since both real callers are the sibling get/set in the same impl, and drop the doc clause promising an external bulk-arithmetic caller that does not exist. Move the n_workers / n_slots and ci_95_half_width reads into the assertions that want them, or gate the accessors behind #[cfg(test)] - the cleaner form OD-009 already asks for, and the form the two conditional allows in this manifest already model (training/forward/enumerated.rs::expected_single_rank_solves under #[cfg_attr(not(debug_assertions), allow(dead_code))] and workspace/mod.rs under #[cfg_attr(not(test), allow(unused_imports))]). For worker_opening_stats_buffer_size, pick one owner: either call it at backward_pass_state.rs:400 and :1173 so the stride product has a single owner, or delete it and keep the inline product. Do not introduce a new trait, generic or seam for any of this - there is one production consumer, so per the pull-don't-push rule an abstraction here would trip conflicts-trigger 4. Byte-neutrality: every step is a visibility, deletion or call-site-substitution change on a telemetry path; no LP row, column, bound, dual or cut value is touched, so tests/parity.rs and tests/common/parity_hash.rs goldens, the tests/common/permute.rs rank-invariance harness and mpiexec -n 1 vs -n 2 all reproduce bit-for-bit and no golden moves. If the buffer-size helper is adopted at the two call sites, the substituted expression is the same product of the same three terms, so the allgatherv send/recv lengths are identical. No pinned contract is touched: this path is neither the cut pool, the Benders cut sign, column-bound state pinning, FPHA average storage, risk aggregation, the node-tag warm-start rule nor the policy-load path, and the mirror records the solver_stats roundtrip as telemetry-only at :794.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "OD-009",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "RankDistribution::actual_per_rank forwards to cobre_comm::per_rank_counts without deciding anything, for one caller, while re-taking a total the struct already stores",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/session/rank_distribution.rs",
+          "symbol": "actual_per_rank"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/rank_distribution.rs",
+          "symbol": "RankDistribution"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'actual_per_rank\\|per_rank_counts' 077dbe2c -- crates/cobre-sddp/src crates/cobre-comm/src | grep -v 'state_exchange.rs'; git grep -n 'num_total_forward_passes' 077dbe2c -- crates/cobre-sddp/src",
+        "output": "077dbe2c:crates/cobre-comm/src/lib.rs:83:pub fn per_rank_counts(total: usize, num_ranks: usize) -> Vec<usize> {\n077dbe2c:crates/cobre-sddp/src/cut/cut_sync.rs:182:        let per_rank_cuts = per_rank_counts(total_forward_passes, num_ranks);\n077dbe2c:crates/cobre-sddp/src/training/forward/stats_aggregation.rs:118:    let path_counts = per_rank_counts(total_forward_passes, num_ranks);\n077dbe2c:crates/cobre-sddp/src/training/session/mod.rs:245:        let actual_per_rank = ranks.actual_per_rank(total_forward_passes);\n077dbe2c:crates/cobre-sddp/src/training/session/rank_distribution.rs:60:    pub(crate) fn actual_per_rank(&self, total_forward_passes: usize) -> Vec<usize> {\n077dbe2c:crates/cobre-sddp/src/training/session/rank_distribution.rs:61:        cobre_comm::per_rank_counts(total_forward_passes, self.num_ranks)\n077dbe2c:crates/cobre-sddp/src/training/session/rank_distribution.rs:205:    fn rank_distribution_actual_per_rank_is_consistent_with_my_actual_fwd() {\n077dbe2c:crates/cobre-sddp/src/training/session/rank_distribution.rs:210:            let per_rank = rd.actual_per_rank(8);\n077dbe2c:crates/cobre-sddp/src/training/forward_pass_state.rs:116:            total_forward_passes: ranks.num_total_forward_passes,\n077dbe2c:crates/cobre-sddp/src/training/session/mod.rs:877:        let global_n = self.ranks.num_total_forward_passes;\n077dbe2c:crates/cobre-sddp/src/training/session/rank_distribution.rs:53:            num_total_forward_passes: total_forward_passes,",
+        "reading": "RankDistribution::actual_per_rank is a two-line method whose whole body forwards to cobre_comm::per_rank_counts with one field. It decides nothing: it neither validates, adapts, reorders nor reshapes the result. It has exactly one production caller (session/mod.rs:245) plus one unit test (:210), while the two sibling sites in this same crate that need the identical vector call the free function directly (cut/cut_sync.rs:182, training/forward/stats_aggregation.rs:118), so the codebase already prefers the unwrapped form 2 to 1. The wrapper also re-takes as a parameter a value the struct already stores: rank_distribution.rs:53 saves the same argument as num_total_forward_passes, a field read at forward_pass_state.rs:116 and session/mod.rs:877, so the method can silently be handed a total that disagrees with the my_actual_fwd / my_fwd_offset / max_local_fwd constants derived from it in new. Today the single caller passes the same total it passed to RankDistribution::new at session/mod.rs:171, so no live defect exists. Counter-signals checked and absent: no second implementation, no test-double seam (the unit test drives the real method), no layer boundary crossed, and no performance or reproducibility fence. Disjoint from OD-009: that row's claim is the #[allow(dead_code)] on the my_rank field of this same struct, and actual_per_rank is not in its reraiseKey symbol list."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the method and let session/mod.rs:245 call cobre_comm::per_rank_counts directly, matching the two sibling sites that already do. If a named owner on the struct is preferred, keep the method but drop the parameter and read self.num_total_forward_passes, so the vector and the per-rank constants cannot disagree by construction. Do not promote the split arithmetic into a new trait or type - cobre_comm::per_rank_counts is already the single owner, and a seam over one consumer would trip conflicts-trigger 4. Byte-neutrality: both variants evaluate the same base/remainder split over the same two inputs, because the sole call site already passes the value that new stored, so the returned Vec<usize> is element-wise identical and the ExchangeBuffers::with_actual_counts sizing it feeds is unchanged. This is rank-distribution arithmetic, so the bar is the one that binds it: mpiexec -n 1 vs -n 2 vs -n 4 must reproduce bit-for-bit, which tests/parity.rs already asserts by comparing 1-rank against 2-rank and 4-rank hashes, plus tests/common/parity_hash.rs and the tests/common/permute.rs rank-invariance harness; no golden moves. No pinned contract in .claude/rules/sddp.md governs rank distribution - the change touches none of the cut pool, the Benders cut sign, column-bound state pinning, FPHA average storage, risk aggregation, the node-tag warm-start rule or the policy-load path.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "relatedTo": [
+        {
+          "id": "OD-009",
+          "sharedSymbols": [
+            "RankDistribution"
+          ],
+          "titleJaccard": 0.03
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "Reserved-is-not-dead precondition, run first over the 5c manifest",
+      "why": "No candidate below rests on 'this item is unwired'. The four reserved-seam blocks were checked against every symbol I touch: LipschitzConfig.mode plus UpperBoundEvaluationConfig (mirror :54), the policy writer's second-family reserved slot body (splice_reserved_state_block, reserve_boundary_inflow_lag_slots, mirror :871), the anticipated post-study-commitment channel (mirror :871), and the Legacy (None) cost-scale branch in rescale_cut_records_for_load (register BACKLOG L2272, no mirror entry at the baseline). None sits in cut/, training/, solve/, workspace/, convergence/, gemm.rs, claim_scatter.rs or solver_stats.rs, so no reserved seam is raised as debt.",
+      "sanctionedBy": "CLAUDE.md 'Unwired config is reserved, not dead'; mirror :54 and :871; register BACKLOG L2272"
+    },
+    {
+      "subject": "Enum census over the 5c manifest: 10 production enums, zero one-variant enums",
+      "why": "Command: git grep -n -E '^\\s*(pub|pub\\(crate\\))? ?enum ' 077dbe2c -- crates/cobre-sddp/src/cut/ crates/cobre-sddp/src/training/ crates/cobre-sddp/src/solve/ crates/cobre-sddp/src/workspace/ crates/cobre-sddp/src/convergence/ crates/cobre-sddp/src/gemm.rs crates/cobre-sddp/src/claim_scatter.rs crates/cobre-sddp/src/solver_stats.rs. Twelve declarations, two of them test-only (rank_reconcile.rs Mode with 3 variants inside a #[cfg(test)] mod, training/training/tests.rs MockPayload). The ten production enums and their variant counts: RiskMeasure 2, StoppingMode 2, StoppingRule 5, CutSelectionStrategy 4, Phase 3, StageOpeningSolver 2, ForwardBound 3, IterationOutcome 3, LoadNoise 2, InflowNoise 2. No enum has a single variant, so the lens's one-variant trigger fires nowhere in this manifest. Reachability was checked for the two widest: all five StoppingRule variants are constructed from outside their own module and mirrored in the CLI broadcast enum, and all four CutSelectionStrategy variants are reachable from deck config through parse_cut_selection_config (cut_selection.rs:529, one arm per variant). CD-018 is therefore examined and NOT re-raised - it is the paradigm-conflation claim, and an unreached-variant claim would be a different and unsupported one.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "#[allow(...)] census over the 5c manifest: 245 openers across 45 files, and no candidate minted from it",
+      "why": "Raw count, reproducible: git grep -c -E '#!?\\[(cfg_attr\\([^)]*, *)?allow\\(' 077dbe2c -- <the eight 5c paths> | awk -F: '{s+=$NF} END{print \"files=\"NR, \"openers=\"s}' gives files=45 openers=245. Classified over all 58 manifest files by whether the site sits at or after the file's first #[cfg(test)] marker, and otherwise by whether any of the six preceding lines carries a comment or a debug_assert guard: 121 test-scoped, 73 production with an adjacent written rationale or guard, 51 bare. Of the 51 bare, 4 are in sibling test files (training/forward/tests.rs, training/training/tests.rs) that carry no in-file #[cfg(test)] marker, so 47 are genuinely production; 39 of them are clippy::cast_possible_truncation and 25 are concentrated in training/session/mod.rs. A strict search for the literal token 'Rationale' would report 214 absent, which is wrong: cut/pool.rs:182 carries '// Cast cannot truncate: SDDP runs only on 64-bit targets and capacity < usize::MAX' and cut/row.rs:29-33 puts a debug_assert on the i32 range immediately above the allow. Both numbers are reported so neither overstates the gap. No candidate is minted: the register clears an OD candidate that is only 'this allow exists', and OD-009 is the one owner-optional refinement of that class.",
+      "sanctionedBy": "mirror :1272 '### #[allow(...)] census'; register L139"
+    },
+    {
+      "subject": "gemm.rs earns its module",
+      "why": "165 lines, one pub(crate) fn gemm_block, and the module doc states the reason: it is the only call site in cobre-sddp for matrixmultiply::dgemm and it isolates the single unsafe block the cut-selection kernel needs so that call site stays in safe code. CLAUDE.md's workspace rule is unsafe_code = 'forbid' with cobre-sddp overriding only for this dgemm call isolated in src/gemm.rs, so the module boundary is the mechanism the hard rule names. It also carries a // SAFETY: block and a # Determinism section - the performance-and-reproducibility fence that defeats an over-engineering claim.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "claim_scatter.rs earns its module",
+      "why": "89 lines holding two primitives, ClaimCursor and canonical_scatter, with three consumers outside the file: training/backward/by_node.rs:171 and :453, training/forward/enumerated.rs:545 and :596, simulation/enumerated.rs:311 and :340. The module doc says 'the crate's two dynamic parallel-region schedulers', which undercounts by one - a doc count drift, not over-engineering. The doc is also explicit about the boundary it refuses to cross: the claim-loop bodies and the scatter-item writes stay at each caller because their borrow shapes and per-item work differ. Three consumers is the opposite of speculative generality.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "solver_stats.rs earns its module, even though its public surface is over-wide",
+      "why": "1428 lines, 614 before the test module, one responsibility: the SolverStatsDelta value type plus the pack/unpack codec that moves it over MPI and into Parquet rows (pack_delta_scalars, pack_scenario_stats, pack_worker_opening_stats and their inverses, delta_to_stats_row, solver_stats_log_to_rows). The three stride constants and the delta type are consumed from cobre-cli and from three cobre-sddp modules, so the file is a real single owner rather than a shard. The verdict is yes on the module and no on part of its surface - the unused public read items are the candidate above, not an argument against the module.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "convergence/ earns its module",
+      "why": "2107 lines across three submodules, roughly 918 before their test modules: convergence.rs owns ConvergenceMonitor, stopping_rule.rs owns MonitorState, StoppingMode, StoppingRule, StoppingRuleSet and the five public rule-name constants, risk_measure.rs owns RiskMeasure, RiskMeasureScratch, BackwardOutcome and the CVaR weight kernels. Each submodule has substantial public surface and its own test module, so the directory is not a one-file wrapper. Whether risk-measure aggregation belongs under a directory named for convergence monitoring is a cohesion question the architecture lens owns; it is not raised here.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "solve/partition.rs earns its 24 lines",
+      "why": "One pub(crate) fn partition with five consumers: simulation/state.rs:50, training/backward/replicated.rs:30, training/forward_pass_state.rs:40, workspace/workspace.rs:20 and the solve/mod.rs re-export. The module doc states the reason a 24-line file exists - a single owner keeps the forward, backward and simulation splits bit-identical - which is a determinism fence, and five consumers make it earned rather than speculative.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "PhaseProfiles is a two-implementation trait, not a single-implementation seam",
+      "why": "solve/solver_phase.rs:92 declares the trait as three associated constants; solver_phase.rs:107 implements it for HighsProfile under #[cfg(feature = \"highs\")] and :169 for ClpProfile under the clp feature, and Cargo.toml:21 and :28 document both gates. Two real implementations selected at build time is the counter-signal that defeats a single-implementation-interface claim, and the associated-constant form avoids the forbidden Box<dyn Trait> entirely.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "The two conditionally-scoped allows in this manifest are already the cleaner form OD-009 asks for",
+      "why": "training/forward/enumerated.rs::expected_single_rank_solves carries #[cfg_attr(not(debug_assertions), allow(dead_code))] with the written reason that its only consumer is a debug_assert, so it is legitimately unused in a release build; workspace/mod.rs guards the BackwardAccumulators and ByNodeScratch re-export with #[cfg_attr(not(test), allow(unused_imports))] and says scoping the allow to cfg(not(test)) keeps the warning live should a non-test caller land. Both narrow the allow to the exact configuration where the item is unreachable instead of blanket-allowing it. These are exemplars to copy, not instances of the OD-009 debt.",
+      "sanctionedBy": "OD-009 (the cleaner form its claim names)"
+    },
+    {
+      "subject": "Constructor-only structs in this manifest are pre-allocated scratch and result holders, not degenerate objects",
+      "why": "Nine impl blocks expose only a constructor: RiskMeasureScratch::new, SolverStatsLogEntry::from_raw, LbEvalScratch::new, IterationScratch::new, TrainingResults::new, TrainingResult::new, BackwardAccumulators::new, SolverWorkspace::new and ScratchBuffers::new. Every one is a buffer or result bag whose fields are public and written directly at the call sites - RiskMeasureScratch exposes upper_bounds, order and mu; LbEvalScratch exposes objectives_buf and weights_buf, both documented as allocating nothing until first use. That is exactly the pre-allocate-and-reuse shape the never-allocate-on-hot-paths rule requires, so a missing behavioural method is the correct design here and none of the nine is a finding.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "The enumerated-sweep duplication has two present consumers, so extracting it is not a one-consumer abstraction",
+      "why": "The shared sweep orchestration lives in training/forward/enumerated.rs (run_enumerated_forward, enumerated_stage_worker) and simulation/enumerated.rs (run_sweep, enumerated_sim_stage_worker), and a third module, training/backward/by_node.rs, already consumes the shared claim and scatter primitives. Two present consumers satisfy pull-don't-push, so a de-duplication fix here does not trip the one-consumer conflicts trigger. Raised once and anchored in both files by rule 12 if it is raised at all; I have no new over-engineering evidence beyond the already-registered duplication, so I am not raising it - only recording that the over-engineering lens does not object to the extraction.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "Superseded cut-sync public methods are a sanctioned deferral, not a candidate",
+      "why": "sync_cuts, pack_local_records and sync_packed_records on CutSyncBuffers are superseded by sync_level_records but are held until the next licensed public-API break. They are cited here as sanctioned rather than emitted as over-engineering debt, and they arrive at this station as a dup-of handoff with no new id.",
+      "sanctionedBy": "CD-019 / mirror ':334 Superseded cut-sync public methods' (Wave 0 override, register L1995)"
+    }
+  ],
+  "_needsHuman": [
+    "Out-of-lens routing question, found while checking CutSelectionStrategy variant reachability and left as a candidate for no lens of mine: are the field doc comments on CutSelectionStrategy::Dynamic (cut/cut_selection.rs) deliberately the reverse of DcsParams, or is that drift the docs lens should own? The enum doc calls k2 'Maximum number of cuts added per lazy-solve round' and nadic 'Number of most-violated candidate cuts considered per round', while cut/dcs.rs:738-756 uses k2 as the seed-recency window and dcs.rs:335 uses nadic as the top-N truncation ('take = nadic.min(violated_count)'). The config mapping itself is correct - parse_cut_selection_config sends seed_window to k2 and max_added_per_round to nadic, matching cobre-io's own field docs - so only the two enum field comments disagree with the code. No behaviour is affected and I raise no candidate for it."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 2,
+    "kept": 2,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

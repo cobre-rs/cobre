@@ -1,0 +1,156 @@
+{
+  "station": "sddp",
+  "subStation": "5b",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "cell": "sddp/5b",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The incoming state-to-LP-column resolver is uncached on the per-solve pin path while its outgoing twin and the cut-extraction path both cache it",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/patch.rs",
+          "symbol": "fill_col_state_patches"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+          "symbol": "state_to_lp_incoming_column"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+          "symbol": "classify"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/patch.rs | sed -n '243,262p'; git show 077dbe2c:crates/cobre-sddp/src/lp/indexer/state_space.rs | sed -n '429,436p;489,499p;508,515p;540,543p'; git grep -n 'state_to_lp_incoming_column(' 077dbe2c -- crates/cobre-sddp/src/lp/builder/patch.rs crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs; git grep -n 'storage_incoming_col(\\|lag_incoming_col(\\|bucket_incoming_col(' 077dbe2c -- crates/cobre-sddp/src/simulation/extraction.rs",
+        "output": "    pub fn fill_col_state_patches(\n        &mut self,\n        state_layout: &StateSpace,\n        state: &[f64],\n        col_scale: &[f64],\n    ) {\n...\n        for (j, &sv) in state.iter().enumerate() {\n            let col = state_layout\n                .state_to_lp_incoming_column(StateDim::new(j))\n                .get();\n...\n    pub(crate) fn classify(&self, j: StateDim) -> (StateRegion, usize) {\n        let j = j.get();\n        let region = REGION_ORDER\n            .into_iter()\n            .find(|&region| self.state_dim_range(region).contains(&j))\n            .unwrap_or(StateRegion::CommitmentHold);\n        (region, j - self.state_dim_range(region).start)\n    }\n...\n    /// Fill [`Self::state_to_lp_column_map`] by calling\n    /// [`Self::state_to_lp_column`] for every `j` in `[0, n_state)` -- a pure cache\n    /// of the resolver, never a reimplementation of its arithmetic.\n    pub fn finalize_state_column_map(&mut self) {\n...\n    pub fn lp_column_for_state(&self, j: StateDim) -> OutCol {\n...\n        self.state_to_lp_column_map[j]\n...\n    pub fn state_to_lp_incoming_column(&self, j: StateDim) -> InCol {\n        let (region, offset) = self.classify(j);\n        InCol::new(self.incoming_block_start(region) + offset)\n    }\n...\ncrates/cobre-sddp/src/lp/builder/patch.rs:259:                .state_to_lp_incoming_column(StateDim::new(j))\ncrates/cobre-sddp/src/lp/indexer/cut_state_projection.rs:91:            incoming_columns.push(global.state_to_lp_incoming_column(g));\n...\ncrates/cobre-sddp/src/simulation/extraction.rs:376:            view.primal[state.bucket_incoming_col(b).get()]\ncrates/cobre-sddp/src/simulation/extraction.rs:920:        let storage_initial = view.primal[state.storage_incoming_col(h).get()];\ncrates/cobre-sddp/src/simulation/extraction.rs:924:            view.primal[state.lag_incoming_col(0, h).get()]\ncrates/cobre-sddp/src/simulation/extraction.rs:2065:                    inflow_m3s: view.primal[state.lag_incoming_col(l, h).get()],\n",
+        "reading": "patch.rs:259 calls state_to_lp_incoming_column once per state element inside fill_col_state_patches, and StageSolvePrep::run executes fill_col_state_patches on every solve on all four hot paths (forward solve/stage_solve.rs, backward training/backward/lp_setup.rs::patch_opening_bounds, simulation/pipeline.rs, training/lower_bound.rs). Each call runs classify(), a linear find over the four REGION_ORDER regions that reconstructs a Range<usize> per probe, then derives the offset with a second state_dim_range(region).start call; state_to_lp_incoming_column adds a third four-arm match (incoming_block_start). The outgoing twin does none of this at call time: state_to_lp_column_map is filled once by finalize_state_column_map and lp_column_for_state is a plain indexed read. The incoming direction ALREADY has this cache for the extraction path -- cut_state_projection.rs:91 fills the incoming_columns field once in CutStateProjection::new, whose field doc reads 'LP incoming column per cut slot (extraction hot path)'. So the pinning path is the only production consumer that re-resolves. Two further production consumers reach the same uncached resolver through the three StateSpace wrappers: simulation/extraction.rs at 376, 920, 924 and 2065 resolve a bucket, storage and lag column per entity on every extracted stage (all four are above that file's first #[cfg(test)] at 2156; extraction.rs is 5d and is cited here for frequency only, never anchored). The only other state_to_lp_incoming_column call sites in the crate are inside #[cfg(test)] regions (entries.rs:8892 with the file's first #[cfg(test)] at 1680, cut_state_projection.rs:359/683/928 above its 292 non-test lines, state_space.rs:967+ above its 729, duals_extraction.rs:151/173, test_support.rs)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the incoming direction the cache the outgoing direction already has: an incoming twin of state_to_lp_column_map on StateSpace, filled by an incoming twin of finalize_state_column_map that calls state_to_lp_incoming_column for every j in [0, n_state) -- a pure cache of the resolver, never a second copy of its arithmetic, which is the discipline finalize_state_column_map's own rustdoc already states -- and let fill_col_state_patches read it, with storage_incoming_col / lag_incoming_col / bucket_incoming_col following the same route so the simulation extraction path benefits without a second cache. The debug_assert on the finalized length that lp_column_for_state carries transfers unchanged. .claude/rules/sddp.md Sec. State pinning uses column bounds, not equality rows is untouched: the same incoming columns are pinned with the same column bounds, and the resolver remains the single authority for the arithmetic. Byte-neutral by construction -- every offset is a pure function of (N, L, B, A, k_max) as the state_space.rs module doc states, so a table lookup returns the identical column for every j and fill_col_state_patches emits identical col_indices / col_lower / col_upper; the parity goldens (tests/parity.rs, tests/common/parity_hash.rs), the rank-invariance harness (tests/common/permute.rs) and mpiexec -n 1 vs -n 2 all see byte-identical solver submissions and no golden moves. This station executes no measurement; the perf epic profiles it on its deck.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant per-element index recomputation on every solve: a four-region linear scan with a Range reconstruction per probe plus two further region-boundary derivations per state element, where a precomputed table already exists for the twin direction and for the extraction path",
+      "profiledSymbol": "PatchBuffer::fill_col_state_patches",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The backward per-opening prep recomputes and re-submits an opening-invariant column-bound state pin and an opening-invariant commitment relaxation once per opening",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/patch.rs",
+          "symbol": "fill_col_state_patches"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs",
+          "symbol": "fill_bound_relaxations"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/training/backward/replicated.rs | sed -n '141,144p'; git show 077dbe2c:crates/cobre-sddp/src/training/stage_solve_prep.rs | sed -n '127,131p;155,161p;230,242p'; git grep -n 'load_backward_lp(\\|patch_opening_bounds(' 077dbe2c -- crates/cobre-sddp/src/training/backward",
+        "output": "        for local_omega in local_start..local_end {\n            let raw_noise = tree_view.opening(s.0, local_omega);\n            patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s)?;\n...\n        patch_buf.fill_col_state_patches(\n            training_ctx.state,\n            pinned_state,\n            &ctx.template(stage).col_scale,\n        );\n...\n        let cp = patch_buf.state_col_patch_count();\n        solver.set_col_bounds(\n            &patch_buf.col_indices[..cp],\n            &patch_buf.col_lower[..cp],\n            &patch_buf.col_upper[..cp],\n        );\n...\n        fill_bound_relaxations(\n            &DeliveryPins {\n                state_layout: training_ctx.state,\n                pinned_state,\n                template: ctx.template(stage),\n                geometry,\n                anticipated_thermal_indices: &training_ctx.study_dims.anticipated_thermal_indices,\n                n_blks: ctx.block_count(stage),\n                stage_idx: stage.0,\n                n_stages: training_ctx.horizon.num_stages(),\n            },\n            &mut patch_buf.commitment_relax,\n        )?;\n...\ncrates/cobre-sddp/src/training/backward/by_node.rs:245:                    load_backward_lp(ws, &child);\ncrates/cobre-sddp/src/training/backward/by_node.rs:284:                        patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s)?;\ncrates/cobre-sddp/src/training/backward/by_scenario.rs:85:                load_backward_lp(ws, child);\ncrates/cobre-sddp/src/training/backward/by_scenario.rs:187:        patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s)?;\ncrates/cobre-sddp/src/training/backward/by_scenario.rs:305:        patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s)?;\ncrates/cobre-sddp/src/training/backward/replicated.rs:101:    super::lp_setup::load_backward_lp(ws, child);\ncrates/cobre-sddp/src/training/backward/replicated.rs:143:            patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s)?;\n",
+        "reading": "load_backward_lp runs once per child ('The LP structure is identical across a child's openings, so only bound patching runs per opening') and patch_opening_bounds runs once per opening with the SAME x_hat -- x_hat is loop-invariant in replicated.rs's opening loop and in the by_node.rs / by_scenario.rs loops, which is the whole per-opening entry point (load once at by_node.rs:245, by_scenario.rs:85, replicated.rs:101; patch at by_node.rs:284, by_scenario.rs:187 and :305, replicated.rs:143). patch_opening_bounds delegates to StageSolvePrep::run, which unconditionally re-runs fill_col_state_patches over pinned_state (= x_hat) and re-submits the result through solver.set_col_bounds, then re-runs fill_bound_relaxations, every one of whose eight DeliveryPins inputs is opening-invariant (state_layout, pinned_state, template, geometry, anticipated_thermal_indices, n_blks, stage_idx, n_stages) and whose result is re-submitted through a second set_col_bounds. The only genuinely per-opening work in that sequence is the transformed inflow/load noise driving the ROW patches and the NCS availability COLUMN patch. patch.rs's own rustdoc on fill_col_state_patches states the intended frequency in the opposite direction -- 'pin this once per stage-visit (the trial point / decision-driven state), never per opening ... (contrast with NCS availability, which patches per opening)' -- so the code re-pins per opening what its contract calls a per-stage-visit pin. This is a call-frequency claim about opening-invariant inputs; it is not CD-074's drift-classification claim about drift_margin's constants, and it proposes no change to that classification."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the opening-invariant work to per-child: fill and submit the column-bound state pin (fill_col_state_patches plus its set_col_bounds) and fill the commitment relaxation once alongside load_backward_lp, and narrow the per-opening entry point to what actually varies -- the row patches from the transformed inflow/load noise and the NCS availability column patch. All three backward drivers reach this through the single helper patch_opening_bounds, so the blast radius is that helper plus a parameterization of StageSolvePrep::run (a per-child prep and a per-opening prep), with no driver-by-driver edit. Three pinned contracts govern it. .claude/rules/sddp.md Sec. State pinning uses column bounds, not equality rows: the pin stays a column-bound pin at the same incoming columns and merely recovers the once-per-stage-visit identity patch.rs's rustdoc already declares. Sec. Lower-bound evaluation must patch NCS: the NCS patch stays per opening and must not be hoisted with it. And the ordering rule reconcile_commitments carries in its rustdoc -- it runs last because the template reload and the bound patches reset the columns it relaxes -- so the hoist is valid only if the hoisted relaxation still runs after every column submission that touches the anticipated columns it relaxes; at the pin the sole remaining per-opening column submission is the NCS patch, which addresses a different column family, and the fix must verify that disjointness rather than assume it. Byte-neutrality is asserted on the data and validated, not assumed on the solver: every bound value and index in force before each solve is unchanged, but the NUMBER of set_col_bounds calls the solver sees per opening changes, which is the same class of perturbation Sec. Backward opening order is warm-start-only describes for the warm-start chain (a differently-warmed solve may settle on a different-but-equally-valid vertex at a degenerate optimum, the divergence the Cobre determinism contract permits). The fix is therefore gated on the parity goldens (tests/parity.rs, tests/common/parity_hash.rs), the rank-invariance harness (tests/common/permute.rs) and mpiexec -n 1 vs -n 2, plus the opening_order_determinism gate in tests/mpi_wire.rs; if a golden moves, the baseline is the arbiter and the hoist is reconsidered, not rebaselined.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant per-opening recomputation plus a repeated FFI bound-submission crossing for an opening-invariant column-bound pin and an opening-invariant commitment relaxation",
+      "profiledSymbol": "PatchBuffer::fill_col_state_patches",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Every generic-constraint term allocates and immediately drops a one- or two-element heap vector during stage-template construction",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/generic_constraints.rs",
+          "symbol": "resolve_variable_ref"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "fill_generic_constraint_entries"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/entries.rs | sed -n '1343,1385p'; git show 077dbe2c:crates/cobre-sddp/src/lp/generic_constraints.rs | sed -n '195,205p'; git show 077dbe2c:crates/cobre-sddp/src/lp/generic_constraints.rs | sed -n '1,985p' | grep -c 'vec!\\['; git show 077dbe2c:crates/cobre-sddp/src/lp/generic_constraints.rs | grep -n 'vec!\\[(' | head",
+        "output": "    for (entry_idx, entry) in layout.generic_constraint_rows.iter().enumerate() {\n...\n        for term in &constraint.expression.terms {\n            let pairs = resolve_variable_ref(\n                &term.variable,\n                entry.block_idx,\n                stage_idx,\n                &geom,\n                ctx.production_models,\n                &positions,\n                &cascade_refs,\n                &pumping_refs,\n                &contract_refs,\n            );\n            for (col, multiplier) in pairs {\n...\npub(crate) fn resolve_variable_ref(\n    var_ref: &VariableRef,\n...\n) -> Vec<(usize, f64)> {\n...\n$ git show 077dbe2c:crates/cobre-sddp/src/lp/generic_constraints.rs | sed -n '1,985p' | grep -c 'vec!\\['\n32\n...\n505:        vec![(geom.state.storage.start + pos, 1.0)]\n774:        vec![(fwd_col, 1.0), (rev_col, -1.0)]\n864:    vec![(col, coeff_fn(station))]\n923:    vec![(col, 1.0)]\n",
+        "reading": "resolve_variable_ref returns Vec<(usize, f64)> by value, and its arms build that vector with vec![...] -- 32 vec![ sites in the production region (the file's first #[cfg(test)] is at 986), almost all of them zero-, one- or two-element literals such as vec![(geom.state.storage.start + pos, 1.0)] at 505 and vec![(fwd_col, 1.0), (rev_col, -1.0)] at 774. fill_generic_constraint_entries calls it once per term inside a loop over layout.generic_constraint_rows (already expanded per block: each entry carries block_idx and is_stage_level), so the count is one heap allocation per (generic-constraint row, term) pair per stage, and each vector is consumed by the immediately following for (col, multiplier) in pairs loop and dropped. Frequency is setup-time, once per stage: build_stage_templates has exactly one production caller, setup/mod.rs:983, and every other call site is a #[cfg(test)] module or the test/integration wrapper build_stage_templates_resolving_layout. Hence severity C -- this is not the per-solve hot path."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Turn the return value into a caller-owned scratch buffer: pass &mut Vec<(usize, f64)> (cleared per term) into resolve_variable_ref and have each arm push into it instead of building and returning a fresh vector, so fill_generic_constraint_entries owns one buffer for the whole stage. That is the same discipline PatchBuffer::new and .claude/rules/sddp.md-adjacent .claude/architecture-rules.md Sec. State Struct Pattern already require of reused buffers. No pinned correctness contract is touched: the resolver is pure index and multiplier arithmetic over the layout and the position maps, it neither reads nor writes the cut pool, the Benders rows or any state pin. Byte-neutral by construction -- the same (col, multiplier) pairs are produced in the same order and pushed into the same col_entries[col] vectors, so the per-column sort, assemble_csc's CSC assembly and every downstream solve see an identical matrix; the parity goldens (tests/parity.rs, tests/common/parity_hash.rs), the rank-invariance harness (tests/common/permute.rs) and mpiexec -n 1 vs -n 2 are unaffected and no golden moves. Queue it behind the two per-solve items above: it is a per-stage setup-time cost, not a per-solve one.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "allocation per call: one short-lived heap vector per resolved generic-constraint term per stage, returned by value and dropped after the immediately following consuming loop",
+      "profiledSymbol": "fill_generic_constraint_entries",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/patch.rs::PatchBuffer -- fill_forward_patches, fill_load_patches, fill_z_inflow_patches",
+      "why": "Named performance target 3 is allocation-free by construction: PatchBuffer::new pre-sizes all six vectors (row capacity hydro_count + n_load_buses * max_blocks + hydro_count; column capacity hydro_count * (1 + max_par_order) + n_buckets + n_anticipated * k_max), all four fill_* functions write into pre-sized slots, and the caller consumes them as &buf[..state_col_patch_count()] / &buf[..forward_patch_count()]. fill_forward_patches takes _row_scale documented 'accepted for API symmetry, never applied', so there is no per-call scaling work. fill_load_patches routes both the LP row and the host-array index through BlockGrid::flat, so there is no second stride derivation to remove. The two candidates on this target are about recomputation and call frequency, never allocation.",
+      "sanctionedBy": ".claude/architecture-rules.md Sec. State Struct Pattern (scratch allocated once and reused via clear()/resize()/extend(); no allocation on the hot path)"
+    },
+    {
+      "subject": "the per-opening NCS availability column patch (training/stage_solve_prep.rs::StageSolvePrep::run reaching apply_ncs_col_bounds; cited, not anchored)",
+      "why": "The NCS patch is the one part of the per-solve column-bound submission that genuinely varies per opening, and it must stay per opening. It is deliberately excluded from the hoist proposed in the second candidate, which names it as a constraint on the fix shape.",
+      "sanctionedBy": ".claude/rules/sddp.md Sec. Lower-bound evaluation must patch NCS"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder template-build path -- template.rs::build_single_stage_template, columns.rs, rows.rs, entries.rs::build_stage_matrix_entries, layout.rs::StageLayout, scaling.rs",
+      "why": "Examined and clean for the per-solve lens: every allocation here is setup-time. build_stage_templates has exactly one production caller (setup/mod.rs:983) and loops the stages serially; every other call site is a #[cfg(test)] module or the test/integration wrapper build_stage_templates_resolving_layout. The one-Vec-per-column reification in build_stage_matrix_entries, the per-column sort, and assemble_csc's CSC copy are all once-per-stage costs, and assemble_csc deliberately does NOT re-sort (caller-owned sort, guarded by a debug_assert whose comment explains that a defensive re-sort would mask a missing caller-side sort). Not a per-solve smell.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs::CutStateProjection -- field incoming_columns and ::dot_trial_state",
+      "why": "Correct and worth protecting on both counts. incoming_columns is filled once in CutStateProjection::new and documented 'LP incoming column per cut slot (extraction hot path)' -- it is the existing sanctioned precedent the first candidate asks the pinning path to match, and the five Vec growths in new() are per-pool setup reached from setup/mod.rs, not per solve. dot_trial_state fuses the gather with the dot product, so no gathered trial-state buffer is materialized per cut. CD-038 owns the separate architectural loop-shape claim about the same symbol; this entry is not a re-raise of it and proposes nothing.",
+      "sanctionedBy": "CD-038 (live, keep -- loop-shape duplication, not a hazard)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer address and vocabulary types -- block_grid.rs::BlockGrid, range_cursor.rs::RangeCursor, study_dimensions.rs::StudyDimensions, layout.rs, storage_boundary_grid.rs, index.rs, entity_index.rs::EntityIndex, hydro_cell.rs, anticipated_gate.rs",
+      "why": "Examined and clean for this lens: all are pure index arithmetic or newtype vocabulary with no allocation and no loop of their own on a per-solve path. BlockGrid is the single owner of every production block-major stride (flat / fpha_plane / deficit) and its module doc states that the two open-coded site classes are not violations, so there is no duplicated stride derivation to reclaim.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs::BoundRelaxations, delivery_ring.rs, fpha_cursor.rs, builder/mod.rs",
+      "why": "Examined and clean for allocation: BoundRelaxations is reused across solves as PatchBuffer::commitment_relax through clear()/push(), fill_bound_relaxations early-returns when anticipated_thermal_indices is empty, and delivery_ring.rs, fpha_cursor.rs and builder/mod.rs contain no allocation in their production regions. CD-074 owns the drift-classification mechanism at these symbols; the second candidate claims call frequency over opening-invariant inputs only and restates none of it.",
+      "sanctionedBy": "CD-074 (Sev A, live -- sharpen-only; a perf claim on the same code is a different claim per the cell directive)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/state_space.rs::finalize_state_column_map and ::lp_column_for_state",
+      "why": "The outgoing direction is the shape to keep, not a smell: a pure cache of the resolver, documented as 'never a reimplementation of its arithmetic', with a debug_assert pinning the finalized length. It is the in-crate reference the first candidate asks the incoming direction to match.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "Second candidate (hoisting the opening-invariant column-bound state pin and commitment relaxation out of the per-opening backward path): the hoist leaves every submitted bound value and index identical but changes how many set_col_bounds calls the solver sees per opening, which .claude/rules/sddp.md Sec. Backward opening order is warm-start-only treats as a warm-start-chain change that must re-check the parity goldens rather than be assumed byte-identical. Does the owner want the hoist attempted at all, or is the per-opening re-submission deliberately retained so every opening's solve starts from an identically-conditioned solver state?"
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 3,
+    "kept": 3,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

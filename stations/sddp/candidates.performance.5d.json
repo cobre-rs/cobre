@@ -1,0 +1,379 @@
+{
+  "station": "sddp",
+  "subStation": "5d",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "cell": "sddp/5d",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "Per-(scenario, stage) element-wise unscale of a per-stage constant row_lower template in the simulation hot path",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/pipeline.rs",
+          "symbol": "build_row_lower_unscaled"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/pipeline.rs",
+          "symbol": "extract_sim_stage_result"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/simulation/pipeline.rs | sed -n '223,247p;664,673p'",
+        "output": "fn build_row_lower_unscaled<'a>(\n    template_row_lower: &[f64],\n    row_scale: &[f64],\n    load_rhs_buf: &[f64],\n    scratch_buf: &'a mut Vec<f64>,\n    ...\n) -> &'a [f64] {\n    scratch_buf.clear();\n    scratch_buf.reserve(template_row_lower.len());\n    if row_scale.is_empty() {\n        scratch_buf.extend_from_slice(template_row_lower);\n    } else {\n        for (i, &val) in template_row_lower.iter().enumerate() {\n            let scale = if i < row_scale.len() && row_scale[i] != 0.0 { row_scale[i] } else { 1.0 };\n            scratch_buf.push(val / scale);\n        }\n    }\n--\n    let row_lower_ref = build_row_lower_unscaled(\n        &ctx.template(t).row_lower,\n        &ctx.template(t).row_scale,\n        load_rhs_buf,\n        row_lower_buf,\n        ctx.n_load_buses,\n        load_row_start,\n        load_n_blks,\n        ctx.load_bus_indices,\n    );",
+        "reading": "build_row_lower_unscaled divides every element of template_row_lower by the matching row_scale entry. Both scaling inputs at the only production call site are ctx.template(t).row_lower and ctx.template(t).row_scale, per-stage constants read off StageContext. The one scenario-dependent input is load_rhs_buf, which overwrites the n_load_buses * n_blks load-balance span after the pass. The call sits inside extract_sim_stage_result, which solve_simulation_stage invokes once per (scenario, stage), so the whole row vector is re-divided once per solve while producing identical values for every scenario at that stage."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Compute the unscaled row_lower once per stage and, on each call, copy the cached vector into the scratch buffer and overwrite only the load-balance span that actually varies per scenario. The cache is per-stage read-only data, so it belongs on StageContext, or on SimulationState scratch if built lazily per worker, per the context-struct decision tree in .claude/architecture-rules.md; keep build_row_lower_unscaled within its recorded argument budget. Byte-neutral because each element's value is the same quotient val / scale computed from the same operands, division is deterministic, and the row order is untouched: the parity goldens in tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs (the cache is keyed by stage index, never by entity order), and mpiexec -n 1 against -n 2 all see identical bytes since the cache derives from already-broadcast templates.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Redundant pass: an element-wise divide over the entire per-stage row_lower template is repeated on every (scenario, stage) solve, although both scaling operands are per-stage constants and only the load-balance rows differ per scenario.",
+      "profiledSymbol": "crates/cobre-sddp/src/simulation/pipeline.rs::build_row_lower_unscaled",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Four per-(scenario, stage) extraction vectors collect from flat_map with no reservation while six siblings in the same file pre-reserve the same product",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "extract_hydros"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "extract_exchanges"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "extract_buses"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "extract_stub_collections"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n \"flat_map\" 077dbe2c -- crates/cobre-sddp/src/simulation/extraction.rs; git grep -n \"Vec::with_capacity\" 077dbe2c -- crates/cobre-sddp/src/simulation/extraction.rs",
+        "output": "extraction.rs:1187:            .flat_map(|(h, &hydro_id)| {\nextraction.rs:1340:            .flat_map(move |(l, &line_id)| {\nextraction.rs:1394:            .flat_map(move |(bus_idx, &bus_id)| {\nextraction.rs:2058:        .flat_map(|(h, &hydro_id)| {\n--\nextraction.rs:1207:        let mut results = Vec::with_capacity(n_cells);\nextraction.rs:1224:        let mut results = Vec::with_capacity(n_cells * n_blks);\nextraction.rs:1285:        let mut results = Vec::with_capacity(spec.entity_counts.thermal_ids.len() * n_blks);\nextraction.rs:1865:        let mut results = Vec::with_capacity(n_ncs * n_blks);\nextraction.rs:1933:        let mut results = Vec::with_capacity(n_pumping * n_blks);\nextraction.rs:2004:        let mut results = Vec::with_capacity(n_contracts * n_blks);",
+        "reading": "The four flat_map collect sites fall inside extract_hydros (declared at 1167, per-block branch), extract_exchanges (1314), extract_buses (1367) and extract_stub_collections (2043). Their output lengths are known before the walk: hydro_ids.len() * n_blks, line_ids.len() * n_blks, bus_ids.len() * n_blks, and hydro_ids.len() * state.max_par_order. A FlatMap reports a zero size_hint lower bound before consumption and is not TrustedLen, so collect starts at zero capacity and grows by repeated reallocation. The pre-reserving siblings in the same file cover exactly the same count shapes: extract_hydro_bus_generation, extract_thermals, extract_non_controllables, extract_pumping_stations, extract_contracts. All of these run inside extract_stage_result_with_lookups, once per (scenario, stage)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Build each of the four vectors with Vec::with_capacity over the same product its pre-reserving sibling already reserves and extend from the flat_map, or drive the nested loop directly in the shape extract_thermals uses. Byte-neutral by construction: capacity is not observable in the output, push order is unchanged, so the emitted row order and every parity golden hash are identical, the rank-invariance harness in tests/common/permute.rs is unaffected, and MPI reproduction is unaffected because each worker extracts only its own scenarios. This also brings the four sites into line with the crate hard rule against allocating on hot paths.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Allocation per call: collect over a FlatMap begins at zero capacity and grows by reallocation, so each of these per-(scenario, stage) result vectors performs a sequence of reallocations and copies where one exact allocation would do.",
+      "profiledSymbol": "crates/cobre-sddp/src/simulation/extraction.rs::extract_stage_result_with_lookups",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "re_expand deep-clones each captured node result once per visiting leaf path because its scratch is borrowed immutably",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "re_expand"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/types.rs",
+          "symbol": "SimulationStageResult"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/simulation/enumerated.rs | sed -n '367,374p;398,402p'; git show 077dbe2c:crates/cobre-sddp/src/simulation/types.rs | sed -n '471,515p' | grep -n 'pub '",
+        "output": "fn re_expand(\n    plan: &EnumeratedPlan,\n    scratch: &EnumeratedSimScratch,\n    scenario_range: Range<u32>,\n    num_stages: usize,\n    ctx: &StageContext<'_>,\n    output: &SimulationOutputSpec<'_>,\n) -> Result<(WorkerCosts, WorkerStats), SimulationError> {\n--\n            let cum_d = ctx.cumulative_discount_factor(StageIdx(t));\n            total_cost += cum_d * visit.immediate_cost;\n            SolverStatsDelta::accumulate_into(&mut leaf_stats, &visit.stats);\n            stage_results.push(visit.result.clone());\n--\npub struct SimulationStageResult { stage_id, node_id,\n  pub costs: Vec<SimulationCostResult>,\n  pub hydros: Vec<SimulationHydroResult>,\n  pub hydro_bus_generation: Vec<SimulationHydroBusResult>,\n  pub thermals: Vec<SimulationThermalResult>,\n  pub exchanges: Vec<SimulationExchangeResult>,\n  pub buses: Vec<SimulationBusResult>,\n  pub pumping_stations: Vec<SimulationPumpingResult>,\n  pub contracts: Vec<SimulationContractResult>,\n  pub non_controllables: Vec<SimulationNonControllableResult>,\n  pub inflow_lags: Vec<SimulationInflowLagResult>,\n  pub transit_buckets: Vec<SimulationTransitBucketResult>,\n  pub generic_violations: ..., pub anticipated_lanes: ... }",
+        "reading": "re_expand receives scratch as an immutable &EnumeratedSimScratch, so no visitor can move a captured result out; its only consumer of a captured node is stage_results.push(visit.result.clone()). SimulationStageResult declares thirteen owned Vec fields (costs, hydros, hydro_bus_generation, thermals, exchanges, buses, pumping_stations, contracts, non_controllables, inflow_lags, transit_buckets, generic_violations, anticipated_lanes), so each clone is a thirteen-vector deep copy of a result the census sweep already solved and captured exactly once. A node shared by many leaf paths is therefore re-materialized once per path. This is a different site and a different mechanism from the refuted per-node capture allocation in enumerated_sim_stage_worker: that one allocates once per solved node, this one copies an already-captured result once per visiting path."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Take the scratch as &mut and move each node's captured result out on its last visiting path, cloning only for the earlier visitors; under the canonical enumeration the leaf paths beneath a node are contiguous, so the last visitor is identifiable from the walk itself without extra bookkeeping. Do not convert the field to a shared handle: an Arc inside SimulationStageResult would drag the serde rc feature into the output types. Byte-neutral because the value pushed is identical whether cloned or moved and the push order into stage_results is untouched, so parity goldens and the rank-invariance harness observe the same bytes; MPI reproduction is unaffected since re_expand runs per worker over its own scenario range.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Dense reification: an already-captured per-node result carrying thirteen owned entity vectors is deep-copied once per leaf path that visits the node, instead of being moved out on its final visit.",
+      "profiledSymbol": "crates/cobre-sddp/src/simulation/enumerated.rs::re_expand",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "FPHA fitting rebuilds the shared (V, Q) grid and re-walks the same nodes at four pipeline stages instead of building it once per plant",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/grid.rs",
+          "symbol": "build_grid"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/hull_fit.rs",
+          "symbol": "build_cloud"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/alpha.rs",
+          "symbol": "compute_alpha_fpha"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/deviation.rs",
+          "symbol": "compute_fit_deviation"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n \"build_grid(\" 077dbe2c -- crates/cobre-sddp/src/production/fpha_fitting/; git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/hull_fit.rs | sed -n '75,86p'; git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/alpha.rs | sed -n '47,65p'",
+        "output": "alpha.rs:47:    let grid = build_grid(pf, bounds);\ndeviation.rs:102:    let grid = build_grid(pf, bounds);\ndeviation.rs:158:    let grid = build_grid(pf, bounds);\ngrid.rs:29:pub(crate) fn build_grid(pf: &ProductionFunction, bounds: &FittingBounds) -> GridParams {\nhull_fit.rs:76:    let grid = build_grid(pf, bounds);\nreduction.rs:283:    let grid = build_grid(pf, bounds);\nsecant.rs:74:    let grid = super::grid::build_grid(pf, bounds);\n(remaining hits are reduction.rs #[cfg(test)] uses)\n--\nfn build_cloud(pf: &ProductionFunction, bounds: &FittingBounds) -> Vec<[f64; 3]> {\n    let grid = build_grid(pf, bounds);\n    let mut cloud = Vec::with_capacity(grid.v_points.len() * grid.q_points.len());\n    for &v in &grid.v_points {\n        for &q in &grid.q_points {\n            let generation = pf.evaluate_capped(v, q, 0.0);\n            cloud.push([v, q, generation]);\n--\n    let grid = build_grid(pf, bounds);\n    for &v in &grid.v_points {\n        for &q in &grid.q_points {\n            let fpha0 = planes.iter().map(|p| p.evaluate(v, q, 0.0)).fold(f64::INFINITY, f64::min);\n            let fph = pf.evaluate_capped(v, q, 0.0);\n            sum_fpha0_fph += fpha0 * fpha0;",
+        "reading": "build_grid allocates both axis vectors (v_points, q_points) afresh on every call. Its production callers are build_cloud in hull_fit, compute_alpha_fpha in alpha, compute_fit_deviation and collect_fit_deviation_points in deviation, reduce_planes_distance in reduction, and representative_operating_point in secant. build_cloud already materializes evaluate_capped at every grid node and discards the cloud once the hull is built; compute_alpha_fpha then rebuilds the grid and recomputes both pf.evaluate_capped and the min-over-planes fold at the same nodes, and the deviation stage repeats the same walk again. reduction.rs is the in-module counter-example: reduce_planes_distance builds the grid once and shares the borrow with grid_max_gh and every per-pair sampler, and grid_max_gh's own doc states that it takes a prebuilt grid so the caller builds it ONCE per plant."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Build one GridParams per plant in fit_fpha_planes and thread the borrow through the hull, alpha, deviation and secant stages exactly as reduce_planes_distance already threads it into grid_max_gh, and carry the per-node evaluate_capped values that build_cloud already computed into the alpha regression and the deviation diagnostic rather than recomputing them. Leave grid as the single owner of the axis formula its module doc claims. Byte-neutral because the axis values, the node visitation order and each accumulation sequence are unchanged, so the alpha ratio and the deviation aggregate are bit-identical; the exported FPHA plane goldens in the parity suite, the rank-invariance harness and MPI reproduction all see the same bytes.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Redundant pass: each fitting stage allocates a fresh copy of the same axis vectors and re-evaluates ProductionFunction::evaluate_capped plus the min-over-planes envelope at grid nodes an earlier stage already visited.",
+      "profiledSymbol": "crates/cobre-sddp/src/production/fpha_fitting/grid.rs::build_grid",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "fit_gamma_s_for_planes rebuilds the grid and recomputes the whole min-over-planes envelope once per plane",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/secant.rs",
+          "symbol": "fit_gamma_s_for_planes"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/secant.rs",
+          "symbol": "representative_operating_point"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/secant.rs | sed -n '68,94p;178,185p'",
+        "output": "fn representative_operating_point(\n    plane: &RawPlane,\n    planes: &[RawPlane],\n    pf: &ProductionFunction,\n    bounds: &FittingBounds,\n) -> Option<(f64, f64)> {\n    let grid = super::grid::build_grid(pf, bounds);\n    let mut best: Option<(f64, f64, f64)> = None;\n    for &v in &grid.v_points {\n        for &q in &grid.q_points {\n            let this_val = plane.evaluate(v, q, 0.0);\n            let min_val = planes\n                .iter()\n                .map(|p| p.evaluate(v, q, 0.0))\n                .fold(f64::INFINITY, f64::min);\n            if this_val - min_val <= ACTIVITY_TOL {\n                let generation = pf.evaluate(v, q, 0.0);\n                if best.is_none_or(|(_, _, best_gh)| generation > best_gh) {\n                    best = Some((v, q, generation));\n--\n    let snapshot: Vec<RawPlane> = planes.to_vec();\n    for plane in planes.iter_mut() {\n        plane.gamma_s = match representative_operating_point(plane, &snapshot, pf, bounds) {\n            Some((v_rep, q_rep)) => fit_gamma_s(pf, v_rep, q_rep, s_max),\n            None => 0.0,\n        };\n    }",
+        "reading": "fit_gamma_s_for_planes snapshots planes and calls representative_operating_point once for each plane in planes.iter_mut(). Each of those calls allocates a fresh grid through super::grid::build_grid and, at every (v, q) node, re-reduces planes.iter().map(|p| p.evaluate(v, q, 0.0)) over the whole snapshot. The result is one grid allocation per plane, plus a number of RawPlane::evaluate calls that grows with the square of the plane count at every grid node, where a single grid walk recording each node's argmin plane and its pf.evaluate value would serve every plane. The literal ACTIVITY_TOL in the excerpt stands for the inline activity tolerance."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Walk the grid once per plant, recording for each node the minimum plane value and which planes sit within the activity tolerance of it, then read every plane's representative point out of that single pass; take GridParams as a parameter the way grid_max_gh already does. Byte-neutrality requires reproducing the selection rule exactly: nodes visited in the same fixed (v, q) order, min_val folded over the same pre-mutation snapshot, activity decided by the same tolerance, and ties resolved to the first point by the same strict greater-than test on pf.evaluate. Under those conditions each plane's chosen (v_rep, q_rep) and therefore each gamma_s is bit-identical, so the exported FPHA plane goldens in the parity suite and the rank-invariance harness are unmoved; MPI reproduction is unaffected because the fit is rank-local.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Redundant pass whose cost grows with the square of the plane count: the per-plane representative-point search allocates its own grid and re-folds the min over all planes at every grid node, rather than sharing one grid walk that computes each node's argmin once.",
+      "profiledSymbol": "crates/cobre-sddp/src/production/fpha_fitting/secant.rs::representative_operating_point",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "long_term_mean_inflow rescans the entire inflow-history table once per hydro inside the parallel production fit",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/production.rs",
+          "symbol": "long_term_mean_inflow"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/production.rs",
+          "symbol": "fit_one_hydro"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/production/hydro_models/production.rs | sed -n '390,398p;286,290p;161,166p'",
+        "output": "fn long_term_mean_inflow(system: &System, hydro_id: EntityId) -> f64 {\n    let mut sum = 0.0_f64;\n    let mut count = 0_u64;\n    for row in system.inflow_history() {\n        if row.hydro_id == hydro_id {\n            sum += row.value_m3s;\n            count += 1;\n        }\n    }\n--\n            let long_term_mean_inflow_m3s = long_term_mean_inflow(system, hydro.id);\n--\n    let fits: Vec<PerHydroFit> = system\n        .hydros()\n        .par_iter()\n        .map(|hydro| {\n            fit_one_hydro(",
+        "reading": "long_term_mean_inflow iterates system.inflow_history() in full and keeps only the rows matching one hydro_id. Its call site is inside fit_one_hydro on the ComputedFromGeometry branch, and fit_one_hydro is the body of system.hydros().par_iter().map(...), so the whole history table is scanned once per hydro that computes planes. Every other per-hydro row table that fit_one_hydro consumes is pre-grouped exactly once before the parallel map and passed in as a map: config_map, geometry_map built by build_geometry_map, families_map built by build_tailrace_families_map, and hyperplane_map. The inflow history is the one table left as a repeated filtered scan."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Accumulate per-hydro sums and counts in one pass over inflow_history() before the parallel map, into a container indexed by the hydro's canonical declaration position, and pass the resolved mean into fit_one_hydro the way the other pre-grouped maps are already passed. This preserves the determinism note on the function: a single sequential pass in stored canonical order adds each hydro's rows in exactly the order the current per-hydro scan does, no add is reordered and no partitioned reduction is introduced, so every mean is bit-identical. Declaration-order invariance holds because the accumulator is indexed by declaration position rather than by first appearance in the history table. Guarded by the parity goldens over the exported FPHA planes plus the rank-invariance harness.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Redundant pass: a full linear scan of the inflow-history table filtered to a single hydro_id, repeated once per computed-FPHA hydro, where one grouped pass before the parallel map would serve all of them.",
+      "profiledSymbol": "crates/cobre-sddp/src/production/hydro_models/production.rs::long_term_mean_inflow",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Hull facet dedup uses a linear Vec::contains membership scan whose cost grows with the number of planes already kept",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/hull_fit.rs",
+          "symbol": "fit_hull_planes"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/hull_fit.rs | sed -n '174,192p'",
+        "output": "    // `Qt` triangulation splits each flat hull face into several facets sharing one\n    // plane, so dedup on EXACT to_bits() equality of (gamma_0, gamma_V, gamma_Q) - a\n    // deterministic, order-preserving predicate (first occurrence wins) that emits\n    // one plane per face while upholding declaration-order invariance.\n    let mut seen: Vec<(u64, u64, u64)> = Vec::with_capacity(planes.len());\n    planes.retain(|p| {\n        let key = (\n            p.gamma_0.to_bits(),\n            p.gamma_v.to_bits(),\n            p.gamma_q.to_bits(),\n        );\n        if seen.contains(&key) {\n            false\n        } else {\n            seen.push(key);\n            true\n        }\n    });",
+        "reading": "fit_hull_planes accumulates seen as a Vec of bit-pattern triples and calls seen.contains(&key) inside planes.retain, so every facet costs one linear scan over all keys kept so far, giving a total that grows with the square of the distinct-plane count. The facet count is the Qt triangulation output, which the comment above the block states splits each flat hull face into several facets sharing one plane, so the input to the dedup is systematically larger than its output."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Replace the membership structure with a hash set keyed on the same to_bits triple while keeping retain as the ordering mechanism. Byte-neutral because the predicate stays exact bit equality with first-occurrence-wins, retain preserves the relative order of the survivors, and set iteration order is never observed anywhere, so the emitted plane sequence and the declaration-order invariance the comment pins are both unchanged; the exported FPHA plane goldens and the rank-invariance harness see identical bytes.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Redundant pass: membership is decided by rescanning the accumulated key vector for every facet, so dedup cost grows with the square of the distinct-plane count instead of staying linear.",
+      "profiledSymbol": "crates/cobre-sddp/src/production/fpha_fitting/hull_fit.rs::fit_hull_planes",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "prepare_hydro_models_from_artifacts groups and per-hydro sorts the same geometry table three times in one call",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/mod.rs",
+          "symbol": "prepare_hydro_models_from_artifacts"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/production.rs",
+          "symbol": "build_geometry_map"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/evaporation.rs",
+          "symbol": "resolve_evaporation_models_from_artifacts"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/production/hydro_models/mod.rs | sed -n '125,136p'; git show 077dbe2c:crates/cobre-sddp/src/production/hydro_models/production.rs | sed -n '336,348p'; git show 077dbe2c:crates/cobre-sddp/src/production/hydro_models/evaporation.rs | sed -n '107,117p'",
+        "output": "    // Sorted by ascending volume, as `ForebayTable::new` expects.\n    let mut vha_geometry_by_hydro: HashMap<EntityId, Vec<HydroGeometryRow>> = HashMap::new();\n    for row in &artifacts.hydro_geometry {\n        vha_geometry_by_hydro.entry(row.hydro_id).or_default().push(row.clone());\n    }\n    for rows in vha_geometry_by_hydro.values_mut() {\n        rows.sort_by(|a, b| a.volume_hm3.total_cmp(&b.volume_hm3));\n    }\n--\n/// Build an `O(1)` geometry map: `hydro_id -> sorted geometry row references`.\nfn build_geometry_map(geometry_rows: &[HydroGeometryRow]) -> HashMap<EntityId, Vec<&HydroGeometryRow>> {\n    let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();\n    for row in geometry_rows {\n        geometry_map.entry(row.hydro_id).or_default().push(row);\n    }\n    for rows in geometry_map.values_mut() {\n        rows.sort_by(|a, b| a.volume_hm3.total_cmp(&b.volume_hm3));\n    }\n--\n    let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();\n    for row in geometry_rows {\n        geometry_map.entry(row.hydro_id).or_default().push(row);\n    }\n    // Interpolation below assumes ascending volume order.\n    for rows in geometry_map.values_mut() {\n        rows.sort_by(|a, b| a.volume_hm3.total_cmp(&b.volume_hm3));\n    }",
+        "reading": "Within one prepare_hydro_models_from_artifacts call, artifacts.hydro_geometry is grouped by hydro_id and each group sorted with a.volume_hm3.total_cmp(&b.volume_hm3) three separate times: once inside resolve_production_models_from_artifacts through build_geometry_map, once inside resolve_evaporation_models_from_artifacts with an identical borrowed map and identical sort, and once in the caller itself as vha_geometry_by_hydro, which additionally clones every row. That is three groupings and three sets of per-hydro sorts over the same rows in a single call. The owned clone is justified by lifetime (the result outlives artifacts); the repetition of the grouping and the sorting is not."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Group and sort the geometry rows once at the top of prepare_hydro_models_from_artifacts and pass that borrowed map into both resolvers, keeping an owned copy only for the value that has to outlive artifacts and building it from the already-sorted groups. Byte-neutral because sort_by is stable and the input row order and the comparator are identical at all three sites, so each group ends in the same order regardless of which site built it, and every downstream consumer (the evaporation area interpolation and ForebayTable::new) sees the same sequence it sees today; nothing in the result depends on the number of times the grouping was performed.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "Redundant pass: the same geometry row table is grouped by hydro and each group sorted by volume three times in a single call, twice as borrowed reference maps in two callees and once as owned row clones in the caller.",
+      "profiledSymbol": "crates/cobre-sddp/src/production/hydro_models/mod.rs::prepare_hydro_models_from_artifacts",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/simulation/state.rs (run_worker_scenarios, SimulationState)",
+      "why": "Examined and clean for this lens. Pre-reserves worker_costs and worker_stats, resizes raw_noise_buf and corr_scratch once per worker, and builds SimLookups once per worker with an in-code rationale that this is what eliminates the per-(scenario, stage) allocation inside extract_thermals and extract_hydros. The module doc states no allocations occur per scenario or per stage in the inner loops, and the code matches it.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/pipeline.rs (solve_simulation_stage, reset_scenario_state, dispatch_scenario_result)",
+      "why": "Correct and worth protecting. solve_simulation_stage takes and restores ws.scratch.unscaled_primal and unscaled_dual so capacity survives the call, reset_scenario_state reuses buffers through fill and copy_from_slice rather than reallocating, and dispatch_scenario_result moves stage_results into the channel payload instead of copying it. The one exception found in this file is the row_lower unscale raised as a candidate.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/enumerated.rs (enumerated_sim_stage_worker, mark_own_paths, run_sweep)",
+      "why": "Examined and clean. The worker_captures arena is filled once per call and drained by Option::take, with a documented rationale for moving rather than copying; mark_own_paths reuses node_seq; run_sweep clears and reuses scratch.stage_units; the worker takes and restores raw_noise_buf and corr_scratch. The per-node capture allocation in enumerated_sim_stage_worker is refuted and not re-raised.",
+      "sanctionedBy": "PD-001 (refuted)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/extraction.rs (extract_hydro_per_block energy-conversion reads, extract_transit_buckets, extract_anticipated_lanes)",
+      "why": "Examined and clean. The EnergyConversionSet lookups are hoisted per hydro rather than per (hydro, block), so conversion and accumulated_productivity cost one lookup per hydro per stage. extract_transit_buckets early-returns when no bucket exists and otherwise reserves n_buckets. extract_anticipated_lanes starts from an empty vector because the lane set is sparse by construction, not because a known count was ignored.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/extraction.rs (stage_release_rate_m3s, build_transit_seed)",
+      "why": "Examined and deliberately not raised. The filtered scan over stage release rates looks like a repeated pass but is bounded by the trailing travel-time span: the caller skips any arc whose travel time exceeds the remaining horizon, so the scan is not proportional to the study length. Recording this so the same lead is not re-opened as a false positive.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/aggregation.rs",
+      "why": "Examined and clean for this lens. Its allocations are per-run collective buffers (counts, displacements, send and receive buffers for the two allgatherv calls, resolve_weights, and the gathered collect), not per scenario or per stage. Any future claim here would be a collective-layout claim, not a single-process one.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/fpha_fitting/reduction.rs (reduce_planes_distance, grid_max_gh)",
+      "why": "Correct and worth protecting, and the pattern the other fitting stages should adopt. reduce_planes_distance builds the grid once per plant and shares the borrow with grid_max_gh and every per-pair sampler, with grid_max_gh's doc stating the build-once contract and the fixed (v, q) scan order that makes the result order-independent. The pair seed is a pure identity and the squared-distance accumulation runs in canonical sample order.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/fpha_fitting/geometry.rs (ForebayTable)",
+      "why": "Examined and clean. ForebayTable::new pre-reserves both volume and height vectors, and height, locate and locate_tailrace resolve through partition_point binary searches rather than linear scans.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/fpha_fitting/tailrace.rs (TailraceFamilies::from_rows, build_tailrace_families_map)",
+      "why": "Correct and worth protecting. Both take pre-sorted rows and isolate each plant's slice in a single contiguity pass without cloning rows, with the sortedness precondition stated in the doc. This is the shape the geometry grouping raised as a candidate lacks.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/fpha_fitting/production.rs (ProductionFunction::net_head, evaluate, evaluate_capped)",
+      "why": "Examined and clean. The per-node kernel allocates nothing: net_head resolves the forebay height and the tailrace level through binary searches and the rest is scalar arithmetic. This scopes the fitting candidates correctly: the cost is the repeated grid walk, not the kernel.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/energy_conversion/builder.rs (build_energy_conversion_set)",
+      "why": "Correct and worth protecting. Pre-reserves the per-hydro outer vector and each per-stage row, builds the id-to-index map with capacity, and hoists ForebayTable construction out of the stage loop so it happens once per hydro rather than once per (hydro, stage).",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/conversion.rs (with_node)",
+      "why": "Examined and clean. Collects through into_iter().map(...), an exact-size iterator that pre-allocates precisely, and moves each record instead of cloning it.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/hydro_models/evaporation.rs (resolve_evaporation_core)",
+      "why": "Examined and clean apart from the shared geometry grouping raised as a candidate. The per-hydro stage coefficient and reference volume vectors are pre-reserved with the stage count before the loop fills them.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/hull/mod.rs and crates/cobre-sddp/src/hull/ffi.rs",
+      "why": "Correct and worth protecting. The owned copy of the input points and the canonical sort in and sort out are the declaration-order-invariance contract, not avoidable work; the flattened coordinate buffer and the facet vector both pre-reserve from known counts; PlaneBuffer is RAII over the shim allocation so no leak or double free is possible on the error path.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lead_time/mod.rs",
+      "why": "Examined and clean. resolve_block_factors, resolve_delivery and cumulative_stage_boundaries all pre-reserve from known counts, and every production caller sits in LP building, bucket topology, policy export or study setup, all outside the per-scenario and per-iteration loops.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/generic_constraint_echo.rs and crates/cobre-sddp/src/fixed_delivery_echo.rs",
+      "why": "Examined and clean. One-shot echo assembly whose allocation is the output itself, run once per study rather than per scenario or per stage.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/config.rs, simulation/error.rs, simulation/mod.rs, error.rs, lib.rs, production/mod.rs, production/fpha_fitting/{error,rng,selection}.rs, production/hydro_models/{export,types,summary}.rs",
+      "why": "Examined and clean for this lens. These hold error enums, re-export surfaces, default constructors, the seeded RNG, selection-mode resolution and one-shot row builders; none carries per-scenario, per-stage or per-node work. The find-by-id inside the hydro model summary builder runs once per study on a display-only path and is deliberately not raised.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/test_support.rs",
+      "why": "Examined and out of scope by construction: the file is entirely test scaffolding with no production code, so it carries no hot-path claim for this lens.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "The FPHA fitting candidates (the shared grid rebuild and the per-plane envelope recomputation) run once per plant during study setup inside a parallel map, not inside the solve loop. Should they enter the perf sweep at all, or be filed as setup-time-only items the sweep skips?",
+    "For the per-stage unscaled row_lower cache: put it on StageContext (one extra full row vector per stage, shared by every worker) or build it lazily per worker on SimulationState scratch (no shared growth, one build per worker per stage)? This is a memory-against-duplication trade the owner should pick before the fix is scoped."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 8,
+    "kept": 8,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

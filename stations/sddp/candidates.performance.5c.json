@@ -1,0 +1,391 @@
+{
+  "station": "sddp",
+  "subStation": "5c",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "cell": "sddp/5c",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The cut-selection value sweep heap-allocates six times per call and twice per rayon fold task, contradicting run_cut_management's stated no-allocation contract",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+          "symbol": "select_for_stage"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "run_cut_management"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+          "symbol": "M_BLOCK"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/cut/cut_selection.rs | sed -n '344,372p;405,421p' && git show 077dbe2c:crates/cobre-sddp/src/training/session/mod.rs | sed -n '1024,1027p'",
+        "output": "cut_selection.rs:344  let eligible: Vec<bool> = (0..populated)\ncut_selection.rs:359  let m_block_starts: Vec<usize> = (0..n_blocks).map(|i| i * M_BLOCK).collect();\ncut_selection.rs:364  let is_selected: Vec<bool> = m_block_starts\ncut_selection.rs:367      || (vec![0.0_f64; populated * M_BLOCK], vec![false; populated]),\ncut_selection.rs:410      || vec![false; populated],\ncut_selection.rs:419  let mut deactivations: Vec<u32> = Vec::new();\ncut_selection.rs:420  let mut reactivations: Vec<u32> = Vec::new();\nsession/mod.rs:1026  /// All operations are O(active cuts) and perform no heap allocation when the\nsession/mod.rs:1027  /// cut pools have not grown since the previous iteration.",
+        "reading": "select_for_stage allocates eligible, m_block_starts, deactivations and reactivations once per call, plus a populated*M_BLOCK value panel and a populated-long bitmap per rayon fold task and one more bitmap per reduce identity. None of them is workspace-owned, so every one is a fresh heap allocation on each invocation. run_cut_management calls select_for_stage once per interior node per cut-management iteration while its own rustdoc promises no heap allocation once the pools have stopped growing, so the caller's stated contract and the callee's shape disagree. The panel is zero-initialised by vec! although gemm_block writes it with beta zero and overwrites every element it reads back."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Move the four per-call vectors and the two per-fold-task buffers onto the per-worker scratch the crate already owns for exactly this purpose, reusing them through clear/resize in the State Struct shape that .claude/architecture-rules.md prescribes for hot-path drivers, and borrow the fold identity from that scratch rather than materialising a fresh vec per task. Drop the zero-fill of the value panel, because gemm_block writes it with beta zero before any read. Byte-neutrality: the rayon fold-and-reduce keeps the same commutative associative OR-merge over the same bitmaps, so the selected slot set, the deactivation list and its order are unchanged, and cut activity therefore stays identical against the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, against the rank-invariance harness in tests/common/permute.rs, and between mpiexec -n 1 and -n 2 because selection is rank-local. .claude/rules/sddp.md section 'Cut pool is append-only; basis matches by slot identity' governs: the fix must not renumber or compact slots, only reuse the scratch that scores them.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "allocation per call and per rayon fold task inside the per-node cut-selection value sweep, plus a redundant zero-fill of a panel the gemm kernel fully overwrites",
+      "profiledSymbol": "crates/cobre-sddp/src/cut/cut_selection.rs::select_for_stage",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "relatedTo": [
+        {
+          "id": "CD-018",
+          "sharedSymbols": [
+            "select_for_stage"
+          ],
+          "titleJaccard": 0.0
+        },
+        {
+          "id": "CD-012",
+          "sharedSymbols": [
+            "run_cut_management"
+          ],
+          "titleJaccard": 0.06
+        }
+      ],
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "apply_column_rule walks the row-major gemm output panel column-strided twice for every trial column",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+          "symbol": "apply_column_rule"
+        },
+        {
+          "path": "crates/cobre-sddp/src/gemm.rs",
+          "symbol": "gemm_block"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/cut/cut_selection.rs | sed -n '452,492p'",
+        "output": "fn apply_column_rule(\n    method: &CutSelectionStrategy,\n    v_block: &[f64],\n    populated: usize,\n    m_len: usize,\n    col: usize,\n...\n    let mut max_val = f64::NEG_INFINITY;\n    for k in 0..populated {\n        let v = v_block[k * m_len + col];\n        if v > max_val { max_val = v; }\n    }\n...\n            let cutoff = max_val - tie_tolerance;\n            for k in warm_start..populated {\n                if eligible[k] && v_block[k * m_len + col] >= cutoff {\n                    bitmap[k] = true;\n                }\n            }",
+        "reading": "Both loops index v_block as k * m_len + col, a stride of m_len over the row-major panel gemm_block produced, so a single column touch walks the whole panel with no contiguous run, and the panel is walked twice per column: once for the max and once for the threshold. The caller invokes apply_column_rule once per column of each block, so the panel is traversed strided twice per column rather than once per block."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Interchange the loops: hoist the per-column call into a per-block call that first computes an m_len-long vector of per-column maxima in one slot-major sweep, where each cut slot's own values are contiguous, then thresholds in a second slot-major sweep against those maxima. Byte-neutrality: the maximum over a fixed set of finite f64 values does not depend on visitation order, the threshold comparison is per element, and the Lml1 break still sees slots in ascending k order for each column, so the first-above-cutoff slot Lml1 retains is unchanged; the bitmap OR-merge is already order independent. Parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 all stay byte-identical. The alternative of transposing the kernel output is explicitly rejected: it would change which operand matrixmultiply::dgemm accumulates over inside gemm_block and therefore the floating-point summation order, moving the parity goldens for no structural gain.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant strided pass: the value panel is traversed with a full-panel stride twice per column instead of once per block in the contiguous direction",
+      "profiledSymbol": "crates/cobre-sddp/src/cut/cut_selection.rs::apply_column_rule",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The cut-management projection gather pushes one scalar at a time through the slot-index table with no bulk-copy path for the identity projection",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "run_cut_management"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/training/session/mod.rs | sed -n '1104,1124p'",
+        "output": "let n_slots = proj.n_slots();\nlet n_trials = archive_ref.map_or(0, |a| a.count(node_pos));\nlet global_states = archive_ref.map_or(&[] as &[f64], |a| a.states_for_node(node_pos));\n// Project the StateDim-packed archive into the pool's projected\n// slot space through its own CutStateProjection (identity when\n// n_slots == n_global). A positional prefix is wrong -- a reduced\n// pool's slots are not the first n_slots StateDims.\nscratch.clear();\nscratch.reserve(n_trials * n_slots);\nfor m in 0..n_trials {\n    let base = m * n_global;\n    for s in 0..n_slots {\n        scratch.push(\n            global_states[base + proj.global_state_index(CutSlot::new(s)).get()],\n        );\n    }\n}",
+        "reading": "The gather runs one push per (trial, slot) pair for every interior node, each push routed through global_state_index, an inline lookup into the projection's slot-index table. The comment on the loop names the identity case itself: the projection is the identity when n_slots equals n_global, which is the all-enabled pool, and the projection's own rustdoc in the sibling sub-station states s equals global_state_index(s) in that case. In that case the trial row in global_states is already exactly the wanted contiguous run, yet the loop still walks it scalar by scalar. This is not CD-038: that live item is the loop-shape duplication between this open-coded gather and the fused dot_trial_state; the claim here is the absent bulk-copy fast path."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the gather a guarded fast path: when the projection is the identity, extend scratch from the contiguous trial row of global_states in one extend_from_slice, and otherwise keep the indexed loop exactly as it stands. The guard must test the projection's own identity predicate, not the slot count alone, so a reduced pool that happens to have as many slots as the state dimension cannot take the fast path. .claude/rules/sddp.md section 'The cut intercept dots the trial state through the projection, never positionally' is why the guard is mandatory rather than optional: a positional prefix is wrong for a reduced pool, and that section is the pinned reason the slow path must remain the default. Byte-neutrality: on the fast path the same f64 values land in the same buffer positions in the same order, so the value sweep, the selected set and the deactivations are bit-identical; parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 are unaffected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "scalar-at-a-time gather through an indirection table per (node, trial, slot), with no contiguous copy path for the identity projection the loop's own comment names",
+      "profiledSymbol": "crates/cobre-sddp/src/training/session/mod.rs::run_cut_management",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "relatedTo": [
+        {
+          "id": "CD-012",
+          "sharedSymbols": [
+            "run_cut_management"
+          ],
+          "titleJaccard": 0.0
+        }
+      ],
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "The backward level archives the whole level's gathered state block into every sibling node's bucket, so archive footprint and the downstream value sweep both scale with nodes per level",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "run_one_backward_level"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/visited_states.rs",
+          "symbol": "archive_gathered_states"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/visited_states.rs",
+          "symbol": "append"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs | sed -n '1560,1574p' && git show 077dbe2c:crates/cobre-sddp/src/training/visited_states.rs | sed -n '53,63p;157,168p'",
+        "output": "backward_pass_state.rs:1560  if let Some(ref mut archive) = inputs.visited_archive {\n        inputs.exchange.pack_real_states_into(&mut state.real_states_buf);\n        // ... every node in a multi-node level receives the level's states\n        // -- a conservative over-inclusion that never drops a binding cut.\n        for &node_pos in level {\n            archive.archive_gathered_states(node_pos, &state.real_states_buf, total_fwd);\n        }\n    }\nvisited_states.rs:59  pub fn append(&mut self, gathered: &[f64], total_fwd: usize) {\n        self.data.extend_from_slice(gathered);\n        self.count += total_fwd;\nvisited_states.rs:157  pub fn archive_gathered_states(&mut self, node: NodePos, gathered: &[f64], total_fwd: usize) {\n        self.nodes[node.0].append(gathered, total_fwd);",
+        "reading": "archive_gathered_states delegates to NodeStates::append, which extend_from_slice copies the entire real_states_buf into that node's own data vector. The loop runs that copy once per node in the level with the same buffer, so on a level with sibling nodes the identical state block is duplicated into every node's bucket every iteration. The code's own comment calls this a conservative over-inclusion. The cost is twofold: archive bytes grow as nodes-per-level times the level's real forward-pass count times the state dimension, and run_cut_management then reads count(node_pos) trial states back per node, so the cut-selection value sweep re-evaluates the same trial states once per sibling node. The sibling archive_one_state rustdoc states the contrast explicitly: the enumerated path never replicates the state total_forward_passes times the way archive_gathered_states does."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Store the level's gathered block once and give every node in that level a view of it, so states_for_node returns the shared block instead of a per-node copy: the values every reader sees are unchanged, only the duplication disappears. The per-node retention window must be preserved, since trim_to_window currently trims each node's own vector, so a shared block needs a level-keyed trim with the same window arithmetic. .claude/rules/sddp.md section 'Per-level exchange in the backward pass' governs the level's gather and must keep owning it, and section 'Cut pool is append-only; basis matches by slot identity' is untouched because no slot is renumbered. Byte-neutrality: the trial states read back per node are identical in value and order, so cut selection, cut generation and the reported bounds are bit-identical against the parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2. Narrowing the archive to each node's OWN routed states is a separate and larger change: it would alter which trial states each pool is scored against and therefore which cuts survive selection, so it would move the goldens and is not proposed here.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "dense replication: the level's state block is copied into every sibling node's archive bucket, so both archive memory and the per-node cut-selection value sweep scale with nodes per level",
+      "profiledSymbol": "crates/cobre-sddp/src/training/backward_pass_state.rs::run_one_backward_level",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "build_slot_lookup clears the whole pool-length slot table on every warm-started solve although only the reconcilable slots are ever written",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/basis_reconstruct.rs",
+          "symbol": "build_slot_lookup"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/stage_solve.rs",
+          "symbol": "run_stage_solve"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/cut/basis_reconstruct.rs | sed -n '240,260p' && git show 077dbe2c:crates/cobre-sddp/src/solve/stage_solve.rs | sed -n '60,66p'",
+        "output": "basis_reconstruct.rs:240  fn build_slot_lookup(reconcilable_slots: &[u32], slot_lookup: &mut Vec<Option<u32>>) {\n...\nbasis_reconstruct.rs:254      slot_lookup.fill(None);\n    for (position, &slot) in reconcilable_slots.iter().enumerate() {\n        slot_lookup[slot as usize] = Some(position as u32);\n    }\nstage_solve.rs:60  // `pool.populated()` only grows, so this resize is a no-op after the\n    // first few iterations.\n    if ws.scratch.recon_slot_lookup.len() < inputs.pool.populated() {\n        ws.scratch.recon_slot_lookup.resize(inputs.pool.populated(), None);\n    }",
+        "reading": "fill(None) writes every entry of slot_lookup, and run_stage_solve resizes that buffer up to inputs.pool.populated() before each warm-started solve while noting that the populated count only grows. The scatter that follows writes reconcilable_slots.len() entries. The clear therefore costs the full append-only pool length on every warm-started LP solve while the useful work stays proportional to the reconcilable slot count, and the two diverge monotonically as the pool grows over the training run."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Replace the sentinel clear with a generation stamp: store a solve epoch alongside each position and treat an entry whose epoch is stale as absent, so no bulk reset is needed; the alternative is to record the slots written by the previous call and reset only those. Either way every lookup reconstruct_basis performs returns the same answer it does today. .claude/rules/sddp.md section 'Cut pool is append-only; basis matches by slot identity' governs and is preserved exactly, because the slot-to-position mapping is unchanged and no slot is compacted; section 'A stored basis warm-starts only at its own node (node-tag)' is untouched because the node-tag filter runs before reconstruction. Byte-neutrality: the reconstructed basis bytes are identical, so the parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 all reproduce. The debug assertion that the caller pre-sized the buffer stays; the workspace construction test that asserts every entry is None would assert a zero epoch instead.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "full-length clear per warm-started LP solve, over a buffer whose length tracks the monotonically growing append-only pool, where the useful scatter touches only the reconcilable slots",
+      "profiledSymbol": "crates/cobre-sddp/src/cut/basis_reconstruct.rs::build_slot_lookup",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "relatedTo": [
+        {
+          "id": "CD-023",
+          "sharedSymbols": [
+            "run_stage_solve"
+          ],
+          "titleJaccard": 0.02
+        }
+      ],
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "recon_slot_lookup",
+          "rejected": "field anchor: check-anchors resolves declarations only (fn|struct|enum|trait|type|const|static|mod|impl); a field is cited, not anchored"
+        }
+      ],
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:organizational-quality-follow-ups-low-priority",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "enforce_basic_count_invariant recounts BASIC statuses with two full filter passes over the status vectors the reconstruction just wrote",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/basis_reconstruct.rs",
+          "symbol": "enforce_basic_count_invariant"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/basis_reconstruct.rs",
+          "symbol": "reconstruct_basis"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/basis_reconstruct.rs",
+          "symbol": "reconstruct_basis_uniform_basic"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/stage_solve.rs",
+          "symbol": "run_stage_solve"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/dcs.rs",
+          "symbol": "lazy_solve_preloaded"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/cut/basis_reconstruct.rs | sed -n '30,35p;291,302p' && git show 077dbe2c:crates/cobre-sddp/src/cut/dcs.rs | sed -n '635,640p'",
+        "output": "basis_reconstruct.rs:32  //! [`enforce_basic_count_invariant`] runs unconditionally after every\n//! reconstruction ... until `excess = col_basic + row_basic - num_row` reaches zero.\nbasis_reconstruct.rs:291  let col_basic = out\n        .col_status\n        .iter()\n        .filter(|&&s| s == BasisStatus::Basic)\n        .count();\n    let row_basic = out\n        .row_status\n        .iter()\n        .filter(|&&s| s == BasisStatus::Basic)\n        .count();\ndcs.rs:635  reconstruct_basis_uniform_basic(stored, target, cut_rows, &mut scratch.recon_basis);\n            enforce_basic_count_invariant(&mut scratch.recon_basis, core.num_rows + cut_rows, core.num_rows)?;",
+        "reading": "The module rustdoc states the check runs unconditionally after every reconstruction, and both production call sites confirm it: run_stage_solve pairs it with reconstruct_basis on the frozen hot path and lazy_solve_preloaded pairs it with reconstruct_basis_uniform_basic on the DCS path. The two filter-count expressions walk the entire col_status and row_status vectors that the immediately preceding reconstruction call had just populated element by element, so the BASIC counts are recomputed from data whose producer already knew them."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Have each reconstruction entry point return the BASIC column and row counts it accumulates as it writes each status, pass them into the invariant check, and keep the two filter recounts behind a debug assertion so the release path drops both walks. Compute the carried counts per entry point rather than sharing one, because reconstruct_basis matches cut rows by slot identity while reconstruct_basis_uniform_basic marks them uniformly BASIC. Byte-neutrality: the counts are exact integers, so a carried count and a recount are the same value by construction, leaving the deficit rejection, the demotion loop, the returned demotion count and hence every warm start unchanged; parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 are unaffected. .claude/rules/sddp.md section 'Cut pool is append-only; basis matches by slot identity' governs the slot matching this must not disturb, and section 'The terminal stage bypasses reconstruction with a 1:1 basis apply' bounds the change: the terminal 1:1 apply path must not acquire the invariant check as a new caller.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant pass per warm-started solve: two full filter-count walks over status vectors whose producer already knew the counts",
+      "profiledSymbol": "crates/cobre-sddp/src/cut/basis_reconstruct.rs::enforce_basic_count_invariant",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "relatedTo": [
+        {
+          "id": "CD-018",
+          "sharedSymbols": [
+            "lazy_solve_preloaded"
+          ],
+          "titleJaccard": 0.0
+        },
+        {
+          "id": "CD-023",
+          "sharedSymbols": [
+            "run_stage_solve"
+          ],
+          "titleJaccard": 0.0
+        }
+      ],
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:organizational-quality-follow-ups-low-priority",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "process_stage_backward allocates a fresh owned staged-cut vector per worker per node at its return boundary, defeating the reused workspace buffer it drains",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "process_stage_backward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_node.rs",
+          "symbol": "process_stage_backward_by_node"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs | sed -n '2036,2038p;2164,2170p;1950,1958p' && git show 077dbe2c:crates/cobre-sddp/src/training/backward/by_node.rs | sed -n '144,145p'",
+        "output": "backward_pass_state.rs:2036  ) -> Vec<Result<(usize, Vec<StagedCut>), SddpError>> {\nbackward_pass_state.rs:2166  // `drain(..)` leaves capacity intact for the next stage; `w` rides\n            // alongside so the merge resolves each cut's `coefficients_range`\n            // against that worker's arena.\n            Ok((w, ws.backward_accum.staged_cuts_buf.drain(..).collect()))\n        })\n        .collect()\nbackward_pass_state.rs:1950  state.staged_cuts_buf.clear();\n        let mut worker_failure: Option<SddpError> = None;\n        for worker_result in worker_staged {\n            match worker_result {\n                Ok((w, cuts)) => state.staged_cuts_buf.extend(cuts.into_iter().map(|cut| (w, cut))),\nby_node.rs:144  ) -> Vec<Result<(usize, usize), SddpError>> {",
+        "reading": "The per-worker closure pushes each staged cut into ws.backward_accum.staged_cuts_buf, a SolverWorkspace-owned buffer that exists to be reused, then returns drain(..).collect(), which allocates a brand new owned Vec<StagedCut> while leaving the reused buffer empty. Rayon then collects those into a fresh Vec<Result<..>>. The caller immediately re-extends its own reused state.staged_cuts_buf from the temporaries and drops them, so both allocations are pure intermediates on a path called once per backward node per rayon worker, in a crate whose hard rule forbids allocation on hot paths. The sibling scheduler already avoids it: process_stage_backward_by_node returns per-worker counts, not owned cut vectors. This is distinct from CD-016, which is the duplicated buffer pre-allocation prologue shared by the same two functions."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Adopt the sibling scheduler's return shape: have process_stage_backward return per-worker counts and leave each staged cut in the producing worker's own staged_cuts_buf, then let the caller read them back in ascending worker-then-item order through the shared canonical_scatter primitive and extend state.staged_cuts_buf from borrowed slices, so no per-node vector is allocated. Error propagation is preserved because the by-node path already returns a Result per worker and propagates the first failure by value. Byte-neutrality: the merge already sorts by cut.trial_state_idx, the sole globally unique key, so the order in which cuts are added to the pool is unchanged and remains independent of worker count; .claude/rules/sddp.md section 'Cut pool is append-only; basis matches by slot identity' governs that add order and section 'Joint risk is applied once over the flattened successor x opening vector' is untouched because no aggregation moves. Parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2 stay byte-identical.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "allocation per (backward node, rayon worker) at a return boundary: a reused workspace buffer is drained into a fresh owned vector that the caller immediately copies into another reused buffer and drops",
+      "profiledSymbol": "crates/cobre-sddp/src/training/backward_pass_state.rs::process_stage_backward",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "dupOf": "CD-016",
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "staged_cuts_buf",
+          "rejected": "field anchor: check-anchors resolves declarations only (fn|struct|enum|trait|type|const|static|mod|impl); a field is cited, not anchored"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "attacker-prompt performance target 1 names the block constant TRIAL_BLOCK",
+      "why": "Drift report, not a finding: no TRIAL_BLOCK symbol exists anywhere in cobre-sddp at the pin. The constant that sizes the cut-selection gemm sweep is crates/cobre-sddp/src/cut/cut_selection.rs::M_BLOCK, and cut/dcs.rs is confirmed as the second crate::gemm call site as the prompt states. Verified with: git grep -n 'TRIAL_BLOCK' 077dbe2c -- crates/cobre-sddp (no match) and git show 077dbe2c:crates/cobre-sddp/src/cut/cut_selection.rs | grep -n 'const M_BLOCK'.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/training/backward/mod.rs::SuccessorEntry and ::SuccessorOutcomes",
+      "why": "Performance target 2's reification half is examined and clean, so it gets a positives entry rather than a candidate. SuccessorEntry is documented as borrow-free precisely so it lives in a reused per-node buffer, and the per-child loop in compute_one_backward_node writes it through build_delta_cut_row_batch_into with metadata_offset and outcome_range indices instead of owned sub-vectors. SuccessorOutcomes is a borrow-only view whose child(i) builds a stack-only SuccessorChild, and total_outcomes and total_metadata_len are O(children) sums evaluated once per node rather than inside any inner loop. There is no dense reification and no per-node allocation here. The gather shape, the other half of target 2, is raised separately as the level-wide archive replication candidate. CD-022 remains the architectural duplication claim on the same code and is not re-raised.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/cut/cut_sync.rs::sync_cuts, ::pack_local_records, ::sync_packed_records",
+      "why": "Superseded cut-sync public methods alongside the live ::sync_level_records. Registered and deferred to the next public-API break, and already handed to this station as a duplicate by the solver and comm station, so they are reported as sanctioned rather than raised as a candidate.",
+      "sanctionedBy": "CD-019 / mirror section Superseded cut-sync public methods"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/convergence/risk_measure.rs::aggregate_weighted",
+      "why": "Examined and clean. The allocation of a state-dimension coefficient vector here is not a hot-path smell: its own rustdoc marks it an allocating wrapper and directs hot paths to the _into form, the hot-path sibling aggregate_weighted_into is documented as bit-identical without allocating, and a grep of the crate shows the allocating path reached only through aggregate_cut, whose sole non-test callers are the module's own doc example and unit tests.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/cut/pool.rs::coefficients_prefix and ::intercepts_prefix",
+      "why": "Examined and clean. Both are zero-allocation reslices of the pool's existing storage, so the per-node cut-selection sweep reads the pool without copying it. The per-column maximum over all populated cuts inside the value kernel is documented selection semantics, not a redundant scan.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/claim_scatter.rs::canonical_scatter and ::ClaimCursor",
+      "why": "Examined and clean. canonical_scatter returns a lazy flat-map over the borrowed counts slice and allocates no scratch of its own, and ClaimCursor is a single relaxed atomic counter. The determinism the pair provides is what makes the borrowed-slice fix shape available to the staged-cut candidate.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/training/forward/enumerated.rs::run_enumerated_forward per-run vectors",
+      "why": "Not raised, by disposition. The node_seq path buffer, the stage-statistics accumulator, the scenario-cost vector and the path-walk buffer are each allocated once per call over the whole local path range and every stage, so they are per-run allocations of the same class as the deferred item on run_enumerated_backward, whose register entry records existence only and queues it to the perf epic. Its symmetric twin run_sampled_backward carries the same per-run stage-statistics vector and is in the same bucket. The per-worker capture and stage-statistics vectors are rebuilt only when the worker count changes and are otherwise reset in place.",
+      "sanctionedBy": "PD-004 deferred pending a profile"
+    },
+    {
+      "subject": "Modules read at the pin for this cell",
+      "why": "Read in full: cut/basis_reconstruct.rs, training/visited_states.rs, training/backward/mod.rs, claim_scatter.rs. Read in the regions that carry the hot loops: cut/cut_selection.rs value kernel and column rule, gemm.rs, cut/pool.rs prefix accessors, training/session/mod.rs cut-management driver, training/backward_pass_state.rs level driver and both backward scheduler entry points, training/forward/enumerated.rs sweep driver, solve/stage_solve.rs solve entry, cut/dcs.rs reconstruction call site, workspace/workspace.rs scratch fields, convergence/risk_measure.rs aggregation pair. crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs was read as context for the projection gather and is cited only, never anchored, because it belongs to the adjacent sub-station.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "The backward level archive deliberately gives every node in a multi-node level the whole level's gathered states, which the code calls a conservative over-inclusion that never drops a binding cut. Sharing one block per level instead of copying it per node is byte-neutral, but narrowing the archive to each node's own routed states would change which trial states each pool is scored against and therefore move the parity goldens. Is the over-inclusion a correctness margin the owner requires kept, or is the narrowing licensed as a golden-moving change?",
+    "Would the owner accept demoting the BASIC recount in enforce_basic_count_invariant to a debug assertion, with the release path trusting counts carried out of the two reconstruction entry points? The recount is currently the only unconditional runtime check that a reconstructed basis satisfies the HiGHS shape requirement before it reaches the solver."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 7,
+    "kept": 7,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

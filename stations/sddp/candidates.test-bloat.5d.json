@@ -1,0 +1,413 @@
+{
+  "station": "sddp",
+  "subStation": "5d",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "test-bloat",
+  "cell": "sddp/5d",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "Five integration binaries hand-copy test_support helpers behind a doc claim that the crate surface is unreachable, while every one of them already calls into that surface",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/simulation_integration.rs",
+          "symbol": "state_layout_for"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/simulation_pipeline_integration.rs",
+          "symbol": "state_layout_for"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/inflow_nonnegativity.rs",
+          "symbol": "state_layout_for"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/load_integration.rs",
+          "symbol": "state_layout_for"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/integration.rs",
+          "symbol": "state_layout_for"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/simulation_integration.rs",
+          "symbol": "all_enabled_cut_state_layouts"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/integration.rs",
+          "symbol": "all_enabled_cut_state_layouts"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/load_integration.rs",
+          "symbol": "all_enabled_cut_state_layouts"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/inflow_nonnegativity.rs",
+          "symbol": "all_enabled_cut_state_layouts"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/simulation_integration.rs",
+          "symbol": "study_dims_for"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/inflow_nonnegativity.rs",
+          "symbol": "study_dims_for"
+        },
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "state_layout"
+        },
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "all_enabled_cut_state_layouts"
+        },
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "study_dims_for"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n -E '^ *fn (state_layout_for|all_enabled_cut_state_layouts|study_dims|study_dims_for)\\(' 077dbe2c -- crates/cobre-sddp/tests/ ; git grep -n 'test_support' 077dbe2c -- crates/cobre-sddp/tests/{simulation_integration,simulation_pipeline_integration,inflow_nonnegativity,load_integration,integration}.rs ; git show 077dbe2c:crates/cobre-sddp/src/test_support.rs | grep -nE '^pub fn (state_layout|all_enabled_cut_state_layouts|study_dims|study_dims_for)\\b' ; git show 077dbe2c:crates/cobre-sddp/src/lib.rs | grep -n -B1 'pub mod test_support'",
+        "output": "state_layout_for declared in 7 tests/ files (conformance.rs:797, inflow_nonnegativity.rs:74, integration.rs:66, load_integration.rs:61, parity.rs:816, simulation_integration.rs:90, simulation_pipeline_integration.rs:60). all_enabled_cut_state_layouts declared in 5 (inflow_nonnegativity.rs:937, integration.rs:1904, load_integration.rs:791, parity.rs:1905, simulation_integration.rs:1809). study_dims/study_dims_for declared in 6 (inflow_nonnegativity.rs:91, integration.rs:79, load_integration.rs:74, parity.rs:829, simulation_integration.rs:106, simulation_pipeline_integration.rs:73). test_support.rs declares pub fn state_layout at 572, pub fn all_enabled_cut_state_layouts at 657, pub fn study_dims at 681, pub fn study_dims_for at 689; lib.rs:46-47 gates it '#[cfg(any(test, feature = \"test-support\"))] pub mod test_support;'. All five named binaries reach cobre_sddp::test_support at multiple call sites: simulation_integration.rs at 13 lines (73, 171, 656, 753, 866, 1064, 1442, 1540, 1659, 1694, 1727 among them), simulation_pipeline_integration.rs at 43 lines including an explicit 'use ... test_support::all_enabled_cut_state_layouts' at line 47, inflow_nonnegativity.rs at 559/641/672, load_integration.rs at 121/450/587/707, integration.rs at 13 lines from 209 to 1859. 24 of the 40 integration binaries import test_support.",
+        "reading": "The four all_enabled_cut_state_layouts copies in my exercising set are byte-identical to one another, doc comment included, and semantically identical to the test_support original: local body maps CutStateProjection::new(global, StageStateConfig{storage:true, inflow_lags:true}) over 0..n_stages, test_support's cut_state_projection does the same. The five state_layout_for copies are byte-identical to one another and expand to exactly the StateSpace::new(hydro_count, max_par_order, 0, Vec::new(), 0, 0, vec![], &vec![max_par_order; hydro_count]) call that test_support::state_layout -> state_layout_full -> state_layout_with_transit_buckets produces. Each copy is justified by a doc comment reading 'this external test crate cannot see the parent crate's #[cfg(test)] surface, so it rebuilds byte-identical patch columns here'. That justification is false at the pin for all five files: each already resolves cobre_sddp::test_support symbols, and one of them imports the very helper its siblings hand-copy. The referenced symbol name is also stale: test_support declares state_layout, not state_layout_for, so 5 doc comments cite a symbol that does not exist. Duplicated helper bodies inside my exercising set total 4 x 12 lines (all_enabled_cut_state_layouts) + 5 x 12 lines (state_layout_for) + 6 study_dims/study_dims_for bodies."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the local state_layout_for, all_enabled_cut_state_layouts and study_dims/study_dims_for definitions in the five binaries and call cobre_sddp::test_support::state_layout, ::all_enabled_cut_state_layouts and ::study_dims/::study_dims_for instead, exactly as simulation_pipeline_integration.rs line 47 already does for one of them; the five stale doc comments citing a nonexistent test_support::state_layout_for go with the bodies. Where a local signature differs from the crate one (study_dims_for takes five scalars locally, a GeometryDims reference in test_support) call the crate helper and set the differing field at the call site rather than re-deriving the whole struct. Byte-neutrality: this is helper-identity substitution producing the same StateSpace and CutStateProjection values, so no golden moves; confirm with the tier-1 parity goldens, the rank-invariance permutation harness, and a single-rank versus two-rank MPI reproduction.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "duplication",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "hold_k1_byte_stability_probe.rs asserts over its own string literals and one required fixture name no longer exists, so the guard passes green while verifying nothing",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+          "symbol": "lead_ge2_rebaseline_contains_the_named_k2_k3_fixtures"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+          "symbol": "LEAD_GE2_REBASELINE"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+          "symbol": "K1_SURVIVORS"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+          "symbol": "k1_survivors_and_lead_ge2_rebaseline_are_disjoint"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+          "symbol": "k1_byte_stability_verdict"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs",
+          "symbol": "AUDITED_FIXTURE_FILES"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+          "symbol": "simulation_ring_buffer_shifts_anticipated_state_k1"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'simulation_ring_buffer_shifts_anticipated_state' 077dbe2c ; for each of the 46 quoted names in K1_SURVIVORS/LEAD_GE2_REBASELINE/EXCLUDED_NOT_RING_GEOMETRY_SENSITIVE: git grep -q \"fn <name>(\" 077dbe2c -- crates/cobre-sddp/tests/ ; git show 077dbe2c:crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs | grep -c -e '#\\[test\\]' -e assert -e 'println!' ; git show 077dbe2c:crates/cobre-sddp/tests/hold_k1_byte_stability_probe.rs | grep -n '^use'",
+        "output": "46 distinct fixture names are quoted across the three const lists; 45 resolve to a 'fn <name>(' declaration under crates/cobre-sddp/tests/, 1 does not: simulation_ring_buffer_shifts_anticipated_state_k2. Repo-wide at the pin that string occurs only at hold_k1_byte_stability_probe.rs:172 (inside LEAD_GE2_REBASELINE) and hold_k1_byte_stability_probe.rs:222 (inside the required-names array of lead_ge2_rebaseline_contains_the_named_k2_k3_fixtures); the sibling _k1 name does resolve, at anticipated_scenarios.rs:1430. File census: 250 lines, 9 #[test] attributes, 17 assert sites, 5 println! sites, exactly 1 production import (use cobre_sddp::lp_builder::DeliveryRing at line 30). k1_byte_stability_verdict (line 232) contains 5 println! calls and 0 asserts.",
+        "reading": "Three of the nine tests exercise production code through the single DeliveryRing import and are legitimate. The other structure is self-referential: lead_ge2_rebaseline_contains_the_named_k2_k3_fixtures asserts that a hand-written &[&str] in the same file contains three string literals the same file writes, so the assertion can only fail if someone edits both sites inconsistently; it cannot detect that simulation_ring_buffer_shifts_anticipated_state_k2 has no corresponding test fn anywhere in the repo, which is the state at the pin. k1_survivors_and_lead_ge2_rebaseline_are_disjoint likewise compares three in-file literals to each other. k1_byte_stability_verdict has zero assertions and its five println! lines are swallowed by cargo test without --nocapture, so it can never fail and reports nothing in a normal run. The file's own module doc states the partition 'is an audited, re-runnable manual enumeration, not a mechanically-provable one' - which is exactly why the two list-shape tests are not a guard for it. One name has already rotted, which makes this a demonstrated false-confidence guard, not a hypothetical one."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Keep the three DeliveryRing primitive tests, which are the only part of this binary that touches production code. Delete k1_byte_stability_verdict, whose five println! lines carry no assertion and are invisible under a normal cargo test run, and delete the two list-shape assertions that compare in-file literals to each other. Relocate the audited k_max partition and its rationale to prose that no green test can misrepresent, either the module doc that already holds the argument or the sddp rules file, and fix or drop the rotted simulation_ring_buffer_shifts_anticipated_state_k2 entry while doing so. If the partition must stay executable, make the assertion resolve each name against the test tree rather than against a sibling literal in the same file, so a renamed or deleted fixture fails the guard. Byte-neutrality: the probe writes no output and reads no golden, and the three retained tests construct DeliveryRing directly, so nothing in the parity or rank-invariance sets is touched; the reproduction pair still runs to confirm.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "false-confidence-guard",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The four right_boundary binaries carry md5-identical 40-to-41-line fixture prologues and a shared-helper trio, with the fixture preamble occupying 54 to 72 percent of each file",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs",
+          "symbol": "penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_output.rs",
+          "symbol": "penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_pricing.rs",
+          "symbol": "penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_validation.rs",
+          "symbol": "penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs",
+          "symbol": "bounds"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_output.rs",
+          "symbol": "bounds"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_pricing.rs",
+          "symbol": "bounds"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_cost_semantics.rs",
+          "symbol": "stages"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_output.rs",
+          "symbol": "stages"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_pricing.rs",
+          "symbol": "leaf_positions"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/shared_boundary_terminal_fan_probe.rs",
+          "symbol": "leaf_positions"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_pricing.rs",
+          "symbol": "fixture_priced_date"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/right_boundary_validation.rs",
+          "symbol": "fixture_priced_date"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/shared_boundary_terminal_fan_probe.rs",
+          "symbol": "fixture_priced_date"
+        },
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "fixture_priced_date"
+        }
+      ],
+      "evidence": {
+        "command": "for f in right_boundary_cost_semantics right_boundary_output right_boundary_pricing right_boundary_validation shared_boundary_terminal_fan_probe; do git show 077dbe2c:crates/cobre-sddp/tests/$f.rs > /tmp/rb_$f.txt; done ; then for each of penalties/bounds/stages/post_study_stages/leaf_positions/fixture_priced_date/post_study_ring_slot/freeze_terminal_template/terminal_theta/ring_pin/inject_ring_boundary: locate 'fn <name>' and the next line matching '^}' and md5sum the extracted body ; git show 077dbe2c:<path> | grep -n '#\\[test\\]' | head -1 versus wc -l",
+        "output": "penalties: 41 lines in all four files (cost_semantics 164-204, output 167-207, pricing 191-231, validation 200-240), one single md5 4b5df6d0ec99 across all four. bounds: 40 lines in all four, md5 2da9a556461d identical in cost_semantics 123-162, output 126-165 and pricing 150-189; validation 159-198 differs (it takes a thermal_block_max_mw parameter). stages: 33 lines with md5 472917407e0b identical in cost_semantics 68-100 and output 73-105; pricing 98-129 and validation 103-134 each differ. leaf_positions: 8 lines, md5 a3f575b7105a identical in pricing 484-491 and shared_boundary_terminal_fan_probe 115-122. fixture_priced_date: identical 3-line adapters in pricing 361, validation 361 and shared_boundary_terminal_fan_probe 35, each delegating to cobre_sddp::test_support::fixture_priced_date with the same ymd(2030,1,1) base. post_study_ring_slot (5 L), inject_ring_boundary (23 L), freeze_terminal_template (38/36 L), terminal_theta (33 L) and ring_pin (5 L) exist in both pricing and validation with near-identical shapes and differing md5 (parameterization differences). Preamble share, first #[test] line over total lines: cost_semantics 289/401 = 72 percent, output 295/532 = 55 percent, pricing 501/936 = 54 percent, validation 503/703 = 72 percent, shared_boundary_terminal_fan_probe 124/237 = 52 percent.",
+        "reading": "164 lines of penalties and 120 lines of bounds are exact character-for-character duplicates across separate integration binaries, and the fixture prologue is the majority of every file in the family. The shared harness that testing-architecture.md section 5.1 designates as the single source of fixture builders holds none of it; nor does test_support, even though these same files already call test_support::write_synthetic_boundary and test_support::fixture_priced_date, so the seam is open and partly used. Adding a field to ResolvedPenalties or ResolvedBounds today requires four and three identical edits respectively inside this family alone."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Hoist the exactly-duplicated bodies into the shared harness the testing architecture already names as the single source of fixture builders, either a right-boundary fixture module under tests/common or the test_support surface these files already call for write_synthetic_boundary and fixture_priced_date, and leave only the genuinely per-file parameterized variants local: validation's bounds takes a thermal cap, pricing and validation each shape their own stages and post_study_stages. Fold the three identical fixture_priced_date adapters into a single shared adapter over the existing crate helper. Do not introduce a new fixture crate; the testing architecture rules that out and no new crate is needed for a move inside one crate's test surface. Byte-neutrality: right_boundary_validation.rs is one of the parity-hash golden files, so the hoist must be a pure move preserving every literal value with no reordering of struct-literal construction, verified against the tier-1 parity goldens, the rank-invariance permutation harness, and a single-rank versus two-rank MPI reproduction.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "duplication",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "anticipated_core.rs re-declares md5-identical hydro-default fixtures six times inside one binary and build_config fourteen times, while already importing the shared O(1) field-add builder",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_core.rs",
+          "symbol": "default_hydro_penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_core.rs",
+          "symbol": "default_hydro_bounds"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_core.rs",
+          "symbol": "default_hydro_block_bounds"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_core.rs",
+          "symbol": "build_config"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_core.rs",
+          "symbol": "build_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+          "symbol": "default_hydro_penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+          "symbol": "build_config"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/hydro_sim.rs",
+          "symbol": "build_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/builders.rs",
+          "symbol": "HydroSpec"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/tests/<file>.rs | grep -oE '^ *fn [a-z_0-9]+\\(' | sort | uniq -c | sort -rn | awk '$1>1' ; then for each 'fn default_hydro_penalties' site: extract to the next '^ *}$' and md5sum after stripping leading indent ; git grep -c 'HydroPenalties {' 077dbe2c -- crates/cobre-sddp/tests/ ; git grep -n -B6 'pub struct HydroPenalties' 077dbe2c -- crates/cobre-core/src/ ; git show 077dbe2c:crates/cobre-sddp/tests/<file>.rs | grep -nE 'common::'",
+        "output": "anticipated_core.rs repeats build_config 14 times, build_system 13 times, default_hydro_penalties 6 times, default_hydro_bounds 6 times, default_hydro_block_bounds 6 times, date 2 times, across its 10 named inner modules. All 6 default_hydro_penalties bodies are 19 lines with one single md5 cbbd76e4b1da (L1493, 2490, 3091, 4561, 5132, 5678). default_hydro_bounds: 7 lines each, md5 9f5946a58e48 at four sites (1476, 2473, 4544, 5115) and 1e380e38343e at two (3074, 5661). default_hydro_block_bounds: 6 lines each, md5 39a1a2d83add at four sites and 524cab1a5065 at two. anticipated_scenarios.rs repeats build_config 6 times, build_system 5 times, default_hydro_bounds 4, default_hydro_block_bounds 4, default_hydro_penalties 3. hydro_sim.rs repeats config 4, build_system 4, study_start 3, stages 3. Both anticipated files declare 'mod common;' and import common::builders (anticipated_core.rs:56, anticipated_scenarios.rs:116). HydroPenalties derives Debug, Clone, Copy, PartialEq at crates/cobre-core/src/entities/hydro.rs:56-58, no Default, so every literal must list all 16 fields. A 'HydroPenalties {' literal appears in 31 files under crates/cobre-sddp/tests/, 27 times in anticipated_core.rs alone.",
+        "reading": "The shared builders module exists precisely so a new entity field costs one edit: HydroSpec carries a penalties field with a Default via neutral_hydro_penalties. Both anticipated binaries import that module and then bypass it, re-writing the exhaustive 16-field HydroPenalties literal once per inner test module. 6 copies of a 19-line body inside a single file is 95 duplicated lines that a file-level fixture module removes with no cross-binary coupling at all, since every copy lives in the same translation unit. The blast radius today for a 17th penalty field is 6 edits in anticipated_core.rs, 3 in anticipated_scenarios.rs, and 27 total literal sites in that one file."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Give each of these binaries a single file-level fixture module holding the bodies that are md5-identical, and have the named inner modules import from it rather than redeclare it; the two variant shapes of default_hydro_bounds and default_hydro_block_bounds become either a parameter on the shared helper or stay local next to the module that needs the variant. Where the fixture is just a differently-defaulted entity, prefer setting the fields on the shared HydroSpec the file already imports over re-writing the exhaustive struct literal, so a new penalty or bound field costs one edit instead of six. Blast radius is one file per binary and no cross-binary move is required. Byte-neutrality: the fixture values are unchanged literals, and any consolidation must preserve the exact per-module variant values rather than collapsing the two distinct bounds shapes into one; verify against the tier-1 parity goldens, the rank-invariance permutation harness, and a single-rank versus two-rank MPI reproduction.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "duplication",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The shared harness carries two hardcoded single-shape communicators while one binary carries the parameterized one that subsumes both, so the rank shape a test needs decides which of three types it reaches for",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "symbol": "Rank0Of2"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/simulation_pipeline_integration.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/integration.rs",
+          "symbol": "ShutdownComm"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/conformance.rs",
+          "symbol": "LocalComm"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n -E '^ *(pub )?struct StubComm' 077dbe2c -- crates/cobre-sddp/tests/ ; git grep -l 'common::StubComm' 077dbe2c -- crates/cobre-sddp/tests/ | wc -l ; git grep -l 'Rank0Of2' 077dbe2c -- crates/cobre-sddp/tests/ ; git show 077dbe2c:crates/cobre-sddp/tests/simulation_pipeline_integration.rs | grep -nE 'mod common|struct StubComm|StubComm \\{ rank'",
+        "output": "tests/common/mod.rs:32 declares 'pub struct StubComm;' as a unit struct whose rank() returns 0 and size() returns 1; 20 integration binaries use common::StubComm. tests/common/mod.rs also declares 'pub struct Rank0Of2;', a second unit struct whose rank() returns 0 and size() returns 2, used by 4 files (common/mod.rs, mpi_wire.rs, node_native_backward_gate.rs, simulation_integration.rs). tests/simulation_pipeline_integration.rs:51 declares 'mod common;' and imports common::builders at line 52, then at line 78 declares its own 'struct StubComm { rank: usize, size: usize }' and instantiates it at 15 sites, 14 with size: 1 and one with size: 2 at line 1173. integration.rs:86 declares ShutdownComm and conformance.rs:40 declares LocalComm as two further local Communicator impls.",
+        "reading": "The same concept is spelled three ways in one crate's test surface: a fixed 1-rank unit struct and a fixed 2-rank unit struct in the shared harness, plus a parameterized rank/size struct local to one binary that covers both shapes and shadows the shared name inside a file that imports the same common module. The collective bodies are not interchangeable as written, so this is fragmentation rather than a redundant copy: the local one panics via unreachable! on allgatherv, allreduce and broadcast, common::StubComm copies send into recv, and common::Rank0Of2 copies at the displs[0] offset. That difference is the reason a consolidation has to be deliberate rather than a delete, and it is also the reason a test author picks by rank shape instead of by semantics today."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Replace the three shapes with one parameterized stub communicator in the shared harness that takes rank and size and carries an explicit mode for the collectives a given path must not touch, so the pipeline tests keep their assert-unused semantics as a stated mode rather than as a separate type. The two existing unit structs become constructor calls at their 20 and 4 call sites and the local copy in simulation_pipeline_integration.rs disappears along with the name shadowing. This is not a blind delete: the unreachable! bodies are load-bearing for the pipeline tests that assert no collective fires on the frozen path, and the displs-offset copy in the 2-rank shape must survive verbatim. Byte-neutrality: communicator behaviour on every currently exercised path stays identical, so no golden moves; verify against the tier-1 parity goldens, the rank-invariance permutation harness, and a single-rank versus two-rank MPI reproduction, which is the direct check for this candidate.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "fixture-fragmentation",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The sibling-versus-inline test homing split across simulation and production is not threshold-driven: one file declares both homes at once, four inline modules sit above the proposed threshold, and one sibling was extracted at eleven test fns",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "transit_seed_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/energy_conversion/builder.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/evaporation.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/summary.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/types.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/pipeline.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lead_time/mod.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/mod.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/production.rs",
+          "symbol": "tests"
+        }
+      ],
+      "evidence": {
+        "command": "for every 5d manifest file: git show 077dbe2c:<path> | wc -l ; git show 077dbe2c:<path> | grep -n '^#\\[cfg(test)\\]' | head -1 ; git show 077dbe2c:<path> | grep -c '#\\[test\\]' ; plus git grep -n -E '^ *mod tests;|^ *#\\[cfg\\(test\\)\\]' 077dbe2c -- <the five sibling declaration sites> and git show 077dbe2c:crates/cobre-sddp/src/simulation/extraction.rs | sed -n '2156,2162p;2411,2413p'",
+        "output": "Sibling form, 5 sites in the 5d manifest: lead_time/mod.rs:747-748 (mod 748, sibling 1493 L / 53 test fns), production/fpha_fitting/mod.rs:40-49 (sibling 2673 L / 89), production/hydro_models/production.rs:1097-1098 (sibling 2759 L / 66), simulation/extraction.rs:2412-2413 (sibling 7138 L / 87), simulation/pipeline.rs:1083-1084 (sibling 2827 L / 11). Inline form above the proposed threshold: production/energy_conversion/builder.rs first #[cfg(test)] at 246 of 1405 lines = 1159 test lines / 26 test fns; production/hydro_models/evaporation.rs at 398 of 1314 = 916 / 22; production/hydro_models/summary.rs at 114 of 804 = 690 / 6; simulation/types.rs at 593 of 1107 = 514 / 18. simulation/extraction.rs declares BOTH homes: '#[cfg(test)] mod transit_seed_tests {' at 2156-2157 with 4 test fns and its own private date and three_stage_dates helpers, then '#[cfg(test)] mod tests;' at 2412-2413 pointing at the 7138-line sibling. 32 of the 47 manifest files carry at least one #[cfg(test)]. The lint-scope hypothesis is falsified: builder.rs:247, evaporation.rs:399 and summary.rs:115 each open a multi-lint #[allow(...)] block on the inline module, and production/fpha_fitting/mod.rs:40-49 opens the same kind of block on the sibling declaration, so the #[allow] wrapper appears on both forms and does not explain the choice.",
+        "reading": "This extends CD-007's class beyond the lp/builder directory it was measured in. None of the 14 inlineTestOutliers in the station inventory is a 5d file, and testing-architecture.md section 3.2 item 4 names only entries.rs, columns.rs, template.rs and layout.rs, so the simulation and production instances are unrecorded. Two facts are new rather than a re-measurement: a single file declaring two test homes simultaneously is not in CD-007's evidence at all, and the split here is provably not size-driven in either direction, since four inline modules exceed the section 5.1 proposal of roughly 500 test lines or 40 test fns while the smallest sibling was extracted at 11 test fns."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pick the single homing threshold that section 5.1 of the testing architecture proposes and apply it here as a lint rather than a judgment call. The immediately available and fully byte-neutral step is the two-homes file: fold the four transit-seed test fns and their two private date helpers into the existing sibling tests.rs that the same file already declares, so one file declares one home. The four inline modules above the threshold extract to sibling tests.rs files as the surrounding code is touched, carrying their #[allow] blocks with them exactly as the existing sibling declarations do. Byte-neutrality: moving a #[cfg(test)] module between an inline block and a sibling file changes no compiled non-test code and no fixture value, so no golden moves; the reproduction pair and the rank-invariance harness still run to confirm.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": "CD-007",
+      "claimType": "test-homing",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/test_support.rs as a live, consumed test-support surface",
+      "why": "The module is gated '#[cfg(any(test, feature = \"test-support\"))]' at lib.rs:46-47 and 24 of the 40 integration binaries import it at the pin, so the mechanism section 5.2 of the testing architecture adopted on 2026-09-15 works as designed: crate-internal geometry, state-layout, k-fan and slot fixtures are shared from one place instead of being reconstructed per binary. Its 1 slow-tests attribute is the only such attribute in the whole 5d manifest.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.2 and its Adoption (2026-09-15) note"
+    },
+    {
+      "subject": "crates/cobre-sddp/tests/common/builders.rs Spec-plus-Default-plus-make pattern",
+      "why": "StageSpec, HydroSpec, BusSpec and ThermalSpec each pair an exhaustive field list with a Default impl and a make_ constructor, so adding an entity field is one edit in this file instead of one per fixture. HydroPenalties carries no Default in cobre-core, which makes this the only place in the test surface where that field-add cost is O(1). It is the correct target for the consolidations proposed above, and the candidates ask to route more fixtures through it, never to fork it.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 3.1 item 4 and section 5.1 Layer 1"
+    },
+    {
+      "subject": "Named inner-module consolidation already in use in the large exercising binaries",
+      "why": "anticipated_core.rs holds 10 named inner modules, anticipated_scenarios.rs 5, hydro_sim.rs 8 and filling_commissioning.rs 4, each grouping a fixture family inside one integration binary rather than spawning a binary per family. That is the domain-binary shape section 5.1 Layer 1 proposes, reached with plain inline modules instead of #[path] files, and it is why the link cost of this corner of the suite is 4 binaries rather than 27.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.1 Layer 1"
+    },
+    {
+      "subject": "The parity, determinism and rank-invariance gates and the slow-tests attribute tier",
+      "why": "The 10 parity-hash golden files and the 13 files carrying slow-tests attributes are a correctness and tier-switch mechanism, not duplication, and none of them is counted as bloat anywhere in this report. Where a candidate above touches one of those files, right_boundary_validation.rs in the boundary-prologue candidate, the fix shape states the pure-move constraint and the reproduction check rather than proposing to trim the gate.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/sddp/inventory.json tests.informationalGates disposition and the prompt's informational declaration"
+    },
+    {
+      "subject": "The 15 manifest files that carry no test module at all",
+      "why": "hull/ffi.rs, lib.rs, production/mod.rs, simulation/mod.rs, production/energy_conversion/mod.rs and the fpha_fitting leaves error.rs, geometry.rs, grid.rs, production.rs and selection.rs declare zero #[cfg(test)], and the five sibling tests.rs files hold only tests. 32 of 47 manifest files carry a test module, so the crate is not uniformly test-dominated and the homing candidate above is scoped to the files where the split is actually inconsistent.",
+      "sanctionedBy": "measured at the baseline across the full 5d manifest"
+    }
+  ],
+  "_needsHuman": [],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 6,
+    "kept": 6,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

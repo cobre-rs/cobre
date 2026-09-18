@@ -9,6 +9,7 @@ tickets append their own stage classes here; the station verification runs the m
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
@@ -943,6 +944,199 @@ class WaveReverifyTests(sc.StationCase):
             self.assertTrue(sc.anchor_exists(f"`{a['path']}::{a['symbol']}`", tree), a)
         params = tree.read_text("crates/cobre-sddp/src/setup/params.rs")
         self.assertIn("export_states: config.exports.states", params)
+
+
+LENSES = ("architecture", "performance", "over-engineering", "test-bloat")
+PERF_TARGETS = {
+    "5c": ("select_for_stage", "SuccessorOutcomes", "reconstruct_basis"),
+    "5b": ("PatchBuffer",),
+}
+SEAM_SYMBOLS = (
+    "LipschitzConfig",
+    "UpperBoundEvaluationConfig",
+    "splice_reserved_state_block",
+    "reserve_boundary_inflow_lag_slots",
+    "rescale_cut_records_for_load",
+    "LEGACY_COST_SCALE_FACTOR",
+)
+SETTLED_SYMBOLS = (
+    "rebuild_historical_library_non_root",
+    "ConstructionConfig",
+    "into_construction_config",
+)
+TIMING_NUMBER = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:x\b|×|%|(?:ms|µs|us|ns|s|sec|secs|seconds|minutes|min|speedup|faster|slower)\b)",
+    re.I,
+)
+
+
+class CandidateEnvelopeTests(sc.StationCase):
+    SLUG = "sddp"
+    SECTION_TITLE = "sddp"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cells = {
+            (lens, sub): sc.load_json(
+                cls.station_dir() / f"candidates.{lens}.{sub}.json"
+            )
+            for lens in LENSES
+            for sub in SUBSTATIONS
+        }
+        cls.inv = sc.load_json(cls.station_dir() / "inventory.json")
+        cls.manifest = {f["path"]: f["substation"] for f in cls.inv["src"]["files"]}
+        cls.log = (cls.station_dir() / "attacker-log.md").read_text(encoding="utf-8")
+
+    def test_sixteen_cells_validate_and_agree_with_their_filenames(self) -> None:
+        for (lens, sub), env in self.cells.items():
+            with self.subTest(cell=f"{lens}.{sub}"):
+                path = self.station_dir() / f"candidates.{lens}.{sub}.json"
+                self.assertEqual(
+                    subprocess.run(
+                        [
+                            "python3",
+                            str(sc.TOOLS / "validate-envelope.py"),
+                            "--role",
+                            "attacker",
+                            "--station",
+                            "sddp",
+                            str(path),
+                        ],
+                        cwd=sc.REPO,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    ).returncode,
+                    0,
+                )
+                self.assertEqual(env["station"], "sddp")
+                self.assertEqual(env["subStation"], sub)
+                self.assertEqual(env["cell"], f"sddp/{sub}")
+                self.assertEqual(env["lens"], lens)
+                self.assertEqual(env["baseline"], self.baseline())
+                self.assertEqual(env["gate"]["validator"], "pass")
+                self.assertTrue(
+                    env["candidates"] or env["positives"],
+                    "a blank cell (no candidates and no positives)",
+                )
+
+    def test_every_anchor_is_symbol_only_inside_the_station_and_resolves(self) -> None:
+        tree = self.tree()
+        for (lens, sub), env in self.cells.items():
+            for c in env["candidates"]:
+                with self.subTest(cell=f"{lens}.{sub}", title=c["title"][:60]):
+                    self.assertTrue(c["anchors"])
+                    for a in c["anchors"]:
+                        self.assertEqual(set(a), {"path", "symbol"}, a)
+                        self.assertTrue(a["path"].startswith("crates/cobre-sddp/"), a)
+                        if a["path"].startswith("crates/cobre-sddp/src/"):
+                            self.assertIn(a["path"], self.manifest, a)
+                        else:
+                            self.assertEqual(lens, "test-bloat", a)
+                        self.assertTrue(
+                            sc.anchor_exists(f"`{a['path']}::{a['symbol']}`", tree), a
+                        )
+                    self.assertIn(c["alignmentHint"], ALIGN)
+                    self.assertIn(c["proposedSeverity"], ("A", "B", "C"))
+
+    def test_performance_cells_carry_layouts_and_no_numbers(self) -> None:
+        for sub in SUBSTATIONS:
+            env = self.cells[("performance", sub)]
+            for c in env["candidates"]:
+                with self.subTest(sub=sub, title=c["title"][:60]):
+                    self.assertIn(c["claimType"], ("single-process", "collective"))
+                    self.assertIn(c["layout"], ("4t", "2x2"))
+                    self.assertEqual(c["status"], "UNMEASURED")
+                    self.assertIsNone(c["measured"])
+                    self.assertEqual(c["queuedTo"], "perf-sweep")
+                    blob = (
+                        " ".join(
+                            str(c.get(k, ""))
+                            for k in ("title", "mechanism", "fixShape")
+                        )
+                        + " "
+                        + str(c["evidence"].get("reading", ""))
+                    )
+                    self.assertIsNone(TIMING_NUMBER.search(blob), blob[:120])
+        for sub, symbols in PERF_TARGETS.items():
+            env = self.cells[("performance", sub)]
+            mentioned = json.dumps(env["candidates"]) + json.dumps(env["positives"])
+            for s in symbols:
+                self.assertIn(
+                    s,
+                    mentioned,
+                    f"perf target {s} has neither candidate nor positive in {sub}",
+                )
+
+    def test_reserved_seams_and_settled_items_never_surface_as_candidates(self) -> None:
+        for (lens, sub), env in self.cells.items():
+            for c in env["candidates"]:
+                blob = c["title"] + " " + json.dumps(c["anchors"])
+                for s in (*SEAM_SYMBOLS, *SETTLED_SYMBOLS):
+                    self.assertNotRegex(
+                        blob, rf"\b{s}\b", f"{lens}.{sub}: {c['title'][:60]}"
+                    )
+            for p in env["positives"]:
+                text = p.get("subject", "") + " " + p.get("why", "")
+                if any(re.search(rf"\b{s}\b", text) for s in SEAM_SYMBOLS):
+                    self.assertTrue(p.get("sanctionedBy"), p)
+
+    def test_gate_recorded_drops_with_the_six_actions_and_the_log_has_no_blank_cell(
+        self,
+    ) -> None:
+        actions = {
+            "settled",
+            "sanctioned",
+            "dup-of",
+            "merged",
+            "anchor-missing",
+            "needs-human",
+        }
+        for (lens, sub), env in self.cells.items():
+            for d in env["dropped"]:
+                self.assertIn(d["action"], actions, f"{lens}.{sub}: {d['action']}")
+                self.assertTrue(d["reason"])
+            self.assertEqual(env["gate"]["kept"], len(env["candidates"]))
+            self.assertEqual(env["gate"]["dropped"], len(env["dropped"]))
+        matrix = section(self.log, "## Coverage matrix")
+        rows = [line for line in matrix.splitlines() if line.startswith("| ")]
+        self.assertEqual(len(rows), 5, "header + four lens rows")
+        for line in rows[1:]:
+            self.assertNotIn("pending", line)
+            self.assertNotIn("0/0/0", line)
+            self.assertNotIn("FAIL", line)
+        for lens in LENSES:
+            self.assertRegex(matrix, rf"^\| {re.escape(lens)}\s+\|", f"{lens} row")
+        for lens in LENSES:
+            for sub in SUBSTATIONS:
+                self.assertIn(
+                    f"{lens}.{sub}", self.log, "a cell without a dispatch record"
+                )
+        self.assertIn("## Prior-register screen", self.log)
+
+    def test_enumerated_duplication_is_kept_once_across_5c_and_5d(self) -> None:
+        enum_files = {
+            "crates/cobre-sddp/src/training/forward/enumerated.rs",
+            "crates/cobre-sddp/src/simulation/enumerated.rs",
+        }
+        dup = re.compile(
+            r"duplicat|twice|mirror|parallel|skeleton|cop(y|ies)|shared shape", re.I
+        )
+        carriers = [
+            (sub, c)
+            for sub in ("5c", "5d")
+            for c in self.cells[("architecture", sub)]["candidates"]
+            if ({a["path"] for a in c["anchors"]} & enum_files)
+            and (
+                len({a["path"] for a in c["anchors"]} & enum_files) == 2
+                or (re.search(r"enumerat", c["title"], re.I) and dup.search(c["title"]))
+            )
+        ]
+        self.assertLessEqual(len(carriers), 1, [s for s, _ in carriers])
+        if carriers:
+            _, c = carriers[0]
+            self.assertEqual({a["path"] for a in c["anchors"]} & enum_files, enum_files)
+            self.assertEqual(c.get("reRaiseOf"), "CD-028")
 
 
 class CleanTreeTests(unittest.TestCase):

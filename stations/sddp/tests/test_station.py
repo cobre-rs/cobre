@@ -1143,6 +1143,229 @@ class CandidateEnvelopeTests(sc.StationCase):
             self.assertEqual(c.get("reRaiseOf"), "CD-028")
 
 
+INGEST_STATES = {
+    "accepted",
+    "rejected-anchor",
+    "rejected-reserved-seam",
+    "rejected-defender",
+    "merged",
+    "needs-human",
+}
+SANCTIONED_BY_CLOSED_SET = {
+    "`LipschitzConfig.mode` and its enclosing `UpperBoundEvaluationConfig`",
+    "Boundary state-family coupling channels are per-family bespoke",
+    "Legacy (`None`) cost-scale branch of `rescale_cut_records_for_load`",
+    "`#[allow(...)]` census — Reserved-seam (Voice 4) class",
+    "Superseded cut-sync public methods",
+}
+BYTE_NEUTRAL = {"asserted", "needs-rebaseline", "n/a"}
+PROBE_TITLE = "INGEST ANCHOR PROBE — sddp (2026-09, baseline)"
+
+
+def ingest_state(entry: dict[str, Any]) -> str:
+    if entry["disposition"] == "dup-of":
+        return "merged"
+    if entry["disposition"] == "anchor-missing":
+        return "rejected-anchor"
+    if entry["disposition"] == "sanctioned":
+        return "rejected-reserved-seam"
+    if entry["verdict"] == "confirmed":
+        return "accepted"
+    if entry["verdict"] == "dismissed" or entry["disposition"] == "contract-dismissed":
+        return "rejected-defender"
+    return "needs-human"
+
+
+def normalised_tokens(text: str) -> set[str]:
+    return set(re.sub(r"[^a-z0-9 ]", "", text.lower().replace("`", "")).split())
+
+
+class IngestTests(sc.StationCase):
+    SLUG = "sddp"
+    SECTION_TITLE = "sddp"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.doc = sc.load_json(cls.station_dir() / "verdicts.json")
+        cls.verdicts = cls.doc["verdicts"]
+        cls.log = (cls.station_dir() / "ingest-log.md").read_text(encoding="utf-8")
+        cls.brief = (cls.station_dir() / "defender-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        cls.expected_refs = {
+            f"{sub}-{lens}-{i:02d}"
+            for lens in LENSES
+            for sub in SUBSTATIONS
+            for i in range(
+                len(
+                    sc.load_json(cls.station_dir() / f"candidates.{lens}.{sub}.json")[
+                        "candidates"
+                    ]
+                )
+            )
+        }
+        cls.headings = {
+            line.strip("# \n").replace("`", "")
+            for line in (sc.REPO / SDDP_MD).read_text(encoding="utf-8").splitlines()
+            if re.match(r"^#{2,3} ", line)
+        }
+
+    def test_exactly_one_verdict_per_candidate_across_the_sixteen_files(self) -> None:
+        self.assertEqual(set(self.verdicts), self.expected_refs)
+        for ref, entry in self.verdicts.items():
+            self.assertEqual(entry["candidateRef"], ref)
+        self.assertEqual(self.doc["counts"]["received"], len(self.expected_refs))
+        self.assertEqual(self.doc["baseline"], header_baseline())
+
+    def test_every_verdict_has_a_known_state_and_the_counts_sum(self) -> None:
+        counts = self.doc["counts"]
+        states = [ingest_state(e) for e in self.verdicts.values()]
+        self.assertTrue(set(states) <= INGEST_STATES, set(states) - INGEST_STATES)
+        self.assertEqual(
+            counts["received"],
+            counts["anchorRejected"]
+            + counts["sanctionedCleared"]
+            + counts["contractDismissed"]
+            + counts["dupOf"]
+            + counts["reRaiseRejected"]
+            + counts["handedOff"]
+            + counts["defended"],
+        )
+        self.assertEqual(
+            counts["defended"],
+            counts["confirmed"] + counts["dismissed"] + counts["verdictNull"],
+        )
+        self.assertEqual(states.count("merged"), counts["dupOf"])
+        self.assertEqual(states.count("accepted"), counts["confirmed"])
+        self.assertEqual(states.count("needs-human"), counts["verdictNull"])
+        for entry in self.verdicts.values():
+            if entry["disposition"] == "defended" and entry["verdict"] is None:
+                self.assertTrue(entry["_needsHuman"], entry["candidateRef"])
+
+    def test_accepted_anchors_resolve_at_the_baseline(self) -> None:
+        tree = self.tree()
+        for entry in self.verdicts.values():
+            if ingest_state(entry) != "accepted":
+                continue
+            for anchor in entry["anchors"]:
+                with self.subTest(ref=entry["candidateRef"], anchor=anchor):
+                    self.assertTrue(anchor["path"].startswith("crates/cobre-sddp/"))
+                    self.assertTrue(
+                        sc.symbol_resolves(anchor["path"], anchor["symbol"], tree)
+                    )
+
+    def test_anchor_probe_resolves_with_the_harness_checker(self) -> None:
+        report = json.loads(
+            subprocess.run(
+                [
+                    "python3",
+                    str(sc.TOOLS / "check-anchors.py"),
+                    PROBE_TITLE,
+                    "--register",
+                    str(self.station_dir() / "anchor-probe.md"),
+                    "--baseline",
+                    header_baseline(),
+                    "--json",
+                ],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+        )
+        self.assertEqual(report["failures"], [])
+        self.assertEqual(
+            report["checked"],
+            sum(len(e["anchors"]) for e in self.verdicts.values()),
+        )
+
+    def test_reserved_seam_rejections_cite_the_closed_set(self) -> None:
+        for entry in self.verdicts.values():
+            if ingest_state(entry) == "rejected-reserved-seam" or entry.get(
+                "sanctionedBy"
+            ):
+                self.assertIn(entry["sanctionedBy"], SANCTIONED_BY_CLOSED_SET)
+        for text in SANCTIONED_BY_CLOSED_SET:
+            self.assertIn(text, self.brief)
+
+    def test_dup_of_carries_the_prior_id_instead_of_a_fresh_verdict(self) -> None:
+        merged = [e for e in self.verdicts.values() if ingest_state(e) == "merged"]
+        self.assertTrue(merged)
+        for entry in merged:
+            self.assertIsNone(entry["verdict"])
+            self.assertIn(entry["priorRelation"], {"restates", "intra-station"})
+            if entry["priorRelation"] == "restates":
+                self.assertRegex(entry["priorId"], r"^(CD|OD|PD)-\d{3}$")
+                self.assertIn(entry["priorId"], OWNED)
+            else:
+                self.assertIn(entry["priorId"], self.verdicts)
+                self.assertEqual(
+                    self.verdicts[entry["priorId"]]["disposition"], "defended"
+                )
+                self.assertIn(
+                    entry["candidateRef"], self.verdicts[entry["priorId"]]["mergedFrom"]
+                )
+        for entry in self.verdicts.values():
+            if entry.get("priorRelation") == "sharpens":
+                self.assertEqual(entry["disposition"], "defended")
+                self.assertIn(entry["priorId"], OWNED | {"CD-074"})
+
+    def test_confirmed_verdicts_narrow_and_dismissals_carry_no_claim(self) -> None:
+        for entry in self.verdicts.values():
+            if entry["disposition"] != "defended":
+                continue
+            with self.subTest(ref=entry["candidateRef"]):
+                self.assertIn(entry["byteNeutral"], BYTE_NEUTRAL | {None})
+                self.assertIn(entry["alignmentHint"], ALIGN | {None})
+                if entry["verdict"] == "confirmed":
+                    claim = entry["survivingClaim"]
+                    self.assertTrue(claim and len(claim) >= 40)
+                    title_tokens = normalised_tokens(entry["title"])
+                    claim_tokens = normalised_tokens(claim)
+                    jaccard = len(title_tokens & claim_tokens) / len(
+                        title_tokens | claim_tokens
+                    )
+                    self.assertLess(jaccard, 0.85)
+                if entry["verdict"] == "dismissed":
+                    self.assertIsNone(entry["survivingClaim"])
+                if entry.get("contractCited"):
+                    self.assertIn(
+                        entry["contractCited"].replace("`", ""), self.headings
+                    )
+                if entry["lens"] == "performance" and entry["argument"]:
+                    self.assertIsNone(
+                        TIMING_NUMBER.search(
+                            entry["argument"] + " " + (entry["survivingClaim"] or "")
+                        )
+                    )
+                for field in ("argument", "survivingClaim"):
+                    self.assertNotIn("```", entry[field] or "")
+
+    def test_ingest_log_has_one_roster_row_per_candidate(self) -> None:
+        roster = section(self.log, "## Per-candidate roster")
+        refs = re.findall(
+            r"^\| (5[a-d]-(?:architecture|performance|over-engineering|test-bloat)-\d{2}) \|",
+            roster,
+            re.M,
+        )
+        self.assertEqual(sorted(refs), sorted(self.expected_refs))
+        self.assertEqual(len(refs), len(set(refs)))
+        header = re.search(r"^Baseline: `([0-9a-f]{40})`", self.log, re.M)
+        assert header is not None
+        self.assertEqual(header.group(1), header_baseline())
+        for heading in (
+            "## Candidate census",
+            "## Anchor rejections",
+            "## Cleared (sanctioned)",
+            "## Dup-of merges",
+            "## Re-raise rejections",
+            "## Contract dismissals",
+            "## Out-of-station hand-offs",
+            "## Defender pass",
+        ):
+            self.assertIn(heading, self.log)
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_under_an_evaluated_surface_is_modified(self) -> None:
         out = subprocess.run(

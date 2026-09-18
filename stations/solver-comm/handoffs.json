@@ -30,7 +30,12 @@
       }
     ],
     "idAssigned": null,
-    "note": "Anchors resolve in cobre-sddp, not in cobre-solver or cobre-comm (git grep over both station crates returns nothing). Merged as dup-of at ingest; no new id. Re-raising here is a check-reraise.py failure. The mirror heading sat at :311 under the superseded pin a136840d and at :334 under this baseline."
+    "note": "Anchors resolve in cobre-sddp, not in cobre-solver or cobre-comm (git grep over both station crates returns nothing). Merged as dup-of at ingest; no new id. Re-raising here is a check-reraise.py failure. The mirror heading sat at :311 under the superseded pin a136840d and at :334 under this baseline.",
+    "ingestRecords": [
+      "architecture-02",
+      "over-engineering-02"
+    ],
+    "ingestNote": "Two lenses (architecture, over-engineering) independently emitted the dup-of; ingest folded them onto this single E5 block, one record each below, no id."
   },
   "E7": {
     "filledBy": "Part-I item 8 re-verification ticket (gate blind spot); the doc-drift observation below came from the inventory ticket",
@@ -81,5 +86,73 @@
   "E10": {
     "filledBy": "calibrate/record ticket (each Sev-A/B perf claim with its 4t or 2x2 layout; the cobre-comm per_rank_counts/prefix_displs consumer list is on inventory.json files[crates/cobre-comm/src/lib.rs].perfHelpers)",
     "block": null
-  }
+  },
+  "records": [
+    {
+      "toEpic": "E5",
+      "kind": "dup-of",
+      "dupOf": "Superseded cut-sync public methods",
+      "mirrorCitation": "docs/design/reserved-seams-and-deferred-debt.md — 'Superseded cut-sync public methods' (:334 at this baseline)",
+      "registerId": "CD-019",
+      "assignedId": null,
+      "candidateRef": "architecture-02",
+      "attackerRef": "SC-ARCH-002",
+      "lens": "architecture",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_cuts"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "pack_local_records"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_packed_records"
+        }
+      ],
+      "supersededBy": {
+        "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+        "symbol": "sync_level_records",
+        "line": 581
+      },
+      "verifiedAtBaseline": "git show 077dbe2c:crates/cobre-sddp/src/cut/cut_sync.rs | grep -nE '^\\s*pub fn (sync_cuts|pack_local_records|sync_packed_records|sync_level_records)\\b' → 243, 400, 495, 581",
+      "trigger": "the next licensed public-API break",
+      "note": "assignedId stays null on purpose — a new OD/CD id here is a check-reraise failure; the candidate's own fixShape/evidence stays in candidates.<lens>.json for E5 to read"
+    },
+    {
+      "toEpic": "E5",
+      "kind": "dup-of",
+      "dupOf": "Superseded cut-sync public methods",
+      "mirrorCitation": "docs/design/reserved-seams-and-deferred-debt.md — 'Superseded cut-sync public methods' (:334 at this baseline)",
+      "registerId": "CD-019",
+      "assignedId": null,
+      "candidateRef": "over-engineering-02",
+      "attackerRef": "SC-OE-002",
+      "lens": "over-engineering",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_cuts"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "pack_local_records"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_packed_records"
+        }
+      ],
+      "supersededBy": {
+        "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+        "symbol": "sync_level_records",
+        "line": 581
+      },
+      "verifiedAtBaseline": "git show 077dbe2c:crates/cobre-sddp/src/cut/cut_sync.rs | grep -nE '^\\s*pub fn (sync_cuts|pack_local_records|sync_packed_records|sync_level_records)\\b' → 243, 400, 495, 581",
+      "trigger": "the next licensed public-API break",
+      "note": "assignedId stays null on purpose — a new OD/CD id here is a check-reraise failure; the candidate's own fixShape/evidence stays in candidates.<lens>.json for E5 to read"
+    }
+  ]
 }

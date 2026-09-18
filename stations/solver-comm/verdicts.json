@@ -1,0 +1,1020 @@
+{
+  "station": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "ingestedAt": "2026-09",
+  "candidateRefScheme": "<lens>-<nn>; nn = the attacker ref's NNN (SC-<LENS>-NNN), preserved as attackerRef",
+  "dispositionVocabulary": [
+    "defended",
+    "anchor-missing",
+    "out-of-station",
+    "sanctioned",
+    "dup-of",
+    "re-raise",
+    "informational"
+  ],
+  "counts": {
+    "received": 24,
+    "anchorRejected": 0,
+    "outOfStation": 0,
+    "sanctionedCleared": 0,
+    "dupOf": 2,
+    "reRaiseRejected": 0,
+    "informational": 1,
+    "defended": 21,
+    "confirmed": 20,
+    "dismissed": 1,
+    "needsHuman": 3
+  },
+  "verdicts": {
+    "architecture-01": {
+      "candidateRef": "architecture-01",
+      "attackerRef": "SC-ARCH-001",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "The hand-replicated per-crate `[lints]` tables have already drifted, and the failure mode is silent: a dropped `deny` cannot make CI red",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/Cargo.toml",
+          "symbol": "lints.clippy",
+          "line": 41
+        },
+        {
+          "path": "crates/cobre-solver/Cargo.toml",
+          "symbol": "lints.rust",
+          "line": 37
+        },
+        {
+          "path": "crates/cobre-comm/Cargo.toml",
+          "symbol": "lints.clippy",
+          "line": 39
+        },
+        {
+          "path": "crates/cobre-comm/Cargo.toml",
+          "symbol": "lints.rust",
+          "line": 35
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "The mechanism is real and unguarded, but the title over-reaches twice, so the finding survives only in narrowed form. Real part: a crate-level `[lints]` table REPLACES `[workspace.lints]` rather than overlaying it -- Cargo workspace lint inheritance is opt-in via `lints.workspace = true`, and `crates/cobre-cli/Cargo.toml:69-70` is the only station-adjacent manifest that takes that form. `crates/cobre-solver/Cargo.toml:37-47` and `crates/cobre-comm/Cargo.toml:35-45` therefore carry the whole enforcement surface themselves, and the Cargo constraint the manifest comments cite (`crates/cobre-solver/Cargo.toml:33-36`, `crates/cobre-comm/Cargo.toml:29-34`) is genuine, so deduplication is not available. I confirmed no guard exists: `scripts/ci/` holds 15 checkers at this baseline (allow-rationale, comment-banners/bloat/line-refs/refs, cut-selection-determinism, doc-paths, doc-placeholders, docs-examples, infra-genericity, no-past-inflows, no-plan-leaks, doc-voice, python-parity, schemas, quality-report) and none parses a manifest lint table; grepping `.github/` and `scripts/` for `workspace.lints`, `lints.workspace` and `unwrap_used` returns only the `#[allow]`-rationale checker, which inspects source attributes, not manifests. Over-reach 1 -- no drift at this station: both replicas are faithful at the baseline, 6 of 6 clippy entries and both rust entries with only `unsafe_code` flipped to `allow`; the drifted replica is `crates/cobre-python/Cargo.toml:46-55`, which is the cli-python station's anchor and, per the prior register, not this station's to raise. The candidate also undercounts the fan-out: `crates/cobre-sddp/Cargo.toml:120-131` is a fourth replica (6 of 6), so four manifests hand-copy the table, not three. Over-reach 2 -- the silence is not universal, and specifically does not hold for the key that drifted: `clippy::too_many_arguments` sits in the `complexity` group, hence inside the `all = { level = \"warn\", priority = -1 }` entry the replicas keep, and CI runs `cargo clippy --workspace --all-targets ... -- -D warnings` (`.github/workflows/ci.yml:154`, and the CLP job at `:221`), which escalates that warning to an error. Dropping `too_many_arguments = \"deny\"` therefore degrades a manifest-level deny to a warn that CI still turns red -- it is not the silent class. The silent class is the allow-by-default entries that no group header restores: `unwrap_used`, `expect_used` and `panic` are `clippy::restriction` lints absent from both `all` and `pedantic`, and rustc `missing_docs` is allow-by-default; omitting any of those four from a replica removes the check with no diagnostic anywhere. That residue is the finding, and it lands on the workspace's hardest rule, since `unwrap_used = \"deny\"` is a CLAUDE.md hard rule. No fix is proposed here; I note only that any resolution is a manifest/CI-hygiene change, which is why the alignment hint is neutral. L0 purity test: the implied fix introduces no engine or paradigm concept into either crate (a), adds no dependency onto an engine crate (b), and creates no single-consumer abstraction (c) -- a manifest-parity guard would have four consumers and lives outside both crates -- so `conflicts` does not fire.",
+        "survivingClaim": "Narrowed to the mechanism at this station only: because a crate-level `[lints]` table replaces rather than overlays `[workspace.lints]`, and no checker in `scripts/ci/` compares the two, omitting any of the four allow-by-default entries (`unwrap_used`, `expect_used`, `panic`, `missing_docs`) from the hand copy in `crates/cobre-solver/Cargo.toml:37-47` or `crates/cobre-comm/Cargo.toml:35-45` disables that check with CI still green. Conceded: neither station replica has drifted at the baseline (6 of 6, `unsafe_code` alone flipped), and the silent failure mode does NOT extend to `too_many_arguments` -- the one key that drifted in the out-of-station python replica -- because `clippy::all` still reports it and `-D warnings` at `.github/workflows/ci.yml:154` turns it red.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "architecture-02": {
+      "candidateRef": "architecture-02",
+      "attackerRef": "SC-ARCH-002",
+      "disposition": "dup-of",
+      "lens": "architecture",
+      "title": "Superseded cut-sync public methods still stand beside the live single path that owns the collective partition contract",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_cuts",
+          "line": 243
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "pack_local_records",
+          "line": 400
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_packed_records",
+          "line": 495
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_level_records",
+          "line": 581
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "dupOf": "Superseded cut-sync public methods",
+      "sanctionedBy": "Superseded cut-sync public methods",
+      "mirrorCitation": "docs/design/reserved-seams-and-deferred-debt.md:334",
+      "registerId": "CD-019",
+      "handoff": "E5",
+      "assignedId": null
+    },
+    "architecture-03": {
+      "candidateRef": "architecture-03",
+      "attackerRef": "SC-ARCH-003",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "Seven production doc comments in cobre-solver carry caller-loop vocabulary that the genericity gate's pattern cannot see at all",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "line": 66
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/retry.rs",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/solver.rs",
+          "line": 320
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/solver.rs",
+          "line": 477
+        },
+        {
+          "path": "crates/cobre-solver/src/trait_def.rs",
+          "line": 95
+        },
+        {
+          "path": "crates/cobre-solver/src/trait_def.rs",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-solver/src/trait_def.rs",
+          "line": 212
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "All seven anchors resolve at the baseline with the quoted text, and the gate PATTERN in scripts/ci/check-infra-genericity.sh carries no scenario, stage, pass or multistage term, so the blindness observation is factually right. It is not a gate defect: the gate implements the CLAUDE.md hard rule verbatim and that rule enumerates only sddp/SDDP/Benders plus cut vocabulary, so 'that the gate cannot see at all' is stripped from the claim - the candidate's own fixShape concedes the point. The broader ban is nonetheless real: tools/target-layering-brief.md section 1 forbids 'SDDP-, Benders- or multistage-shaped types, fields or vocabulary' in the L0 row that names cobre-solver. Four of the seven do not survive as independent sites. highs/solver.rs:320 states the L0 fact in the same parenthetical ('thousands of solves per instance'); trait_def.rs:207 states the generic contract first ('between independent solve sequences ... discarding any simplex state') and marks the caller boundary with an explicit 'e.g.'; clp/interface.rs:66 is the impl-side rationale twin of trait_def.rs:212 and its normative content is the ClpSimplex rim/pricing state that Clp_loadProblem does not heal, so it travels with the trait-level anchor rather than as its own site; retry.rs:74 'deep-stage' rides on vocabulary the crate owns publicly - StageTemplate is the parameter type of load_model at trait_def.rs:64, freeze.rs:1 reads 'reusable LP stage templates', highs/config.rs:153 says 'every stage template' - and Part-I item 8 sheds only that type's multistage FIELDS, leaving the L0 container. The residue is undefendable. git grep at the baseline shows the only other forward/backward-pass vocabulary in the five gated crates is cobre-core/src/constraints/training_event.rs, itself registered Part-I item 5 debt slated to leave L0, so it is precedent for debt and not a sanction: 'the primary warm-start mechanism for the backward pass' at highs/solver.rs:477 names an L3 traversal phase with no referent anywhere in L0. trait_def.rs:212 is worse than a word choice - it scopes the public determinism guarantee to a scenario-looping caller when the handle-level property (a solve's result must not depend on which models the same handle solved before it) is both L0-resolvable and strictly stronger, so a second engine implementing SolverInterface cannot tell whether the guarantee binds it. trait_def.rs:95 is the mildest of the three: 'patch' is crate-owned (clp/interface.rs:340 'Patches the bounds of an arbitrary set of rows in place', clp/solver.rs:29), so only the qualifier 'scenario' fails to resolve against any trait method. L0 purity test: the fix removes engine vocabulary from L0, adds no engine or paradigm concept, no dependency onto an engine crate and no one-consumer abstraction, so rule 8 does not fire. The one-sidedness also holds - the same grep over crates/cobre-comm/src returns nothing. Hint is neutral because the fix is prose only: no type, field, dependency or seam moves, and none of the enumerated 0a/0b/1 deliverables advances.",
+        "survivingClaim": "Three of the seven put above-L0 vocabulary in the normative sentence itself with no adjacent generic restatement: highs/solver.rs:477 ('the primary warm-start mechanism for the backward pass', an L3 traversal phase with no L0 referent), trait_def.rs:212 (the public determinism guarantee scoped to 'a scenario's result' and 'which scenarios a worker happened to process' instead of to the solver handle), and trait_def.rs:95 (the qualifier 'scenario' on solve's otherwise crate-owned 'patches' precondition). The other four restate the L0 fact in the same sentence, mark the caller boundary as an 'e.g.', or duplicate a trait-level anchor, and the gate's inability to see any of them is not part of the defect.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "architecture-04": {
+      "candidateRef": "architecture-04",
+      "attackerRef": "SC-ARCH-004",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "The CLP backend's module facade carries a `pub(crate)` re-export and a lint suppression whose only consumer is its own sibling test module, where the HiGHS facade carries neither",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/mod.rs",
+          "line": 24
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/mod.rs",
+          "symbol": "LADDER_RUNGS",
+          "line": 25
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "line": 6
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/mod.rs",
+          "line": 23
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "The core is true at the baseline and I can find no code that requires the facade line. `git grep LADDER_RUNGS 077dbe2c -- crates/` returns exactly four files: the definition (`clp/retry.rs:24`), the production consumer reading it by its owning path (`clp/interface.rs:6` -> use at `:570`), the facade re-export (`clp/mod.rs:25`), and the sibling test module (`clp/tests.rs:1`, asserted at `:364` and `:406`). No other crate-internal consumer exists, so the `pub(crate)` facade surface has zero non-test consumers and the `#[cfg_attr(not(test), allow(unused_imports))]` at `clp/mod.rs:24` exists only to cover that. `retry` is a private sibling module of `tests` inside `clp`, so the owning path `interface.rs:6` already uses is reachable from the test module too; nothing in `.claude/rules/imports.md` forces the facade path, since its section 4 shallowest-curated-re-export rule ends by making the defining module path canonical when no shallower re-export exists, and section 8 explicitly makes test-module import paths a SHOULD, not a MUST. I therefore cannot defend the line. I strip two over-reaches. First, the cross-backend framing: the HiGHS facade carries neither because its retry module defines no module-level constant at all -- the rung count is the function-local `let num_retry_levels = 12_u32;` inside `HighsSolver::retry_escalation` (`highs/retry.rs`), and `highs/tests.rs` asserts on `retry_count` relations, never on a named constant. There is no HiGHS item in the same situation, so this is not two facade rules for one job; it is a difference in what the two retry modules define, and naming the count as CLP does is the better of the two. Second, the suppression itself is not an unexplained exception: it is the narrowest available scope (the lint stays live under `--cfg test`), it carries the rationale comment that `scripts/ci/check-allow-rationale.sh` requires for directive D4, and the identical construct with an identical rationale shape already exists at `crates/cobre-sddp/src/workspace/mod.rs:31`, making it a workspace idiom rather than a CLP-local habit. What survives is only the narrow structural residue: a production facade line plus its suppression whose sole reason to exist is a shallower import path for the sibling test module, when the owning path is already the production access route in the same directory.",
+        "survivingClaim": "At `clp/mod.rs:25` the `pub(crate) use retry::LADDER_RUNGS` re-export has no non-test consumer -- `interface.rs:6` reads the constant through its owning path `super::retry`, which is equally reachable from the sibling `clp/tests.rs` -- so that facade line and the `not(test)` suppression above it exist only to give the test module a shallower import path; the claim does not extend to a HiGHS/CLP facade-rule divergence (HiGHS defines no module-level rung constant) nor to the suppression's form, which is minimum-scope, rationale-carrying and mirrored at `cobre-sddp/src/workspace/mod.rs:31`.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "architecture-05": {
+      "candidateRef": "architecture-05",
+      "attackerRef": "SC-ARCH-005",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "The CLP per-element basis code space has four spellings and no owner, and the comment that forbids a symbolic definition rests on a premise the code contradicts",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/ffi/clp.rs",
+          "line": 29
+        },
+        {
+          "path": "crates/cobre-solver/src/basis_status.rs",
+          "symbol": "to_clp_code",
+          "line": 67
+        },
+        {
+          "path": "crates/cobre-solver/src/basis_status.rs",
+          "symbol": "from_clp_code",
+          "line": 82
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+          "symbol": "CLP_BASIS_AT_LOWER",
+          "line": 18
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+          "symbol": "CLP_BASIS_BASIC",
+          "line": 22
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "line": 600
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Confirmed but materially narrowed. What is real at the baseline: the load-bearing clause of the ffi/clp.rs:27-31 rationale is false. The codes are NOT round-tripped verbatim as raw i32 — get_basis decodes each one into BasisStatus at backends/clp/interface.rs:624 and :632, install_basis re-encodes at backends/clp/solver.rs:250 and :264, and basis_status.rs:73 folds Nonbasic and Superbasic both onto 4, so the numerals are interpreted in both directions, not passed through. The comment then rests its 'so no symbolic definitions are kept here' conclusion on that false premise while two symbolic definitions of exactly that code space do exist, private, in a third module (backends/clp/solver.rs:18 CLP_BASIS_AT_LOWER = 3 and :22 CLP_BASIS_BASIC = 1), and interface.rs:600 documents the mapping as being over a CLP_BASIS_* family that is visible nowhere from that module and would cover only 2 of the 6 values if it were. Stripped as over-reach: (1) 'no owner' is false — BasisStatus::to_clp_code and from_clp_code (basis_status.rs:67 and :82) own every production encode/decode path, and git grep over crates/ at the baseline shows the only site that bypasses them is reset_cold_basis (solver.rs:290 and :299), so the residue is one owner plus one bypass, not an ownerless code space. (2) The compile-time cost argument is false. HIGHS_BASIS_STATUS_* are hand-written literals at ffi/highs.rs:49-57 whose upstream kHighsBasisStatus* enumerator names appear only in doc comments, and csrc/ carries a static assert only for CoinBigIndex, none over basis codes — so the HiGHS half is not 'anchored to the header by the compiler', it is the same hand-maintained mirror the CLP half is. Naming the six CLP values would likewise not turn a transposed match arm into a compile error; the only real gain is a single definition site. Worth recording alongside it: the CLP round-trip tests at basis_status.rs:176-206 are self-consistent and would survive a symmetric transposition of two arms, and only code 4 is pinned to a literal (:231), so no test anchors the absolute CLP values today. (3) The 'four spellings' count is dropped as unnecessary to the claim, and it is in any case undercounted — solver.rs:16-17 is a third full prose enumeration of the same six values that the candidate did not list. L0 purity (rule 8): the residue is a binding-module naming and stale-rationale cleanup inside cobre-solver with no engine or paradigm vocabulary introduced, no new dependency on an engine crate, and no abstraction with a single consumer (named constants in ffi/clp.rs would be read from basis_status.rs in both directions plus solver.rs), so no clause of (a)/(b)/(c) fires and the candidate's neutral hint stands. Scope note: the residue concerns only where the six numerals are spelled and what the rationale comment asserts; it proposes nothing about how either backend validates an offered warm basis. No fix is proposed here.",
+        "survivingClaim": "The ffi/clp.rs:27-31 rationale is stale at the baseline — get_basis and install_basis decode and re-encode the CLP codes through BasisStatus with folding rather than round-tripping them verbatim as raw i32 — and its 'no symbolic definitions' conclusion is contradicted by the two private constants at backends/clp/solver.rs:18 and :22, which reset_cold_basis uses as the single bypass of the canonical to_clp_code/from_clp_code owner, leaving interface.rs:600's CLP_BASIS_* reference resolvable to nothing. Conceded: the code space is NOT ownerless, and naming the six values would add a single definition site, not compile-time anchoring, since the HiGHS constants are themselves hand-written literals.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "architecture-06": {
+      "candidateRef": "architecture-06",
+      "attackerRef": "SC-ARCH-006",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "Part-I item 8 re-verified field by field: all five multistage fields are write-only in cobre-solver, but the handoff's collateral list undercounts the in-src fixture blocks and clips two assertion spans",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "StageTemplate",
+          "line": 235
+        },
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "n_state",
+          "line": 270
+        },
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "n_transfer",
+          "line": 278
+        },
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "n_dual_relevant",
+          "line": 287
+        },
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "n_hydro",
+          "line": 290
+        },
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "max_par_order",
+          "line": 297
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "symbol": "freeze_rows_into_template",
+          "line": 158
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/tests.rs",
+          "line": 33
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "line": 32
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "line": 153
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-8",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Judged only what the candidate ADDS to partI-handoff.json, per dispatch: the fixture-collateral census and the widened assertion spans. Both additions check out at the baseline, and both are corrections to the E9 collateral estimate, not to crate behaviour. (1) Assertion spans: `git show 077dbe2c:crates/cobre-solver/tests/conformance.rs` puts the five asserts of test_fixture_stage_template_data at 153-157 (`t.n_state` at :153, `t.max_par_order` at :157), so the handoff's recorded 154-156 clips both ends; `git show 077dbe2c:crates/cobre-solver/src/types.rs` puts its five asserts at 779-783, so the recorded 779-782 clips `tmpl.max_par_order` at :783. The third span, freeze.rs:320-324, resolves exactly as recorded (:320 n_state through :324 max_par_order) — the candidate concedes this correctly. (2) Undercount: the handoff's collateral sentence enumerates a definite 'four StageTemplate test fixtures' (freeze.rs:275-279, trait_def.rs:380-384, backends/profiled.rs:252-256, types.rs Default 390-394) and that list is load-bearing for the estimate ('Collateral the estimate must carry'). At the baseline there is a fifth in-src fixture at types.rs:749-753 (inside the test module gated at :546), three more in backends/clp/tests.rs (:37, :163, :480), four in backends/highs/tests.rs (:36, :1261, :1291, :1336), and five further in freeze.rs (:437, :475, :555, :755, :800); tests/conformance.rs holds eight five-field struct literals (:47-51, :740-744, :798-802, :862-866, :1015-1019, :1055-1059, :1106-1110, :1156-1160) and the handoff names no fixture there at all. An estimate sized from four fixtures times five lines is off by roughly an order of magnitude, so the sizing defect is real. Two over-reaches are stripped. The candidate's 'seven further freeze.rs blocks' counts all eight max_par_order lines minus the one named fixture, but freeze.rs:162 is the production copy-forward the handoff names as the fix site (propagationSites, freeze.rs:158-162) and :324 is an assertion span the same collateral sentence names — only five freeze.rs blocks are genuinely unlisted. And '22 in-src mentions across six files' is a `git grep -c` matching-LINE count, not a mention count: re-run with `grep -o` the six src files give 24 occurrences (freeze.rs:162 and :324 each carry two), and two of the five types.rs lines are the declaration at :297 and its doc comment at :294, not fixture blocks — so the number is a proxy for blocks, not a census of mentions. The 18-across-seven figure for the integration binaries is exact (18 lines, 18 occurrences). The title's first clause, the field-by-field write-only re-verification, is not an addition: it restates the recorded perFieldDisposition entries, which I did not re-derive. I did re-read the owner-one-layer-up anchors the fix-shape rests on and they hold: StateSpace carries n_state/hydro_count/max_par_order at state_space.rs:97,100,104, StageRowLayout carries n_dual_relevant at layout.rs:509 hard-coded 0 at layout.rs:1355 with the column-bound reason at :1353, and template.rs:445,459-463 is the sole writer. L0 purity test: the implied fix REMOVES engine vocabulary (`AR lags`, `maximum PAR lag order`, `FPHA`, `uniform lag stride`) from cobre-solver rather than adding it, places no engine concept in L0, adds no dependency onto an engine crate and creates no one-consumer abstraction, so rule 8 does not fire and the hint stays advances-1.",
+        "survivingClaim": "Two additions survive, both scoped to the E9 collateral estimate and neither to crate behaviour: (a) the handoff clips exactly two of its three assertion spans — conformance.rs is 153-157 not 154-156 and types.rs is 779-783 not 779-782, while freeze.rs:320-324 is correct as recorded; (b) the definite 'four StageTemplate test fixtures' list omits a fifth in-src fixture at types.rs:749-753 plus three in backends/clp/tests.rs, four in backends/highs/tests.rs, five further in freeze.rs (:437,:475,:555,:755,:800), and names none of the eight in tests/conformance.rs. Stripped: 'seven further freeze.rs blocks' over-counts by two, since freeze.rs:162 is the production copy-forward named as the fix site and :324 is a named assertion span, leaving five; and '22 in-src mentions' is a matching-line count (24 occurrences), two of whose types.rs lines are the declaration and its doc comment rather than fixture blocks. The write-only field-by-field disposition is not an addition and carries no new weight.",
+        "alignmentHint": "advances-1",
+        "_needsHuman": []
+      }
+    },
+    "architecture-07": {
+      "candidateRef": "architecture-07",
+      "attackerRef": "SC-ARCH-007",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "The sealed `ffi` boundary is asymmetric under feature selection: `mod highs` is declared un-gated, so the HiGHS binding module compiles in the CLP-only configuration that CI builds and tests",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/ffi/mod.rs",
+          "symbol": "highs",
+          "line": 15
+        },
+        {
+          "path": "crates/cobre-solver/src/ffi/mod.rs",
+          "symbol": "clp",
+          "line": 18
+        },
+        {
+          "path": "crates/cobre-solver/src/basis_status.rs",
+          "line": 9
+        },
+        {
+          "path": "crates/cobre-solver/src/ffi/highs.rs",
+          "line": 5
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Read at the baseline, three of the title's load-bearing parts do not hold and one does. (1) `pub(crate) mod ffi` (crates/cobre-solver/src/lib.rs:52) means no gating choice inside `ffi` can breach a boundary outside cobre-solver, so nothing about the sealing varies with feature selection. (2) The un-gated declaration is forced rather than omitted: `pub mod basis_status` (lib.rs:57) is unconditional and crates/cobre-solver/src/basis_status.rs:9-12 imports the five named HIGHS_BASIS_STATUS_* constants by path, while crates/cobre-solver/src/ffi/mod.rs:20-21 already gates the flat re-export under `highs` - gating was applied exactly where it could be, and dropping the module declaration alone would not compile. (3) The CLP-only configuration pays nothing measurable at the boundary: crates/cobre-solver/build.rs:30 puts the entire HiGHS cmake build and the `cargo:rustc-link-lib=static=highs` directive (build.rs:97) behind CARGO_FEATURE_HIGHS, so no HiGHS symbol is ever demanded at link time, and `#![allow(dead_code)]` at ffi/highs.rs:5 keeps the CLP-only clippy `-D warnings` pass clean over constants and unreferenced extern declarations. What does survive is a drifted contract the candidate did not name: crates/cobre-solver/README.md:106-107 asserts that the `ffi::highs` module compiles only with the `highs` feature, which is false at this baseline, and the ffi/mod.rs header reinforces the false symmetry by tagging only `clp` with the `clp` feature at line 4 while listing `highs` at line 3 with no gate note. The structural cause sits in basis_status.rs, not ffi/mod.rs: the HiGHS half of the canonical mapping (:39-60) references named ffi::highs constants, while the CLP half (:67-92) uses bare integer literals documented in a doc comment, so only the HiGHS half induces a module dependency from the un-gated neutral vocabulary type. The residue's fix shape is either one clause stating why the module is unconditional plus a README correction, or naming the CLP codes in ffi::clp so each half can carry its own backend cfg; neither adds engine vocabulary, an engine-crate dependency, or a single-consumer abstraction to L0, so no purity trigger fires and the hint stays neutral. Independently verified: the only consumer of the HiGHS half outside the HiGHS backend module is the `#[cfg(test)]` region of crates/cobre-sddp/src/policy/policy_load.rs (cfg(test) at :1279, from_highs_code at :3523 and :3527), and production export/load uses the discriminant codec only (policy_export.rs:701,706; policy_load.rs:410,415).",
+        "survivingClaim": "Narrowed off ffi/mod.rs and off any harm claim: the CLP-only build's carried HiGHS declarations are benign (no link demand per build.rs:30 and :97, no lint noise per ffi/highs.rs:5), and the un-gated `mod highs` is not a missing cfg. The defensible residue is (a) the expression asymmetry inside crates/cobre-solver/src/basis_status.rs, whose HiGHS half (:39-60) references named ffi::highs constants while its CLP half (:67-92) uses bare integer literals, which is what makes the module unconditional, and (b) crates/cobre-solver/README.md:106-107, which states that ffi::highs compiles only with the `highs` feature - a gating contract that is false at this baseline and is nowhere corrected in ffi/mod.rs.",
+        "alignmentHint": "neutral",
+        "_needsHuman": [
+          "Owner picks the residue's direction: keep the canonical mapping unconditional and correct README.md:106-107, or name the CLP codes in ffi::clp and gate each half - the latter also makes BasisStatus::to_highs_code/from_highs_code and the legacy-checkpoint agreement test (basis_status.rs:280-289) HiGHS-only."
+        ]
+      }
+    },
+    "architecture-08": {
+      "candidateRef": "architecture-08",
+      "attackerRef": "SC-ARCH-008",
+      "disposition": "defended",
+      "lens": "architecture",
+      "title": "L0 vocabulary leakage in the private `FreezeScratch.cut_nz_per_col` field survives the genericity gate because `_` is a word character",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "symbol": "cut_nz_per_col",
+          "line": 22
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "line": 137
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "line": 141
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "line": 188
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Confirmed on the vocabulary half only. At the baseline the field is private and non-serialized (crates/cobre-solver/src/freeze.rs:22, inside pub struct FreezeScratch carrying only #[derive(Debug, Default)]), and its file is otherwise engine-neutral: the module doc says 'CSR-to-CSC template freeze for reusable LP stage templates', the input type is RowBatch, the container is StageTemplate, and FreezeScratch's own doc says 'Caller-owned reusable scratch buffers'. So the engine noun at lines 22/137/138/141/188 is the single non-generic token in an otherwise clean file, and target-layering-brief.md line 13 puts 'SDDP-, Benders- or multistage-shaped types, fields or vocabulary' in the forbidden column for cobre-solver -- fields named explicitly, which is what carries a private field into scope even though CLAUDE.md's inline example list is narrower ('sddp', 'SDDP', 'Benders' in types, functions, or doc comments) and does not itself enumerate 'cut'. The strongest available defence was tested and fails on its own terms. cobre-io does ship cut-rooted identifiers publicly with the gate green: pub cuts_active: u64 (output/manifest.rs:182, output/mod.rs:104 and 187), cuts_populated / cuts_active_before / cuts_deactivated / cuts_reactivated / cuts_active_after (output/mod.rs:222-228), and pub cut_selection: RowSelectionConfig (config/training.rs:41). But config/training.rs states the sanctioned rule inline above that field: 'the type stays algorithm-neutral (RowSelectionConfig) per the infrastructure genericity rule, while the serialized key uses the domain-standard term every practitioner types. The key/type divergence is deliberate, not an unfinished rename.' Every cobre-io instance is a serde / Parquet / config key pinned by an external contract, with the surrounding doc prose genericized ('Total number of active rows in the pool', 'Row-selection time'). cut_nz_per_col is pinned by nothing -- no serde, no schemars, no wire format, no public path, no output column -- so it sits outside the documented exemption class and the tolerance that covers cuts_active does not reach it. Two parts of the candidate do not survive. First, the gate-evasion mechanism is not new here: partI-handoff.json's genericityGateBlindSpot already records the evaded word-boundary-anchored cut alternative, the word-character reason, changeProposed false, and the hand-off to E7, so this station adds nothing to that half. Second, the claimed second blind spot is not a defect: the gate header lists the #[cfg(test)] truncation as documented exclusion 2 beside the basename-contains-test exclusion 1, and documents the tail-block assumption under 'Known limitation', so the recurrences below freeze.rs:244 (test comments at 356/362/372/561-597, cap_cut_nz at 820/849) are excluded by design. No gate edit is contemplated or proposed here; the gate is build-ci's. The fix shape stays a private rename plus its four production uses, no API/schema/wire movement, which removes engine vocabulary from L0 rather than adding it, so rule 8 does not fire; it touches neither the Engine seam (0a), the cobre-model carve-out (0b), nor the StageTemplate shed (1), hence neutral.",
+        "survivingClaim": "The private, contract-unpinned FreezeScratch.cut_nz_per_col -- declaration at crates/cobre-solver/src/freeze.rs:22 plus its four production uses at 137, 138, 141 and 188 -- is an unsanctioned L0 vocabulary residue, narrowly because it carries no serialized key and therefore falls outside the deliberate key/type divergence that crates/cobre-io/src/config/training.rs documents for cut_selection and that output/mod.rs applies to cuts_active. The gate half of the title does not survive: the word-character evasion is already recorded in partI-handoff.json's genericityGateBlindSpot and owned by E7, and the #[cfg(test)] truncation is a documented intentional exclusion rather than a second blind spot.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "architecture-09": {
+      "candidateRef": "architecture-09",
+      "attackerRef": "SC-ARCH-009",
+      "disposition": "informational",
+      "lens": "architecture",
+      "title": "Informational: the solver trait has no capability-query surface and exactly one backend compiles, so building the capability trait at this baseline would be a one-consumer abstraction",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/trait_def.rs",
+          "symbol": "SolverInterface",
+          "line": 41
+        },
+        {
+          "path": "crates/cobre-solver/src/trait_def.rs",
+          "symbol": "Profile",
+          "line": 49
+        },
+        {
+          "path": "crates/cobre-solver/src/lib.rs",
+          "line": 44
+        },
+        {
+          "path": "crates/cobre-solver/src/lib.rs",
+          "line": 50
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "roadmapRef": "plans/generalizing/beyond-sddp-generalization.md § III.6"
+    },
+    "over-engineering-01": {
+      "candidateRef": "over-engineering-01",
+      "attackerRef": "SC-OE-001",
+      "disposition": "defended",
+      "lens": "over-engineering",
+      "title": "ExecutionTopology::is_homogeneous is a public predicate with zero consumers outside its own four unit tests",
+      "anchors": [
+        {
+          "path": "crates/cobre-comm/src/topology.rs",
+          "symbol": "is_homogeneous",
+          "line": 34
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Consumer count re-verified at the pin, not taken from the candidate: `git grep -n is_homogeneous 077dbe2c -- crates/` returns only the declaration at crates/cobre-comm/src/topology.rs:34 plus the four unit tests and their four assertions in the same file (lines 126-146). No production code in any workspace crate reads it. The sibling accessors on the same struct DO have production readers, which isolates this predicate rather than condemning the type: leader_hostname at crates/cobre-cli/src/commands/run/mod.rs:163 and crates/cobre-cli/src/summary.rs:135 and :159, num_hosts at crates/cobre-cli/src/commands/run/mod.rs:296 and crates/cobre-cli/src/summary.rs:155 feeding the manifest field at crates/cobre-io/src/output/manifest.rs:97. No sanctioned seam covers it: the committed mirror docs/design/reserved-seams-and-deferred-debt.md carries no topology entry (its cobre-comm heading at :79 is the shared-memory hierarchy, and :334 is the cut-sync block), and the station prior register's do-not-re-raise list names only the shared-memory hierarchy, the three cut-sync methods, the backend basis-validation divergence and the per-crate lints tables. The project's own executed standard is what makes this a defect class and not a taste call: the dead-surface sweep entry at mirror :1210 states that every public item the workspace ships has a production reader or a recorded owner and milestone, and its Owner line names the cobre-core, cobre-io and cobre-stochastic owners as executed, so cobre-comm was never swept. This predicate is an unswept residue of exactly that class. I narrowed the claim on two points the evidence does not sustain. First, this is not speculative STRUCTURE in the over-engineering sense: the body is a six-line iterator comparison over the pub field hosts whose HostInfo.ranks is also pub, so it adds no trait, no generic, no indirection and no configuration knob, and any caller can already compute heterogeneity from the public fields. Applying the L0 purity test, none of the three triggers fires: the implied fix pushes no engine or paradigm concept into cobre-comm, adds no dependency onto an engine crate, and creates no one-consumer abstraction (it removes surface), and the candidate itself keeps heterogeneity policy out of L0. Second, cobre-comm is published to crates.io (.github/workflows/publish.yml:86) with keywords, categories and a README that invites direct external dependence, so 'zero consumers' is provable only inside this workspace and a removal is a semver-visible public-API change. The surviving residue is therefore a delete-or-register disposition on one predicate, on the same licensed-public-API-break footing the register already gave CD-019, not a proven-dead item whose tests can be ordered deleted alongside it.",
+        "survivingClaim": "At the baseline ExecutionTopology::is_homogeneous (crates/cobre-comm/src/topology.rs:34) has no IN-WORKSPACE production reader and no reserved-seam entry, so it is the single item in cobre-comm's topology surface that still owes the delete-or-register disposition the mirror's dead-surface standard (:1210) requires of every shipped public item — a registration/decision gap in the crate that sweep never covered. It is NOT speculative structure: no trait, generic, indirection or knob, just a six-line query over already-public hosts/ranks. And because cobre-comm publishes to crates.io, the absence of consumers is established only inside this workspace, so the candidate's implied conclusion that the predicate and its four tests can simply be dropped does not follow from its own evidence.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "over-engineering-02": {
+      "candidateRef": "over-engineering-02",
+      "attackerRef": "SC-OE-002",
+      "disposition": "dup-of",
+      "lens": "over-engineering",
+      "title": "Superseded cut-sync public methods still exported beside their live replacement (E5 handoff, re-verified at this baseline)",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_cuts",
+          "line": 243
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "pack_local_records",
+          "line": 400
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "sync_packed_records",
+          "line": 495
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "dupOf": "Superseded cut-sync public methods",
+      "sanctionedBy": "Superseded cut-sync public methods",
+      "mirrorCitation": "docs/design/reserved-seams-and-deferred-debt.md:334",
+      "registerId": "CD-019",
+      "handoff": "E5",
+      "assignedId": null
+    },
+    "over-engineering-03": {
+      "candidateRef": "over-engineering-03",
+      "attackerRef": "SC-OE-003",
+      "disposition": "defended",
+      "lens": "over-engineering",
+      "title": "CLP hot-start snapshot lifecycle is built end to end (C++ shim, extern decls, safe wrapper, determinism harness) with no production consumer and no reserved-seam registration",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+          "symbol": "mark_hot_start",
+          "line": 350
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+          "symbol": "solve_from_hot_start",
+          "line": 394
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Re-ran the consumer count at the pin over the whole tree, not just crates/: the only hits for mark_hot_start / solve_from_hot_start are the C++ shim (crates/cobre-solver/csrc/clp_wrapper_cpp.cpp:71,83 and the header decls at clp_wrapper.h:257,263), the extern block (crates/cobre-solver/src/ffi/clp.rs:258,269), the two definitions (crates/cobre-solver/src/backends/clp/solver.rs:350,394) and the two test files; nothing outside crates/cobre-solver mentions them at all. Decisively, crates/cobre-solver/src/trait_def.rs declares no hot-start method, so the pair is unreachable through the backend-agnostic SolverInterface that cobre-sddp actually holds - it can only be called on the concrete ClpSolver type. On the register side, a case-insensitive search for hot-start over docs/design/reserved-seams-and-deferred-debt.md returns zero hits, so the surface has neither an owner nor a consuming milestone, which that register's own preamble makes the admission test: a candidate that cannot be given both is dead code to remove, not a seam to reserve. Being published public API is not an exemption in this project, and that is what closes the strongest dismissal path: the register's own Superseded cut-sync public methods entry (mirror lines 334-345) covers methods that remain re-exported public API on a published crate, still records an owner and a trigger for them, and calls out the false still-used confidence their test suite creates - structurally the same shape as clp_determinism.rs here. I strip two over-reaches from the title. First, the release half is genuinely production-wired, not merely compiled: unmark_hot_start runs from reset_solver_state, load_model and add_rows (crates/cobre-solver/src/backends/clp/interface.rs:82,134,240) and from Drop (solver.rs:509), guarded by the live hot_start_token field (solver.rs:84,143), so only the acquire/solve pair is unwired. Second, the determinism harness is not an inert artifact awaiting registration: CLAUDE.md names crates/cobre-solver/tests/clp_determinism.rs the reference determinism harness, and hot_start_sequence_is_deterministic_and_order_invariant pins exactly the self-consistent reproducibility plus order-invariance contract stated in the doc comment above solver.rs:394. Removal is correctly off the table for a third reason the candidate did not cite: CHANGELOG.md:1741, under the released 0.8.1 heading, advertises hot-start (snapshot and restore of the simplex rim) as a shipped CLP backend capability. What survives is therefore only the registration gap on the acquire/solve pair. L0 purity is unaffected: the fix is a register entry, or wiring confined to backends/clp/interface.rs, introducing no engine or paradigm vocabulary, no dependency on an engine crate and no single-consumer abstraction.",
+        "survivingClaim": "Only the acquire half of the CLP hot-start lifecycle - the shim/extern pair cobre_clp_mark_hot_start plus cobre_clp_solve_from_hot_start and the two safe methods at crates/cobre-solver/src/backends/clp/solver.rs:350 and :394 - has no production caller and is absent from the reserved-seam register, so the defect is the missing register entry (owner plus consuming milestone) for that pair alone; the release half (unmark_hot_start, its three interface.rs call sites and Drop) is production-wired and the determinism harness is a contract-pinning exerciser, so neither is part of the unwired surface nor needs registering.",
+        "alignmentHint": "neutral",
+        "_needsHuman": [
+          "Owner must supply the activating milestone for the CLP hot-start acquire/solve pair, or rule it retired at the next licensed public-API break; the register admits an entry only with both an owner and a consuming milestone, and this station cannot invent one."
+        ]
+      }
+    },
+    "over-engineering-04": {
+      "candidateRef": "over-engineering-04",
+      "attackerRef": "SC-OE-004",
+      "disposition": "defended",
+      "lens": "over-engineering",
+      "title": "HiGHS defaults exist twice -- 12 of 14 HighsProfile field defaults hand-mirror the default_options() table, with the bit-for-bit claim stated in prose and pinned by nothing",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/highs/config.rs",
+          "symbol": "default",
+          "line": 58
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/config.rs",
+          "symbol": "default_options",
+          "line": 168
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/config.rs",
+          "line": 10
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "The 12-of-14 overlap is real at the baseline: `Default for HighsProfile` (crates/cobre-solver/src/backends/highs/config.rs:58-77) and `default_options()` (same file, 168-238) carry the same values for every field except `simplex_iteration_limit` and `ipm_iteration_limit`, which the table never names because `set_iteration_limits` installs them per solve attempt (backends/highs/solver.rs:324-340). The agreement is load-bearing rather than cosmetic: `ProfiledSolver::new` documents that it issues no FFI calls and assumes the inner solver is already consistent with `S::Profile::default()`, and `set_profile` returns early when the incoming profile equals `current_profile` (backends/profiled.rs:38-58). So a caller that installs `HighsProfile::default()` triggers no option setter at all, and the live HiGHS state is exactly whatever `apply_default_config` pushed from the table (backends/highs/solver.rs:137-152). If the two surfaces diverged, `current_profile()` would report one value while HiGHS held another, and the divergence would materialise silently at the retry finalization seam, where `restore_default_settings` replays the table and `reapply_profile` then overwrites it from the profile (solver.rs:201-292). Nothing at the baseline compares the two: `full_profile_survives_retry_finalization_seam` (tests/profile_retry_composition.rs:440-540) asserts readback against a fixture deliberately unequal to the default, the workspace assertion at cobre-sddp/src/workspace/workspace.rs:2645-2667 compares only the Rust-side `current_profile()` against `HighsProfile::default()` and never reads a HiGHS option, and the const drift guard at cobre-sddp/src/solve/solver_phase.rs:582-634 pins the phase constants against inline literals, not against the table. Drift of exactly this kind has already happened in the prose that mirrors these literals: the test-module comment at tests/profile_retry_composition.rs:369 and the doc comments at 378 and 402 state that the restore path resets the feasibility tolerances to 1e-6 as `the hardcoded table values`, while the table carries 1e-9 for both (config.rs:194-201). What I do NOT accept is the framing that the second copy is removable duplication. The table is a strict superset with its own job: 5 of its 17 entries (`solver`, `simplex_strategy`, `parallel`, `output_flag`, `simplex_initial_condition_check`; config.rs:170-193 and 210-213) are not profile fields at all, and the table is the sole installer on both the fresh-handle path and the retry restore path, each of which must resend those non-profile options. Two of the 12 overlaps are also cross-type mappings, not literal twins (`PresolveKind::On` against `c\"on\"`, `true` against `Bool(1)`), so the table cannot be collapsed into the profile. On the L0 purity test: the derive-`Default`-from-the-table half of the candidate fixShape would add a name-keyed typed lookup over `DefaultOption` with exactly one consumer, which is rule 8 clause (c); I therefore exclude it from the surviving claim, leaving only the table-walking guard, which adds no abstraction, no engine vocabulary, and no new dependency, and is a pure local cleanup inside L0. The roadmap-consistent alternative to the merge is precisely that guard.",
+        "survivingClaim": "The 12-value agreement between `HighsProfile::default()` and the `default_options()` table (config.rs:58-77 against 168-238) is a load-bearing invariant for the delta-only dispatch in `ProfiledSolver::new`/`set_profile` (profiled.rs:38-58) that no test or compile-time assert pins; the defect is the missing guard alone, not the second surface, since the 17-entry table carries 5 non-profile options and remains the sole installer on the fresh-handle and retry-restore paths and so cannot be collapsed into the profile.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "over-engineering-05": {
+      "candidateRef": "over-engineering-05",
+      "attackerRef": "SC-OE-005",
+      "disposition": "defended",
+      "lens": "over-engineering",
+      "title": "HiGHS retry ladder hand-copies the same tolerance-floor-and-set fragment four times where the CLP ladder is one declarative rung table",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/highs/retry.rs",
+          "symbol": "apply_retry_level_options",
+          "line": 173
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/retry.rs",
+          "symbol": "apply_extended_retry_options",
+          "line": 222
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/retry.rs",
+          "symbol": "apply_extended_retry_options",
+          "line": 248
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/retry.rs",
+          "symbol": "apply_extended_retry_options",
+          "line": 272
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Read at the baseline, the copy count is real. In crates/cobre-solver/src/backends/highs/retry.rs the level-3 body (lines 174-189) and the level-7 body (lines 223-238) are byte-identical: two f64::max bindings over current_profile primal/dual feasibility tolerance, then the same two cobre_highs_set_double_option calls in the same order. Levels 10 (249-270) and 11 (273-299) repeat that identical pair with only the floor literal changed from 1e-8 to 1e-7, after their own int-scaler calls. The pair has no owner and the four floors are not adjacent, so a mistyped floor edits exactly one level silently. The rung-table half of the title does NOT stand. CLP tabulates because all five rungs set the same three fixed-type knobs: clp/retry.rs lines 95-104 declare [(i32, i32, ClpAlgorithm); LADDER_RUNGS]. The twelve HiGHS levels set option sets of differing arity and setter type (1 and 4 string, 2/6/8 int, 9 three ints, 3/7 two doubles, 10/11 mixed), and they split into a cumulative phase 1 for levels 0-4 (doc comment at 134-138) versus a reset-plus-presolve prologue for phase 2 (apply_extended_retry_options, 208-214), so no fixed-arity tuple array is expressive-complete for them. The declarative table that already exists in the same module, DefaultOption with OptionValue and default_options in highs/config.rs lines 103-168, cannot host these four levels at all: their values are computed from current_profile at apply time and the table is const-valued. L0 purity: the surviving extraction takes a floor argument and has four call sites (levels 3, 7, 10, 11), so trigger (c) one-consumer abstraction does not fire, and no engine vocabulary or engine dependency enters cobre-solver. The loose- and strict-profile assertions for levels 3, 7, 10 and 11 in crates/cobre-solver/tests/profile_retry_composition.rs pin the applied values, so the residue is a shape-preserving extraction rather than a ladder redesign.",
+        "survivingClaim": "The profile-floored tolerance pair in highs/retry.rs (two f64::max bindings plus the two cobre_highs_set_double_option calls) has no single owner: it is written out verbatim four times at levels 3, 7, 10 and 11, with the level-3 and level-7 bodies byte-identical and only the floor literal (1e-8 versus 1e-7) separating the two groups. The residue is a floor-taking two-statement extraction with four call sites; the CLP rung-table comparison in the title is conceded and does not carry, because the twelve heterogeneous HiGHS levels are not tabulable the way CLP's five fixed-arity rungs are.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "performance-01": {
+      "candidateRef": "performance-01",
+      "attackerRef": "SC-PERF-001",
+      "disposition": "defended",
+      "lens": "performance",
+      "title": "Partition helpers hand back freshly allocated owned vectors and the partition is recomputed from scratch at every collective",
+      "anchors": [
+        {
+          "path": "crates/cobre-comm/src/lib.rs",
+          "symbol": "per_rank_counts",
+          "line": 83
+        },
+        {
+          "path": "crates/cobre-comm/src/lib.rs",
+          "symbol": "prefix_displs",
+          "line": 94
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "measurementLayout": "2x2",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/cut/cut_sync.rs:182",
+        "crates/cobre-sddp/src/cut/cut_sync.rs:186",
+        "crates/cobre-sddp/src/training/forward/stats_aggregation.rs:118",
+        "crates/cobre-sddp/src/training/forward/stats_aggregation.rs:131",
+        "crates/cobre-sddp/src/training/forward/stats_aggregation.rs:159",
+        "crates/cobre-sddp/src/training/session/rank_distribution.rs:61"
+      ],
+      "mechanism": "allocation per call plus recomputation of an invariant: two owned vectors allocated and a partition recomputed at each collective even though the partition is a pure function of the total item count and the rank count, both fixed for a given layout. Per-collective at the sync and aggregation sites; the setup-time site is once per run and acceptable.",
+      "defender": {
+        "verdict": "dismissed",
+        "argument": "The title's load-bearing clause -- the partition is recomputed at every collective -- does not hold at the baseline for the majority of the anchored consumers. cut_sync.rs:182 and :186 are not in the record-sync path the candidate attributes them to; both sit inside the body of CutSyncBuffers::with_distribution (declared at cut_sync.rs:173), the pre-allocating constructor, and its only production caller is training/session/mod.rs:252, executed once when the training session is built. The module doc at cut_sync.rs:12-14 states the point directly: buffers pre-allocated in the constructor are reused so the per-stage exchange is allocation-free, i.e. the collective the candidate names does not touch these helpers at all. rank_distribution.rs:61 (actual_per_rank) is likewise once-per-session, called at training/session/mod.rs:245 beside it -- the candidate already concedes that one. So three of the six consumers are setup-time recomputation, acceptable by project rule. The candidate's reading also double-counts the displacement helper: stats_aggregation.rs:131 and :159 lie in mutually exclusive branches, because the NestedRisk arm returns at stats_aggregation.rs:151-156 before control can reach :159. No invocation calls prefix_displs twice per aggregation. That leaves exactly one genuinely repeating site, sync_forward (stats_aggregation.rs:105), reached once per training iteration through sync_forward_bound (training/session/mod.rs:873, whose three sync_forward calls at :891, :911 and :925 are exclusive arms) from run_forward_phase at :849. There the two partition vectors are each of length num_ranks, and the same function body already allocates its gather destination on every call -- vec![0.0_f64; global_n] at stats_aggregation.rs:161, or vec![0.0_f64; global_stage_n] at :133 plus the stage_counts collect at :130 in the NestedRisk arm -- immediately around a real cross-rank allgatherv. The partition vectors are strictly the smallest allocations in a function whose per-call allocation profile is set by the gather buffer the claim does not name, so eliminating them would not change the mechanism the candidate is arguing about. Against that, the owned return is what makes each helper the single owner of the partition rule that every allgatherv count vector in one collective must agree on, as its own doc states at cobre-comm/src/lib.rs:79-82. The proposed fill-into-caller-buffer companion beside each helper would, at this baseline, have exactly one consumer each, since sync_forward is the sole per-collective consumer of either helper -- clause (c) of the L0 purity test. Adding a second expression of a rule whose whole value is having one expression, to remove the subordinate allocations in a once-per-iteration collective, is not justified by the mechanism as it actually stands in the code. The current design is correct as written.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "performance-02": {
+      "candidateRef": "performance-02",
+      "attackerRef": "SC-PERF-002",
+      "disposition": "defended",
+      "lens": "performance",
+      "title": "CLP bound writers push the entire retained bound array across the FFI on every call, while the sibling backend writes only the requested index subset",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "set_row_bounds",
+          "line": 352
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "set_col_bounds",
+          "line": 399
+        },
+        {
+          "path": "crates/cobre-solver/csrc/clp_wrapper.c",
+          "symbol": "cobre_clp_chg_bounds",
+          "line": 208
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "measurementLayout": "4t",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:157",
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:164",
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:246",
+        "crates/cobre-sddp/src/training/forward/stage_solve.rs:95",
+        "crates/cobre-sddp/src/training/forward/enumerated.rs:321",
+        "crates/cobre-sddp/src/lp/builder/entries.rs:5893"
+      ],
+      "mechanism": "work proportional to the model dimension rather than to the number of patched indices, on every call: two FFI crossings each transferring the full retained bound array, plus one heap allocation and free of a full-length translation buffer inside the wrapper per crossing. Per-solve, not setup-time: the engine patches a handful of bounds per stage solve.",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Read at the baseline: crates/cobre-solver/src/backends/clp/interface.rs set_row_bounds and set_col_bounds patch the retained mirror at the requested indices, then hand self.row_lower/self.row_upper (resp. col_) as whole-array pointers to cobre_clp_chg_row_lower/upper and cobre_clp_chg_column_lower/upper. crates/cobre-solver/csrc/clp_wrapper.c line 208 shows cobre_clp_chg_bounds sizing n from Clp_getNumRows/Clp_getNumCols, doing malloc of n doubles, running cobre_clp_translate_bounds over all n, calling chg, then free, once per crossing, with one crossing per bound side. Half of the candidate title does NOT survive and I strip it. The whole-array transfer is the only bound-change surface the C header offers: vendor/Clp/Clp/src/Clp_C_Interface.h declares Clp_chgRowLower and Clp_chgColumnLower (and the Upper pair) taking only a bare const double*, with no count and no index array, and clp_wrapper.c is a plain-C translation unit whose own header block records that it must not include the C++ headers. So the divergence from the HiGHS realisation, which calls cobre_highs_change_rows_bounds_by_set with the caller subset and a retained i32 scratch, is a library-surface difference at the C boundary rather than a shape the CLP interface chose badly, and the interface doc comment on set_row_bounds already states that the Clp_chg* calls take the whole array and not an index subset. What DOES survive is the per-crossing heap allocation, and it survives on its own footing without any HiGHS comparison. The allocation is unconditional, it sits on the per-solve path (crates/cobre-sddp/src/training/stage_solve_prep.rs patches state columns and forward rows once per stage solve, and crates/cobre-sddp/src/training/forward/stage_solve.rs plus forward/enumerated.rs call set_col_bounds with the single-element slice for the theta pin), and it is exactly what the project no-allocation-on-hot-paths rule forbids. Nothing in the CLP surface requires it: vendor/Clp/Clp/src/ClpModel.cpp chgRowLower, chgRowUpper, chgColumnLower and chgColumnUpper each already walk the full dimension and clamp any value past the CLP magnitude threshold to the COIN_DBL_MAX sentinel, so for the bound orientations the mirror actually carries (minus infinity in a lower array, plus infinity in an upper array) CLP reproduces the shim translation immediately after the shim performed it. The translation is not fully redundant, because a plus infinity sitting in a lower array is clamped by the shim but not by CLP, so a fix must keep translating. It only has to stop owning fresh heap memory to do it: a scratch buffer retained across calls on the Rust side or inside the shim removes the malloc and free without changing a stored bound. I also note, so the width half is not silently reopened later, that a subset FFI write alone would not shorten CLP internal work; ClpModel setRowLower and setRowBounds are per-index C++ class methods, reachable only through a new entry point in the existing C++ translation unit crates/cobre-solver/csrc/clp_wrapper_cpp.cpp, and both they and the whole-array form set whatsChanged_ to zero, so the whole-array push forfeits no CLP state that the per-index path would keep. That width change is therefore a separate proposal needing its own basis, not part of the surviving defect. L0 purity: the surviving fix stays inside cobre-solver, adds no engine or paradigm vocabulary, adds no dependency on an engine crate, and creates no single-consumer abstraction because it changes the buffer ownership inside the existing shared cobre_clp_chg_bounds helper, so none of (a), (b) or (c) fires.",
+        "survivingClaim": "Narrowed to the allocation only: cobre_clp_chg_bounds (crates/cobre-solver/csrc/clp_wrapper.c:208) heap-allocates, fills and frees a full-dimension sentinel-translation buffer on every one of the four chg_* crossings, so each per-stage-solve bound patch, including the single-column theta pin in training/forward/stage_solve.rs and training/forward/enumerated.rs, pays a fresh malloc and free for a translation that ClpModel::chg{Row,Column}{Lower,Upper} then largely repeats internally. The transfer-width half of the title is stripped: Clp_C_Interface.h exposes no subset bound setter, so the whole-array push from the two Rust setters is the C surface the plain-C shim is bound to, not an unjustified divergence from the HiGHS by-set path.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "performance-03": {
+      "candidateRef": "performance-03",
+      "attackerRef": "SC-PERF-003",
+      "disposition": "defended",
+      "lens": "performance",
+      "title": "CLP add_rows allocates five fresh vectors and replaces three retained buffers wholesale on every append, contradicting the struct's own reusable-buffer contract",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "add_rows",
+          "line": 215
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "col_starts",
+          "line": 302
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "measurementLayout": "4t",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/backward/lp_setup.rs:31",
+        "crates/cobre-sddp/src/cut/row.rs:257",
+        "crates/cobre-sddp/src/cut/row.rs:347",
+        "crates/cobre-sddp/src/training/lower_bound.rs:158"
+      ],
+      "mechanism": "allocation per call plus a full rebuild pass per call: five heap allocations on the Rust side, two more inside the wrapper, three retained buffers replaced rather than reused, and a rebuild of the retained column-major mirror proportional to the merged nonzero count for an append whose payload is only the new rows. Per-solve on the training path, not setup-time; this collides with the project hard rule against allocating on hot paths.",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "The Rust-side mechanism is real at the baseline and nothing in the code justifies it. crates/cobre-solver/src/backends/clp/interface.rs:244 allocates per_col_count sized to num_cols, :259-261 allocate new_col_starts, new_row_indices and new_values (the latter two sized to merged_nz = self.num_nz + new_nz, i.e. the WHOLE matrix, not the appended batch), :265 allocates write_cursor, the loop at :266-283 rewrites every retained nonzero, and :302-304 assign the three new vectors over self.col_starts / self.row_indices / self.values, dropping the capacity those fields held. This is not setup-time: load_backward_lp (crates/cobre-sddp/src/training/backward/lp_setup.rs:25-33) calls load_model then add_rows, and it is invoked per successor child inside the backward loops at crates/cobre-sddp/src/training/backward/by_node.rs:245, by_scenario.rs:85 and replicated.rs:101, while append_new_cuts_to_lp (crates/cobre-sddp/src/cut/row.rs:257) runs per iteration from training/lower_bound.rs:139. Worse than a plain per-call allocation: load_model at interface.rs:179-184 has just cleared and refilled exactly those three Vecs in place (capacity reused), and add_rows then throws that storage away one call later. The zero-init is not load-bearing either, because every slot in [0, merged_nz) is written (the copy loop plus the per-column write_cursor scatter, pinned by the debug_assert_eq!(acc, merged_nz) at :283), so a resized retained buffer would produce byte-identical contents in the same write order. The sibling backend proves the trait does not require any of it: crates/cobre-solver/src/backends/highs/interface.rs:253-300 makes one FFI crossing and only resizes retained buffers. Corroborating evidence for severity, though NOT part of the surviving claim: git grep over 077dbe2c shows col_starts / row_indices / values are pub(super) and read nowhere in the CLP backend except this rebuild and the unit tests at backends/clp/tests.rs:213-215, so the merged CSC mirror's only production reader is the next add_rows; the four retained bound vectors, by contrast, are genuinely consumed (set_row_bounds / set_col_bounds at interface.rs:371-384 and :418-433 push the full array to CLP) and are already extended in place at :305-306 with no reallocation. Two parts of the candidate do NOT survive and are stripped. First, the wrapper's two mallocs (csrc/clp_wrapper.c:174-175) are sized to the appended row count only and exist to keep the caller's arrays untouched during the IEEE-inf to DBL_MAX sentinel translation; that translation is a documented C-side ownership boundary (interface.rs load_model doc: the C wrapper owns the bound translation, so bound slices are forwarded verbatim) shared by cobre_clp_chg_bounds with the other full-length bound wrappers, so the candidate's proposal to hoist it into Rust fights a deliberate invariant rather than a defect. Second, the struct doc at backends/clp/solver.rs:26-32 scopes its reuse promise to buffers resized by load_model and reused ACROSS SOLVES to avoid per-solve allocation; add_rows is a structural mutation, not a solve, so the only false word in that doc is 'patch' applied to the CSC trio. Fix shape (prose only, no diff): move the two scratch vectors and a second mirror buffer set onto ClpSolver and swap roles per append, preserving write order so reproducibility and declaration-order invariance are untouched; the owner should first settle whether a mirror with no reader outside add_rows and the unit tests needs to exist at all, since deleting it removes the rebuild entirely. L0 purity: none of (a), (b) or (c) fires. The fix adds backend-local scratch fields to ClpSolver, introduces no cut / stage / scenario / training vocabulary into cobre-solver, adds no dependency on an engine crate, and creates no new abstraction, so the hint is neutral rather than advancing or conflicting with the target layering.",
+        "survivingClaim": "Rust side only, and only the CSC trio: on the per-iteration append path (load_backward_lp, append_new_cuts_to_lp) CLP add_rows heap-allocates two scratch vectors plus three merged_nz-sized replacements for col_starts / row_indices / values and rewrites the whole mirror, discarding the capacity load_model reused one call earlier, when a retained-and-resized buffer set would yield byte-identical contents in the same write order. Stripped from the candidate: the wrapper's two batch-sized mallocs (a documented C-side sentinel-translation ownership boundary shared with the other bound wrappers, not debt), and the reusable-buffer-contract framing, whose only false element is the word 'patch' applied to the CSC trio -- the struct doc's reuse promise is scoped to load_model-resized buffers reused across solves, and the four retained bound vectors already honour it.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "performance-04": {
+      "candidateRef": "performance-04",
+      "attackerRef": "SC-PERF-004",
+      "disposition": "defended",
+      "lens": "performance",
+      "title": "CLP basis capture and cold reset cross the FFI boundary once per column and once per row, where the sibling backend moves the whole status vector in one crossing",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/clp/interface.rs",
+          "symbol": "get_basis",
+          "line": 606
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/solver.rs",
+          "symbol": "reset_cold_basis",
+          "line": 280
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "measurementLayout": "4t",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:154",
+        "crates/cobre-sddp/src/training/forward/stage_solve.rs:248",
+        "crates/cobre-sddp/src/training/forward/enumerated.rs:442"
+      ],
+      "mechanism": "one FFI crossing per matrix element instead of one per capture: the crossing count grows with num_cols plus num_rows on both the read and the cold-write path. Per-solve, not setup-time: the engine captures a basis on the forward and backward solve paths and resets to a cold basis between solves.",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Mechanism verified at the pin, no measurement taken and none quoted. ClpSolver::get_basis (crates/cobre-solver/src/backends/clp/interface.rs:606-634) issues one extern \"C\" call per column and then one per row through cobre_clp_get_column_status / cobre_clp_get_row_status, whereas HighsSolver::get_basis (crates/cobre-solver/src/backends/highs/interface.rs:500-533) makes a single cobre_highs_get_basis crossing into the retained basis_col_i32 / basis_row_i32 buffers and converts to the shared status vocabulary in a pure Rust loop. The granularity is a property of cobre's own shim rather than of CLP: crates/cobre-solver/src/ffi/clp.rs:206-218 declares only the four per-element accessors, crates/cobre-solver/csrc/clp_wrapper.c:314-328 forwards each of them one line for one line, and crates/cobre-solver/csrc/clp_wrapper_cpp.cpp:54-100 already reaches the C++ ClpSimplex through the Clp_Simplex wrapper struct, so a bulk loop has a home on the C or C++ side and the in-code note about the wrapper describes a surface cobre controls. The capture path is per-solve and not setup-time: all three engine sites (crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:154, crates/cobre-sddp/src/training/forward/stage_solve.rs:248, crates/cobre-sddp/src/training/forward/enumerated.rs:442) call get_basis once per solve into a reused CapturedBasis. The candidate over-reaches on the cold reset. reset_cold_basis (crates/cobre-solver/src/backends/clp/solver.rs:280-302) has exactly one caller, escalate_run at crates/cobre-solver/src/backends/clp/retry.rs:52, which runs only inside the escalate_solve recovery ladder entered after CLP reports a spurious PRIMAL_INFEASIBLE, is bounded by LADDER_RUNGS on an LP that has already failed, and is immediately followed on each rung by a full cobre_clp_dual or cobre_clp_primal re-solve. It is therefore not reached between successful solves as the candidate's mechanism states, and it is not part of the confirmed residue. L0 purity test: the implied fix adds a bulk status transfer to cobre-solver's own shim, so (a) no engine or paradigm concept enters L0, (b) no dependency on an engine crate is added, and (c) the retained-buffer pattern already has a second consumer in the HiGHS backend, so no single-consumer abstraction is created. Nothing fires; a local L0 cleanup, hence neutral.",
+        "survivingClaim": "Only the read side qualifies: ClpSolver::get_basis crosses the FFI once per column and once per row on the per-solve capture path, where the HiGHS sibling crosses once into retained i32 buffers. The cold reset is conceded out of the finding — reset_cold_basis is reachable only from the escalate_solve failure ladder through escalate_run, never between successful solves, so its per-element write crossings are not a hot-path defect.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "test-bloat-01": {
+      "candidateRef": "test-bloat-01",
+      "attackerRef": "SC-TB-001",
+      "disposition": "defended",
+      "lens": "test-bloat",
+      "title": "Three #[test] functions restate a Send+Sync monomorphisation that a production const fn beside them already performs on every build",
+      "anchors": [
+        {
+          "path": "crates/cobre-comm/src/factory.rs",
+          "symbol": "_assert_comm_backend_send_sync",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-comm/src/factory.rs",
+          "symbol": "test_comm_backend_send_sync",
+          "line": 419
+        },
+        {
+          "path": "crates/cobre-comm/src/ferrompi.rs",
+          "symbol": "test_ferrompi_backend_send_sync",
+          "line": 488
+        },
+        {
+          "path": "crates/cobre-comm/tests/factory_tests.rs",
+          "symbol": "test_ferrompi_backend_send_sync",
+          "line": 89
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "The mechanism the candidate names does hold at the baseline, but only for one of the three anchors verbatim, so the finding survives narrowed. crates/cobre-comm/src/lib.rs:47 declares `mod factory` unconditionally and crates/cobre-comm/src/factory.rs:73-77 gates only the const fn on `#[cfg(feature = \"mpi\")]`, the same gate that guards `CommBackend` itself (factory.rs:60-67); the call `assert_send_sync::<CommBackend>()` is an ordinary trait obligation resolved while type-checking the body, so `#[allow(dead_code)]` and the absence of any caller do not suppress it and every `cargo check --features mpi` discharges it. crates/cobre-comm/src/factory.rs:417-422 sits inside `#[cfg(test)] mod tests` -> `#[cfg(feature = \"mpi\")] mod comm_backend`, i.e. strictly inside the const fn's own gate, and asserts the identical obligation on the identical type: it can only fail in a compilation that already failed, so it is vacuous and the candidate is right about it. The two `FerrompiBackend` anchors are a weaker case and the title over-reaches on them. The const fn never names `FerrompiBackend`; it reaches it only transitively, because factory.rs:63 declares the variant `Mpi(Box<FerrompiBackend>)` and `Box<T>` is Send/Sync only when `T` is. That entailment is real at this baseline but it is a consequence of the current payload, not a restatement, so deleting both copies would leave the `unsafe impl Send`/`unsafe impl Sync` soundness argument at crates/cobre-comm/src/ferrompi.rs:66-76 without a direct pin. Between those two copies, though, the redundancy is exact: crates/cobre-comm/src/ferrompi.rs:487-491 and crates/cobre-comm/tests/factory_tests.rs:88-92 carry the same body on the same type under the same feature gate, differing only in `super::FerrompiBackend` versus `cobre_comm::FerrompiBackend`. The public-path reachability that could have justified the integration copy is already asserted by its own siblings at factory_tests.rs:96-99 and 102-105, which name `cobre_comm::FerrompiBackend` while additionally checking the `Communicator` and `SharedMemoryProvider` impls that no const fn covers. Measured against the yardstick in docs/design/testing-architecture.md section 5.3, whose decision rule is cheapest-sufficient-tier first, a `#[test]` harness entry that cannot fail at run time is never the cheapest sufficient mechanism for a trait obligation; the doc is still marked Proposal outside section 5.2, so it argues the direction rather than binding it. The shape of the residue is therefore one mechanism per asserted type, sited in production next to the claim it guards, not a test-harness entry. On the L0 purity test none of (a), (b) or (c) fires: the residue removes test entries from cobre-comm without introducing engine or paradigm vocabulary, without any new dependency, and without creating an abstraction, so the hint is neutral rather than conflicts.",
+        "survivingClaim": "Only crates/cobre-comm/src/factory.rs:419 is a verbatim vacuous restatement, asserting the same `CommBackend: Send + Sync` obligation that the production const fn at factory.rs:74 discharges under the identical `#[cfg(feature = \"mpi\")]` gate; of the two `FerrompiBackend` copies exactly one is redundant, because crates/cobre-comm/src/ferrompi.rs:488 and crates/cobre-comm/tests/factory_tests.rs:89 duplicate each other and the public-path reachability distinguishing the integration copy is already asserted by its siblings at factory_tests.rs:97 and :104. The title's claim that the const fn already performs the `FerrompiBackend` assertion does not hold: it entails it only transitively through the `Box<FerrompiBackend>` payload of `CommBackend::Mpi` at factory.rs:63, so that assertion is subsumed at this baseline rather than restated, and dropping both copies would unpin the `unsafe impl Send`/`Sync` claim at ferrompi.rs:66-76.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "test-bloat-02": {
+      "candidateRef": "test-bloat-02",
+      "attackerRef": "SC-TB-002",
+      "disposition": "defended",
+      "lens": "test-bloat",
+      "title": "cobre-comm tests the same public Communicator contracts twice: six name-identical collective tests exist both inline in src/local.rs and in tests/local_conformance.rs, plus renamed pairs across factory.rs and tests/factory_tests.rs",
+      "anchors": [
+        {
+          "path": "crates/cobre-comm/src/local.rs",
+          "symbol": "test_local_allreduce_buffer_mismatch",
+          "line": 406
+        },
+        {
+          "path": "crates/cobre-comm/tests/local_conformance.rs",
+          "symbol": "test_local_allreduce_buffer_mismatch",
+          "line": 198
+        },
+        {
+          "path": "crates/cobre-comm/src/local.rs",
+          "symbol": "test_local_allgatherv_recv_too_small",
+          "line": 360
+        },
+        {
+          "path": "crates/cobre-comm/tests/local_conformance.rs",
+          "symbol": "test_local_allgatherv_recv_too_small",
+          "line": 244
+        },
+        {
+          "path": "crates/cobre-comm/src/local.rs",
+          "symbol": "test_local_broadcast_invalid_root",
+          "line": 453
+        },
+        {
+          "path": "crates/cobre-comm/tests/local_conformance.rs",
+          "symbol": "test_local_broadcast_invalid_root",
+          "line": 290
+        },
+        {
+          "path": "crates/cobre-comm/src/local.rs",
+          "symbol": "test_local_allreduce_identity_sum",
+          "line": 379
+        },
+        {
+          "path": "crates/cobre-comm/tests/local_conformance.rs",
+          "symbol": "test_local_allreduce_identity_sum",
+          "line": 44
+        },
+        {
+          "path": "crates/cobre-comm/src/local.rs",
+          "symbol": "test_local_allgatherv_with_offset",
+          "line": 292
+        },
+        {
+          "path": "crates/cobre-comm/tests/local_conformance.rs",
+          "symbol": "test_local_allgatherv_with_displacement",
+          "line": 30
+        },
+        {
+          "path": "crates/cobre-comm/src/factory.rs",
+          "symbol": "test_available_backends_contains_local",
+          "line": 303
+        },
+        {
+          "path": "crates/cobre-comm/tests/factory_tests.rs",
+          "symbol": "test_available_backends_contains_local",
+          "line": 71
+        },
+        {
+          "path": "crates/cobre-comm/src/factory.rs",
+          "symbol": "test_create_communicator_no_feature_local",
+          "line": 322
+        },
+        {
+          "path": "crates/cobre-comm/tests/factory_tests.rs",
+          "symbol": "test_factory_no_feature_local",
+          "line": 11
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Verified at the pin. The six pairs are body-identical, not merely name-identical: local.rs:379/388/397 and local_conformance.rs:44/56/68 push the same literals through the same ReduceOp and assert the same identity result; local.rs:406 and local_conformance.rs:198 both assert CommError::InvalidBufferSize with operation 'allreduce', expected 3, actual 2; local.rs:360 and local_conformance.rs:244 both assert expected 5 and actual 4 for allgatherv; local.rs:453 and local_conformance.rs:290 both assert CommError::InvalidRoot with root 1 and size 1. Only the failure message differs, and the renamed pair local.rs:292 / local_conformance.rs:30 is likewise literal-for-literal equivalent. The two-layer defence does not hold for these: the inline module at local.rs:268-270 imports only super::LocalBackend plus crate::{CommError, Communicator, ReduceOp}, and lib.rs:57/59/60 re-export all four, so the inline copies reach no private surface; and local_conformance.rs carries a single file-scope use at line 10, so a broken re-export would fail the whole binary at compile time, meaning one test in that file already proves the public path for all 18. The overlap has already drifted: broadcast_root0_noop broadcasts a 2-element buffer at local.rs:444 and a 3-element buffer at local_conformance.rs:94. Verbatim test duplication is treated as real debt by the project's own register (its Oracle test-harness duplication entry), not as sanctioned layering, and testing-architecture.md section 5.1 states no rule that mandates a second identical copy. I strip the factory half of the title: the inline module reaches the crate-private mpi_launch_detected() at factory.rs:211 to guard its auto-detect case, which no integration binary can call, and the mpi-gated integration module asserts the CommBackend::Local(_) variant that create_communicator actually returns while the inline comm_backend submodule only hand-constructs that variant, so each of those two files holds assertions the other cannot and neither is retirable as a duplicate. The shared-memory pairs were excluded at ingest and nothing in this verdict touches them. No L0 purity trigger: the implied change is test-only, introduces no engine vocabulary into cobre-comm, adds no dependency on an engine crate, and creates no single-consumer abstraction. The hint stays neutral because testing-architecture.md section 5.1 puts the non-solver crates out of scope for binary consolidation, so nothing here moves the L0-L4 layering.",
+        "survivingClaim": "Only the src/local.rs to tests/local_conformance.rs overlap survives: the six body-identical LocalBackend Communicator assertions (allreduce identity sum, min and max, allreduce_buffer_mismatch, allgatherv_recv_too_small, broadcast_invalid_root) are duplicated with zero coverage residue beyond a single re-export smoke test, so the inline copies of those six are redundant. The factory.rs to tests/factory_tests.rs half of the title is dropped; neither of those two files is retirable, because the inline module needs the crate-private mpi_launch_detected() and the integration module asserts a CommBackend variant the inline module never checks.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "test-bloat-03": {
+      "candidateRef": "test-bloat-03",
+      "attackerRef": "SC-TB-003",
+      "disposition": "defended",
+      "lens": "test-bloat",
+      "title": "The SS1.1 stage-template fixture is declared eight times token-identically across src and tests, so every StageTemplate field change costs eight edits",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/lib.rs",
+          "symbol": "test_support",
+          "line": 164
+        },
+        {
+          "path": "crates/cobre-solver/src/types.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 736
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 262
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/tests.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 19
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 34
+        },
+        {
+          "path": "crates/cobre-solver/tests/clp_determinism.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 33
+        },
+        {
+          "path": "crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 29
+        },
+        {
+          "path": "crates/cobre-solver/tests/clp_only_smoke.rs",
+          "symbol": "make_fixture_stage_template",
+          "line": 24
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/clp/tests.rs",
+          "symbol": "make_fixture_row_batch",
+          "line": 52
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "symbol": "make_fixture_row_batch",
+          "line": 45
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "symbol": "make_fixture_row_batch",
+          "line": 57
+        },
+        {
+          "path": "crates/cobre-solver/tests/clp_determinism.rs",
+          "symbol": "make_fixture_row_batch",
+          "line": 58
+        }
+      ],
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "partIRef": "I.3-8",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "The stated reason in clp_determinism.rs:13-14 ('Fixtures are re-declared locally because an integration test cannot import the #[cfg(test)] builders from src') is true about #[cfg(test)] visibility but has no bearing on four of the eight sites. types.rs:736 and freeze.rs:262 sit inside #[cfg(test)] mod tests of the SAME crate (gates at types.rs:546 and freeze.rs:244), and backends/clp/tests.rs:20 and backends/highs/tests.rs:19 are #[cfg(test)] mod tests declared at clp/mod.rs:14-15 and highs/mod.rs:20-21. One shared in-crate #[cfg(test)] fixture module serves all four with no cargo feature, no gating change and no coverage change; freeze.rs:253 already documents its own copy as 'the canonical 3-col, 2-row fixture from types.rs::make_fixture_stage_template', naming a same-crate owner it merely cannot path to because types.rs's mod tests is private. The justification has also rotted where it is cited: conformance.rs:4-5 attributes the copy to 'the highs.rs unit tests' and ffi_set_basis_non_alien_smoke.rs:26-28 to 'the src/highs.rs #[cfg(test)] module', and crates/cobre-solver/src/highs.rs does not resolve at the baseline (the module is src/backends/highs/tests.rs). The convention is already ratified against cobre-solver: docs/design/reserved-seams-and-deferred-debt.md:1173-1181 ('Fixed - a shared test-fixture surface per type owner') requires one definition where the type lives behind #[cfg(any(test, feature = 'test-support'))], and its 'What the convention has not reached' paragraph at :1200-1205 names only cobre-sddp/tests/common and cobre-python, so cobre-solver is an unrecorded gap rather than a sanctioned exception; testing-architecture.md section 5.2 (:396-420) keeps the cargo-feature route, so the candidate is right that a fixture crate is not on the table. What I do NOT confirm is the candidate's route for the four integration binaries. test_support is gated only by #[cfg(feature = 'test-support')] (lib.rs:163) and test-support is a non-default feature (crates/cobre-solver/Cargo.toml), so an integration binary reading a fixture there needs the feature; the whole-file gate borrowed from profile_retry_composition.rs:23 then compiles clp_determinism.rs, clp_only_smoke.rs and conformance.rs's clp half to empty binaries under the two invocations this repo documents WITHOUT test-support (CONTRIBUTING.md:71 'cargo test --workspace --no-default-features --features clp' and crates/cobre-solver/README.md:84 'cargo test -p cobre-solver --no-default-features --features clp'), and clp_only_smoke.rs:3-4 states its purpose as guaranteeing that this exact clp-only build 'ships at least one runnable integration test, not just #[cfg(test)] unit tests'. CI would not lose those tests (ci.yml:32 puts test-support in NON_SOLVER_FEATURES and both backend jobs consume it at :114 and :233), but the documented developer invocations would. The route that reaches those four with no feature gate is the live shared-module idiom, crates/cobre-sddp/tests/common/mod.rs with its #![allow(clippy::expect_used, dead_code)], compiled into each binary directly; the candidate did not propose it, so the integration-side collapse is unproven as specified, not justified in perpetuity. L0 purity test: the surviving fix introduces no engine or paradigm concept into cobre-solver - it reduces the same multistage-shaped StageTemplate literal from four declarations to one - and the shared module has at least three consumers in every single-backend build, so neither (a) nor (c) fires. Alignment is neutral, not advances-1: the dedup sheds no StageTemplate field and relocates no type, so by itself it advances no phase; it only shrinks the Phase-1 shed's test collateral, and the Phase-1 alignment travels with the merged I.3-8 record.",
+        "survivingClaim": "Only the four in-src declarations are unjustified duplication: crates/cobre-solver/src/types.rs:736, src/freeze.rs:262, src/backends/clp/tests.rs:20 and src/backends/highs/tests.rs:19 are all #[cfg(test)] inside one crate and collapse to a single shared in-crate fixture module with no cargo feature and no coverage change - the clp_determinism.rs:13-14 reason does not apply to any of them, and freeze.rs:253 already names types.rs as the owner. The four integration-binary copies (conformance.rs:34, clp_determinism.rs:33, ffi_set_basis_non_alien_smoke.rs:29, clp_only_smoke.rs:24) are NOT confirmed under the proposed test_support hoist, because gating them on the non-default test-support feature empties three of them under CONTRIBUTING.md:71 and crates/cobre-solver/README.md:84 and voids the guarantee clp_only_smoke.rs:3-4 declares as its reason to exist.",
+        "alignmentHint": "neutral",
+        "_needsHuman": [
+          "Owner call on the four integration binaries: either give cobre-solver a tests/common shared-fixture module (the cobre-sddp idiom, no feature gate) or accept that a test-support-gated fixture makes the documented clp-only invocations (CONTRIBUTING.md:71, crates/cobre-solver/README.md:84) run zero cobre-solver integration tests."
+        ]
+      }
+    },
+    "test-bloat-04": {
+      "candidateRef": "test-bloat-04",
+      "attackerRef": "SC-TB-004",
+      "disposition": "defended",
+      "lens": "test-bloat",
+      "title": "test_research_probe_limit_status_on_ss11_lp is a #[test] with no behavioural assertion; the fact it observes is already prose in the module comment directly above it",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "symbol": "test_research_probe_limit_status_on_ss11_lp",
+          "line": 846
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "symbol": "research_tests",
+          "line": 796
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/highs/tests.rs",
+          "line": 787
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Read at the baseline, crates/cobre-solver/src/backends/highs/tests.rs:846-878 contains exactly three failable checks across its two HiGHS create/run/destroy cycles: assert!(!highs.is_null()) at :853 and :867, plus the assert_eq!(status, ffi::HIGHS_STATUS_OK) the shared helper research_load_ss11_lp runs at :833-837. Both cobre_highs_get_model_status reads (:857 and :872) and both cobre_highs_get_objective_value reads flow only into eprintln! at :859-861 and :874-876, so no HiGHS observation the test exists to make can fail it. The station precedent does not protect it. P14 protects the two tests/ sign-convention probe binaries, and the CLP one earns that protection in code: _clp_sign_convention_probe.rs:114-124 asserts row_price[0] within 1e-6 of the -100.0 it records, which is the decision itself. This probe has no counterpart assertion. I cannot cite code that makes the probe a guard for anything, so I cannot defend it. Two parts of the title over-reach and are stripped in the surviving claim. First, 'no behavioural assertion' is inexact — the null-handle checks and the helper's pass_lp status check are real, they are simply orthogonal to the documented property. Second, 'already prose in the module comment' overstates the substitution: the comment at :791-794 records the conclusion (SS1.1 is solved by the crash heuristic so time and iteration limits never fire, and a 5-variable larger_lp is required) but records neither observed status code, and the executable does emit those codes — only to stderr, where cargo test swallows them on a pass. The attacker's own contrast is also weaker than stated: _q1_sign_convention_probe.rs prints its sign comparison at :107-122 and asserts only LP-R/LP-C primal and objective equivalence at :126-147, so it too leaves the relation it records unasserted. The verdict therefore rests on the probe's own internals, not on the contrast. The minimal fix already has an in-module precedent, which is why the residue is narrow rather than a deletion mandate: the sibling test_research_partial_solution_availability at :1030, labelled observational in the same register, nonetheless asserts HIGHS_MODEL_STATUS_TIME_LIMIT at :1044 and HIGHS_MODEL_STATUS_ITERATION_LIMIT at :1065 and prints only the objective. Either retiring the probe or pinning its two status codes is a change confined to a test module inside cobre-solver: it adds no engine or paradigm vocabulary to L0, no dependency on an engine crate, and no single-consumer abstraction, so none of (a)/(b)/(c) fires and the hint stays neutral.",
+        "survivingClaim": "Narrower residue: test_research_probe_limit_status_on_ss11_lp (highs/tests.rs:846) asserts neither of the two model_status values it exists to observe (:857, :872 are printed only), so it cannot fail if a future HiGHS release lets SS1.1 reach the time or iteration limit — the exact premise the module comment's larger_lp justification rests on at :791-794. Dropped from the title: 'no behavioural assertion' (the two null-handle checks at :853/:867 and the helper's pass_lp == HIGHS_STATUS_OK at :833 do fail), and 'the fact is already prose' as a full substitute (the comment carries the conclusion, not the two observed status codes). The in-module fix precedent is the sibling test_research_partial_solution_availability (:1030), which asserts both statuses at :1044/:1065 while printing only the objective.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "test-bloat-05": {
+      "candidateRef": "test-bloat-05",
+      "attackerRef": "SC-TB-005",
+      "disposition": "defended",
+      "lens": "test-bloat",
+      "title": "clp_only_smoke.rs is a whole test binary whose stated reason to exist is already met by conformance.rs, and its single test is a tolerance-only clone of the conformance one",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/tests/clp_only_smoke.rs",
+          "symbol": "clp_only_load_model_and_solve",
+          "line": 48
+        },
+        {
+          "path": "crates/cobre-solver/tests/clp_only_smoke.rs",
+          "line": 3
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "symbol": "test_solver_clp_load_model_and_solve",
+          "line": 1450
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "line": 26
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "At the baseline conformance.rs is NOT file-gated: it gates the CLP import at :25-26 and carries six clp-only tests (:1450, :1487, :1521, :1557, :1636, :1724) behind per-test cfg(feature = clp), and clp_determinism.rs carries a crate-level #![cfg(feature = clp)] at :16. The CLP job in .github/workflows/ci.yml builds all targets and then runs the whole suite with cargo nextest run --workspace --no-default-features --features clp <non-solver> (:223 and :233), so the clp-only feature combination already collects, links and RUNS integration tests without this binary. The build-matrix property the binary would guard is therefore already exercised by CI, and the guarantee stated at clp_only_smoke.rs:3-4 is false at this baseline. The single test at clp_only_smoke.rs:48-77 rebuilds the same 3-col/2-row fixture declared at conformance.rs:34 and asserts the same objective 100.0 and primals 6.0/0.0/2.0 as conformance.rs:1450, differing only in tolerance (1e-9 against 1e-8) and panic text, so it makes no assertion the clp-only run does not already make. Measured against docs/design/testing-architecture.md at the baseline (one linked executable per tests/*.rs, each statically linking the C++ solver, a new binary needing justification proportional to its link cost), the binary is unjustified. Two parts of the candidate do NOT survive: cobre-solver test_support (src/lib.rs:164-171) is an FFI/option-passthrough module with no fixtures module to source a fixture from, and the CI matrix needs no addition because the clp-only combination is already built and tested there. Nothing in this verdict rests on the HiGHS-loud / CLP-silent basis-validation asymmetry. L0 purity: the implied fix deletes a duplicated test binary from an L0 crate, adding no engine or paradigm vocabulary, no dependency on an engine crate, and no single-consumer abstraction, so none of (a)/(b)/(c) fires and the hint is a local cleanup.",
+        "survivingClaim": "Narrowed to two anchors: the module-doc guarantee at clp_only_smoke.rs:3-4 is false under the very feature combination it names, because conformance.rs (six clp-gated tests) and clp_determinism.rs (crate-level clp gate at :16) already ship runnable integration tests that CI runs under --no-default-features --features clp, so this extra solver-linked binary does not earn its link cost. Conceded from the title: its single test is not a pure tolerance-only clone -- it asserts a strict SUBSET of the clp conformance coverage (no duals, no add_rows, no warm start) at a marginally TIGHTER tolerance (1e-9 against conformance 1e-8), so retiring it loses a slightly tighter objective/primal bound rather than nothing; and the redundancy claim holds against the clp-gated section of conformance.rs plus clp_determinism.rs jointly, not against conformance.rs alone.",
+        "alignmentHint": "neutral",
+        "_needsHuman": []
+      }
+    },
+    "test-bloat-06": {
+      "candidateRef": "test-bloat-06",
+      "attackerRef": "SC-TB-006",
+      "disposition": "defended",
+      "lens": "test-bloat",
+      "title": "The two fixture-contract tests in conformance.rs assert a test-local literal against its own transcription and re-encode the five StageTemplate fields Part-I item 8 sheds",
+      "anchors": [
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "symbol": "test_fixture_stage_template_data",
+          "line": 138
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "symbol": "test_fixture_row_batch_data",
+          "line": 161
+        },
+        {
+          "path": "crates/cobre-solver/tests/conformance.rs",
+          "line": 153
+        }
+      ],
+      "proposedSeverity": "C",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-8",
+      "defender": {
+        "verdict": "confirmed",
+        "argument": "Both self-checks resolve at the baseline: test_fixture_stage_template_data spans crates/cobre-solver/tests/conformance.rs:137-158 and test_fixture_row_batch_data spans :160-170, each reading a builder declared in the same file (make_fixture_stage_template at :34, make_fixture_row_batch at :57). Both builders are plain struct literals with no computation, so every assert_eq! compares a literal to a hand transcription of that same literal and no assertion cross-checks a derivable relation (num_cols against col_starts.len(), num_nz against values.len()); the CSC-consistency oracle that would have made the self-check independent is absent. I tested the one defense that would have made them load-bearing and it fails: a no-backend build does not exist, because crates/cobre-solver/src/lib.rs:49-50 rejects it with compile_error! (restated in the manifest note at crates/cobre-solver/Cargo.toml:16-19), and both builders are consumed under each compilable configuration - the template at :74 and the row batch at :179 under highs, at :1452 and :1524 under clp - so these two ungated tests suppress no dead-code warning in any build that can be produced. The fixture data also already has an oracle independent of the transcription: test_solver_highs_load_model_and_solve (:72) pins objective 100.0 and primals [6,0,2] and test_solver_highs_add_rows_tightens (:176) pins 162.0 and [6,62,2], values derived from the LP rather than copied from the builder, so a builder edit fails there first and harder than in the self-check. The struct-literal construction at :35-54 and the field write at :122 already prove every field is publicly visible from an integration test, so the reads add no compile-time coverage either. Narrowing: the five-field re-encoding belongs to one test, not two - RowBatch carries none of n_state/n_transfer/n_dual_relevant/n_hydro/max_par_order, so test_fixture_row_batch_data survives only as a tautology and is not I.3-8 collateral. Verified rider for the alignment epic, carried without re-deriving any per-field disposition (all five remain retire): the five assertions sit at :153-157, while partI-handoff.json records the collateral site as conformance.rs:154-156 in both writeOnlyEvidence.testReaders and the fixShape prose, leaving n_state (:153) and max_par_order (:157) outside the recorded span. L0 purity test: the implied removal takes multistage vocabulary out of an L0 test, places no engine or paradigm concept into cobre-solver, adds no dependency onto an engine crate and creates no one-consumer abstraction, so none of (a)/(b)/(c) fires.",
+        "survivingClaim": "Only test_fixture_stage_template_data (conformance.rs:137-158) is I.3-8 collateral - its assertions at :153-157 re-encode the five shed fields; test_fixture_row_batch_data (:160-170) carries none of them, so the title's second half holds for one of the two tests. What holds for both is narrower than the title: each asserts a same-file struct-literal builder against its own transcription, adds no relation the builder does not already contain, and invokes no SolverInterface method, while the objective and primal assertions at :72 and :176 already pin the same fixture against an LP-derived oracle.",
+        "alignmentHint": "advances-1",
+        "_needsHuman": []
+      }
+    }
+  }
+}

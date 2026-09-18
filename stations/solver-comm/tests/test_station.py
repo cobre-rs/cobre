@@ -1287,6 +1287,345 @@ class CandidateEnvelopeTests(sc.StationCase):
         )
 
 
+INGEST_DISPOSITIONS = {
+    "defended",
+    "anchor-missing",
+    "out-of-station",
+    "sanctioned",
+    "dup-of",
+    "re-raise",
+    "informational",
+}
+# The ticket's test vocabulary (accepted / rejected-anchor / rejected-reserved-seam /
+# rejected-defender / merged) maps onto disposition + defender verdict; the map is the
+# single place the two vocabularies meet.
+INGEST_STATE = {
+    ("defended", "confirmed"): "accepted",
+    ("defended", "dismissed"): "rejected-defender",
+    ("anchor-missing", None): "rejected-anchor",
+    ("out-of-station", None): "rejected-anchor",
+    ("sanctioned", None): "rejected-reserved-seam",
+    ("dup-of", None): "merged",
+    ("informational", None): "accepted",
+}
+MIRROR_ENTRIES = {
+    "Shared-memory communicator trait hierarchy",
+    "Superseded cut-sync public methods",
+}
+ALIGN = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
+CUT_SYNC_SYMBOLS = ("sync_cuts", "pack_local_records", "sync_packed_records")
+ASYMMETRY = re.compile(
+    r"BasisInconsistent|isBasisConsistent|basis[- ]validation|"
+    r"(?:loud|silent)\w*\W.{0,60}\bbasis|\bbasis\b.{0,80}(?:loud|silent)",
+    re.I | re.S,
+)
+
+
+def ingest_ref(attacker_ref: str, lens: str) -> str:
+    return f"{lens}-{int(attacker_ref.rsplit('-', 1)[1]):02d}"
+
+
+def normalised(text: str) -> str:
+    return re.sub(r"\W+", " ", text).strip().lower()
+
+
+class IngestTests(sc.StationCase):
+    """verdicts.json + ingest-log.md + anchor-probe.md + the E5 dup-of handoff records."""
+
+    SLUG = "solver-comm"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.verdicts = sc.load_json(cls.station_dir() / "verdicts.json")
+        cls.handoffs = sc.load_json(cls.station_dir() / "handoffs.json")
+        cls.log = (
+            cls.station_dir().joinpath("ingest-log.md").read_text(encoding="utf-8")
+        )
+        cls.probe = (
+            cls.station_dir().joinpath("anchor-probe.md").read_text(encoding="utf-8")
+        )
+        cls.candidates: dict[str, dict] = {}
+        for lens in LENSES:
+            merged = sc.load_json(cls.station_dir() / f"candidates.{lens}.json")
+            for cand in merged["candidates"]:
+                cls.candidates[ingest_ref(cand["candidateRef"], lens)] = {
+                    **cand,
+                    "lens": lens,
+                }
+
+    def entries(self) -> dict[str, dict]:
+        return self.verdicts["verdicts"]
+
+    def state(self, entry: dict) -> str:
+        verdict = (entry.get("defender") or {}).get("verdict")
+        return INGEST_STATE[(entry["disposition"], verdict)]
+
+    def test_one_verdict_per_candidate_and_attacker_ref_round_trips(self) -> None:
+        self.assertEqual(set(self.entries()), set(self.candidates))
+        for ref, entry in self.entries().items():
+            self.assertEqual(entry["candidateRef"], ref)
+            self.assertEqual(entry["attackerRef"], self.candidates[ref]["candidateRef"])
+            self.assertEqual(entry["lens"], self.candidates[ref]["lens"])
+        self.assertEqual(self.verdicts["counts"]["received"], len(self.candidates))
+        self.assertEqual(self.verdicts["baseline"], self.baseline())
+
+    def test_every_verdict_maps_onto_the_ticket_state_vocabulary(self) -> None:
+        for ref, entry in self.entries().items():
+            self.assertIn(entry["disposition"], INGEST_DISPOSITIONS, ref)
+            state = self.state(entry)
+            self.assertIn(
+                state,
+                {
+                    "accepted",
+                    "rejected-anchor",
+                    "rejected-reserved-seam",
+                    "rejected-defender",
+                    "merged",
+                },
+                ref,
+            )
+            if entry["disposition"] == "defended":
+                self.assertIn(entry["defender"]["verdict"], ("confirmed", "dismissed"))
+            else:
+                self.assertNotIn(
+                    "defender", entry, f"{ref}: no defender off the defended route"
+                )
+
+    def test_confirmed_carries_a_strictly_narrower_surviving_claim(self) -> None:
+        for ref, entry in self.entries().items():
+            defender = entry.get("defender")
+            if defender and defender["verdict"] == "confirmed":
+                claim = normalised(defender.get("survivingClaim", ""))
+                title = normalised(self.candidates[ref]["title"])
+                self.assertTrue(claim, f"{ref}: confirmed without survivingClaim")
+                self.assertNotEqual(
+                    claim, title, f"{ref}: survivingClaim restates the title"
+                )
+                self.assertNotIn(
+                    title, claim, f"{ref}: survivingClaim contains the title"
+                )
+                self.assertNotIn("sanctionedBy", defender, ref)
+
+    def test_every_defender_argument_is_reasoning_with_an_alignment_hint(self) -> None:
+        for ref, entry in self.entries().items():
+            defender = entry.get("defender")
+            if defender:
+                self.assertGreaterEqual(len(defender["argument"].strip()), 120, ref)
+                self.assertIn(defender["alignmentHint"], ALIGN, ref)
+                self.assertEqual(entry["alignmentHint"], defender["alignmentHint"], ref)
+
+    def test_sanctioned_dismissals_cite_one_of_the_two_mirror_entries(self) -> None:
+        mirror = self.tree().read_text(backlog_parse.MIRROR)
+        for entry_name in MIRROR_ENTRIES:
+            self.assertIn(f"### {entry_name}", mirror)
+        for ref, entry in self.entries().items():
+            cite = (entry.get("defender") or {}).get("sanctionedBy") or entry.get(
+                "sanctionedBy"
+            )
+            if entry["disposition"] in ("sanctioned", "dup-of") or cite is not None:
+                self.assertIn(cite, MIRROR_ENTRIES, f"{ref}: sanctionedBy {cite!r}")
+
+    def test_basis_asymmetry_dismissals_name_intended_behaviour(self) -> None:
+        for ref, entry in self.entries().items():
+            defender = entry.get("defender")
+            if (
+                defender
+                and defender["verdict"] == "dismissed"
+                and ASYMMETRY.search(defender["argument"])
+            ):
+                self.assertTrue(
+                    defender.get("intendedBehaviour", "").strip(),
+                    f"{ref}: dismissal rests on the basis-validation asymmetry without intendedBehaviour",
+                )
+                self.assertRegex(defender["intendedBehaviour"], r"(?i)intended")
+
+    def test_shared_memory_hierarchy_never_reaches_a_defender(self) -> None:
+        # The ratified seam is an ingest filter: it may appear only in positives, never as a
+        # candidate, so no verdict names one of its six symbols as a removal target.
+        for ref, entry in self.entries().items():
+            if entry["disposition"] == "sanctioned":
+                self.assertEqual(
+                    entry["sanctionedBy"],
+                    "Shared-memory communicator trait hierarchy",
+                    ref,
+                )
+                self.assertNotIn("defender", entry, ref)
+            else:
+                anchors = {a.get("symbol") for a in entry["anchors"]}
+                self.assertFalse(
+                    anchors & set(SHARED_MEMORY), f"{ref}: anchors the reserved seam"
+                )
+        cleared = self.log.split("## Cleared (sanctioned)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Shared-memory communicator trait hierarchy", cleared)
+
+    def test_cut_sync_candidates_merge_into_the_e5_handoff_without_an_id(self) -> None:
+        tree = self.tree()
+        source = tree.read_text(DUP_OF_PATH)
+        for symbol in (*CUT_SYNC_SYMBOLS, "sync_level_records"):
+            self.assertRegex(source, rf"(?m)^\s*pub fn {symbol}\b")
+        merged = {
+            ref for ref, e in self.entries().items() if e["disposition"] == "dup-of"
+        }
+        self.assertTrue(merged)
+        records = {r["candidateRef"]: r for r in self.handoffs["records"]}
+        self.assertEqual(set(records), merged)
+        self.assertEqual(set(self.handoffs["E5"]["ingestRecords"]), merged)
+        for ref in merged:
+            entry, record = self.entries()[ref], records[ref]
+            self.assertEqual(entry["dupOf"], "Superseded cut-sync public methods")
+            self.assertEqual(entry["registerId"], "CD-019")
+            self.assertIsNone(entry["assignedId"])
+            self.assertEqual(record["toEpic"], "E5")
+            self.assertEqual(record["kind"], "dup-of")
+            self.assertIsNone(record["assignedId"])
+            self.assertEqual(record["attackerRef"], entry["attackerRef"])
+            self.assertEqual(record["supersededBy"]["symbol"], "sync_level_records")
+            self.assertTrue(
+                {a["symbol"] for a in record["anchors"]} & set(CUT_SYNC_SYMBOLS)
+            )
+            self.assertTrue(
+                all(a["path"] == DUP_OF_PATH for a in entry["anchors"]), ref
+            )
+        self.assertIsNone(self.handoffs["E5"]["idAssigned"])
+
+    def test_informational_capability_trait_is_recorded_neutral_with_iii6(self) -> None:
+        info = [
+            e for e in self.entries().values() if e["disposition"] == "informational"
+        ]
+        self.assertEqual(len(info), 1)
+        entry = info[0]
+        self.assertEqual(entry["attackerRef"], "SC-ARCH-009")
+        self.assertIn("III.6", entry["roadmapRef"])
+        self.assertEqual(entry["alignmentHint"], "neutral")
+        self.assertTrue(
+            {"crates/cobre-solver/src/trait_def.rs", "crates/cobre-solver/src/lib.rs"}
+            <= {a["path"] for a in entry["anchors"]}
+        )
+        held = self.log.split("## Held as conflicts (L0 purity test)", 1)[1].split(
+            "\n## ", 1
+        )[0]
+        self.assertIn("one consumer", held)
+        self.assertRegex(self.log, r"## Informational \(recorded, no severity\)")
+
+    def test_part_i_refs_survive_ingest(self) -> None:
+        for ref, entry in self.entries().items():
+            cand_ref = self.candidates[ref].get("partIRef")
+            self.assertEqual(entry.get("partIRef"), cand_ref, ref)
+            defender = entry.get("defender")
+            if cand_ref and defender:
+                self.assertEqual(entry["partIRef"], "I.3-8")
+
+    def test_perf_verdicts_keep_their_layout_and_carry_no_number(self) -> None:
+        for ref, entry in self.entries().items():
+            if entry["lens"] == "performance":
+                self.assertIn(entry["measurementLayout"], LAYOUTS, ref)
+                self.assertEqual(
+                    entry["measurementLayout"],
+                    self.candidates[ref]["measurementLayout"],
+                )
+                self.assertIn(entry["proposedSeverity"], ("A", "B", "C"), ref)
+                defender = entry.get("defender") or {}
+                blob = " ".join(
+                    str(defender.get(k, "")) for k in ("argument", "survivingClaim")
+                )
+                self.assertIsNone(
+                    TIMING_NUMBER.search(blob), f"{ref}: number in verdict"
+                )
+
+    def test_accepted_anchors_resolve_at_the_station_baseline(self) -> None:
+        tree = self.tree()
+        for ref, entry in self.entries().items():
+            if self.state(entry) in ("accepted", "merged"):
+                for anchor in entry["anchors"]:
+                    self.assertTrue(tree.is_file(anchor["path"]), f"{ref}: {anchor}")
+                    if anchor.get("line") is not None:
+                        lines = tree.read_text(anchor["path"]).count("\n") + 1
+                        self.assertLessEqual(anchor["line"], lines, f"{ref}: {anchor}")
+                    elif anchor.get("symbol"):
+                        self.assertTrue(
+                            sc.symbol_resolves(anchor["path"], anchor["symbol"], tree),
+                            f"{ref}: {anchor}",
+                        )
+
+    def test_anchor_probe_has_one_block_per_candidate_and_checker_passes(self) -> None:
+        for ref, cand in self.candidates.items():
+            self.assertEqual(
+                self.probe.count(f"### {ref} · {cand['candidateRef']} · "), 1, ref
+            )
+        for anchor in ANCHOR_TOKEN.finditer(self.probe):
+            self.assertTrue(
+                anchor.group("path").startswith(IN_SCOPE)
+                or anchor.group("path") == DUP_OF_PATH,
+                anchor.group(0),
+            )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "check-anchors.py"),
+                "INGEST ANCHOR PROBE — solver-comm (2026-09, baseline)",
+                "--register",
+                str(self.artifact("anchor-probe.md")),
+                "--baseline",
+                self.baseline(),
+                "--allow-drift",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=sc.REPO,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"checked \d+ anchors, 0 failing")
+
+    def test_ingest_log_has_one_roster_row_per_candidate_and_names_the_baseline(
+        self,
+    ) -> None:
+        self.assertIn(f"Baseline: `{self.baseline()}`", self.log)
+        roster = self.log.split("## Per-candidate roster", 1)[1]
+        for ref, entry in self.entries().items():
+            self.assertEqual(
+                roster.count(f"| {ref} | {entry['attackerRef']} |"),
+                1,
+                f"{ref}: expected exactly one roster row",
+            )
+        for lens in LENSES:
+            self.assertRegex(
+                self.log, rf"\| {lens} \| candidates\.{lens}\.json \| \d+ \|"
+            )
+
+    def test_counts_block_sums_to_the_received_total(self) -> None:
+        counts = self.verdicts["counts"]
+        entries = list(self.entries().values())
+        by_disposition = {
+            "anchorRejected": "anchor-missing",
+            "outOfStation": "out-of-station",
+            "sanctionedCleared": "sanctioned",
+            "dupOf": "dup-of",
+            "reRaiseRejected": "re-raise",
+            "informational": "informational",
+            "defended": "defended",
+        }
+        for key, disposition in by_disposition.items():
+            self.assertEqual(
+                counts[key],
+                sum(1 for e in entries if e["disposition"] == disposition),
+                key,
+            )
+        self.assertEqual(
+            sum(counts[k] for k in by_disposition),
+            counts["received"],
+            "dispositions != received",
+        )
+        verdicts = [e["defender"]["verdict"] for e in entries if "defender" in e]
+        self.assertEqual(counts["confirmed"], verdicts.count("confirmed"))
+        self.assertEqual(counts["dismissed"], verdicts.count("dismissed"))
+        self.assertEqual(counts["confirmed"] + counts["dismissed"], counts["defended"])
+        self.assertEqual(
+            counts["needsHuman"],
+            sum(1 for e in entries if (e.get("defender") or {}).get("_needsHuman")),
+        )
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_modified(self) -> None:
         self.assertEqual(sc.tracked_modifications(), [])

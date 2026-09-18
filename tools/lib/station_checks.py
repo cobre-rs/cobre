@@ -195,6 +195,9 @@ ANCHOR_LOC_RE = re.compile(
 _DECL_RE = r"^\s*(pub(\([^)]*\))?\s+)?(async\s+)?(unsafe\s+)?(fn|struct|enum|trait|type|const|static|mod|impl|macro_rules!)\s+{sym}\b"
 _FIELD_RE = r"^\s*(pub(\([^)]*\))?\s+)?{sym}\s*:"
 _SHELL_RE = r"^\s*(export\s+)?{sym}=|^\s*{sym}\s*\(\)\s*\{{"
+# `.py` files resolve def / class at any indent or a column-0 module constant — never the
+# field form, which would accept a type-annotated parameter as a declaration.
+_PY_DECL_RE = r"^\s*(async\s+)?(def|class)\s+{sym}\b|^{sym}\s*(:[^=\n]*)?="
 
 
 def run_checker(tool: str, section_title: str, *extra: str) -> int:
@@ -226,11 +229,13 @@ def symbol_resolves(
 ) -> bool:
     text = tree.read_text(path)
     sym = re.escape(symbol)
-    patterns = (
-        [_DECL_RE, _FIELD_RE]
-        if pathlib.PurePosixPath(path).suffix == ".rs"
-        else [_SHELL_RE, _DECL_RE, _FIELD_RE]
-    )
+    suffix = pathlib.PurePosixPath(path).suffix
+    if suffix == ".rs":
+        patterns = [_DECL_RE, _FIELD_RE]
+    elif suffix == ".py":
+        patterns = [_PY_DECL_RE]
+    else:
+        patterns = [_SHELL_RE, _DECL_RE, _FIELD_RE]
     return any(re.search(p.format(sym=sym), text, re.M) for p in patterns)
 
 

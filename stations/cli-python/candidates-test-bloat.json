@@ -1,0 +1,1519 @@
+{
+  "station": "cli-python",
+  "stationLabel": "cobre-cli+cobre-python+facade",
+  "subStation": "S6",
+  "cells": [
+    "test-bloat.S6a",
+    "test-bloat.S6b",
+    "test-bloat.S6c"
+  ],
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "test-bloat",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "id": "S6a-TB-01",
+      "title": "output_metadata_active_backend.rs and setup_timings_metadata.rs are 53-line twins: two solver-linked binaries run the same d01 CLI training to assert two field groups of the same training/metadata.json",
+      "proposedSeverity": "B",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/tests/output_metadata_active_backend.rs",
+          "symbol": "training_metadata_solver_matches_active_backend"
+        },
+        {
+          "path": "crates/cobre-cli/tests/setup_timings_metadata.rs",
+          "symbol": "training_metadata_carries_well_formed_setup_timings"
+        },
+        {
+          "path": "crates/cobre-cli/tests/setup_timings_metadata.rs",
+          "symbol": "d01_case_dir"
+        }
+      ],
+      "evidence": {
+        "command": "diff <(git show 077dbe2c:crates/cobre-cli/tests/output_metadata_active_backend.rs | sed -n '10,62p') <(git show 077dbe2c:crates/cobre-cli/tests/setup_timings_metadata.rs | sed -n '6,58p')",
+        "output": "23c23\\n< fn training_metadata_solver_matches_active_backend() {\\n---\\n> fn training_metadata_carries_well_formed_setup_timings() {",
+        "reading": "Over 53 lines the two files differ in exactly one line: the test function name. Same allow attributes, same import set, same fn cobre(), same d01_case_dir() body, same cobre run invocation of examples/deterministic/d01-thermal-dispatch into a TempDir with --quiet, same read of training/metadata.json. One then asserts the solver and solver_version fields; the other asserts the setup timing fields of that same artifact. Per .claude/rules/testing.md section Cost discipline (lines 113-123) cobre-solver statically links HiGHS/CLP into every tests/*.rs, so each file pays a full C++ link, and the guidance is explicit: add a test function to an existing domain binary rather than a new file, group related tests with mod. Here the cost is two links plus two identical d01 training runs to assert two field groups of one JSON file. Neither test is redundant as a claim; only their homes are."
+      },
+      "fixShape": "Fold both claims into the existing run-path domain binary crates/cobre-cli/tests/cli_run.rs as one mod group that performs a single d01 run into a single TempDir, reads training/metadata.json once, and then asserts the solver and solver_version group and the setup timing group as two separate test functions sharing that module-scoped output, and delete the two single-test binaries. Both assertions and both field lists survive verbatim, so no claim is lost. Byte-neutrality (rule 8) holds: nothing in any output tree changes, no parity baseline and no committed .sha256 is read or written by either test, and setup_timings_metadata.rs itself documents the setup section as excluded from parity hashing.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "the rule 7 reserved-seam pre-check is scoped to the over-engineering lens and to the facade crate / commands/broadcast.rs; nothing raised here is a registered reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-02",
+      "title": "Seven of the nine run-path test binaries hold exactly one #[test], and cobre-cli has no tests/common/: fn cobre() is redefined in 13 of 14 binaries, the repo-root case-dir body in 5 corpus files under 3 names, and a 102-line parquet-reader block is byte-identical across the two anticipated binaries",
+      "proposedSeverity": "B",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/tests/cli_run_anticipated.rs",
+          "symbol": "read_thermals_parquet"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_anticipated_k2.rs",
+          "symbol": "read_thermals_parquet"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_evaporation.rs",
+          "symbol": "d08_case_dir"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_generic_echo.rs",
+          "symbol": "case_dir"
+        },
+        {
+          "path": "crates/cobre-cli/tests/python_parity_check.rs",
+          "symbol": "python_parity_script_passes"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run.rs",
+          "symbol": "cobre"
+        }
+      ],
+      "evidence": {
+        "command": "git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/tests; git grep -l 'fn cobre() -> Command' 077dbe2c -- crates/cobre-cli/tests | wc -l; diff <(git show 077dbe2c:crates/cobre-cli/tests/cli_run_anticipated.rs | sed -n '125,226p') <(git show 077dbe2c:crates/cobre-cli/tests/cli_run_anticipated_k2.rs | sed -n '135,236p'); echo exit=$?",
+        "output": "14 flat .rs paths, no tests/common/ entry anywhere in the tree\\n13\\nexit=0   (no diff output: the 102 lines are byte-identical)",
+        "reading": "The crate has no shared harness directory at all, so every binary rebuilds the harness. fn cobre() -> Command, whose body is a single Command::new(assert_cmd::cargo::cargo_bin!(\\\"cobre\\\")), is declared in 13 of the 14 binaries, 8 of them in this corpus. The repo-root case-dir resolution body (manifest dir, two parents, join examples/deterministic/<case>) appears 5 times in this corpus under 3 different names, d08_case_dir, case_dir(name), d01_case_dir, plus inline in python_parity_check.rs, with a sixth variant form in cli_e2e_run_end_block.rs. The 102-line block carrying fn write_file, struct ThermalRows and fn read_thermals_parquet is byte-identical between cli_run_anticipated.rs and cli_run_anticipated_k2.rs, and each of those binaries holds exactly one #[test]. Against the station's frozen per-binary census, 7 of the 9 corpus binaries hold a single test function (all but cli_run.rs at 12 and cli_run_generic_echo.rs at 2), so the crate pays 7 full solver links for 7 test functions. .claude/rules/testing.md section Cost discipline states both halves of the violation directly: add a test function to an existing domain binary rather than a new file, and the shared harness helpers live once in tests/common/, never re-defined per file. python_parity_check.rs is the sharpest instance: a whole solver-linked binary whose single test never invokes the cobre binary at all, it only shells python3 against scripts/ci/check_python_parity.py and returns early, a silent pass, when python3 is absent."
+      },
+      "fixShape": "Introduce crates/cobre-cli/tests/common/ as the single harness home (a mod common declared from the consolidated binary, which is the layout section Cost discipline already names) holding fn cobre(), one case_dir(name) resolver that subsumes the d01 and d08 variants and the 1dtoy form, fn write_file, struct ThermalRows and fn read_thermals_parquet, then move the single-test run-path binaries into the existing cli_run.rs domain binary as mod groups, one per feature lane (anticipated, anticipated_k2, evaporation, generic_echo, end_block, run_metadata). No new test binary and no new fixture crate: the helper home is a module of an existing binary, not a crate. Keep python_parity_check.rs shelling to the one canonical parity script rather than reimplementing parity in Rust, but move it into the consolidated binary too and turn its python3-absent early return into an explicit skip signal so an absent interpreter cannot read as a pass. Byte-neutrality (rule 8): helper bodies move verbatim, every assertion and every deck stays as written, and no golden, baseline or committed .sha256 is touched.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "the rule 7 reserved-seam pre-check is scoped to the over-engineering lens and to the facade crate / commands/broadcast.rs; nothing raised here is a registered reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-03",
+      "title": "test_study.py and test_run.py declare no fixtures and re-train or re-run examples/1dtoy per test function, including for pure argument-validation claims, while test_outputs.py in the same directory runs each deck once behind a module-scoped fixture",
+      "proposedSeverity": "B",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/tests/test_study.py",
+          "symbol": "test_policy_evaluate_stage_out_of_range_raises_indexerror"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_study.py",
+          "symbol": "test_policy_evaluate_bad_state_length_raises_valueerror"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_run.py",
+          "symbol": "test_run_1dtoy_succeeds"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_run.py",
+          "symbol": "test_run_1dtoy_creates_output"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_outputs.py",
+          "symbol": "run_output"
+        },
+        {
+          "path": "crates/cobre-python/tests/conftest.py",
+          "symbol": "cli_binary"
+        }
+      ],
+      "evidence": {
+        "command": "for f in test_study.py test_run.py test_outputs.py test_callback.py; do echo \\\"== $f\\\"; git show 077dbe2c:crates/cobre-python/tests/$f | grep -c '@pytest.fixture'; git show 077dbe2c:crates/cobre-python/tests/$f | grep -c '^def test_'; git show 077dbe2c:crates/cobre-python/tests/$f | grep -c '\\\\.train()'; git show 077dbe2c:crates/cobre-python/tests/$f | grep -c 'run\\\\.run('; done; git show 077dbe2c:crates/cobre-python/tests/test_outputs.py | grep -n '@pytest.fixture(scope=' -A 1",
+        "output": "== test_study.py  fixtures 0  tests 20  train() 15  run.run 4\\n== test_run.py  fixtures 0  tests 13  run.run 14\\n== test_outputs.py  fixtures 3  tests 9  run.run 3\\n== test_callback.py  fixtures 0  tests 3  run.run 4\\ntest_outputs.py: @pytest.fixture(scope=\\\"module\\\") def run_output(...)  /  def d20_output(...)  /  def d28_output(...)",
+        "reading": "test_study.py drives 20 test functions against a single deck, VALID_CASE = examples/1dtoy, with zero fixtures: 20 Study constructions and 15 trainings, plus 4 tests that additionally run cobre.run.run to compare the two paths. Two of those trainings buy nothing: test_policy_evaluate_stage_out_of_range_raises_indexerror and test_policy_evaluate_bad_state_length_raises_valueerror each train a full policy and then assert only that an out-of-range stage index raises IndexError and that a wrong-length state vector raises ValueError, claims about argument validation on an already-built Policy. test_run.py repeats the pattern: 13 tests, 14 run.run calls, no fixture, with test_run_1dtoy_succeeds and test_run_1dtoy_creates_output performing two separate full runs of the same deck to assert the result dict and then the output tree. test_outputs.py, in the same directory, is the counter-example that proves the seam exists and is idiomatic here: three module-scoped fixtures, run_output, d20_output and d28_output, cover 9 tests with 3 runs. docs/design/testing-architecture.md section 5.3 asks each claim to sit at the cheapest sufficient tier; an argument-validation claim on a Policy object does not need its own training. test_callback.py is excluded from this finding on purpose: its callbacks must observe distinct runs, so its 4 runs for 3 tests are correct."
+      },
+      "fixShape": "Add a module-scoped trained-policy fixture to crates/cobre-python/tests/conftest.py (the file that already owns the session-scoped cli_binary fixture, so no new file and no new fixture crate) that trains examples/1dtoy once into a tmp_path_factory directory and yields the Study and its Policy, then have the tests whose claim is about an already-built Policy consume it: the two policy_evaluate validation tests and the other read-only Policy assertions in test_study.py. Tests that assert on the output tree, on config overrides, or on per-run metadata keep their own tmp_path and their own run, since their claim is about the run itself. In test_run.py, fold the result-dict and output-tree assertions on the shared 1dtoy deck onto one module-scoped run the same way test_outputs.py already does. Every assertion text and every deck stays exactly as written, so byte-neutrality (rule 8) holds and no parity golden or committed .sha256 is involved.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "the rule 7 reserved-seam pre-check is scoped to the over-engineering lens and to the facade crate / commands/broadcast.rs; nothing raised here is a registered reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-04",
+      "title": "The bindings' inline test module runs seven full run_via_study studies and hand-pins the CLI's 1dtoy numbers, and cli_e2e_run_end_block.rs pins the same mean cost again at different precision in a second crate, while the pytest parity suite derives the CLI/Python agreement live",
+      "proposedSeverity": "B",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "python_run_1dtoy_metadata_matches_cli_golden_values"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "copy_dir_all"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_e2e_run_end_block.rs",
+          "symbol": "EXPECTED_MEAN_COST"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_cli_python_determinism_parity.py",
+          "symbol": "test_cli_python_json_files_match"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'run_via_study(\\\\|golden_\\\\|fn python_run_1dtoy'; git show 077dbe2c:crates/cobre-cli/tests/cli_e2e_run_end_block.rs | grep -n 'EXPECTED_MEAN_COST'; git ls-tree -r --name-only 077dbe2c -- crates/cobre-sddp/tests/fixtures | grep 'sha256$'",
+        "output": "run.rs: run_via_study( called 7 times across 4 tests; golden_lower_bound = 15_595_518.381_798_638; golden_upper_bound = 579_592.198_622_440_7; golden_mean_cost = 9_679_385.922_404_84\\ncli_e2e_run_end_block.rs: const EXPECTED_MEAN_COST: f64 = 9_679_385.922_404_844;\\nfixtures: parity_baselines and parity_baselines_clp .sha256 files for D06 D15 D30 D34 D41 only, no 1dtoy baseline",
+        "reading": "The inline module of the bindings crate executes run_via_study seven times across four tests, all on examples/1dtoy, each a full train-then-simulate into a process-id-named temp dir, and one of them, python_run_1dtoy_metadata_matches_cli_golden_values, hand-pins the CLI's lower bound, upper bound, mean cost and two counts as Rust literals; its own doc says the golden values are the CLI's actual output for examples/1dtoy. That is a CLI/Python agreement claim, the exact claim test_cli_python_determinism_parity.py derives live by running both front ends and comparing their artifacts, so the number-pinning copy adds a second, hand-maintained source for it. The same mean cost is pinned a third time in a different crate as EXPECTED_MEAN_COST in cli_e2e_run_end_block.rs, at 9_679_385.922_404_844 against the bindings' 9_679_385.922_404_84, the same quantity at two precisions with no generator tying them. Scope caveat stated deliberately: the section Contracts rule in .claude/rules/testing.md, parity baselines have ONE source of truth, the committed .sha256, do not add a second pinned copy, does not literally cover these constants, because as the fixture listing shows 1dtoy has no committed baseline at all; it is cited here as the nearest standing norm, not as a rule these lines breach. This finding is about duplicated hand-pinned goldens and repeated full studies inside a unit-tier module; it is NOT the superseded claim that the bindings' Rust tests are invisible to CI, which ci.yml runs at the pin."
+      },
+      "fixShape": "Give the CLI/Python 1dtoy agreement one owner. Keep the live derivation in the pytest parity suite as the authority, and reduce the inline bindings test to what only it can assert, that run_via_study returns a well-formed metadata structure, dropping the hand-copied CLI numbers rather than maintaining a second pinned copy. If an offline guard is wanted for environments with no built wheel, pin the 1dtoy numbers in exactly one place and have the other site read them, and say in that one place which command regenerates them. Separately, collapse the four tests that each drive a fresh full 1dtoy study onto one shared setup within the module so the deck is trained once for the metadata, override, checkpoint-roundtrip and simulation-only claims, and reuse one directory-copy helper instead of the module-local copy_dir_all. Byte-neutrality (rule 8): no parity golden, no committed .sha256 and no output artifact changes; only where the numbers live and how many times the same deck is solved.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:347",
+        "rule": "the only mirror entry touching the bindings' Rust tests is the CI-visibility entry at :347, which the station records as stale at this pin (ci.yml:562 runs them); it does not reserve the duplicated 1dtoy goldens or the repeated full studies, and this candidate does not re-raise CI invisibility"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-05",
+      "title": "The pytest parity files each rebuild the same harness: _make_case_with_simulation is declared four times with a byte-identical body, plus a fifth copy inside _seed_case and a sixth in Rust, alongside six one-off parquet collectors, two identical comparators and two _relative_files, while conftest.py and _cobre_cli.py are the existing shared seam",
+      "proposedSeverity": "C",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/tests/test_contract_output_parity.py",
+          "symbol": "_make_case_with_simulation"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_anticipated_lanes_output_parity.py",
+          "symbol": "_make_case_with_simulation"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_anticipated_output_parity.py",
+          "symbol": "_make_case_with_simulation"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_parity_hydros.py",
+          "symbol": "_make_case_with_simulation"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_parity_scalar_parameters.py",
+          "symbol": "_seed_case"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_cli_python_file_set_parity.py",
+          "symbol": "_relative_files"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_cli_python_determinism_parity.py",
+          "symbol": "_relative_files"
+        },
+        {
+          "path": "crates/cobre-python/tests/conftest.py",
+          "symbol": "cli_binary"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -l 'def _make_case_with_simulation' 077dbe2c -- crates/cobre-python/tests; for f in test_contract_output_parity.py test_anticipated_lanes_output_parity.py test_anticipated_output_parity.py test_parity_hydros.py; do git show 077dbe2c:crates/cobre-python/tests/$f | python3 -c 'import re,sys; s=sys.stdin.read(); b=s.split(\\\"def _make_case_with_simulation\\\")[1].split(\\\"\\\\ndef \\\")[0]; b=re.sub(r\\\"\\\\\\\"\\\\\\\"\\\\\\\".*?\\\\\\\"\\\\\\\"\\\\\\\"\\\", \\\"\\\", b, flags=re.S); import hashlib; print(hashlib.md5(b.encode()).hexdigest())'; done; git grep -c 'scenario_id is both' 077dbe2c -- crates/cobre-python/tests | wc -l",
+        "output": "4 files declare _make_case_with_simulation\\nc86c32161ad55be6132368cd860919c9\\nc86c32161ad55be6132368cd860919c9\\nc86c32161ad55be6132368cd860919c9\\nc86c32161ad55be6132368cd860919c9\\n6 files carry the same scenario_id partition-key note",
+        "reading": "With docstrings stripped, all four _make_case_with_simulation bodies hash identically: copy the source case tree item by item, load config.json, set simulation.enabled true, write it back. A fifth copy of that logic is embedded in _seed_case in test_parity_scalar_parameters.py and a sixth exists in Rust as copy_dir_all in the bindings' inline test module. The same directory also carries six separate partitioned-parquet collectors that each walk a Hive-partitioned output directory and concatenate, _lanes_parquets, _thermals_parquets, _contract_parquets, _thermals_table, _collect_hydros_parquet and _collect_buses_parquet; two byte-identical float comparators, _lane_values_equal and _anticipated_values_equal; two _relative_files declarations, one per cli_python parity file; and the same warning note about scenario_id being both the partition key and an in-file column repeated across six files, which is the signature of a shared gotcha with no shared home. .claude/rules/testing.md section Cost discipline states the standard for the Rust side, shared harness helpers live once and are never re-defined per file, and the pytest suite has the seam ready to hold them: conftest.py already registers the --require-cli-binary option and the session-scoped cli_binary fixture, and _cobre_cli.py already owns resolve_cli_binary and run_cli for the 12 modules that consume them. The duplication is in the case-building and output-reading half that was never hoisted."
+      },
+      "fixShape": "Hoist the shared harness into the seam that already exists: put one case-with-simulation builder, one Hive-partitioned parquet collector parameterised by entity directory, and one float comparator into conftest.py as fixtures (or beside run_cli in the existing _cobre_cli.py helper module, whichever keeps the import graph flatter), have the four parity modules and _seed_case consume them, and keep the scenario_id partition-key note once at that single home instead of six times. Give the two cli_python parity modules one shared _relative_files. No new fixture crate and no new test binary: both target files already exist and are already imported by the suite. Every test keeps its own deck, its own tolerance and its own assertions, the two file-set tests keep their distinct decks, so byte-neutrality (rule 8) holds and no parity golden or committed .sha256 is touched, which is what section 5.11 of docs/design/testing-architecture.md asks for.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "the rule 7 reserved-seam pre-check is scoped to the over-engineering lens and to the facade crate / commands/broadcast.rs; nothing raised here is a registered reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-06",
+      "title": "test_run_via_study_emits_contract_output asserts a strict subset of test_cli_python_contract_row_parity on the same Python surface and the same derived d41 deck, costing one extra full train-and-simulate",
+      "proposedSeverity": "C",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/tests/test_contract_output_parity.py",
+          "symbol": "test_run_via_study_emits_contract_output"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_contract_output_parity.py",
+          "symbol": "test_cli_python_contract_row_parity"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_contract_output_parity.py",
+          "symbol": "CONTRACT_SCHEMA_FIELDS"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/tests/test_contract_output_parity.py | grep -n '^def test_\\\\|_make_case_with_simulation(\\\\|cobre.run.run(\\\\|run_cli(\\\\|CONTRACT_SCHEMA_FIELDS\\\\|@pytest.fixture'",
+        "output": "no @pytest.fixture in the module; the derived case is materialised in 4 tests; test_run_via_study_emits_contract_output asserts len(parquets) > 0 and schema_names == CONTRACT_SCHEMA_FIELDS after cobre.run.run; test_cli_python_contract_row_parity builds the same derived case, calls run_cli and the same cobre.run.run, and asserts len(py_parquets) > 0, py_schema == CONTRACT_SCHEMA_FIELDS, and row-for-row CLI/Python equality",
+        "reading": "Both tests build the same derived d41 case through the same helper and exercise the same Python surface, cobre.run.run. The parity test asserts everything the other one asserts, non-empty parquet set and the exact contract schema field list, and then adds the CLI comparison and the row-for-row equality. So the earlier test is a strict subset on an identical surface and deck, and the module pays one extra full d41 train-and-simulate for a claim already covered. This is distinguished from the neighbouring modules on purpose: test_in_transit_output_parity.py and test_pumping_output_parity.py look the same in shape but their paired tests exercise different Python surfaces, Study.simulate versus cobre.run.run, so their pairs are not subsets and are not raised."
+      },
+      "fixShape": "Drop test_run_via_study_emits_contract_output and let test_cli_python_contract_row_parity carry the Python-side schema and non-emptiness assertions it already makes, or, if a Python-only claim is wanted for runs where no CLI binary is available, keep the thinner test but have it consume the same module-scoped derived-case-and-run fixture instead of materialising and solving the deck again. In either direction the contract field list and the non-emptiness guard stay asserted, so no coverage is lost. Byte-neutrality (rule 8): no output bytes, no parity golden and no committed .sha256 are affected, and the row-for-row comparison that section 5.11 of docs/design/testing-architecture.md protects is the test that survives.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "the rule 7 reserved-seam pre-check is scoped to the over-engineering lens and to the facade crate / commands/broadcast.rs; nothing raised here is a registered reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-07",
+      "title": "run/mod.rs's inline test module is the wrong home for its unit tests: it tests resolve_thread_count, declared in setup.rs which has its own test module, and pins three literal-argument cases of the engine's delta_to_stats_row, which has no unit test in the crate that declares it",
+      "proposedSeverity": "C",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "test_resolve_thread_count_cli_value"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "test_resolve_thread_count_default"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "test_delta_to_stats_row_backward_carries_opening_rank_worker"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "resolve_thread_count"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/mod.rs | grep -n 'cfg(test)\\\\|mod tests\\\\|use super::\\\\|use cobre_sddp::\\\\|fn test_'; git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | grep -n 'fn resolve_thread_count\\\\|cfg(test)'; git grep -n 'fn delta_to_stats_row' 077dbe2c -- crates/cobre-sddp/src",
+        "output": "run/mod.rs: #[cfg(test)] mod tests, use super::setup::resolve_thread_count;, use cobre_sddp::{SolverStatsDelta, delta_to_stats_row};, then test_resolve_thread_count_cli_value, test_resolve_thread_count_default, and three delta_to_stats_row tests\\nsetup.rs: pub(super) fn resolve_thread_count declared here, and setup.rs has its own #[cfg(test)] mod tests\\ncobre-sddp: delta_to_stats_row declared in solver_stats.rs, no #[test] naming it in that crate",
+        "reading": "The thread-count tests import the function across a module boundary, use super::setup::resolve_thread_count, to test a function declared in setup.rs, which already carries its own #[cfg(test)] module, so the test sits one module away from its subject for no reason. The three delta_to_stats_row tests are pure literal-argument unit tests of an engine function the CLI merely calls: they construct a SolverStatsDelta and assert which of opening, rank and worker id survive on the backward, forward and simulation paths. That is a cobre-sddp behaviour, and the declaring crate has no unit test naming the function, so the front end holds coverage for engine logic while the owner holds none. Under docs/design/testing-architecture.md section 5.3 the cheapest sufficient tier for both claims is a unit test next to the declaration."
+      },
+      "fixShape": "Move the two thread-count tests into the existing #[cfg(test)] module of setup.rs, next to the function they exercise, which also removes the cross-module import from the run module's test module. Move the three stats-row tests to the engine module that declares the function so its owner holds the unit coverage for its own field-propagation rules, and let the CLI keep only what is genuinely the CLI's claim, that the run path calls it once per phase with the right phase argument, if that is asserted anywhere. Test bodies and assertions move verbatim, so no claim changes and byte-neutrality (rule 8) is unaffected: these are unit tests that write no output and read no golden or committed .sha256.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "the rule 7 reserved-seam pre-check is scoped to the over-engineering lens and to the facade crate / commands/broadcast.rs; nothing raised here is a registered reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "S6a-TB-08",
+      "title": "simulation_weighting_census_underivable_from_sampled_traversal is declared in three crates, and both front-end copies test only cobre-sddp node-graph behaviour without touching any CLI or binding code, sharpening CD-025 with a third copy the register's own note does not have",
+      "proposedSeverity": "C",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "simulation_weighting_census_underivable_from_sampled_traversal"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "one_node_graph"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "simulation_weighting_census_underivable_from_sampled_traversal"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'fn simulation_weighting_census_underivable_from_sampled_traversal' 077dbe2c -- crates; sed -n '1010,1016p' /home/rogerio/git/cobre/plans/architecture-debt-audit/BACKLOG.md",
+        "output": "three declarations at the pin: crates/cobre-cli/src/commands/run/simulation.rs, crates/cobre-python/src/run.rs, crates/cobre-sddp/src/setup/node_graph.rs\\nBACKLOG.md: the test exists in BOTH crates (cli/.../simulation.rs, python/run.rs) -- two test copies pinning two code copies, no shared owner",
+        "reading": "The same test name is declared in three crates. Both front-end copies build a cobre_sddp NodeGraph literal and assert on Traversal::resolve(...).simulation_weighting(); neither touches any CLI argument handling, any output writer, or any PyO3 binding, so neither is testing the crate it lives in. The bindings copy says so in its own doc, describing itself as Python-free and mirroring the CLI's own test. The owner, cobre-sddp, declares simulation_weighting in its node-graph module and now carries its own copy of the same census claim, using an enumerated fan graph. This is a sharpen of CD-025, not a new id: the register's note records two copies with no shared owner, and at this pin there are three and the owner does have one, which is new evidence that the front-end copies are now pure duplicates rather than the only coverage."
+      },
+      "fixShape": "Delete both front-end copies and let the owning engine module keep the single census test next to the function it constrains, since that is where the behaviour and its fan-graph fixtures live. If either front end needs a claim of its own here, it is that the front end calls the engine's weighting once per simulated scenario and forwards the result, which is a different assertion from the census and belongs in the front end only in that form. This sharpens CD-025's row with a third copy and does not restate CD-025's own remedy: the hand-mirrored writer boundary still moves to the crate both front ends depend on, per the station's destination rule, and that half is not re-derived here. Byte-neutrality (rule 8): these are pure in-memory unit tests, no output tree, no parity golden and no committed .sha256 is involved.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": "CD-025",
+      "dupOf": null,
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587",
+        "rule": "the mirror entry at :587 reserves CD-025's writer-boundary hand-mirror, which this candidate sharpens rather than re-raises; the triplicated test itself is not a reserved seam"
+      },
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "id": "TB-S6b-01",
+      "title": "The seven inline tests of the validate subcommand assert a test-local reimplementation of the report renderer, not the shipped one, and the copy has already drifted",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "format_report_to_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "format_entry"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "print_prep_error"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '479,611p'  #  then: git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '1,478p' | grep -nE '^[[:space:]]*(pub )?fn ' and grep -n 'error:|warning:|format_entry|Validation: '",
+        "output": "test module (479-611): fn format_report_to_string(report, path) -> String  /  fn format_entry(entry: &ReportEntry) -> String  /  fn make_report() -> ValidationReport  then `use super::*;` AFTER both definitions, then 7 #[test] fns, all of which call format_report_to_string or format_entry.  production half (1-478) declares: format_constraint_description, describe_prep_error, print_prep_error, prep_error_to_cli_error, run_prep_phase, format_boundary_error, reconcile_boundary, run_boundary_check, emit_validate_json, execute -- there is no format_entry and no report-rendering fn at all; the rendering is inlined in execute at 436-448: \"Validation: 0 errors, {} warnings in {}\", then let location = if let Some(entity) = &entry.entity { format!(\"{} ({})\", entry.file, entity) }, then style(\"warning:\").yellow().bold().",
+        "reading": "Production renders the validation report inline inside execute (three hard-coded header shapes at 131, 152, 207, 436). The test module defines its own format_report_to_string plus format_entry and places `use super::*;` after them, so the glob import cannot shadow the local items: all 7 tests exercise the test copy and zero lines of the shipped renderer. The copy has drifted already -- format_report_summary_header_present asserts the output contains \"1 errors\" and \"1 warnings\", while the production success path at 436 emits a literal \"0 errors\" and the two error paths at 152 and 207 emit \"1 errors, 0 warnings\". No production path can emit the header the unit test pins. Real coverage of the shipped text exists only in the process tier (cli_validate.rs valid_case_stdout_contains_buses_count, missing_buses_json_stdout_contains_error), so the cheapest tier that could catch a renderer regression is occupied by a closed loop instead."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Extract the rendering that execute inlines at 436-448 into a private fn that returns the lines (the same shape summary.rs already uses for training_summary_lines and simulation_summary_lines, where tests and production share one code path), delete the test-module format_report_to_string and format_entry copies, and repoint the seven tests at the extracted fn. Consolidate the five format_report_* cases into one table-driven test over (report, expected substrings) since they all render make_report once. Byte-neutral: the extracted fn keeps the exact literals now inlined in execute, so no stdout or stderr byte changes and every substring cli_validate.rs pins stays asserted.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- the change stays inside cobre-cli (L4): no crate boundary moves, no dependency edge is added, and no engine concept crosses a layer, so no Alignment axis is advanced or violated.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- the test-local copy is not loaded, validated or schema-exported config; the pre-check that the prior register mandates covers the facade crate and commands/broadcast.rs, neither of which is touched here",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the reserved-seams pre-check applies to unconsumed config sections, not to test-module helpers"
+      },
+      "measured": {
+        "inlineTestFns": 7,
+        "testsTouchingProductionRenderer": 0,
+        "productionRenderingSites": 4,
+        "testLocalRendererFns": 2
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-02",
+      "title": "Four cfg(test)-gated format_*_string twins in summary.rs let the shipped print_* renderers drift while the tests stay green; the shipped path is asserted only for absence of panic",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_hydro_model_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_setup_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_provenance_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_boundary_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_hydro_model_summary"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "training_summary_lines"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'fn .*does_not_panic|fn .*no_panic' 077dbe2c -- crates/cobre-cli/src   and   git show 077dbe2c:crates/cobre-cli/src/summary.rs | grep -n 'cfg(test)|fn format_.*_string|fn print_'",
+        "output": "14 panic-only tests in the S6b manifest, 11 of them in summary.rs: print_training_summary_does_not_panic 1505, print_simulation_summary_does_not_panic 1511, print_output_path_does_not_panic 1530, print_hydro_model_summary_does_not_panic 1788, print_hydro_model_summary_all_constant_does_not_panic 1794, print_hydro_model_summary_all_fpha_does_not_panic 1800, print_setup_summary_does_not_panic 1961, print_provenance_summary_does_not_panic 2010, print_provenance_summary_deterministic_does_not_panic 2016, print_provenance_summary_with_hydro_counts_does_not_panic 2154, print_boundary_summary_does_not_panic 2248; plus banner.rs test_print_banner_does_not_panic 93 and two no_panic in progress.rs (907, 1011). Four #[cfg(test)] pub fns re-implement their twin's literals: format_hydro_model_summary_string 224 vs print_hydro_model_summary 29, format_setup_summary_string 265 vs print_setup_summary 239, format_provenance_summary_string 330 vs print_provenance_summary 303, format_boundary_summary_string 395 vs print_boundary_summary 375.",
+        "reading": "The module header at summary.rs lines 5-9 states the intended contract itself: most print_* writers pair with a format_*_string for tests, while print_training_summary, print_simulation_summary and print_output_path instead share their exact rendered lines with tests through a private *_lines helper 'so tests assert on the same code path production prints from'. Three functions honour that rule; four do not. For those four, every content assertion runs against a hand-copied format string, and the shipped print_* is covered only by a does_not_panic smoke test -- so a literal edited in print_hydro_model_summary but not in format_hydro_model_summary_string ships with a green suite. The same file already contains the correct pattern (training_summary_lines, simulation_summary_lines, output_path_line), so this is an internal asymmetry, not a missing idea."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Apply the pattern the module header already declares and the file already uses three times: convert each of the four print_* twins to build its lines through a private *_lines helper that returns Vec<String>, have print_* write those lines, and delete the four cfg(test) format_*_string functions, repointing their tests at the helper. The eleven does_not_panic tests then stop being the only coverage of the shipped path and collapse into the content assertions. Byte-neutral: the *_lines helpers carry the literals verbatim out of the current print_* bodies, so no stderr byte changes and every substring the integration binaries pin stays asserted.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- the change is internal to cobre-cli (L4); no crate boundary, dependency edge or engine concept moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- the four format_*_string fns are cfg(test) test scaffolding, not loaded, validated or schema-exported config",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the rule covers unconsumed config sections, not cfg(test) renderers"
+      },
+      "measured": {
+        "parallelRenderersGated": 4,
+        "twinsUsingSharedLinesHelper": 3,
+        "panicOnlyTestsInSummary": 11,
+        "panicOnlyTestsInManifest": 14
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-03",
+      "title": "cobre-cli has no tests/common at all: the binary invocation helper is redefined in 13 of 14 integration binaries and the valid-case fixture in three, against the verbatim text of the standing testing contract",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/tests/cli_color.rs",
+          "symbol": "make_valid_case"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "make_valid_case"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_smoke.rs",
+          "symbol": "cobre"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_schema.rs",
+          "symbol": "cobre"
+        },
+        {
+          "path": "crates/cobre-cli/tests/init.rs",
+          "symbol": "cobre"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_color.rs",
+          "symbol": "write_file"
+        }
+      ],
+      "evidence": {
+        "command": "git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/tests   and   for h in 'fn cobre()' 'fn write_file' 'fn make_valid_case' 'fn run_case'; do git grep -l \"$h\" 077dbe2c -- crates/cobre-cli/tests | wc -l; done",
+        "output": "14 flat .rs files, no common/ directory: cli_color.rs, cli_e2e_run_end_block.rs, cli_run.rs, cli_run_anticipated.rs, cli_run_anticipated_k2.rs, cli_run_evaporation.rs, cli_run_generic_echo.rs, cli_schema.rs, cli_smoke.rs, cli_validate.rs, init.rs, output_metadata_active_backend.rs, python_parity_check.rs, setup_timings_metadata.rs. Redefinition counts: fn cobre() 13 files, fn write_file 5, fn make_valid_case 3, fn run_case 2. cli_color.rs:20 carries the admission in a comment: 'Minimal valid-case fixture, duplicated (not shared) with cli_run.rs to keep this test module self-contained.'",
+        "reading": ".claude/rules/testing.md:118-121 (the standing contract) says shared harness helpers and entity construction 'live once in tests/common/ -- never re-defined per file', and gives the reason: adding a required field to an entity is then a one-place change and 'no tests/*.rs consumer is touched'. cobre-cli has no tests/common/ at all, so cobre-cli pays the inverse: the eight-const valid-case fixture is maintained in three copies that have already diverged (cli_validate.rs uses forward_passes 10, iteration_limit 100, 1 stage, num_openings 50; cli_color.rs uses 1, 2, 2 stages, 2), and a new required field in buses.json or hydros.json is a 3-file edit plus 5 write_file copies. The divergence is not itself wrong -- the two suites want different run sizes -- but it is undeclared: the copies are byte-similar enough that a reader cannot tell which differences are deliberate."
+      },
+      "fixShape": "Add crates/cobre-cli/tests/common/mod.rs holding the single fn cobre() built on assert_cmd cargo_bin, the write_file helper, and one parameterised valid-case builder whose knobs are the fields that actually differ today (stage count, forward passes, iteration limit, openings), then have each binary declare mod common and delete its private copy. This is a consolidation inside the existing tests directory, not a new test binary and not a fixture crate: tests/common/mod.rs is compiled into each binary that declares it, so the binary count stays at 14 and no new solver link is paid. Byte-neutral: each call site keeps the field values it uses today by passing them to the builder, so no case JSON changes and no assertion is weakened.",
+      "proposedSeverity": "B",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- the change is confined to cobre-cli's own test surface; no crate boundary or dependency edge moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- integration-test helpers are not loaded, validated or schema-exported config",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the rule covers unconsumed config sections"
+      },
+      "measured": {
+        "integrationBinaries": 14,
+        "commonDirectories": 0,
+        "cobreHelperRedefinitions": 13,
+        "writeFileRedefinitions": 5,
+        "makeValidCaseRedefinitions": 3,
+        "runCaseRedefinitions": 2
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-04",
+      "title": "Ten full cobre run trainings execute inside the validate binary and three more inside the color binary, to assert claims the unit tier already covers",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "run_case"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "boundary_superset_source_under_strict_exits_nonzero_and_names_the_family"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_color.rs",
+          "symbol": "color_always_flag_forces_ansi_in_banner"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_color.rs",
+          "symbol": "color_never_flag_suppresses_ansi_in_banner"
+        },
+        {
+          "path": "crates/cobre-cli/src/banner.rs",
+          "symbol": "render_banner_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/init.rs",
+          "symbol": "execute"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/tests/cli_validate.rs | grep -n 'run_case|\"run\"'   and   git show 077dbe2c:crates/cobre-cli/tests/cli_color.rs | grep -n '\"run\"|iteration_limit'   and   git grep -n 'print_banner' 077dbe2c -- crates/cobre-cli/src",
+        "output": "cli_validate.rs: fn run_case at 564 shelling cobre run, called at 613, 638, 654, 694, 698, 718, 722, 763, 767 (nine calls), plus a tenth direct run at 334. cli_color.rs: three cobre run invocations at 121, 146, 170 over a 2-stage case with iteration_limit 2, each asserting only banner bytes on stderr. banner.rs: print_banner declared at 47, called from commands/init.rs:148 and commands/run/setup.rs:210; inline tests test_render_banner_colored_contains_ansi_escapes and test_render_banner_plain_no_ansi_escapes already assert the ESC[38;5;172m prefix and its absence against render_banner_string at 22.",
+        "reading": ".claude/rules/testing.md:113-117 states the cost model: cobre-solver statically links HiGHS or CLP into every dependent tests/*.rs. Both binaries then spend solver-linked subprocess runs on claims that do not need a solve. The three color tests assert exactly what banner.rs already asserts at the unit tier (ANSI escapes present with color, absent without); their only residual claim is that resolve_color wires the console global from the flag, and print_banner is reachable from commands/init.rs:148, which performs no LP solve. In cli_validate.rs the ten trainings sit inside a binary named for the validate subcommand, so the cheap validate suite cannot be run without paying for ten SDDP trainings, and a training regression fails a validate test."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "For the color suite, keep one test that exercises the flag-to-global wiring through cobre init (init calls print_banner and performs no solve) and drop the two remaining run-based cases, since banner.rs already pins the escape bytes at the unit tier. For cli_validate.rs, move the six boundary tests that call run_case, and invalid_simulation_scenario_source_fails_validate_and_run, into the existing cli_run.rs domain binary as a mod boundary block, leaving cli_validate.rs as a solve-free suite; this adds no binary, so no new solver link is paid. Byte-neutral: every stderr and stdout substring currently pinned stays pinned, only the binary that owns the assertion changes.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- test relocation inside cobre-cli; no crate boundary, dependency edge or engine concept moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- no config section is involved; the fixture JSON stays byte-identical",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the rule covers unconsumed config sections"
+      },
+      "measured": {
+        "fullRunsInValidateBinary": 10,
+        "fullRunsInColorBinary": 3,
+        "unitTestsAlreadyCoveringBannerAnsi": 2,
+        "solveFreeBannerCallSites": 1
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-05",
+      "title": "Seven executable-marked doctests in cobre-cli never compile or run, and every one names a crate path that does not exist at the pin",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/banner.rs",
+          "symbol": "print_banner"
+        },
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "find_template"
+        },
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "available_templates"
+        },
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "exit_code"
+        },
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "CliError"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "run_progress_thread"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/Cargo.toml   and   git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/src | grep -c 'lib.rs'   and   for f in banner error progress templates summary; do git show 077dbe2c:crates/cobre-cli/src/$f.rs | grep -nE '^[[:space:]]*(///|//!) *(```|use )'; done",
+        "output": "Cargo.toml declares [[bin]] name = \"cobre\", path = \"src/main.rs\", doc = false and has no [lib] section (grep -c '[lib]' returns 0); src/lib.rs count is 0; main.rs:10-15 declares mod banner, commands, error, progress, summary, templates as private modules of the binary. Seven fenced executable blocks: banner.rs 8-13 with 'use cobre::banner;', error.rs 42-51, 98-106 and 132-139 each with 'use cobre_cli::error::CliError;', progress.rs 13-23 with 'use cobre_cli::progress::{run_progress_thread, RenderMode};', templates.rs 17-25 and 144-149 each with 'use cobre::templates;'. summary.rs is clean: one ignore block at 49 and two text blocks at 91 and 100. ci.yml:114 runs cargo test --workspace; ci.yml:399 runs cargo doc --workspace --no-deps.",
+        "reading": "Two independent reasons none of the seven is a live guard. First, cargo runs doctests only for a library target, and this package has none, so cargo test --workspace collects zero doctests from cobre-cli; doc = false on the bin also removes it from cargo doc. Second, and independent of cargo semantics, none of the seven would compile if it ran: the package cobre-cli publishes no library named cobre_cli, the facade crate cobre 're-exports nothing yet' (crates/cobre/src/lib.rs) and is not even a dependency of cobre-cli, and templates and banner are pub(crate) items of a binary. That is the false-confidence guard shape codified in .claude/rules/doc-integrity.md:122 -- a partial guard lies -- here taken to the limit: a guard that parses nothing at all. The examples read as verified contracts in review and are not."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the seven fenced blocks and relocate any claim that is load-bearing into the inline test module of the same file, where it will actually run: the two exit_code assertions are already duplicated by validation_exit_code_is_1 and solver_exit_code_is_3, and the two find_template assertions by test_find_template_1dtoy_returns_some and test_find_template_unknown_returns_none, so most of the content is already covered and the deletion loses nothing. Keep the surrounding prose that documents intent; only the fenced code goes. Whether cobre-cli should instead grow a real library target so these examples compile is an owner call, recorded in _needsHuman. Byte-neutral: doc comments are not rendered output, so no binary assertion is affected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- deleting inert doc examples moves no crate boundary and adds no dependency edge; the library-target alternative would change cobre-cli's published surface and is held for the owner rather than recommended here.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "the facade crate has no reserved-seam register entry, so the 'use cobre::' examples cannot be cleared as a reserved seam by citation; this candidate does not ask the facade to re-export anything -- the inertness of the seven blocks holds whatever the facade's future surface is",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "prior-register.md -- reserved-seams check before any entry touching the facade crate or commands/broadcast.rs; an entry on the facade goes to the owner gate as an open question, not as a pre-judged finding"
+      },
+      "measured": {
+        "executableDoctestBlocks": 7,
+        "doctestBlocksThatRun": 0,
+        "libTargets": 0,
+        "unresolvableCratePathsNamed": 2,
+        "honestNonExecutingBlocks": 3
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-06",
+      "title": "Fifteen of the twenty-two inline progress tests spawn a real renderer thread to re-assert one channel round-trip contract, five of them in cases the widest test already subsumes",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "run_progress_thread"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "ProgressHandle"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "RenderMode"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "fmt_hms"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/progress.rs | sed -n '533,1140p'   and   git grep -n '.join()' 077dbe2c -- crates/cobre-cli/src/commands/run/training.rs",
+        "output": "The cfg(test) module starts at 533, so 608 of the file's 1140 lines are tests. Fifteen tests call run_progress_thread(rx, RenderMode::Interactive or Log, ...) and then assert only on the Vec returned by join(): simulation_started_event_is_preserved_and_renders_banner, test_progress_handle_training_events_returned (len 4), test_progress_handle_simulation_events_returned (len 3), test_progress_handle_returns_all_events (len 5 plus five matches! variant checks), test_empty_channel_returns_empty_vec, test_training_only_no_simulation_events (len 6 plus a matches! loop), test_simulation_progress_message_with_statistics, test_simulation_progress_message_single_scenario, test_non_ui_events_are_collected, test_simulation_progress_five_events_no_panic, test_simulation_progress_accumulator_costs_collected_correctly, test_simulation_progress_accumulator_three_events_no_panic, test_log_mode_training_events_round_trip, test_log_mode_simulation_events_round_trip, test_log_mode_ignores_non_ui_events_without_panic. One of them carries the comment 'The rendered banner is not captured; this asserts only the channel round-trip.' training.rs:107 shows the returned Vec is production-load-bearing: (Some(handle), _) => handle.join().",
+        "reading": "The collected Vec is a real production contract, so these tests are not tautologies -- that framing would be wrong. The redundancy is in the case count: test_progress_handle_returns_all_events already sends a mixed training-plus-simulation sequence and checks both length and variant order, which subsumes test_progress_handle_training_events_returned, test_progress_handle_simulation_events_returned, test_training_only_no_simulation_events and the two accumulator no_panic cases; only test_empty_channel_returns_empty_vec adds a distinct edge. Each of the fifteen spawns an OS thread and constructs a renderer, and none captures rendered output, so the rendering half of run_progress_thread stays unasserted while its collection half is asserted fifteen times. The six pure-arithmetic tests in the same module (fmt_hms_pads_hours_minutes_seconds, three eta_millis cases, two fmt_time_cell cases) are the right shape and are listed as a positive."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the fifteen spawn-and-inspect tests into one table-driven test over (event sequence, expected variant order) plus the empty-channel edge and one Log-mode case, keeping every distinct sequence currently exercised as a row. That preserves coverage of the join() contract training.rs:107 depends on while dropping about a dozen thread spawns. Byte-neutral by construction: none of these tests captures rendered output today, so no rendered text contract is touched.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- inline test consolidation inside cobre-cli; no crate boundary, dependency edge or engine concept moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- no config section is involved",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the rule covers unconsumed config sections"
+      },
+      "measured": {
+        "inlineTestFns": 22,
+        "testsSpawningRendererThread": 15,
+        "testsAssertingRenderedOutput": 0,
+        "distinctEdgeCasesAmongThem": 2,
+        "testLinesOfFile": 608,
+        "totalLinesOfFile": 1140
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-07",
+      "title": "One assertion per subprocess: several integration tests re-run the same invocation to check a second substring of the same output",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "missing_buses_json_exits_1"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "missing_buses_json_stdout_contains_error"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "missing_buses_json_stdout_mentions_file"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "symbol": "valid_case_exits_0"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_smoke.rs",
+          "symbol": "version_exits_0_and_contains_version_string"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_smoke.rs",
+          "symbol": "version_stdout_contains_active_solver"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/tests/cli_validate.rs | grep -n '^fn |^    fn |#\\[test\\]' ; git show 077dbe2c:crates/cobre-cli/tests/cli_smoke.rs",
+        "output": "cli_validate.rs holds 22 tests in 812 lines. Four split families each rebuild the same case and respawn the binary to assert one more substring of one invocation's output: missing_buses_json_exits_1 / missing_buses_json_stdout_contains_error / missing_buses_json_stdout_mentions_file (three builds, three spawns); valid_case_exits_0 / valid_case_stdout_contains_buses_count; nonexistent_path_exits_2 / nonexistent_path_stderr_mentions_path; fpha_hydro_without_production_models_json_fails_validate / fpha_hydro_without_production_models_json_stdout_mentions_file. cli_smoke.rs holds 10 tests in 112 lines, three of which spawn cobre version to assert one substring each: version_exits_0_and_contains_version_string, version_exits_0_and_stdout_contains_cobre_prefix, version_stdout_contains_active_solver.",
+        "reading": "Eleven process spawns carry five distinct claims. assert_cmd allows chaining several predicates on one Assert, so each family can be one test that spawns once and asserts exit code plus every substring, with the failure message naming which predicate failed. The split buys no isolation here because all members of a family construct the same fixture and run the same argv; it only multiplies solver-linked process starts, which .claude/rules/testing.md:113-117 identifies as the expensive unit in this workspace."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Merge each split family into a single test that builds the fixture once, spawns once, and chains the exit-code and substring predicates on one Assert. Byte-neutral: the set of asserted substrings is unchanged, only the number of spawns drops.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- test consolidation inside cobre-cli's own test surface; no boundary moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- no config section is involved",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the rule covers unconsumed config sections"
+      },
+      "measured": {
+        "splitFamilies": 5,
+        "spawnsUsed": 11,
+        "spawnsNeeded": 5
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-08",
+      "title": "Six of the seven template tests assert compile-time literals or restate an inert doc example; the one real guard sits next to a frozen file count the sibling schema suite deliberately refuses",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "TemplateFile"
+        },
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "DTOY1_FILES"
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_schema.rs",
+          "symbol": "test_schema_export_writes_files"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/templates.rs   and   git show 077dbe2c:crates/cobre-cli/tests/cli_schema.rs",
+        "output": "templates.rs holds 7 inline tests. test_1dtoy_files_have_descriptions and test_1dtoy_files_have_relative_paths loop over DTOY1_FILES asserting each description and relative_path is non-empty and does not start with a slash -- DTOY1_FILES is a static array of string literals declared 120 lines above in the same file. test_available_templates_contains_1dtoy, test_find_template_1dtoy_returns_some and test_find_template_unknown_returns_none restate exactly what the two fenced examples at 17-25 and 144-149 assert. test_1dtoy_template_has_files asserts template.files.len() == 11. test_1dtoy_embedded_files_match_canonical_source iterates every file, reads examples/1dtoy/<relative_path> and asserts byte equality, covering JSON and parquet alike. By contrast cli_schema.rs test_schema_export_writes_files derives emitted and committed basenames as BTreeSets at test time and says in a comment that it is never a hard-coded count.",
+        "reading": "One of the seven catches a real regression class: the embedded copy drifting from examples/1dtoy, which build.rs re-embeds and which no compiler checks. That one is right-sized and is listed as a positive. The other six do not: two assert non-emptiness of compile-time statics visible in the same file, three duplicate the doc examples at 17-25 and 144-149 (which, per candidate TB-S6b-05, never execute -- so the duplication is the only thing keeping the claim alive, and after deleting the examples these three become the sole home and should stay), and test_1dtoy_template_has_files freezes 11 as a hand-maintained literal in the same file where its sibling guard already walks the whole set. Two tests over one file set in one crate take opposite approaches to the same question, and cli_schema.rs shows which one this crate considers correct."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete test_1dtoy_files_have_descriptions and test_1dtoy_files_have_relative_paths (static literals, nothing can change them at runtime), and replace the frozen assertion in test_1dtoy_template_has_files with a derived comparison in the style of cli_schema.rs test_schema_export_writes_files: read the relative paths under examples/1dtoy into a BTreeSet and compare it with the set of relative_path values, which turns the count into a real guard against a file added on one side only. Keep the two find_template tests as the surviving home for the claim once the inert doc examples go, and keep test_1dtoy_embedded_files_match_canonical_source unchanged. Byte-neutral: no template bytes and no rendered output change.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- inline test change inside cobre-cli; no boundary or dependency edge moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- the template registry is consumed by commands/init.rs execute, and the byte-identity guard stays in place",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the registry is wired, so the rule does not gate this change"
+      },
+      "measured": {
+        "inlineTestFns": 7,
+        "testsAssertingCompileTimeStatics": 2,
+        "testsRestatingDocExamples": 3,
+        "frozenCountAssertions": 1,
+        "regressionCatchingTests": 1
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-09",
+      "title": "Three of the six engine types the summary module re-exports have zero production uses and exist only so its inline test module's imports resolve, with a comment that says so",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_provenance_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_provenance_summary"
+        }
+      ],
+      "evidence": {
+        "command": "for n in HydroProductionProvenance InflowProvenance ProvenanceSource HydroModelSummary ModelProvenanceReport BoundaryReconciliationReport; do p=$(git show 077dbe2c:crates/cobre-cli/src/summary.rs | sed -n '1,910p' | grep -c \"$n\"); t=$(git show 077dbe2c:crates/cobre-cli/src/summary.rs | sed -n '911,2302p' | grep -c \"$n\"); echo \"$n prod=$p test=$t\"; done   and   git grep -n 'summary::(HydroProductionProvenance|InflowProvenance|ProvenanceSource)' 077dbe2c -- crates/cobre-cli/src",
+        "output": "mod tests begins at 912. Occurrence split (lines 1-910 versus 911-2302): HydroProductionProvenance prod=2 test=7; InflowProvenance prod=2 test=5; ProvenanceSource prod=2 test=17; HydroModelSummary prod=7 test=13; ModelProvenanceReport prod=4 test=9; BoundaryReconciliationReport prod=6 test=5. For the first three names the two production occurrences are the pub use line itself and the rationale comment above it, so the real production count is zero. No other module imports them through crate::summary (the summary:: grep returns 0 hits). The rationale comment at 18-26 states it outright: the cfg(test) blocks import these three names via use super, and 'this pub use is the declaration that puts those names on the module surface so those test imports resolve. Without it they would not.'",
+        "reading": "This sharpens the Part-I I.5 observation that summary.rs re-exports six engine types, by splitting the six: three (HydroModelSummary, ModelProvenanceReport, BoundaryReconciliationReport) are genuinely used by the printing functions, and three (HydroProductionProvenance, InflowProvenance, ProvenanceSource) are pure test scaffolding promoted onto the production module surface. A test module reaching for a type it does not import directly is the actual problem: use super::* pulled it in, and rather than adding the import to the test module the re-export was widened and annotated with allow(unused_imports). The engine-type surface of an L4 module is therefore three names wider than its production need, which is what makes the I.5 coupling figure read worse than the code requires."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Have the test module import the three provenance types directly from cobre_sddp instead of through use super, then drop them and the allow(unused_imports) from the pub use, leaving the three names the printing functions actually use. Byte-neutral: this is an import-visibility change only, no rendered output and no assertion is touched.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- narrowing an L4 module's re-exported engine surface to its production need reduces cobre-cli's engine-concept coupling without moving any boundary; nothing engine-specific is pushed below L4.",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- the three names are not config, are not schema-exported, and have no consumer outside the file's own test module",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; the rule covers unconsumed config sections, not test-driven re-exports"
+      },
+      "measured": {
+        "reExportedEngineTypes": 6,
+        "withZeroProductionUses": 3,
+        "externalConsumersViaCrateSummary": 0
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "id": "TB-S6b-10",
+      "title": "fmt_sci is defined byte-identically in two S6b modules and neither copy has a direct test, so a divergence between the two renderers is unasserted",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "fmt_sci"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "fmt_sci"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "training_summary_lines"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'fmt_sci' 077dbe2c -- crates/cobre-cli",
+        "output": "progress.rs:39 fn fmt_sci(v: f64) -> String, called at 337, 338, 351, 352, 490, 491. summary.rs:414 fn fmt_sci(v: f64) -> String, called at 800, 804, 805. Twelve hits in total and not one of them is inside a cfg(test) module: no test in either file calls fmt_sci directly. Both bodies are the same five lines, formatting with {v:.5e} and stripping the exponent's leading zeroes and plus sign.",
+        "reading": "The two copies render the bound values the user reads in the progress table and in the post-run summary, so they are one user-visible contract implemented twice. Neither has a unit test; the only coverage is indirect, through summary.rs training_summary_lines_scientific_notation, which asserts on a whole rendered line. A change to the exponent handling in one copy and not the other therefore ships with a green suite, and the progress-table copy has no assertion path at all. Because the two bodies are identical today, this is cheap to close by deletion rather than by adding a second test."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Keep one fmt_sci, delete the other, and give the surviving copy one table-driven unit test over the exponent cases the two call sites exercise (positive and negative exponents, zero, and a value whose exponent is a single digit). Both modules are private modules of the same binary, so the surviving definition can live in whichever of the two files owns the other shared formatting helpers and be referenced by the second, with no new module and no new dependency. Byte-neutral: the two bodies are identical today, so no rendered digit changes and the existing training_summary_lines_scientific_notation assertion keeps passing unchanged.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "plans/architecture-debt-audit/tools/target-layering-brief.md -- the deduplication stays inside cobre-cli; no crate boundary, dependency edge or engine concept moves.",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "dupOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not a reserved seam -- both copies are live production helpers with call sites in the same files",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:30",
+        "rule": "CLAUDE.md -- unwired config is reserved, not dead; both definitions are wired, so the rule does not gate this change"
+      },
+      "measured": {
+        "identicalDefinitions": 2,
+        "directUnitTests": 0,
+        "productionCallSites": 9
+      },
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "Seven py_to_json_value unit claims are routed through the eleven-phase cobre.io.validate on a premise the crate's own Rust tests falsify",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/convert.rs",
+          "symbol": "py_to_json_value"
+        },
+        {
+          "path": "crates/cobre-python/src/convert.rs",
+          "symbol": "pydict_to_json_map"
+        },
+        {
+          "path": "crates/cobre-python/src/errors.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "validate"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_convert.py",
+          "symbol": "_validate"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/tests/test_convert.py | sed -n '1,34p'; git show 077dbe2c:crates/cobre-python/src/convert.rs | tail -3; git show 077dbe2c:crates/cobre-python/src/io.rs | sed -n '168p'; git show 077dbe2c:crates/cobre-python/src/errors.rs | sed -n '360,400p'; git show 077dbe2c:crates/cobre-python/Cargo.toml | sed -n '37,41p'; git show 077dbe2c:crates/cobre-python/src/convert.rs | grep -c '#\\[test\\]'",
+        "output": "test_convert.py:4-8  `Because those helpers require a live interpreter, they cannot be unit-tested from a #[cfg(test)] Rust module linked against the extension-module build. Instead they are exercised here through cobre.io.validate(..., config_overrides=...)`\ntest_convert.py:30-34  `def _validate(overrides): import cobre.io; return cobre.io.validate(VALID_CASE_1DTOY, config_overrides=overrides)`\nconvert.rs tail  `// GIL-bound: a Rust #[cfg(test)] calling Python::attach cannot link the extension-module build (no embedded interpreter), so coverage lives in tests/test_convert.py.`\nio.rs:168  `/// 9. [prepare_stochastic] - PAR estimation, opening trees, stochastic context`\nerrors.rs:360 `mod tests {`, :393 `Python::initialize();` then `Python::attach(|py| {`\nCargo.toml:37-39  `[features]` / `default = [extension-module, highs]` / `extension-module = [pyo3/extension-module]`\n#[test] count in convert.rs: 0",
+        "reading": "The 7 per-type round-trip tests (test_py_to_json_value_int_/bool_/float_/str_/none_/list_/dict_round_trips) share exactly one body, `_validate`, which calls `cobre.io.validate`. That entry point's own doc enumerates eleven phases and its phase 9 is `prepare_stochastic` (PAR estimation plus opening trees), so each of the 7 conversion claims pays a full case validation to assert one serde_json Value shape. The stated reason is written twice, in the module docstring (:4-8) and in the closing comment of convert.rs, and both rest on the premise that a #[cfg(test)] Rust module cannot drive a live interpreter. That premise does not hold for the configuration the crate's Rust tests actually run in: `extension-module` is a default feature (Cargo.toml:37-39) and CI's bindings step runs cargo test with --no-default-features --features highs, which drops it, and errors.rs already calls Python::initialize() then Python::attach in three passing tests under exactly that invocation. convert.rs itself has zero inline #[test]. Both signatures take only Bound handles (py_to_json_value takes &Bound<PyAny>, pydict_to_json_map takes &Bound<PyDict>), so a Rust test needs no importable cobre package. The current oracle is also weaker than the Rust one: the docstring (:11-16) states the assertion is `valid is True` confirming the shape by inference from a successful serde deserialization, where a Rust test compares against an expected serde_json Value directly.",
+        "readingNote": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give convert.rs its own #[cfg(test)] mod tests following the pattern errors.rs already proves under --no-default-features: Python::initialize() then Python::attach, build the Bound scalar and dict handles in-test, and compare py_to_json_value / pydict_to_json_map output against an expected serde_json Value. The 7 per-type round-trip claims then assert the conversion directly instead of inferring it from an eleven-phase validate; the 4 rejection tests stay in pytest because they assert the Python-visible ValueError raised before any pipeline work. Correct the module docstring and the convert.rs closing comment in the same change so the recorded rationale matches the configuration the Rust tests run in. No claim loses coverage, which is what testing-architecture section 7 requires, and the output-parity suites are not touched, so the rule 8 byte-neutrality bar holds.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": null,
+        "rule": "reserved-seams-and-deferred-debt has no entry for convert.rs nor for where the bindings crate homes its conversion-helper coverage; its one cobre-python test entry (:347) is the superseded CI-invisibility claim, which this candidate does not raise"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "Schema export is asserted twice in two languages, with one test name byte-identical across the Rust and pytest suites",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/schema.rs",
+          "symbol": "test_export_writes_all_schemas_as_valid_json"
+        },
+        {
+          "path": "crates/cobre-python/src/schema.rs",
+          "symbol": "test_export_creates_missing_directory"
+        },
+        {
+          "path": "crates/cobre-python/src/schema.rs",
+          "symbol": "export"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_schema.py",
+          "symbol": "test_export_creates_missing_directory"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/schema.rs | sed -n '61,97p'; git show 077dbe2c:crates/cobre-python/tests/test_schema.py | sed -n '18,56p'",
+        "output": "schema.rs:65 `fn test_export_writes_all_schemas_as_valid_json()` asserts `assert_eq!(count, entries.len())`, `assert!(count > 0)`, then per file `serde_json::from_str(&content).expect(schema file must be valid JSON)` and `assert!(parsed.is_object())`\nschema.rs:88 `fn test_export_creates_missing_directory()` asserts `nested.is_dir()` and `count > 0`\ntest_schema.py:18 `test_export_returns_file_count` asserts `isinstance(count, int)`, `count > 0`, `count == len(os.listdir(tmp_path))`\ntest_schema.py:29 `test_export_writes_valid_json` asserts `written` non-empty and `json.load(handle)` per file\ntest_schema.py:42 `test_export_creates_missing_directory` asserts `target.is_dir()` and `count == len(os.listdir(target))`\ntest_schema.py:53 `test_export_accessible_as_submodule`",
+        "reading": "The Rust test_export_writes_all_schemas_as_valid_json is a strict superset of the pytest pair test_export_returns_file_count plus test_export_writes_valid_json: it asserts the same count-equals-directory-listing identity, the same per-file JSON parse, and additionally that each parsed schema is a JSON object. test_export_creates_missing_directory exists under the same name in both languages against the same `export` function and asserts the same two facts. Only one of the four pytest tests carries a claim the Rust side cannot make, test_export_accessible_as_submodule, plus the `isinstance(count, int)` line inside test_export_returns_file_count, which is a binding-layer claim. So two of four pytest tests re-assert engine behavior that the Rust tests, which CI runs, already own; both languages pay a real schema export to do it.",
+        "readingNote": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Let schema.rs keep the two engine-level claims, the count-equals-listing identity and the nested-directory creation, since they are the cheapest tier for facts about `export` itself. Reduce the pytest side to what only Python can assert: that cobre.schema.export is reachable as a submodule and returns an int for a fresh directory. That keeps every distinct claim, which is what testing-architecture section 7 requires, and removes one duplicated real export per test run; the byte-neutrality bar of rule 8 is unaffected because test_schema.py is not a parity suite.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "no reserved seam covers schema-export test homing; this is not the Python-parity hard rule, which governs output files written by a run, not schema export coverage"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "conftest.py owns one fixture, so copy-the-case and find-the-case are each re-implemented per module in two incompatible conventions and borrowed across modules by a private import",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "copy_dir_all"
+        },
+        {
+          "path": "crates/cobre-python/tests/conftest.py",
+          "symbol": "cli_binary"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_validate.py",
+          "symbol": "copy_case_to_tempdir"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_policy_load_validation.py",
+          "symbol": "_copy_case_with_renamed_hydro"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_boundary_load.py",
+          "symbol": "_set_boundary_policy"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_model.py",
+          "symbol": "test_system_entity_counts"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/tests/conftest.py | sed -n '18,45p'; git grep -n -E 'shutil.copytree|mkdtemp' 077dbe2c -- crates/cobre-python/tests/; git show 077dbe2c:crates/cobre-python/tests/test_boundary_load.py | sed -n '24p'; for f in conftest.py test_errors.py test_model.py test_policy_load_validation.py test_boundary_load.py test_d48_ic_seed_load.py test_readme.py test_validate.py test_io.py test_results.py test_convert.py; do printf '%-34s repo_root=%s literal=%s\\n' $f $(git show 077dbe2c:crates/cobre-python/tests/$f | grep -cE '_REPO_ROOT|parents\\[3\\]') $(git show 077dbe2c:crates/cobre-python/tests/$f | grep -c 'examples/1dtoy'); done",
+        "output": "conftest.py declares exactly one fixture: `@pytest.fixture(scope=session) def cli_binary(pytestconfig)` plus `pytest_addoption` and the module constant `_REPO_ROOT = pathlib.Path(__file__).parents[3]`. No case fixture, no case-copy fixture, no output-reader fixture.\ncopy-a-case implementations inside this cell's corpus: test_validate.py:27 `def copy_case_to_tempdir` (tempfile.mkdtemp plus copytree, called at :92, :181, :319); test_policy_load_validation.py:36 `_copy_case_with_renamed_hydro` (per-item iterdir loop at :50); test_io.py:64 inline `shutil.copytree(VALID_CASE, case_dir)` on tmp_path; test_boundary_load.py:66 and :105 the same inline pair; crates/cobre-python/src/run.rs:2207 `fn copy_dir_all` (recursive read_dir loop) in the Rust test module.\ntest_boundary_load.py:24 `from test_policy_load_validation import _copy_case_with_renamed_hydro`\ncase-path convention split: _REPO_ROOT / parents[3] re-derived in conftest.py, test_errors.py, test_policy_load_validation.py, test_boundary_load.py, test_d48_ic_seed_load.py, test_readme.py; cwd-relative literal `examples/1dtoy` in test_convert.py 1, test_io.py 1, test_results.py 1, test_validate.py 2, test_model.py 6",
+        "reading": "The directory has a conftest.py and a _cobre_cli.py, so a shared home exists, but conftest.py owns only the CLI-binary fixture. Copy a case into a writable temp dir is implemented five separate ways across this cell's corpus, four in pytest and once in Rust, with three distinct temp-dir disciplines: mkdtemp with a manual try/finally rmtree, pytest tmp_path, and pytest tmp_path_factory. The sharpest symptom is test_boundary_load.py:24, which reaches into another test module for a private name because no shared home exists for it. Finding the case is split the same way: six modules re-derive the repo root from __file__.parents[3], a constant conftest.py:20 already owns, while five modules pass the cwd-relative literal examples/1dtoy instead, test_model.py six times with no module constant. Two incompatible conventions in one directory means half the files resolve the case from the file's own location and half only resolve it when pytest is invoked from the repo root.",
+        "readingNote": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Move the shared harness surface into conftest.py beside cli_binary: a session-scoped constant for the repo root that the modules import instead of re-deriving parents[3], a fixture returning the 1dtoy case path resolved from that root rather than from the working directory, and one case-copy fixture that yields a writable copy under tmp_path so the mkdtemp plus manual rmtree discipline disappears. The domain-specific part of _copy_case_with_renamed_hydro, the hydro-id rename, stays in test_policy_load_validation.py and takes the copy from the fixture, which removes the cross-module private import at test_boundary_load.py:24. Keep the Rust copy_dir_all where it is, since it serves the Rust test module and cannot use a pytest fixture, and leave every test_*_parity.py file untouched so the rule 8 byte-neutrality bar and testing-architecture section 5.11 hold; the two per-item copy loops in the parity suites are cited only as evidence that the idiom recurs.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "no reserved seam covers pytest harness ownership; testing-architecture cost discipline states that shared harness helpers live once and are never re-defined per file, which is the standard this candidate measures against"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "Four redundant full solver runs pay for preconditions a module-scoped fixture already establishes in the same directory",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "train"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_boundary_load.py",
+          "symbol": "test_boundary_load_reports_source_date_and_reconciliation"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_boundary_load.py",
+          "symbol": "test_boundary_load_strict_accepts_a_faithful_self_boundary"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_boundary_load.py",
+          "symbol": "test_boundary_load_rejects_a_mismatched_source"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_results.py",
+          "symbol": "run_output"
+        },
+        {
+          "path": "crates/cobre-python/tests/test_results.py",
+          "symbol": "test_load_stochastic_missing_artifacts_raises"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n -E 'cobre.run.run\\(|\\.train\\(\\)' 077dbe2c -- crates/cobre-python/tests/test_boundary_load.py crates/cobre-python/tests/test_results.py; git show 077dbe2c:crates/cobre-python/tests/test_results.py | sed -n '27,37p;332,346p'",
+        "output": "test_boundary_load.py:59 `cobre.run.run(VALID_CASE, output_dir=str(source_output))`\ntest_boundary_load.py:70 `cobre.run.run(str(target_case), ...)`\ntest_boundary_load.py:98 `cobre.run.run(VALID_CASE, output_dir=str(source_output))`\ntest_boundary_load.py:109 `cobre.run.run(str(target_case), ...)`\ntest_boundary_load.py:124 `cobre.run.run(VALID_CASE, output_dir=str(source_output))`\ntest_boundary_load.py:136 `cobre.run.run(str(target_case), ...)`\ntest_results.py:36 inside `@pytest.fixture(scope=module) def run_output` with the docstring `Module-scoped so the solver only runs once per test session`\ntest_results.py:296 `.train()` inside the second module-scoped fixture stochastic_output\ntest_results.py:342 `cobre.Study(VALID_CASE, output_dir=str(tmp_path)).train()`",
+        "reading": "test_boundary_load.py runs six solves for three tests. Three of the six, at :59, :98 and :124, are the identical source run of the same VALID_CASE with no per-test variation except the output directory name, and all three consume it read-only as `source_output / policy`: the mutations each test performs go into a separate copied target case, and the target solve writes to its own output directory. So three of that module's six solver runs are redundant. In test_results.py, test_load_stochastic_missing_artifacts_raises pays a fourth by calling Study(...).train() at :342 purely to obtain a completed default 1dtoy run with no stochastic exports, which is exactly what the module-scoped run_output fixture at :27-37 already produces; the module proves the point by using a second fixture, stochastic_output, for the with-exports case. The right-sized pattern is already in the same directory and even documents its own reason.",
+        "readingNote": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "In test_boundary_load.py add a module-scoped fixture that performs the source run once with tmp_path_factory and yields the source policy directory, then have the three tests take it instead of re-running the source case, which is safe because none of them writes into that tree. In test_results.py have test_load_stochastic_missing_artifacts_raises take the existing run_output fixture and drop its own Study(...).train(), since load_stochastic only needs a completed run whose stochastic directory is absent and the fixture already satisfies that. Both changes adopt a pattern the same directory already uses and documents, no claim loses coverage so testing-architecture section 7 is satisfied, and no parity suite is touched so the rule 8 byte-neutrality bar holds.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "no reserved seam covers pytest fixture scoping; testing-architecture cost discipline is the standard applied"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "testing-architecture section 5.11 still asks for the bindings crate's Rust tests to be wired into CI and section 5.2 still lists an unadopted dev-dependency, so the doc understates and misdirects the only invocation that runs them",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/errors.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-python/src/schema.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-python/src/policy.rs",
+          "symbol": "tests"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'manifest-path crates/cobre-python'; git show 077dbe2c:crates/cobre-python/Cargo.toml | sed -n '21,23p;33,41p'; git show 077dbe2c:docs/design/testing-architecture.md | sed -n '559p'",
+        "output": "ci.yml:562-568 runs `cargo test --manifest-path crates/cobre-python/Cargo.toml --no-default-features --features highs`, gated on matrix.python-version == '3.12'\ncobre-python/Cargo.toml [lib] `crate-type = [cdylib]`, and the crate is excluded from the workspace, so `cargo test --workspace` never compiles it\ncobre-python/Cargo.toml [dev-dependencies] contains only `tempfile = 3`; it does not name cobre-sddp with the test-support feature that testing-architecture section 5.2 describes\ntesting-architecture:559 section 5.11 still says to wire the crate's Rust tests into CI",
+        "reading": "The two-tier visibility is a fact, not a finding: the 19 Rust #[test] functions of the bindings crate (run.rs 13, errors.rs 3, schema.rs 2, policy.rs 1) are compiled and run by the dedicated CI step, and are simultaneously never compiled by a local cargo test --workspace because the crate is workspace-excluded with a cdylib lib target. What is a gap is the documentation a contributor reads. Section 5.11 still states the wiring as work to be done, so it neither records that the step exists nor that it is the only invocation that exercises these tests, nor that the step deliberately drops the extension-module default feature, which is the fact that makes Python::initialize() in a #[cfg(test)] module legal and which the convert.rs comment gets wrong. Section 5.2's cobre-python dev-dependency convention is also still unadopted at the pin, so the section describes a state the manifest does not have.",
+        "readingNote": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Rewrite testing-architecture section 5.11 to describe the state that exists rather than the work: the bindings crate's Rust tests run only through the dedicated manifest-path step with default features off, a local workspace test run never compiles them, and the feature-off invocation is what makes an embedded interpreter available to a #[cfg(test)] module. State the invariant rather than freezing the test count, as the prose doc-integrity rule requires. Either adopt the section 5.2 dev-dependency convention in the manifest or mark the cobre-python row as not yet adopted so the section stops describing a manifest state that is absent. This is a prose change routed with the existing mirror write-back, not a change to any test file, so the rule 8 byte-neutrality bar is trivially met.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "sanctioned",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:347 plus docs/design/testing-architecture.md:559",
+        "rule": "the CI-invisibility claim itself is superseded at the pin and is stated here only as fact; the candidate is the doc gap that remains after the supersession, which the station prompt routes to the E11 mirror write-back rather than raising as invisibility"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "dupOf": [],
+  "positives": [
+    {
+      "subject": "crates/cobre-cli/src/commands/broadcast.rs::tests",
+      "note": "The 19 inline #[test] functions are postcard wire round-trips over the broadcast payload types: no solver, no process spawn, no filesystem. That is the correct Unit tier under docs/design/testing-architecture.md section 5.3, it is the only coverage of the wire layout, and keeping it inline beside the types it serialises costs no extra integration-test binary and therefore no extra static link under .claude/rules/testing.md section Cost discipline. Right-sized as written.",
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-python/tests/test_outputs.py::run_output",
+      "note": "Three module-scoped fixtures, run_output for 1dtoy, d20_output and d28_output, let 9 tests share 3 runs. This is the in-corpus model for run-once test design and the pattern candidate S6a-TB-03 asks the neighbouring modules to adopt; it needs no change.",
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-python/tests/_cobre_cli.py::run_cli",
+      "note": "resolve_cli_binary and run_cli, together with the --require-cli-binary option and the session-scoped cli_binary fixture in conftest.py, are the shared-harness seam .claude/rules/testing.md section Cost discipline asks for, and 12 pytest modules already consume them. The pytest suite's CLI-invocation half is correctly consolidated; only the case-building and parquet-reading half was never hoisted.",
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-python/tests/test_cli_python_file_set_parity.py::test_case_exercises_the_drift_prone_output_surface",
+      "note": "Both cli_python parity modules guard against vacuity: this test pins the expected simulation entity directories so a shrunken output surface cannot pass, the determinism module carries a negative self-test that perturbs a value and requires the comparison to fail, and the two file-set tests run distinct decks. These guards are why the two same-named file-set tests are NOT a redundant claim, and none of them is proposed for change.",
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes",
+      "note": "It shells to the single canonical parity script rather than reimplementing the parity rule in Rust, so the CLAUDE.md Python-parity rule keeps one enforcement implementation. Candidate S6a-TB-02 asks only for its home and its silent python3-absent skip to change, never for the delegation to be replaced.",
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "docs/design/testing-architecture.md section 5.11",
+      "note": "Section 5.11 asks that the pytest output-parity suite be kept as it is, and no candidate in this envelope moves, regenerates or relaxes a parity comparison: every fix shape is a consolidation of harness code or of how often a deck is solved, with the assertions preserved verbatim, which is the byte-neutrality bar of rule 8.",
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/error.rs::tests",
+      "claim": "The 28 inline tests are the right shape for the tier: no process spawn, no fixture, one distinct From conversion arm per test across LoadError, SddpError, SimulationError and BackendError, each asserting both the variant and the exit code. The exit-code table in the module header is the contract and the suite covers it arm by arm, which is exactly the cheapest tier that catches the regression.",
+      "measured": {
+        "inlineTestFns": 28,
+        "processSpawns": 0,
+        "conversionArmsCovered": 21
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/tests/cli_schema.rs::test_schema_export_writes_files",
+      "claim": "Derives the emitted and the committed schema basenames as BTreeSets at test time and compares them, with a comment stating that it is never a hard-coded count. The test survives a schema being added or renamed without a hand edit, and it is the pattern the templates suite should follow.",
+      "measured": {
+        "frozenCounts": 0,
+        "testFnsInBinary": 4
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/templates.rs::tests",
+      "claim": "test_1dtoy_embedded_files_match_canonical_source is the one guard in this sub-surface that catches a regression class nothing else can see: build.rs re-embeds the in-crate templates copy, so drift from examples/1dtoy is invisible to the compiler. It walks every file and compares bytes, covering the parquet scenario statistics as well as the JSON, at the unit tier with no process spawn.",
+      "measured": {
+        "filesGuarded": 11,
+        "processSpawns": 0
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs::fmt_hms",
+      "claim": "The arithmetic half of the progress test module is right-sized: fmt_hms_pads_hours_minutes_seconds is a single table-driven test over seven inputs, and the three eta_millis cases plus two fmt_time_cell cases each pin one distinct branch of a pure function with no thread and no renderer. This is the shape the fifteen round-trip tests in the same module should collapse into.",
+      "measured": {
+        "tableDrivenTests": 1,
+        "casesInTable": 7,
+        "pureFunctionTests": 6
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/summary.rs::training_summary_lines",
+      "claim": "Three of the seven printing paths already do the right thing: print_training_summary, print_simulation_summary and print_output_path build their output through a shared lines helper that tests assert on, so tests and production render through one code path. The module header states this as the intended rule, which makes the four format_string twins an internal asymmetry rather than a missing idea.",
+      "measured": {
+        "twinsUsingSharedLinesHelper": 3,
+        "twinsWithParallelRenderer": 4
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/init.rs::tests",
+      "claim": "The eight inline tests call execute directly against a TempDir instead of spawning the binary, and they cover distinct contracts: list mode, unknown template, directory creation, the version-pinned schema URL in config.json and in the six system files, and the force and non-force branches on a non-empty directory. The schema URL tests build the expected string from CARGO_PKG_VERSION rather than freezing a version.",
+      "measured": {
+        "inlineTestFns": 8,
+        "processSpawns": 0,
+        "frozenVersions": 0
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/main.rs::tests",
+      "claim": "Two inline tests, one per resolve_color branch, asserting the console global the rest of the color behaviour depends on. This is the cheapest possible home for that claim and it is where the color suite's residual contract belongs.",
+      "measured": {
+        "inlineTestFns": 2,
+        "processSpawns": 0
+      },
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-python/src/errors.rs::tests",
+      "why": "The three Rust tests assert the SDDP-error to leaf-class mapping arms that no Python call can reach, using a shared assert_leaf helper, so they sit at the cheapest tier that catches the regression and are correctly split against the nine Python-visible claims in test_errors.py. They are also the working proof that a #[cfg(test)] module in this crate can drive an interpreter under the feature-off CI invocation.",
+      "sanctionedBy": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/policy.rs::tests",
+      "why": "The single test covers an entity_type value that is unclassified and unreachable from the Python surface, so the claim is only assertable in Rust and is homed there rather than duplicated in pytest.",
+      "sanctionedBy": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/tests/test_results.py fixtures run_output and stochastic_output",
+      "why": "Two module-scoped fixtures split the expensive solver work by configuration, with-exports and without, so twenty-two tests share two runs. This is the right-sized pattern for a solver-linked suite and its docstring records why the scope is module.",
+      "sanctionedBy": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/tests/_cobre_cli.py and conftest.py::cli_binary",
+      "why": "CLI binary discovery and the skip-versus-fail policy behind --require-cli-binary live in exactly one place and are consumed through one session-scoped fixture, so the parity modules carry no copy of that policy. This is the shape the rest of the harness should follow.",
+      "sanctionedBy": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/tests/test_convert.py rejection tests",
+      "why": "The four rejection tests correctly cost almost nothing: io.rs::validate converts config_overrides through pydict_to_json_map with the question mark operator before it touches the case directory, so these raise before any pipeline work. They are the part of the module that is right-sized as written.",
+      "sanctionedBy": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre/src/lib.rs",
+      "why": "Examined and clean for this lens: the facade is two doc lines that re-export nothing, so it has no test surface to be bloated and correctly carries no tests.",
+      "sanctionedBy": null,
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "cleanVerdicts": [],
+  "_needsHuman": [
+    {
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a",
+      "question": "{\"question\": \"Does section 5.11's instruction to keep the pytest output-parity suite unchanged freeze those files against harness consolidation and against removing a strictly subsumed test, or does it only exempt them from the Layer-1 binary migration while leaving fixture hygiene in scope?\", \"why\": \"Candidates S6a-TB-05 and S6a-TB-06 touch files section 5.11 names. Both are assertion-preserving, but if the section is read strictly as a freeze on the files rather than on the comparisons, both are out of scope and should be withdrawn rather than dispositioned.\"}"
+    },
+    {
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a",
+      "question": "{\"question\": \"Is the run-path binary consolidation sanctioned now, or should it wait for the section 5.1 Layer-1 migration to a single integration-test entry point?\", \"why\": \"docs/design/testing-architecture.md carries Proposal status for everything outside section 5.2, including the canonical layout and its test-LOC threshold, while .claude/rules/testing.md section Cost discipline is a standing contract. S6a-TB-01 and S6a-TB-02 are grounded in the standing rule only, but doing them now partly pre-empts the proposed migration, and doing them twice would be waste.\"}"
+    },
+    {
+      "cell": "test-bloat.S6a",
+      "subSurface": "S6a",
+      "question": "{\"question\": \"Should the hand-pinned 1dtoy numbers be retired in favour of the live CLI/Python parity derivation, or kept deliberately as an offline regression guard for environments with no built wheel?\", \"why\": \"S6a-TB-04 assumes the live derivation is the authority. If the pinned copy is intentional cover for environments where the pytest parity suite cannot run, the right outcome is one pinned home with a named regeneration command rather than removal, and that choice is the owner's.\"}"
+    },
+    {
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b",
+      "question": "{\"question\": \"Should cobre-cli grow a library target so its doc examples compile and run, or should the seven inert examples be deleted and their claims kept in the inline test modules?\", \"why\": \"Candidate TB-S6b-05 establishes that the seven executable doctest blocks never run and would not compile. Deleting them is the byte-neutral, in-scope fix and is what the candidate recommends. Adding a [lib] to cobre-cli would instead make them real guards, but it changes the package's published surface, interacts with the facade crate that today re-exports nothing, and is not traceable to any stated requirement, so it is an owner call rather than a station recommendation.\", \"anchors\": [{\"path\": \"crates/cobre-cli/Cargo.toml\", \"line\": 15}, {\"path\": \"crates/cobre/src/lib.rs\", \"line\": 1}]}"
+    },
+    {
+      "cell": "test-bloat.S6b",
+      "subSurface": "S6b",
+      "question": "{\"question\": \"Is the divergence between the three copies of the valid-case fixture deliberate per suite, or incidental?\", \"why\": \"Candidate TB-S6b-03 proposes one parameterised builder in tests/common. The three copies differ in forward passes, iteration limit, stage count and openings. The consolidation is safe either way because the fix keeps today's values at each call site, but knowing which differences are load-bearing determines whether the builder exposes four knobs or two named presets.\", \"anchors\": [{\"path\": \"crates/cobre-cli/tests/cli_validate.rs\", \"symbol\": \"make_valid_case\"}, {\"path\": \"crates/cobre-cli/tests/cli_color.rs\", \"symbol\": \"make_valid_case\"}]}"
+    },
+    {
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c",
+      "question": "Anchor tooling: rule 3 restricts a symbol anchor to a declared fn, struct, enum, trait, type, const, static, mod or impl name, and tools/check-anchors.py compiles exactly that Rust vocabulary, so a pytest def or class name resolves as symbol-missing. The test-bloat corpus for this cell is mostly pytest files. Every candidate here therefore leads with a Rust symbol that resolves, and the pytest def anchors follow. The owner decides whether check-anchors.py should grow a def and class branch for .py paths, or whether pytest anchors should be dropped to evidence only."
+    },
+    {
+      "cell": "test-bloat.S6c",
+      "subSurface": "S6c",
+      "question": "convert.rs carries an in-code comment asserting that a #[cfg(test)] module cannot link an interpreter, and test_convert.py repeats it in a module docstring. Both are contradicted by errors.rs and by the feature-off CI invocation. Correcting an in-code rationale and relocating coverage are separable decisions, so the owner should say whether candidate one lands as a comment correction only, as a coverage relocation only, or as both in one change."
+    }
+  ],
+  "coverage": {
+    "S6a": "candidates",
+    "S6b": "candidates",
+    "S6c": "candidates"
+  },
+  "gate": {
+    "S6a": {
+      "cell": "test-bloat.S6a",
+      "wave": 2,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 8,
+      "candidates": 8,
+      "dupOf": [],
+      "positives": 6,
+      "needsHuman": 3,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6b": {
+      "cell": "test-bloat.S6b",
+      "wave": 2,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 10,
+      "candidates": 10,
+      "dupOf": [],
+      "positives": 7,
+      "needsHuman": 2,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6c": {
+      "cell": "test-bloat.S6c",
+      "wave": 2,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 5,
+      "candidates": 5,
+      "dupOf": [],
+      "positives": 6,
+      "needsHuman": 2,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    }
+  }
+}

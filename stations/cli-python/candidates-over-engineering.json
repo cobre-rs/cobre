@@ -1,0 +1,950 @@
+{
+  "station": "cli-python",
+  "stationLabel": "cobre-cli+cobre-python+facade",
+  "subStation": "S6",
+  "cells": [
+    "over-engineering.S6a",
+    "over-engineering.S6b",
+    "over-engineering.S6c"
+  ],
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "commands/broadcast.rs is a 1,088-line postcard wire-type module filed under commands/, whose own parent doc says every module there is a clap subcommand",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/mod.rs; git grep -ln 'broadcast::' 077dbe2c -- crates/cobre-cli/src; git show 077dbe2c:crates/cobre-io/src/broadcast.rs | sed -n '1,12p'",
+        "output": "//! Subcommand implementations for the `cobre` binary.\n//!\n//! Each module pairs a clap-derived `Args` struct with an `execute` function.\n\npub(crate) mod broadcast;\npub mod init;\npub mod run;\npub mod schema;\npub mod validate;\npub mod version;\n--\ncrates/cobre-cli/src/commands/run/mod.rs\ncrates/cobre-cli/src/commands/run/policy.rs\ncrates/cobre-cli/src/commands/run/setup.rs\n--\n//! Postcard-safe mirror types for [`ScalarParameter`], used to broadcast\n//! scalar parameters over MPI.\n... [`BroadcastScalarParameter`],\n//! [`BroadcastParameterKind`] and [`BroadcastComputedParameter`] mirror them\n//! with externally-tagged encoding instead, convertible via `From` in both\n//! directions. This is the same pattern as `BroadcastConfig` in `cobre-cli`,\n//! used for [`crate::Config`].",
+        "reading": "commands/mod.rs states the module contract for that directory: each module pairs a clap-derived Args struct with an execute function. broadcast is the only pub(crate) module of the six and satisfies neither half: its declaration census is 3 enums (BroadcastStoppingRule 4 variants, BroadcastStoppingMode 2, BroadcastBackwardScheduler 2), 3 structs (BroadcastConfig, BroadcastOpeningTree, BroadcastNodeGraph), 4 From impls, 2 free functions (stopping_rules_from_broadcast, broadcast_value) and 19 inline tests, with no Args type and no execute. Its only three consumers are commands/run/mod.rs, commands/run/policy.rs and commands/run/setup.rs, i.e. every consumer sits one directory down. The same wire-mirror pattern already has an L2 home: cobre-io/src/broadcast.rs holds the postcard mirror for ScalarParameter and its module doc names the cobre-cli copy as the same pattern, so the module is misfiled rather than novel.",
+        "reading_note": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Placement only; the Config-to-BroadcastConfig projection content is CD-004's and is not touched here. Minimal shape: relocate the module out of commands/ to the directory that owns its only consumers, crates/cobre-cli/src/commands/run/broadcast.rs, so commands/ holds subcommands and nothing else, and the pub(crate) visibility narrows to pub(super). Larger shape, and the one to prefer if CD-004 relocates the projection anyway: move the wire mirror beside the existing one in cobre-io (L2), which already owns the identical externally-tagged mirror for ScalarParameter and is depended on by both front ends; that variant is held until CD-004 lands because both mirrors read the same Config. Byte-neutrality: a module relocation and a visibility narrowing change no postcard field order, no From impl body and no writer call order, so the CLI-vs-Python determinism golden, the file-set parity test, the import-resolving parity gate at 18 shared names and the cobre validate --json single-object stdout contract are all untouched.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "sanctioned",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:563 and the audit bullet at :233 (CD-004, ratified 2026-09-18 at the sddp gate) sanction the Config projection twin; neither entry mentions where the module is filed, which is the only claim raised here",
+        "rule": "rule 7 pre-check on commands/broadcast.rs: mirror at the pin, CLAUDE.md section Unwired config is reserved not dead (does not apply, this is not config), and the in-code rationales; the projection is sanctioned, the placement is unaddressed"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a",
+      "relatedTo": [
+        "CD-002"
+      ]
+    },
+    {
+      "title": "WriteTrainingArgs carries hydro_models next to setup, and at its one construction site the field is literally &setup.hydro_models",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "WriteTrainingArgs"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute_inner"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | sed -n '44,55p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/mod.rs | sed -n '190,200p'; git grep -n 'hydro_models' 077dbe2c -- crates/cobre-cli/src/commands/run",
+        "output": "pub(super) struct WriteTrainingArgs<'a> {\n    pub(super) output_dir: &'a Path,\n    pub(super) system: &'a System,\n    pub(super) config: &'a Config,\n    pub(super) training_output: &'a TrainingOutput,\n    pub(super) setup: &'a StudySetup,\n    pub(super) training_result: &'a TrainingResult,\n    pub(super) output_ctx: &'a OutputContext,\n    pub(super) hydro_models: &'a PrepareHydroModelsResult,\n    pub(super) quiet: bool,\n    pub(super) stderr: &'a Term,\n}\n--\n            write_training_outputs(&WriteTrainingArgs {\n                ...\n                setup: &setup,\n                training_result: &training.result,\n                output_ctx: &training_ctx,\n                hydro_models: &setup.hydro_models,\n--\nrun/outputs.rs:52:    pub(super) hydro_models: &'a PrepareHydroModelsResult,\nrun/outputs.rs:90:    if !args.hydro_models.fpha_export_rows.is_empty() {\nrun/outputs.rs:95:        write_fpha_hyperplanes(&fpha_path, &args.hydro_models.fpha_export_rows)\nrun/outputs.rs:101:    let evaporation_rows = build_evaporation_model_rows(args.hydro_models, args.system);\nrun/outputs.rs:113:        let deviation_point_rows = args.hydro_models.fpha_deviation_point_rows.as_slice();\nrun/setup.rs:535:    let hydro_summary = build_hydro_model_summary(&setup.hydro_models, system);",
+        "reading": "The 10-field argument struct carries both setup and hydro_models, and the sole construction site (run/mod.rs, inside execute_inner) fills them as setup: &setup and hydro_models: &setup.hydro_models, so one field is a second borrow of a field of the other. The four readers are outputs.rs:90, :95, :101 and :113; each could read args.setup.hydro_models, which run/setup.rs:535 already does in the same crate. Grep over the whole crate shows no other construction site and no test constructs WriteTrainingArgs, so the extra field has exactly one producer and one shape."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Drop the hydro_models field and read args.setup.hydro_models at the four sites in write_training_outputs; the change stays inside cobre-cli (L4) and crosses no crate boundary. Ordering note: CD-025 will move the shared output entry point to cobre-io (L2), and this argument struct is the thing that moves, so removing the redundant field first reduces the surface that has to be designed at the L2 boundary rather than carrying the duplication across it. Byte-neutrality: the same PrepareHydroModelsResult is borrowed from the same StudySetup, so every row set, every guard condition and the writer call order are unchanged; the CLI-vs-Python determinism golden, the file-set parity test, the parity gate at 18 shared names and the cobre validate --json contract see no difference.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7: checked the mirror at the pin, CLAUDE.md section Unwired config is reserved not dead and the declaration site for a reserved or allow rationale; the field is live (read at four sites), so the reserved-seam question does not arise and the claim is redundancy, not deadness"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "write_sim_outputs_on_root is a decision-free pass-through layer, and the root guard its name asserts lives at the call site instead",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "write_sim_outputs_on_root"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '203,250p'; git grep -n 'OutputContext {' 077dbe2c -- crates/cobre-cli/src crates/cobre-python/src",
+        "output": "    if ctx.is_root {\n        write_sim_outputs_on_root(\n            ctx, hostname, sim_started_at, &merged_sim_output,\n            &global_scenario_stats, &global_path_rows, &gathered_scenario_costs,\n        )?;\n    }\n--\nfn write_sim_outputs_on_root(\n    ctx: &RunContext<impl Communicator>, hostname: &str, sim_started_at: String,\n    merged_sim_output: &SimulationOutput, global_scenario_stats: &[(u32, SolverStatsDelta)],\n    global_path_rows: &[SimulationPathRecord], gathered_scenario_costs: &[(u32, f64, Option<f64>)],\n) -> Result<(), CliError> {\n    let mpi_world_size = u32::try_from(ctx.topology.world_size).unwrap_or(u32::MAX);\n    let sim_ctx = OutputContext { ... };\n    write_simulation_outputs(&WriteSimulationArgs { ... })\n}\n--\ncrates/cobre-cli/src/commands/run/mod.rs:178:            let training_ctx = OutputContext {\ncrates/cobre-cli/src/commands/run/simulation.rs:230:    let sim_ctx = OutputContext {\ncrates/cobre-python/src/run.rs:571:    let training_ctx = OutputContext {\ncrates/cobre-python/src/run.rs:844:    let sim_ctx = OutputContext {",
+        "reading": "NEW evidence for CD-025, whose register row claims the hand-mirror but not its asymmetry. There are exactly four OutputContext construction sites across the two front ends. Three build the context inline at the point of use: run/mod.rs:178 inside execute_inner, cobre-python run.rs:571 inside write_training_artifacts and run.rs:844 inside run_simulation_phase_py. Only the CLI simulation path interposes a function, and its body is decision-free: compute mpi_world_size, build OutputContext, call write_simulation_outputs with a struct literal. It has one call site (the name occurs twice in the file, declaration plus call), takes 7 positional parameters to save one, contains no guard, no error mapping and no branch, and the if ctx.is_root test that its name asserts sits at the call site at simulation.rs:204, so the helper does not enforce the condition it is named for. The testability counter-signal is absent: the file's only inline test (simulation_weighting_census_underivable_from_sampled_traversal) exercises Traversal::resolve and SimulationWeighting, never this function."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Destination for the shared output entry point is cobre-io (L2), the crate both front ends already depend on and the owner of shared output orchestration in the roadmap; the CD-025 fix hoists the output-set-plus-guards shape there, and the OutputContext assembly is part of what moves. The interim step in cobre-cli is a deletion, not a new cli-local layer: inline the seven-parameter wrapper into its single call site inside the existing if ctx.is_root block so the simulation path matches the other three construction sites, which removes the misleading on_root name rather than adding a helper. No cobre-sddp home and no new cobre-cli-local helper is proposed. Byte-neutrality: the same OutputContext field values in the same order feed the same write_simulation_outputs call under the same root guard, so the CLI-vs-Python determinism golden, the file-set parity test, the parity gate at 18 shared names and the cobre validate --json contract are unaffected.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7: checked the mirror at the pin (the CD-025 entry at docs/design/reserved-seams-and-deferred-debt.md:587 is a debt entry, not a reserved seam), CLAUDE.md section Unwired config is reserved not dead, and the function's own doc comment for a reserved rationale; the function is live on the rank-0 write path, so deadness is not the claim"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The per-artifact write guards are mirrored across the CLI/Python boundary by four hand-written comments naming the twin symbol, a granularity the name-matching parity gate cannot check",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_fixed_delivery_if_any"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_training_artifacts"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | sed -n '90,140p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '654,668p'; for s in write_training_artifacts write_fpha_hyperplanes_if_any write_evaporation_models_if_any write_generic_constraint_echo_if_any write_fixed_delivery_if_any write_fpha_deviation_points_if_any; do printf '%s run.rs=%s study.rs=%s\\n' \"$s\" \"$(git show 077dbe2c:crates/cobre-python/src/run.rs | grep -c \"$s\")\" \"$(git show 077dbe2c:crates/cobre-python/src/study.rs | grep -c \"$s\")\"; done",
+        "output": "    // No evaporation-modeled hydro writes no file (FPHA \"if-any\" behavior);\n    // mirror on the Python side: `write_evaporation_models_if_any`.\n    ...\n    // Off by default, so a default run writes no file and stays byte-identical;\n    // mirror on the Python side: `write_fpha_deviation_points_if_any`.\n    ...\n    // No generic constraint writes no file, so a default run stays byte-identical;\n    // mirror on the Python side: `write_generic_constraint_echo_if_any`. The writer\n    // is called fully qualified, not imported, so the Python-parity checker's\n    // `cobre_io::write_*` match sees it.\n    ...\n    let fixed_rows = build_fixed_delivery_rows(args.setup, args.system);\n    cobre_io::write_fixed_delivery(args.output_dir, &fixed_rows).map_err(CliError::from)?;\n--\npub(crate) fn write_fixed_delivery_if_any(\n    output_dir: &Path, setup: &StudySetup, system: &System,\n) -> Result<(), String> {\n    let rows = build_fixed_delivery_rows(setup, system);\n    write_fixed_delivery(output_dir, &rows)\n        .map_err(|e| format!(\"output write error: failed to write fixed_delivery: {e}\"))\n}\n--\nwrite_training_artifacts run.rs=1 study.rs=2\nwrite_fpha_hyperplanes_if_any run.rs=1 study.rs=2\nwrite_evaporation_models_if_any run.rs=1 study.rs=2\nwrite_generic_constraint_echo_if_any run.rs=1 study.rs=2\nwrite_fixed_delivery_if_any run.rs=1 study.rs=2\nwrite_fpha_deviation_points_if_any run.rs=1 study.rs=2",
+        "reading": "Three pieces of NEW evidence for CD-025, whose row says the two paths are kept aligned only by the Python-parity hard rule. First, the alignment mechanism is more specific and weaker than that: write_training_outputs carries four comments that each name their Python twin by symbol (mirror on the Python side: write_evaporation_models_if_any, and the same for the deviation-points and generic-constraint artifacts), so the guard condition per artifact is mirrored in prose. The gate cited in the Frozen figures matches writer NAMES with a floor of 18 shared names; it can confirm both sides call write_fpha_hyperplanes but cannot see that one side guards on is_empty and the other on a config flag, so a one-sided guard change passes CI. Second, the guard shapes are not uniform within the family: four of the five artifacts are guarded (rows non-empty, or config.exports.fpha_deviation_points plus non-empty) while fixed_delivery is written unconditionally on both sides, so write_fixed_delivery_if_any contains no if at all and its name asserts a guard its body does not hold; this is a naming inconsistency, not a parity divergence, since the CLI is equally unconditional at outputs.rs:138 and cobre-io's own test writes an empty row slice successfully. Third, the placement is inverted: each of the six helpers occurs exactly once in run.rs, its declaration, and twice in study.rs, the import and the call, so the module that declares the writer family has no consumer of it. The per-artifact guard is therefore the real variation point, and it is currently duplicated data rather than a typed structure."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Owner is cobre-io (L2), the crate both front ends already depend on and the roadmap owner of shared output orchestration; a cobre-sddp home or a new cobre-cli-local helper is out. Shape: express the training output set in cobre-io as one ordered list of artifact descriptors, each pairing its writer with its emit condition (rows non-empty, or an exports flag plus rows non-empty, or unconditional), and have both front ends drive that one list instead of two hand-kept bodies; the unconditional fixed_delivery becomes an explicit always variant, which retires the _if_any misnomer, and the five helpers move next to the descriptors so the declaring module is also a consumer. Byte-neutrality: the descriptor order reproduces the current CLI call order artifact for artifact, and each condition is transcribed from the existing site, so the file set and every byte stay identical from both entry points, which is what the CLI-vs-Python determinism golden and the file-set parity test assert; the parity gate keeps its 18 shared names because both paths still name the cobre_io writers, and the cobre validate --json contract is not on this path. If the descriptor list is introduced, the gate worth adding alongside it is one that compares conditions, not names, since name matching is what let the guards drift apart in the first place.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587 is CD-025's deferred-debt entry, not a reserved-seam entry; its Target already says to hoist the shared output set plus guards into a crate both the CLI and Python depend on",
+        "rule": "rule 7: checked the mirror at the pin, CLAUDE.md section Unwired config is reserved not dead and the six helpers' doc comments; all six are live through Study::train_native, so deadness is not the claim"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "Thirteen production #[allow] suppressions in the cell carry no written rationale, including a verbatim-duplicated cast in the two phase files and one whose identical twin in the same file is documented",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/training.rs",
+          "symbol": "run_training_phase"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "run_simulation_phase"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "run_via_study"
+        }
+      ],
+      "evidence": {
+        "command": "for f in crates/cobre-cli/src/commands/broadcast.rs crates/cobre-cli/src/commands/run/mod.rs crates/cobre-cli/src/commands/run/setup.rs crates/cobre-cli/src/commands/run/training.rs crates/cobre-cli/src/commands/run/policy.rs crates/cobre-cli/src/commands/run/simulation.rs crates/cobre-cli/src/commands/run/outputs.rs crates/cobre-python/src/run.rs; do git show 077dbe2c:\"$f\" | grep -n -B1 '#\\[allow('; done; git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | sed -n '191,192p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '173,174p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '1405,1406p;1665,1667p'",
+        "output": "25 #[allow(...) sites over the 8 manifest files: broadcast.rs 3, run/mod.rs 1, setup.rs 2, training.rs 5, policy.rs 2, simulation.rs 3, outputs.rs 1, cobre-python run.rs 8.\n9 carry a written rationale on the preceding line (broadcast.rs:86, policy.rs:73, policy.rs:262, setup.rs:245, setup.rs:422, simulation.rs:313, training.rs:58, run.rs:1202, run.rs:1666).\n3 are #[cfg(test)]-scoped (broadcast.rs:463, run/mod.rs:324, run.rs:1759).\n13 bare: broadcast.rs:429, outputs.rs:196, simulation.rs:138, simulation.rs:173, training.rs:150, training.rs:166, training.rs:191, training.rs:194, run.rs:757, run.rs:823, run.rs:1096, run.rs:1098, run.rs:1405.\n--\ntraining.rs:191:    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]\ntraining.rs:192:    let parallelism = (ctx.n_threads as u32).saturating_mul(ctx.comm.size() as u32);\nsimulation.rs:173:    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]\nsimulation.rs:174:    let parallelism = (ctx.n_threads as u32).saturating_mul(ctx.comm.size() as u32);\n--\nrun.rs:1405:#[allow(clippy::needless_pass_by_value)]\nrun.rs:1406:pub(crate) fn run_via_study(\nrun.rs:1665:// needless_pass_by_value: PyO3's from-Python extraction hands over owned values,\nrun.rs:1666:#[allow(clippy::needless_pass_by_value)]",
+        "reading": "Census of the named target. Of 25 suppressions, 9 follow the project's own practice of a rationale line above the attribute, 3 are inside #[cfg(test)] modules where unwrap_used is explicitly permitted, and 13 in production code state nothing. Honest scoping: .claude/rules/comments.md D4 enumerates the lints that MUST carry a rationale (too_many_arguments, too_many_lines, type_complexity, dead_code, unused_*), and 12 of the 13 are cast lints outside that list, so those are a consistency gap rather than a rule violation. Two sharp instances remain. First, training.rs:191-192 and simulation.rs:173-174 are byte-identical two-line blocks, the same suppression around the same parallelism expression duplicated across the two phase files, while the Python side computes the same metadata field at run.rs:802 with u32::try_from(n_threads).unwrap_or(u32::MAX) and needs no suppression at all. Second, run.rs:1405 suppresses needless_pass_by_value with nothing written, while run.rs:1666 suppresses the same lint 261 lines later with the exact rationale (PyO3's from-Python extraction hands over owned values); the documented one is the #[pyfunction] boundary where the reason holds, and the bare one is a plain Rust function where it does not, so the missing line is also the place where the justification is weakest."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Two shapes, both inside the crates that own the sites. For the duplicated cast, compute parallelism once in a small function beside build_distribution_info in crates/cobre-cli/src/commands/run/mod.rs, keeping the existing saturating arithmetic exactly as written so the value is bit-identical, which leaves one suppression site instead of two and gives it one rationale line. For the rest, either add the one-clause reason above each remaining suppression or remove the suppression by narrowing the conversion, and in particular give run_via_study the reason its twin already states or drop the attribute if the borrow is in fact available there. Byte-neutrality: parallelism reaches only the metadata field of the same name, the arithmetic is unchanged, and no writer, guard or row set moves, so the CLI-vs-Python determinism golden, the file-set parity test, the parity gate at 18 shared names and the cobre validate --json contract are unaffected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": null,
+        "rule": "rule 7: checked each of the 13 sites for an in-code rationale or reserved marker, the mirror at the pin for a suppression entry, and CLAUDE.md section Unwired config is reserved not dead; the absent rationale is precisely the finding, and none of the 13 is a dead_code or unused_* seam"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "RunSummary is declared pub(crate) but has no consumer outside its own file, unlike the SimSummary declared 14 lines below it",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "RunSummary"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'RunSummary' 077dbe2c -- crates; git grep -n 'SimSummary' 077dbe2c -- crates",
+        "output": "RunSummary: crates/cobre-python/python/cobre/_types.pyi:91 (prose reference in a doc string), crates/cobre-python/src/run.rs:188 (declaration), :1397 (doc link), :1412 (return type of run_via_study), :1429, :1447, :1465 (construction), :1692 (consumed by run).\nSimSummary: crates/cobre-python/src/run.rs:196, :202, :702, :840 and crates/cobre-python/src/study.rs:32, :416, :421.",
+        "reading": "The census target pub items with no consumer outside their file yields exactly one hit in this cell. Every reference to RunSummary outside a doc comment is inside run.rs itself: run_via_study returns it, and run consumes it seven lines later in the same file. Its sibling SimSummary, declared 14 lines further down, is imported and used in study.rs at :32, :416 and :421, which is what pub(crate) is for; the contrast shows the visibility on RunSummary is breadth the consumer set does not ask for. Checked against the rest of the cell: every other pub(super) item in commands/run (check_stats_overflow, build_distribution_info, LoadBroadcastResult, resolve_thread_count, stopping_rules_from_broadcast, broadcast_value, BroadcastOpeningTree) has a real consumer in another file of the module, so the visibility is otherwise correct."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Narrow the declaration to a private struct in crates/cobre-python/src/run.rs, so the type's visibility states what the grep shows: it is the internal return shape between run_via_study and the run shim that renders it into the Python dict. Nothing to move between crates. Byte-neutrality: a visibility keyword change alters no field, no construction site and no dict assembly, so the CLI-vs-Python determinism golden, the file-set parity test, the parity gate at 18 shared names and the cobre validate --json contract are untouched, and the type is not part of the Python surface (its only external mention is a prose reference in a .pyi doc string).",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7: checked the mirror at the pin, CLAUDE.md section Unwired config is reserved not dead and the declaration site for a reserved rationale; RunSummary is live (built at :1429, :1447, :1465 and consumed at :1692), so the claim is visibility breadth, not a reserved or dead seam"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The prep-phase error ladder threads a redundant `json: bool` beside `stdout_sink` while the sibling boundary check never receives it, so the documented fourth validation phase emits no `--json` error object",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "prep_error_to_cli_error"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_prep_phase"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_boundary_check"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "execute"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '158,200p;283,308p;330,332p'",
+        "output": "fn prep_error_to_cli_error(\n    stdout_sink: Option<&Term>,\n    json: bool,\n    phase: PrepPhase,\n    err: &SddpError,\n    case_dir: &Path,\n) -> Result<CliError, CliError> {\n    let (kind, report) = describe_prep_error(phase, err);\n    if let Some(term) = stdout_sink {\n        print_prep_error(term, &report, case_dir);\n    }\n    if json {\n        emit_validate_json(&ValidateBoundaryOutput::error(kind, &report))?;\n    }\n...\nfn run_prep_phase<T>(result: Result<T, SddpError>, stdout_sink: Option<&Term>, json: bool, phase: PrepPhase, case_dir: &Path) -> Result<T, CliError> {\n    ... Err(ref err) => Err(prep_error_to_cli_error(stdout_sink, json, phase, err, case_dir)?),\n...\nfn run_boundary_check(\n    case_dir: &Path, config: &Config, system: &System, stochastic: StochasticContext,\n    hydro_models: PrepareHydroModelsResult, stdout: Option<&Term>,\n) -> Result<Option<BoundaryOutcome>, CliError> {\n    ...\n        Err(err) => {\n            let Some(term) = stdout else {\n                return Err(CliError::from(err));\n            };\n...\npub fn execute(args: ValidateArgs) -> Result<(), CliError> {\n    let stdout = Term::stdout();\n    let stdout_sink = (!args.json).then_some(&stdout);",
+        "reading": "`execute` builds `stdout_sink` as `(!args.json).then_some(&stdout)`, so `json == stdout_sink.is_none()` holds by construction; the two parameters encode one mode and `run_prep_phase` forwards both through four call sites (`args.json` at :386, :412, :421 plus the inline case-dir arm at :359). The sibling `run_boundary_check` takes only `stdout` and, when it is `None` (which is exactly `--json`), returns `CliError::from(err)` with nothing written to stdout. The module doc at :5-7 promises that `--json` stdout is the boundary outcome or `an error object naming the first failing phase`, and the Validation contract at :17-26 lists boundary reconciliation as phase 4; phase 4 can therefore never produce that object. `prep_error_to_cli_error` returning `Result<CliError, CliError>` exists only so the serializer error can escape, forcing every caller to write `Err(...?)`. `git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '478,611p' | grep -c 'run_prep_phase\\|prep_error_to_cli_error\\|run_boundary_check\\|emit_validate_json'` is 0 - no inline test exercises any of the four ladder helpers, so the testability counter-signal for the extra parameter is absent; the two boundary-reject integration tests in tests/cli_validate.rs (`boundary_mismatched_hydro_set_exits_nonzero_and_names_hydro`, `boundary_superset_source_under_strict_exits_nonzero_and_names_the_family`) invoke the human path only."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Two separable moves. First, collapse the duplicated mode: the ladder keeps one `Option<&Term>` stdout sink and derives JSON mode from its absence, dropping the `json: bool` parameter from `prep_error_to_cli_error` and `run_prep_phase` and the four `args.json` arguments at their call sites; `prep_error_to_cli_error` then returns `CliError` rather than `Result<CliError, CliError>` once the serializer failure is raised where the object is emitted. Second, the boundary check reaches the same error surface as the other three phases: per CD-029 the fold destination is cobre-sddp (L3) `PrepPhase`, after which `run_boundary_check` disappears into `run_prep_phase` and inherits the `--json` error object for free; a cobre-cli-local re-implementation of the error object is the lesser shape and is not recommended. Byte-neutrality: the first move is signature-only and leaves every rendered stderr line, the human stdout report and the `cobre validate --json` single-object contract byte-identical, and touches no written output file, so both parity goldens (test_cli_python_determinism_parity.py, test_cli_python_file_set_parity.py) and check_python_parity.py --min-shared 18 are unaffected. The second move ADDS a stdout object on the `--json` boundary-reject path where today stdout is empty: that is a deliberate change to the `--json` contract on a path no test pins, so it goes to the owner gate rather than being folded in silently, and it must arrive with a new integration test alongside the two existing human-path reject tests.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "V.1",
+      "partIRef": null,
+      "waveRef": "CD-029",
+      "reRaiseOf": "CD-029",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md, deferred-debt entry `Prep-phase abstraction covers three of four phases; boundary check unmirrored` (Owner: the setup / I-O owner; Trigger: the next validation-phase or boundary-check change)",
+        "rule": "Reserved-seam register vs deferred-debt register: the only mirror text covering this code is a deferred-debt entry carrying an owner and a trigger, which records debt rather than sanctioning a seam, so the item is sharpenable under rule 12; CLAUDE.md `Unwired config is reserved, not dead` covers unconsumed config sections, and neither parameter here is config. No in-code `reserved` rationale accompanies the `json: bool` parameter."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "Four `#[cfg(test)] pub fn format_*_string` renderers duplicate their `print_*` twins line for line, in the same module whose doc prescribes the `*_lines` idiom already used for the other three printers",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_setup_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_setup_summary"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_hydro_model_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_provenance_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_boundary_summary_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "training_summary_lines"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/summary.rs | sed -n '239,289p' && git show 077dbe2c:crates/cobre-cli/src/summary.rs | grep -n 'fn format_.*_string\\|fn print_\\|_lines(' | head -24",
+        "output": "pub fn print_setup_summary(stderr: &Term, timings: &SetupTimings) {\n    let _ = stderr.write_line(&format!(\"{}\", console::style(\"Setup\").bold()));\n    let _ = stderr.write_line(&format!(\"  Load:            {}\", format_split_duration(timings.load_seconds)));\n    ... 4 more write_line(&format!(...)) arms ...\n}\n\n#[cfg(test)]\npub fn format_setup_summary_string(timings: &SetupTimings) -> String {\n    let mut lines: Vec<String> = Vec::new();\n    lines.push(\"Setup\".to_string());\n    lines.push(format!(\"  Load:            {}\", format_split_duration(timings.load_seconds)));\n    ... the same 4 arms as lines.push ...\n    lines.join(\"\\n\")\n}\n---\n29:pub fn print_hydro_model_summary   224:pub fn format_hydro_model_summary_string (#[cfg(test)] at 223)\n239:pub fn print_setup_summary         265:pub fn format_setup_summary_string (#[cfg(test)] at 264)\n303:pub fn print_provenance_summary    330:pub fn format_provenance_summary_string (#[cfg(test)] at 329)\n375:pub fn print_boundary_summary      395:pub fn format_boundary_summary_string (#[cfg(test)] at 394)\n788:fn training_summary_lines          830:pub fn print_training_summary { for line in training_summary_lines(t) }\n837:fn simulation_summary_lines        888:pub fn print_simulation_summary { for line in simulation_summary_lines(sim) }\n895:fn output_path_line                905:pub fn print_output_path",
+        "reading": "Four print/format pairs hold two copies of the same format literals, differing only in `stderr.write_line(&format!(..))` versus `lines.push(format!(..))` plus a trailing `lines.join`. The same file already solves this correctly three times: `training_summary_lines` / `print_training_summary`, `simulation_summary_lines` / `print_simulation_summary`, `output_path_line` / `print_output_path`, where the printer iterates the helper so there is one copy of each literal. The module doc at :8-9 names that idiom and its reason verbatim: tests assert on the same code path production prints from. The four duplicates therefore have no design argument left - the alternative is present, documented and used in the same file - and they are the only `pub fn` names in the 11-file manifest with no consumer outside their own file (all 29 occurrences of the four names are inside summary.rs)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Replace each of the four `format_*_string` functions with a private `*_lines(&..) -> Vec<String>` helper holding the single copy of the format literals, and rewrite the matching `print_*` to iterate it, exactly as `print_training_summary` iterates `training_summary_lines` in the same file; the `#[cfg(test)]` and `pub` markers then disappear with the duplicates. The home is cobre-cli local - this is intra-module shape, not output orchestration, so the L2 destination rule does not apply. Byte-neutrality: the surviving literals are the ones production already prints, so every rendered stderr line stays byte-identical; the four renderers are `#[cfg(test)]` and therefore absent from the shipped binary, so no stdout, no `cobre validate --json` object and no written output file changes, leaving both parity goldens and check_python_parity.py --min-shared 18 untouched. The 61 inline tests that call the four names have to be repointed at the `*_lines` helpers, which is the sibling test-bloat cell's surface, so the two cells' fixes land together.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": null,
+        "rule": "Searched the mirror's reserved-seam register and deferred-debt register at the pin for `summary.rs`, `format_hydro_model_summary_string`, `format_setup_summary_string`, `format_provenance_summary_string` and `format_boundary_summary_string`: no entry. CLAUDE.md `Unwired config is reserved, not dead` scopes to loaded-but-unconsumed config sections and these are test-only render helpers, not config. The four functions carry no `reserved` rationale in code; their doc lines describe what they render, not a seam they hold open."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "Three subcommand entry points take their clap args by value and suppress `needless_pass_by_value` without a rationale, while the same `match` binds the run args by reference",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/schema.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/init.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/main.rs",
+          "symbol": "Command"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/main.rs | sed -n '95,101p' && git show 077dbe2c:crates/cobre-cli/src/commands/schema.rs | sed -n '49,55p' && git grep -c 'args\\.' 077dbe2c -- crates/cobre-cli/src/commands/validate.rs",
+        "output": "let result = match cli.command {\n    Command::Init(args) => init::execute(args),\n    Command::Run(ref args) => run::execute(args),\n    Command::Validate(args) => validate::execute(args),\n    Command::Schema(args) => schema::execute(args),\n    Command::Version => version::execute(),\n};\n---\n#[allow(clippy::needless_pass_by_value)]\npub fn execute(args: SchemaArgs) -> Result<(), CliError> {\n    match args.command {\n        SchemaCommand::Export(ref export_args) => execute_export(export_args),\n    }\n}\n---\n077dbe2c:crates/cobre-cli/src/commands/validate.rs:10",
+        "reading": "One `match` uses two conventions: `Command::Run(ref args)` binds by reference and `run::execute` takes `&RunArgs`, while the other three arms move their args into entry points that take them by value and then silence the lint the move does not justify. `schema::execute` is airtight - its whole body is a `match` with an explicit `ref export_args` binding, so nothing is ever moved out and the by-value parameter exists only to be suppressed. `validate::execute` is equally airtight: all 10 `args.` uses in the file are `args.json` (a `Copy` bool read) or `&args.case_dir`, so no field is moved either, yet the suppression sits at :329. `init::execute` does move two fields out (`args.template.ok_or_else`, `args.directory.ok_or_else` at :63-69), so its by-value signature is defensible and only its missing rationale is at issue. The mirror's own allow-census defines the Load-bearing class as refactor-decision lints including `needless_pass_by_value` `each carrying a // Rationale: comment`; none of these three does, and the same manifest shows the standard being met elsewhere (progress.rs:93, validate.rs:244, version.rs:11)."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Take `&SchemaArgs` and `&ValidateArgs` at the two entry points that never move a field, bind those two arms as `ref args` in main's `match` to match the run arm, and delete the two suppressions - the convention then has one shape across the whole dispatch table. Leave `init::execute` by value because it consumes two fields, and either give its suppression a `// Rationale:` line naming why the lint still fires or delete the suppression if it no longer does; which of the two applies is a clippy question this station does not run, so the fix states both branches rather than guessing. cobre-cli local, no crate move. Byte-neutrality: signature and binding changes only, with no touched format literal, no stdout or stderr text change, no `cobre validate --json` shape change and no written output file, so both parity goldens and check_python_parity.py --min-shared 18 are unaffected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md, the `#[allow(...)]` census and its Load-bearing class definition",
+        "rule": "The mirror's allow census is the governing text: it sanctions refactor-decision suppressions including `needless_pass_by_value` only when each carries a `// Rationale:` comment naming the non-obvious choice. `git show 077dbe2c:crates/cobre-cli/src/commands/schema.rs | sed -n '44,50p'` and the same window at validate.rs :323,:329 and init.rs :47,:53 show doc lines and no `// Rationale:`, so no census sanction attaches. No reserved-seam entry names these signatures."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "Seven doc examples in the CLI shell are written against two library roots that resolve nowhere, in a crate with no library target and no doctest step anywhere in CI",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/banner.rs",
+          "symbol": "render_banner_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "find_template"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "run_progress_thread"
+        },
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "CliError"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE '^\\s*(//!|///) use cobre(_cli)?::' 077dbe2c -- crates/cobre-cli/src && git ls-tree 077dbe2c -- crates/cobre-cli/src/lib.rs && git show 077dbe2c:crates/cobre-cli/Cargo.toml | grep -n 'lib\\]\\|\\[\\[bin\\]\\]\\|doc =' && git grep -c 'cargo test --doc' 077dbe2c -- .github/workflows/ci.yml scripts | wc -l",
+        "output": "banner.rs:10://! use cobre::banner;\nerror.rs:43:/// use cobre_cli::error::CliError;\nerror.rs:99:    /// use cobre_cli::error::CliError;\nerror.rs:133:    /// use cobre_cli::error::CliError;\nprogress.rs:16://! use cobre_cli::progress::{run_progress_thread, RenderMode};\ntemplates.rs:18://! use cobre::templates;\ntemplates.rs:145:/// use cobre::templates;\n---\n(git ls-tree prints nothing: crates/cobre-cli/src/lib.rs does not exist)\n---\n15:[[bin]]\n18:doc = false\n---\n0",
+        "reading": "Seven fenced examples name two roots. `cobre_cli::...` (4 of them) cannot resolve because the crate has no `[lib]` section and no `src/lib.rs`, so it publishes only the `cobre` binary, declared with `doc = false`. `cobre::...` (3 of them) cannot resolve either: the facade crate's `src/lib.rs` is two doc lines that re-export nothing, and its manifest has no dependencies, so `cobre::banner` and `cobre::templates` name nothing at the pin. Nothing compiles them: zero files under .github/workflows/ and scripts/ contain `cargo test --doc`, and a binary-only crate has no doctest target in any case. The result is a library-shaped documented surface - four modules presenting themselves as an importable API - maintained for a consumer that does not exist and checked by no gate, which is the sole over-engineering defect in otherwise well-earned shell modules."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Stop claiming a compilable import the crate cannot offer: rewrite the seven examples as illustrative `text` blocks or plain prose describing the call, keeping the content and dropping the fictional `use` line, so the doc states what the function renders rather than how an external crate would import it. The alternative - declaring a `[lib]` target for cobre-cli plus a `cargo test --doc` step so the four `cobre_cli::` examples compile - is a structural change to the crate's published surface and a new CI job, which is the owner's call and is recorded as a needs-human rather than recommended here; the three `cobre::` examples cannot be rescued that way at all while the facade re-exports nothing. cobre-cli local, comments only. Byte-neutrality: doc comments are not compiled into the binary and no format literal, stdout line, stderr line or written output file is touched, so the `cobre validate --json` contract, both parity goldens and check_python_parity.py --min-shared 18 are all unaffected by construction.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "ARCHITECTURE.md:102-106 at the pin (`The umbrella crate. Currently an empty skeleton ... reserved for a future single-dependency convenience re-export`); the mirror's reserved-seam register has no entry for the facade crate (prior-register, Normative) and none for a cobre-cli library target",
+        "rule": "The facade crate's own emptiness IS sanctioned by the crate map and is cited here only as context - it is not the claim and is not raised. What the crate map does not sanction is seven examples inside cobre-cli's own modules written against roots that resolve nowhere; no reserved-seam entry, no `CLAUDE.md` clause and no in-code `reserved` rationale covers them. `CLAUDE.md` `Unwired config is reserved, not dead` is config-scoped and does not apply to doc examples."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "Nine production cast suppressions in the summary module carry no `// Rationale:` line, against the mirror's own Load-bearing class definition and the rationalized twin in the sibling progress module",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_split_duration"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "time_split_training_walls"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "format_time_split_training"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "simulation_summary_lines"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "fmt_avg_lp_time"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n '#\\[allow(clippy::cast' 077dbe2c -- crates/cobre-cli/src/summary.rs && git show 077dbe2c:crates/cobre-cli/src/progress.rs | sed -n '93,95p' && git show 077dbe2c:crates/cobre-cli/src/summary.rs | sed -n '601,603p'",
+        "output": "summary.rs:602:#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]\nsummary.rs:648:#[allow(clippy::cast_precision_loss)]\nsummary.rs:713:#[allow(clippy::cast_precision_loss)]\nsummary.rs:757:        #[allow(clippy::cast_precision_loss)]\nsummary.rs:777:        #[allow(clippy::cast_precision_loss)]\nsummary.rs:821:        #[allow(clippy::cast_precision_loss)]\nsummary.rs:851:        #[allow(clippy::cast_precision_loss)]\nsummary.rs:866:        #[allow(clippy::cast_precision_loss)]\nsummary.rs:870:    #[allow(clippy::cast_precision_loss)]\nsummary.rs:1436:    #[allow(clippy::cast_precision_loss)]\n---\n// Rationale: LP counts stay far below 2^53, so the u64 -> f64 conversion is exact.\n#[allow(clippy::cast_precision_loss)]\nfn fmt_avg_lp_time(total_ms: f64, count: u64) -> String {\n---\n/// Format a duration for the time-split breakdown lines.\n#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]\nfn format_split_duration(seconds: f64) -> String {",
+        "reading": "Ten cast suppressions in summary.rs; the one at :1436 is inside the `#[cfg(test)]` module and is sanctioned, leaving nine on production code, spread over six declared functions (`format_split_duration`, `time_split_training_walls`, `format_time_split_training`, `policy_rows_lines` twice, `training_summary_lines`, `simulation_summary_lines` three times). None is preceded by a `// Rationale:` line - :602 is preceded only by a doc line describing what the function formats. The sibling module shows the standard being met one file away: progress.rs:93 states the numeric fact that makes the cast safe, and validate.rs:244 does the same for its truncation. The mirror's allow census defines the Load-bearing class as cast and refactor-decision lints on production code `each carrying a // Rationale: comment` naming the non-obvious choice, so these nine sit outside the class the census claims covers the majority of suppressions - the census is measuring a discipline nine sites in one file do not follow."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Give each of the nine a one-clause `// Rationale:` line stating the numeric fact that makes the cast safe - for the rounding casts, that the value is a wall-clock duration already bounded well below the integer range; for the count-to-float casts, that the counts stay far below 2^53 so the conversion is exact, the fact progress.rs:93 already states - or, where several sit in one function over the same quantity, hoist a single suppression with a single rationale onto the function rather than repeating it at three statements. cobre-cli local, comments and attribute placement only. Byte-neutrality: a suppression and its comment generate no code, so every rendered stderr line, the `cobre validate --json` object and every written output file are unchanged, leaving both parity goldens and check_python_parity.py --min-shared 18 untouched. The fix also removes the mirror's own census from the list of things a reader can trust without re-measuring, so it pairs with the E11 census write-back.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md, the `#[allow(...)]` census, Load-bearing class (`cast lints ... each carrying a // Rationale: comment ... the majority of the census`)",
+        "rule": "The census is the sanctioning text for suppressions and it sanctions a cast allow only with a written rationale; these nine have none, so the sanction does not attach. The test-scoped allow at :1436 IS sanctioned (CLAUDE.md `unwrap_used = deny` ... ok in tests, and the census's test class) and is excluded from the count and from this candidate. No reserved-seam entry names these functions."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "The summary module publicly re-exports six engine types under a rationale whose final claim is false, and three of the six are used nowhere outside the module's own test block",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_provenance_summary"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_hydro_model_summary"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_boundary_summary"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/summary.rs | sed -n '18,26p' && for n in HydroProductionProvenance InflowProvenance ProvenanceSource BoundaryReconciliationReport; do echo -n \"$n: \"; git grep -l \"$n\" 077dbe2c -- crates/cobre-cli/src | tr '\\n' ' '; echo; done && git grep -n 'BoundaryReconciliationReport' 077dbe2c -- crates/cobre-cli/src/commands/validate.rs | head -1",
+        "output": "// Rationale: the `#[cfg(test)]` blocks in this module import\n// `HydroProductionProvenance`, `InflowProvenance`, and `ProvenanceSource` via\n// `use super::{...}`; this `pub use` is the declaration that puts those names on\n// the module surface so those test imports resolve. Without it they would not.\n#[allow(unused_imports)]\npub use cobre_sddp::{\n    BoundaryReconciliationReport, HydroModelSummary, HydroProductionProvenance, InflowProvenance,\n    ModelProvenanceReport, ProvenanceSource,\n};\n---\nHydroProductionProvenance: 077dbe2c:crates/cobre-cli/src/summary.rs\nInflowProvenance: 077dbe2c:crates/cobre-cli/src/summary.rs\nProvenanceSource: 077dbe2c:crates/cobre-cli/src/summary.rs\nBoundaryReconciliationReport: 077dbe2c:crates/cobre-cli/src/commands/validate.rs 077dbe2c:crates/cobre-cli/src/summary.rs\n---\nvalidate.rs:37:    BoundaryLoadRequest, BoundaryReconciliationReport, PrepareHydroModelsResult, SddpError,\n\n(validate.rs:37 sits inside a `use cobre_sddp::{...}` list, not a `use crate::summary::{...}` list)",
+        "reading": "The rationale's last sentence is false as a matter of Rust name resolution: a private `use` binding is visible to the module and all of its descendants, which is precisely the mechanism every `use super::*` in a child test module relies on, so a plain `use cobre_sddp::{...}` would resolve the `use super::{...}` imports at :1969 exactly as the `pub use` does. The `pub` therefore buys nothing, and no caller redeems it: the only other file in the crate naming any of the six is commands/validate.rs, which imports `BoundaryReconciliationReport` straight from `cobre_sddp` at :37 rather than through `crate::summary`. Three of the six - `HydroProductionProvenance`, `InflowProvenance`, `ProvenanceSource` - appear in no production line anywhere in the crate: every occurrence outside the re-export itself is at :1969 or later, inside the `#[cfg(test)]` module. So a public engine-type re-export surface and an `#[allow(unused_imports)]` are both being maintained to serve test-module imports that need neither."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Split the one re-export into what each group actually needs: a plain private `use cobre_sddp::{BoundaryReconciliationReport, HydroModelSummary, ModelProvenanceReport};` at module scope for the three types the printers name in their signatures, and a `use cobre_sddp::{HydroProductionProvenance, InflowProvenance, ProvenanceSource};` inside `mod tests` for the three that only test fixtures construct. The `pub` disappears with no caller affected, the `#[allow(unused_imports)]` becomes unnecessary because nothing is then unused in a non-test build, and the four-line rationale goes away with the construct it was defending rather than being corrected in place. Keeping the engine types named here is correct and stays: cobre-cli is L4, the one layer allowed to name engines. cobre-cli local, import visibility only. Byte-neutrality: import shape generates no code, so every rendered stderr line, the `cobre validate --json` object and every written output file are byte-identical, leaving both parity goldens and check_python_parity.py --min-shared 18 unaffected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "prior-register Normative, Part-I I.5 sharpening (`the src/summary.rs module ... its pub use cobre_sddp::{...} re-export at L23 carries 6 engine types`) - recorded as a doc-correction context, with no reserved-seam entry",
+        "rule": "Checked the mirror's reserved-seam register for `summary.rs` and for the six re-exported type names: no entry. The in-code text preceding the construct is a rationale for the `#[allow(unused_imports)]`, not a reserved-seam declaration, and its factual claim fails, so it sanctions nothing. `CLAUDE.md` `Unwired config is reserved, not dead` is config-scoped. The candidate raises only the visibility and the false rationale; the presence of SDDP type names at L4 is legal per Part IV.1 / IV.4 and is not raised."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "Three cobre.model entity twins are self-labelled minimal stubs: full pyclass scaffolding per class surfaces only id and name, and nothing outside a hasattr presence check ever reads them",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "PyEnergyContract"
+        },
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "PyPumpingStation"
+        },
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "PyNonControllableSource"
+        },
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "PySystem"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/model.rs | sed -n '288,398p'   AND   git grep -n -E '\\.(buses|lines|thermals|hydros|contracts|pumping_stations|non_controllable_sources)\\b' 077dbe2c -- crates/cobre-python/tests   AND   git grep -n -E 'EnergyContract|PumpingStation|NonControllableSource' 077dbe2c -- crates/cobre-python/tests/test_model.py   AND   git grep -n -E 'contracts|pumping_stations|non_controllable_sources|EnergyContract|PumpingStation|NonControllableSource' 077dbe2c -- examples/notebooks/quickstart.ipynb crates/cobre-python/tests/test_types.py README.md",
+        "output": "model.rs 288-398 (trimmed): three sections each headed '// --- EnergyContract (minimal stub) ---', '// --- PumpingStation (minimal stub) ---', '// --- NonControllableSource (minimal stub) ---'. Each is #[pyclass(name = \"...\", frozen, skip_from_py_object)] + #[derive(Clone)] + a one-field struct { inner: <CoreEntity> } + a #[pymethods] block of exactly three items (#[getter] fn id -> i32, #[getter] fn name -> &str, fn __repr__ -> String) + a separate impl block with pub(crate) fn from_rust. -- getter-access grep over the whole pytest tree returns 5 hits, all in test_model.py: 31 'buses = system.buses', 44 'hydros = system.hydros', 56 'thermals = system.thermals', 69 'lines = system.lines', 79 'bus = system.buses[0]'. No hit for .contracts, .pumping_stations or .non_controllable_sources anywhere in crates/cobre-python/tests. -- the only pytest reference to the three class names is test_model.py:103-105, inside test_model_classes_importable, which asserts hasattr(cobre.model, name) and reads no field. -- the notebook, test_types.py and README greps return nothing at all.",
+        "reading": "The three classes carry the full PyO3 twin scaffold that the five complete twins carry (frozen pyclass, Clone, skip_from_py_object, a pymethods block, a from_rust constructor, and a PySystem getter at model.rs:448-473 that clones the entire core entity vector to build them) while surfacing 2 of each core entity's fields. By contrast PyHydro exposes 10 getters and PyLine 8. Roughly 100 of model.rs's 526 lines are these three scaffolds plus their three PySystem getters. All three are declared public API in crates/cobre-python/python/cobre/model.pyi at lines 37, 41 and 45. Every counter-signal for a thin abstraction was checked and is absent: no second implementation is stated anywhere, no reserved-seam row exists for them, the notebook that CI executes with nbmake does not touch them, and the code's own section comments call them stubs rather than citing a requirement. The only thing holding them in place is the export-presence assertion in test_model.py, which is satisfied by the class existing and says nothing about its content."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Either complete the three twins so each exposes the field set its core entity actually carries, matching the shape PyBus, PyLine, PyThermal, PyHydro and PySystem already use, or drop the three classes and have the corresponding PySystem getters return plain dicts until a caller needs typed objects. Whichever direction the owner picks, record it as a reserved seam in docs/design/reserved-seams-and-deferred-debt.md so the next sweep does not re-derive it, and replace the hasattr presence assertion with a test that reads at least one field per class so the surface cannot silently stay empty. The byte-neutrality bar for either direction: every Python-visible name and value that exists today keeps its current value, the cobre.model export list is unchanged so test_model_classes_importable still passes, and neither the CLI-versus-Python determinism golden nor the file-set parity test is touched, because no output file and no writer is involved in the model read surface.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "git grep -n -i -E 'minimal stub|EnergyContract|PumpingStation|NonControllableSource|entity twin|cobre\\.model' 077dbe2c -- docs/design/reserved-seams-and-deferred-debt.md returns exactly one hit, line 1026, which is about cobre-core's LoadModel conflating physical load with its stochastic model and mentions NonControllableSource only as the counter-example; there is no row for the cobre.model stub twins",
+        "rule": "Reserved-seams check before any over-design entry (prior-register.md:46) -- extended here from the facade crate to the other candidate in this cell, so neither is raised without the mirror having been read"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "Allow-attribute proliferation in the bindings crate: the errors test module re-declares the exact crate-level test allow lib.rs already sets, and 14 of the 17 needless_pass_by_value allows are bare while the single shared PyO3 reason is written out three times",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/errors.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_results"
+        },
+        {
+          "path": "crates/cobre-python/src/schema.rs",
+          "symbol": "export"
+        }
+      ],
+      "evidence": {
+        "command": "for f in convert errors io lib model policy results schema study version; do git show 077dbe2c:crates/cobre-python/src/$f.rs | grep -n '#\\[allow(\\|#!\\[cfg_attr(test' | sed \"s#^#$f.rs:#\"; done   AND   for f in policy schema errors run; do git show 077dbe2c:crates/cobre-python/src/$f.rs | grep -n -B2 '^mod tests'; done",
+        "output": "17 allow sites across the 10 bindings files, plus one crate-level attribute: lib.rs:17 '#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]'; errors.rs:359 '#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]'; io.rs:136 and io.rs:197, policy.rs:447, results.rs:146, results.rs:242 (with clippy::too_many_lines), results.rs:372, results.rs:740, results.rs:1125, results.rs:1362, results.rs:1502, schema.rs:32, study.rs:165 (with clippy::similar_names), study.rs:277, study.rs:482, study.rs:661, study.rs:715 -- all 16 of these carry clippy::needless_pass_by_value. The test-module comparison shows policy.rs:557 and schema.rs:60 declaring '#[cfg(test)]' immediately followed by 'mod tests {' with no allow attribute at all, while errors.rs:358-360 declares '#[cfg(test)]' then the three-lint allow then 'mod tests {'.",
+        "reading": "errors.rs:359 is provably dead: it allows exactly the three lints (unwrap_used, expect_used, panic) that lib.rs:17 already allows crate-wide under cfg(test), and a #[cfg(test)] module only compiles in the configuration where that cfg_attr is active. The two sibling test modules in the same crate, policy.rs:557 and schema.rs:60, prove the crate-level attribute is sufficient by relying on it and carrying no allow of their own. The contrast case is crates/cobre-python/src/run.rs:1758-1765 (cited, not anchored, per rule 14), whose test-module allow adds clippy::float_cmp -- a lint lib.rs:17 does not cover -- so three of its four entries are redundant but one is load-bearing; errors.rs:359 has no such fourth entry. Separately, 14 of the 16 needless_pass_by_value allows are bare, and the single cause behind every one of them is written out three times in study.rs, at :163-164 ('state: Vec<f64> is required so PyO3 can extract from an arbitrary Python sequence'), :274-276 and :480-481 ('PyO3's from-Python extraction hands over owned values, so the PathBuf/Bound arguments cannot be borrowed here'). One reason, three copies, fourteen silent sites."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the allow attribute on the errors test module outright; the crate-level cfg_attr in lib.rs already covers all three lints for every test module in the crate, as the policy and schema test modules demonstrate by carrying none. For the needless_pass_by_value family, state the shared PyO3 extraction reason once in the crate-level module documentation in lib.rs and leave the per-site attributes bare, rather than repeating the sentence at three of seventeen sites. Do not hoist needless_pass_by_value itself to the crate root: a crate-wide allow would also silence a genuine by-value parameter in a future non-PyO3 helper, which is a real cost for a cosmetic gain, so the per-site attribute stays and only its rationale is centralised. The byte-neutrality bar: this is attribute-only and touches no signature, so the Python-visible API and every value it returns are unchanged, the CLI-versus-Python golden is unchanged, and the file-set parity test is unchanged; the only observable difference is the number of allow attributes and the clippy warning count, which must remain zero.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "Reserved-seams check before any over-design entry (prior-register.md:46) -- not applicable: a lint-allow attribute is neither a reserved seam nor unwired config, so the CLAUDE.md 'unwired config is reserved, not dead' rule cannot shelter it"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "dupOf": [],
+  "positives": [
+    {
+      "subject": "crates/cobre-cli/src/commands/broadcast.rs::BroadcastNodeGraph",
+      "why": "Examined as a candidate and withdrawn under rule 7. The type has zero consumers workspace-wide (11 occurrences, all inside the module) and roughly 110 lines of dedicated postcard round-trip tests, but its own doc states the reservation and the reason: not currently wired into the live MPI broadcast, it exists so a future caller can transport the graph explicitly without inventing a second wire shape. That is an in-code reserved rationale, so it is recorded as sanctioned rather than raised, and the reserve-or-retire decision is carried to the owner in _needsHuman.",
+      "sanctionedBy": "in-code reserved rationale on the BroadcastNodeGraph doc at crates/cobre-cli/src/commands/broadcast.rs, per rule 7",
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "the nine #[allow] sites in the cell that carry a written rationale (broadcast.rs:86, policy.rs:73, policy.rs:262, setup.rs:245, setup.rs:422, simulation.rs:313, training.rs:58, cobre-python run.rs:1202, run.rs:1666)",
+      "why": "Each states why the refactor that would remove the lint is inappropriate, which is the project's own directive for a suppression. training.rs:58 is the model: an inherently sequential orchestration whose steps each depend on the prior's result, so splitting would thread shared mutable state across boundaries for no benefit. run.rs:1666 names the PyO3 extraction boundary that makes owned arguments unavoidable.",
+      "sanctionedBy": ".claude/rules/comments.md:365 directive D4, rationale above suppression",
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-python/src/run.rs::PhaseError",
+      "why": "Not a duplicate of RunError. RunError has four variants including Callback(PyErr); PhaseError has three and its doc says it mirrors RunError minus the callback variant. The narrower type is type-enforced rather than stylistic: run_training_phase_py_streaming returns Result<(TrainingPhaseResult, Option<PyErr>), PhaseError>, so a captured Python callback error travels back as a value alongside a successful result and cannot be an error of the phase. Two error enums are the honest encoding of that signature.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/mod.rs::execute",
+      "why": "A wrapper layer that earns itself. Its only work is the MPI failure path that execute_inner cannot own: it renders the failing rank's diagnostic and then calls comm.abort, with the reason written in place (abort diverges, so main never reaches its own format_error and the diagnostic would be lost to the launcher). The layer exists because the decision has to happen after the inner call returns Err and before the process dies.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/training.rs::GlobalTrainingStats",
+      "why": "A private struct with no methods that is nonetheless load-bearing: its doc names it the single owner of the stats that the printed TrainingSummary and the persisted MetadataTrainingSolveStats both read, so the two cannot drift, and it records which fields are cross-rank allreduce sums and which are rank-0-local along with why the local ones are never allreduced. This is the anti-drift shape the writer boundary lacks elsewhere in the cell.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/setup.rs::resolve_thread_count and the non-root reconstruction path in the same file",
+      "why": "Layers with the testability counter-signal actually present. resolve_thread_count is exercised by two inline tests in the sibling module (run/mod.rs test_resolve_thread_count_cli_value and test_resolve_thread_count_default), and the non-root branch of the setup path is exercised by setup.rs's own inline test non_root_opening_tree_matches_rank_0_under_shared_noise_groups, so neither is an untested speculative arm.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "the enum and struct census over the eight manifest files",
+      "why": "Two named census targets came back empty. No one-variant enum exists: the six enums are BroadcastStoppingRule (4), BroadcastStoppingMode (2), BroadcastBackwardScheduler (2), CommBackendArg (3), RunError (4) and PhaseError (3), and every variant of the two-variant wire enums is reachable through From impls in both directions. No struct in the cell has a constructor as its only method; the structs are either plain records with no impl block (the argument and result structs) or carry real behavior (BroadcastConfig::from_config).",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "the Python-parity hard rule as the current mechanism holding the two writer paths together",
+      "why": "Recorded as normative rather than as a finding, per the prior register. It is the reason the mirror is correct at the pin, and the import-resolving gate enforces it at name granularity with a floor of 18 shared names. The candidate above does not dispute the rule; it shows the granularity gap between the rule's scope (a file is written by both paths) and what the two bodies actually share (the condition under which each file is written).",
+      "sanctionedBy": "CLAUDE.md:42, Python parity hard rule; prior-register section Normative",
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/schema.rs::SchemaCommand",
+      "why": "The only single-variant enum in the 11-file manifest, and it is a documented seam rather than speculative structure: the module doc at :4 states that `export` is a sub-subcommand to leave room for future `validate`/`list` siblings, so the nesting is a deliberate CLI-surface reservation whose cost is one `match` arm.",
+      "sanctionedBy": "crates/cobre-cli/src/commands/schema.rs module doc line 4 (in-code reserved-seam rationale); CLAUDE.md `Unwired config is reserved, not dead` in spirit",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/version.rs::execute",
+      "why": "An infallible subcommand that still returns `Result`, with the suppression preceded by the reason: `Currently infallible; the Result is kept for uniform subcommand dispatch.` The uniformity is real - main's `match` has five arms all typed `Result<(), CliError>` - so this is a rationalized suppression, not a silenced lint, and the whole 39-line module earns itself as the price of that uniform dispatch table.",
+      "sanctionedBy": "in-code rationale at crates/cobre-cli/src/commands/version.rs:11; docs/design/reserved-seams-and-deferred-debt.md allow census, Load-bearing class",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs::fmt_avg_lp_time and crates/cobre-cli/src/commands/validate.rs::reconcile_boundary",
+      "why": "Two production cast suppressions that meet the census standard the nine in summary.rs miss: progress.rs:93 states that LP counts stay far below 2^53 so the conversion is exact, and validate.rs:244 carries its own `// Rationale:` for the truncation. They are the in-repo proof that the discipline is achievable in this manifest.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md allow census, Load-bearing class (`each carrying a // Rationale: comment`)",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs::ProgressHandle",
+      "why": "Its `join` carries `#[allow(clippy::expect_used)]` directly under a `# Panics` doc section that names the exact message and the condition, so the suppression is documented on the public surface where a caller reads it rather than in a comment only a maintainer sees.",
+      "sanctionedBy": "in-code `# Panics` doc section at crates/cobre-cli/src/progress.rs:145",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "The five `#[cfg(test)]`-scoped blanket suppressions (error.rs:290, init.rs:205, progress.rs:584, commands/validate.rs:481, summary.rs:1436)",
+      "why": "Every one sits inside a test module and suppresses `unwrap_used`, `panic` or a cast lint that the project deliberately permits in tests, so none is a production suppression and none needs a rationale. They are excluded from the un-rationalized count rather than counted against it.",
+      "sanctionedBy": "CLAUDE.md Hard Rules, `unwrap_used = \"deny\"` - no `.unwrap()` in library code (ok in tests)",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs (module and size)",
+      "why": "Earns both. Two genuinely different renderers exist - a redrawing bar for a TTY and an append-only line writer for logs - selected by a two-variant `RenderMode` and dispatched through a two-variant `ProgressRenderer` enum whose doc states the reason (keeping the event loop free of dynamic dispatch), which is the shape CLAUDE.md's `Never use Box<dyn Trait>` rule requires. `MpiTerm` is justified by a named external constraint stated in its doc - under `mpirun` stderr may not carry a width even when the end terminal is a TTY - and its `TermLike` forwarding is the trait's contract, not gratuitous indirection.",
+      "sanctionedBy": "CLAUDE.md Hard Rules, `Never use Box<dyn Trait>` - enum dispatch for closed variant sets",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/error.rs (module and size)",
+      "why": "Earns both. The four `CliError` variants map one-to-one onto the four exit codes the module doc tabulates, and each of the five `From` impls lands an upstream error family on a specific one of those codes, so the variant count is set by the process contract rather than by taste. Naming `cobre_sddp` error variants here is legal at L4, the one layer allowed to name engines.",
+      "sanctionedBy": "beyond-sddp-generalization.md IV.1 / IV.4 via tools/target-layering-brief.md (L4 entry points: nothing engine-shaped is forbidden)",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/templates.rs",
+      "why": "Earns its module. It is a data registry, not an abstraction: `find_template` and `available_templates` have four call sites in commands/init.rs, and a one-element `ALL_TEMPLATES` is a list with one entry rather than a framework awaiting a second implementor. Its drift guard is real - `test_1dtoy_embedded_files_match_canonical_source` byte-compares the embedded bytes against examples/1dtoy, so the scaffold cannot silently diverge from the shipped example.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/banner.rs (module and size)",
+      "why": "Earns both at 55 production lines: two functions, one returning the rendered string and one writing it, with the colour and no-colour split pinned by tests/cli_color.rs. Its only defect is the doc example raised as a candidate; the module structure itself is right-sized.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/validate.rs::BoundaryOutcome",
+      "why": "A two-field named struct for a returned pair, exactly the shape the register asks for elsewhere in this crate where a positional ten-tuple straddles three concerns (CD-002). Worth protecting as the in-crate counter-example: the right answer already exists a few files away from the wrong one.",
+      "sanctionedBy": "prior-register CD-002 (direction: a named struct rather than a positional tuple)",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/summary.rs::training_summary_lines, ::simulation_summary_lines, ::output_path_line",
+      "why": "The idiom the module doc prescribes, implemented correctly three times: the helper owns the single copy of each format literal and the printer iterates it, so tests assert on the same code path production prints from. These three are the model the four `format_*_string` duplicates should be folded into, and they are not themselves debt.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "Census results over the 11-file manifest: enums, structs and `pub` consumers",
+      "why": "Three sweeps came back clean and are recorded so no later round re-derives them. Six enums with variant counts 1 / 2 / 2 / 3 / 4 / 5 (`SchemaCommand`, `RenderMode`, `ProgressRenderer`, `ColorWhen`, `CliError`, `Command`); the single one-variant enum is the sanctioned seam above. Sixteen structs and not one is a constructor-only wrapper - the data-only ones are serde output types (`ValidateBoundaryOutput`, `ValidateErrorOutput`), a named return pair (`BoundaryOutcome`), clap argument records or template data, and the rest carry behaviour. Twenty distinct `pub fn` names, of which only the four `format_*_string` have no consumer outside their own file.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre/src/lib.rs (the facade crate's emptiness, cited as context only)",
+      "why": "The umbrella crate being an empty skeleton is declared in the crate map, not an accident, so it is not raised as a finding by this cell. It is recorded here because two doc examples in this cell's manifest import from it, which is what makes those examples unresolvable; the seam itself is sanctioned and the open question about its future is carried as a needs-human rather than a candidate.",
+      "sanctionedBy": "ARCHITECTURE.md:102-106 at the pin (`The umbrella crate. Currently an empty skeleton ... reserved for a future single-dependency convenience re-export`); no mirror entry exists (prior-register, Normative)",
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre/src/lib.rs (line 1) and crates/cobre/Cargo.toml -- the umbrella facade crate",
+      "why": "Emitted as a positive rather than a candidate because there is no structure here to be over-built: git ls-tree -r --name-only 077dbe2c -- crates/cobre shows exactly three files (Cargo.toml, README.md, src/lib.rs), src/lib.rs is two doc lines ('Umbrella crate for the Cobre power-system ecosystem; re-exports nothing yet.' / 'Depend on the individual cobre-* crates directly.') with zero declarations, and Cargo.toml has no [dependencies] section at all, only [package] plus [lints] workspace = true. An empty name-reservation crate with a documented reservation cannot be speculative generality, because it generalises nothing. reservedSeamsCheck for this subject, recorded here in prose because the positives schema carries no such key and the gate drops keys outside the schema: result sanctioned by ARCHITECTURE.md:102-106, which states the crate is 'Currently an empty skeleton (src/lib.rs re-exports nothing yet, Cargo.toml has no dependencies) reserved for a future single-dependency convenience re-export of the ecosystem; for all current work, depend on the specific cobre-* crates you need', and ARCHITECTURE.md:134 which repeats that 'the empty cobre umbrella crate have no dependency edges yet'; and simultaneously result not-found in the mirror, because git grep -n -E 'facade|umbrella|re-export|crates/cobre/|cobre-python' 077dbe2c -- docs/design/reserved-seams-and-deferred-debt.md returns seven hits (lines 109, 339, 688, 760, 1183, 1203, 1311) and not one of them concerns the umbrella crate. The rule checked is prior-register.md:46, which requires this check before any over-design entry on the facade and states that such an entry cannot be Cleared-with-citation and must reach the owner as an open question rather than a pre-judged finding. The open question is in _needsHuman.",
+      "sanctionedBy": "ARCHITECTURE.md:102-106 and ARCHITECTURE.md:134 (the crate map declares the reservation); prior-register.md:46 (the reserved-seams precondition that routes the residual question to the owner gate)",
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/study.rs -- the four pub(crate) *_native methods and their four #[pymethods] wrappers",
+      "why": "Examined against the lens question about wrapper layers that forward without deciding, and it is not one. git grep -n -E 'new_native|train_native|simulate_native|load_policy_native' 077dbe2c -- crates/cobre-python/src shows each of the four has two consumers, not one: its own #[pymethods] wrapper in study.rs (call sites at 503, 626, 663, 724) and run.rs::run_via_study (1415, 1420, 1423, 1443, 1444). The wrapper is also not a pass-through: it releases the GIL with py.detach, maps the returned RunError or PhaseError string to the typed cobre.errors leaf via phase_error_to_pyerr, and builds the Python result dict. The *_native half is the GIL-free seam the monolithic run path reuses, which is exactly the second consumer that the pull-don't-push rule requires before an abstraction exists.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/errors.rs -- the ErrorSource enum and the seven-leaf cobre.errors hierarchy",
+      "why": "472 lines earned. The enum census over all ten bindings files found exactly two enums, BuiltinBase with 3 variants and ErrorSource with 4, and no one-variant enum anywhere in the cell. ErrorSource is a concrete enum rather than a trait object by design, which the module documentation states and which the CLAUDE.md hard rule forbidding Box<dyn Trait> for closed variant sets requires. All seven leaf classes are reachable from production raise paths, traced by message prefix through run.rs (internal error at 245/433/754, policy validation error at 1089/1128, simulation error at 744/791, config override error at 878, config parse error at 877/880, config read error at 875, output write error at 559/568/584/603/625/647/665, policy checkpoint error at 554), so the hierarchy is not speculative. Each leaf subclassing both CobreError and a builtin is what keeps 'except OSError' and 'except ValueError' working across the boundary.",
+      "sanctionedBy": "CLAUDE.md hard rule: never use Box<dyn Trait>, enum dispatch for closed variant sets",
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/results.rs -- the paired Arrow readers load_convergence_arrow and load_simulation_arrow and their five exclusive helpers",
+      "why": "Attacked as a doubled public reader surface and defeated on both halves. The coverage half fails: .github/workflows/ci.yml:586 runs 'pytest --nbmake examples/notebooks/quickstart.ipynb' against the locally built maturin wheel, the notebook calls load_convergence_arrow twice and load_simulation_arrow three times, and the comment at ci.yml:575-579 states nbmake treats any cell error as a test failure, so both readers are exercised in CI even though no file under crates/cobre-python/tests names them. The justification half also fails: the Arrow path exists to avoid per-row Python object construction, which the doc block at results.rs:315-325 states, and pyarrow is installed in the same job at ci.yml:554, so there is no missing dependency either. The surface is also not indiscriminate: only 2 of the 7 public readers have an Arrow variant, and the two chosen are the tabular ones, while load_results, load_stochastic and load_policy return manifests, metadata and a pyclass where an Arrow table would mean nothing.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/policy.rs -- the twelve pub(crate) Py* extraction structs",
+      "why": "Census result recorded, not raised. git grep -l over each of the twelve names across crates/cobre-python/src returns policy.rs and only policy.rs for all twelve, so none has a consumer outside its own file. It is still not a finding: four of the twelve (PyStageCutsPayload, PyPolicyCheckpointMetadata, PyBasisRecord, PyStageStatesPayload) appear in the signature of pub fn write_policy_checkpoint at policy.rs:448-456, where pub(crate) is the visibility the effective-visibility rule actually wants, and every field of all twelve is private so no field can force a widening. Making the other eight private would be a one-notch cosmetic change to sibling structs in a single-file module, against a real cost in uniformity, so the visibility is left as it stands.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/version.rs, schema.rs, convert.rs, lib.rs, io.rs and model.rs -- module-earning verdicts",
+      "why": "Each earns its module and its size. version.rs (57) is one pyfunction assembling the same six-key dict the CLI version command prints, and nothing smaller would do. schema.rs (97) is a single pyfunction over cobre_io::schema::generate_schemas plus two Rust tests. convert.rs (106) owns the two Python-to-JSON conversions and documents both the load-bearing ordering constraint that bool must be checked before int and the reason it has no Rust tests, namely that a #[cfg(test)] Python::attach cannot link the extension-module build, so coverage lives in tests/test_convert.py. lib.rs (170) is the module assembly and carries the one piece of real knowledge in the cell, that PyO3's add_submodule only attaches an attribute and leaves import to fail, which is why register_submodule exists. io.rs (335) is the cobre.io entry pair load_case and validate plus their error mapping table. model.rs (526) earns itself through the five complete twins and PySystem, whose entity-list getters are documented to return canonical ID order; only the three stub twins inside it are raised as a candidate. study.rs (732) and policy.rs (583) are the Study/Policy class pair and the FromPyObject extraction layer, both boundary-shaped by necessity: the PyO3 boundary is the real seam here, not an invented one.",
+      "sanctionedBy": null,
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "cleanVerdicts": [],
+  "_needsHuman": [
+    {
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a",
+      "question": "BroadcastNodeGraph in crates/cobre-cli/src/commands/broadcast.rs: keep it as a documented reserved seam, or retire it? It has zero consumers workspace-wide plus roughly 110 lines of dedicated round-trip tests, and its doc reserves it for a future caller that would transport the node graph explicitly. The mirror contains the opposite precedent for an identically shaped artifact: at docs/design/reserved-seams-and-deferred-debt.md:683-697, a resolved-parameters MPI broadcast pair (a postcard envelope with its own version byte) with zero production callers was deleted outright under the no-dead-code directive and recorded as removed, explicitly so a future audit would not resurrect it as reserved. Rule 7 forbids pre-judging this either way, so it is recorded as sanctioned and asked here. If it is kept, the E11 mirror write-back owes it a reserved-seam entry, since it has none today."
+    },
+    {
+      "cell": "over-engineering.S6a",
+      "subSurface": "S6a",
+      "question": "Should the CLI's Config wire mirror move beside crates/cobre-io/src/broadcast.rs, which already owns the identical externally-tagged mirror for ScalarParameter and whose module doc names the cobre-cli copy as the same pattern? The placement candidate above proposes only the minimal in-crate relocation, because the L2 move shares the Config projection with CD-004 (ratified at the sddp gate) and the two should not be designed twice. The owner call is whether CD-004's projection work is expected to relocate the mirror anyway, in which case the in-crate move should be skipped."
+    },
+    {
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b",
+      "question": "Should `cobre validate --json` emit an error object when boundary reconciliation - the fourth phase the module doc lists - fails? The doc promises an object naming the first failing phase, today that path writes nothing to stdout, and no test pins either behaviour, so adding it is a deliberate extension of the `--json` contract on an untested path rather than a byte-neutral cleanup."
+    },
+    {
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b",
+      "question": "May the four `#[cfg(test)] pub fn format_*_string` renderers in summary.rs be deleted in favour of private `*_lines` helpers? The rendered output is unchanged either way, but the 61 inline tests that call them have to be repointed, and that test corpus belongs to the sibling test-bloat cell, so the two fixes must be sequenced together."
+    },
+    {
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b",
+      "question": "The facade crate: keep `crates/cobre` as a documented reserved seam or retire it until the re-export actually exists? It is sanctioned by the crate map and has no mirror entry, and while it re-exports nothing the two `use cobre::...` doc examples in banner.rs and templates.rs cannot be made to resolve."
+    },
+    {
+      "cell": "over-engineering.S6b",
+      "subSurface": "S6b",
+      "question": "Does cobre-cli want a library target and a `cargo test --doc` step so its documented examples are compiled, or should the examples stop presenting themselves as importable code? The manifest declares only `[[bin]]` with `doc = false`, so today the choice is being made by omission."
+    },
+    {
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c",
+      "question": "The umbrella facade crate crates/cobre: keep it as a documented reserved seam and add the missing row to docs/design/reserved-seams-and-deferred-debt.md as an E11 mirror write-back, or retire the crate from the workspace members list until the convenience re-export it reserves actually exists? Two facts bear on the decision and neither is the attacker's to weigh. First, ARCHITECTURE.md:102-106 documents the reservation but the mirror has no row, so prior-register.md:46 blocks a Cleared-with-citation disposition. Second, CLAUDE.md names five reserved stubs (cobre-mcp, cobre-tui, cobre-flow, cobre-uc, cobre-emt) and omits cobre itself, so the crate is a sixth reserved stub absent from the list a reader would check; and crates/cobre/Cargo.toml carries keywords and categories with no publish = false, which reads as a crates.io name reservation that ARCHITECTURE.md does not mention."
+    },
+    {
+      "cell": "over-engineering.S6c",
+      "subSurface": "S6c",
+      "question": "The three cobre.model stub twins (EnergyContract, PumpingStation, NonControllableSource): are they a reserved seam awaiting a full field set, in which case the mirror needs a row and the fix is to fill the getters, or is the Python model surface deliberately limited to the four entity types the SDDP read path needs, in which case the three should leave cobre.model and PySystem should return dicts? The mirror has no row either way, and the answer determines whether the candidate above is a completion ticket or a removal ticket."
+    }
+  ],
+  "coverage": {
+    "S6a": "candidates",
+    "S6b": "candidates",
+    "S6c": "candidates"
+  },
+  "gate": {
+    "S6a": {
+      "cell": "over-engineering.S6a",
+      "wave": 2,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 6,
+      "candidates": 6,
+      "dupOf": [],
+      "positives": 8,
+      "needsHuman": 2,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6b": {
+      "cell": "over-engineering.S6b",
+      "wave": 2,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 6,
+      "candidates": 6,
+      "dupOf": [],
+      "positives": 13,
+      "needsHuman": 4,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6c": {
+      "cell": "over-engineering.S6c",
+      "wave": 2,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 2,
+      "candidates": 2,
+      "dupOf": [],
+      "positives": 6,
+      "needsHuman": 2,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    }
+  }
+}

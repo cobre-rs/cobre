@@ -361,6 +361,83 @@ class AnchorBaselineTests(unittest.TestCase):
         self.assertIn(f"at {SECOND_PIN[:8]}", register_pin.stdout)
 
 
+class PythonAnchorTests(unittest.TestCase):
+    """`.py` anchors resolve def / class / column-0 constant declarations and nothing else."""
+
+    GOOD = [
+        "**CD-903 · Sev C · duplication · effort S · confidence high**",
+        "A pytest fixture and a module constant of the cobre-python test corpus.",
+        f"- **Baseline:** `{SECOND_PIN[:8]}`",
+        "- **Anchors:** `crates/cobre-python/tests/conftest.py::cli_binary` "
+        "`crates/cobre-python/tests/test_contract_output_parity.py::CONTRACT_SCHEMA_FIELDS`",
+        "- **Alignment:** neutral",
+    ]
+    BAD = [
+        "**CD-904 · Sev C · duplication · effort S · confidence high**",
+        "An imported module name and a name that does not exist are not declarations.",
+        f"- **Baseline:** `{SECOND_PIN[:8]}`",
+        "- **Anchors:** `crates/cobre-python/tests/conftest.py::pytest` "
+        "`crates/cobre-python/tests/conftest.py::no_such_def`",
+        "- **Alignment:** neutral",
+    ]
+
+    def run_fixture(self, section: list[str]) -> subprocess.CompletedProcess[str]:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        fixture = pathlib.Path(scratch.name) / "py-anchor.md"
+        fixture.write_text(
+            "## ★ QUALITY EVALUATION (2026-09, baseline FIXTURE) — py-anchor\n\n"
+            + "\n".join(section)
+            + "\n",
+            encoding="utf-8",
+        )
+        return checker(
+            "check-anchors.py",
+            "--allow-drift",
+            "--baseline",
+            SECOND_PIN,
+            "--register",
+            fixture,
+            "py-anchor",
+        )
+
+    def test_def_and_module_constant_resolve(self) -> None:
+        good = self.run_fixture(self.GOOD)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        self.assertIn("checked 2 anchors, 0 failing", good.stdout)
+
+    def test_non_declarations_are_symbol_missing(self) -> None:
+        bad = self.run_fixture(self.BAD)
+        self.assertEqual(bad.returncode, 1, bad.stdout + bad.stderr)
+        self.assertIn("checked 2 anchors, 2 failing", bad.stdout)
+        self.assertIn("pytest", bad.stdout)
+        self.assertIn("no_such_def", bad.stdout)
+
+    def test_station_checks_resolver_agrees_with_the_register_checker(self) -> None:
+        from lib import station_checks as sc
+
+        tree = sc.Tree(SECOND_PIN)
+        self.assertTrue(
+            sc.anchor_exists(
+                "`crates/cobre-python/tests/conftest.py::cli_binary`", tree
+            )
+        )
+        self.assertTrue(
+            sc.anchor_exists(
+                "`crates/cobre-python/tests/test_contract_output_parity.py::CONTRACT_SCHEMA_FIELDS`",
+                tree,
+            )
+        )
+        self.assertFalse(
+            sc.anchor_exists("`crates/cobre-python/tests/conftest.py::pytest`", tree)
+        )
+        self.assertFalse(
+            sc.anchor_exists(
+                "`crates/cobre-python/tests/conftest.py::no_such_def`", tree
+            )
+        )
+
+
 class ReadOnlyMirrorTests(unittest.TestCase):
     def test_the_mirror_is_not_a_read_only_offender(self) -> None:
         sys.path.insert(0, str(TOOLS))

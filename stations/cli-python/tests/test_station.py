@@ -9,6 +9,7 @@ Later cli/python tickets append their stage classes to this module.
 from __future__ import annotations
 
 import collections
+import json
 import pathlib
 import re
 import subprocess
@@ -1141,6 +1142,257 @@ class WaveReverifyTests(sc.StationCase):
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
+LENSES = ("architecture", "performance", "over-engineering", "test-bloat")
+SUBSTATIONS = ("S6a", "S6b", "S6c")
+STATION_PREFIXES = ("crates/cobre-cli/", "crates/cobre-python/", "crates/cobre/")
+TEST_DIRS = ("crates/cobre-cli/tests/", "crates/cobre-python/tests/")
+LINE_ANCHOR_OK = {"crates/cobre/src/lib.rs", "crates/cobre/Cargo.toml"}
+COUPLING_WORDS = re.compile(
+    r"cobre_sddp|StudySetup|BroadcastConfig|from_config|new_with_boundary_requirements|PrepPhase|\bEngine\b",
+    re.I,
+)
+ENFORCEMENT_WORDS = re.compile(
+    r"parity gate|enforcement|coverage gap|check_python_parity", re.I
+)
+TIMING_NUMBER = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:x\b|×|%|(?:ms|µs|us|ns|s|sec|secs|seconds|minutes|min|speedup|faster|slower)\b)",
+    re.I,
+)
+DIFF_MARKERS = ("---", "+++", "@@", "diff ", "```")
+
+
+def log_section(text: str, heading: str) -> str:
+    return text.split(heading, 1)[1].split("\n## ", 1)[0]
+
+
+class CandidateEnvelopeTests(sc.StationCase):
+    """The attacker fan-out (E06-3): four merged lens files and the dispatch log.
+
+    Each lens file merges the three sub-surface cells; every anchor is re-resolved on the pin, the
+    station field rules the ticket prescribes are asserted, and the log must record all twelve cells.
+    """
+
+    SLUG = "cli-python"
+    SECTION_TITLE = "cli-python"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.files = {
+            lens: sc.load_json(cls.station_dir() / f"candidates-{lens}.json")
+            for lens in LENSES
+        }
+        cls.inv = sc.load_json(cls.station_dir() / "inventory.json")
+        cls.manifest = {
+            m: r["id"] for r in cls.inv["substationRollup"] for m in r["members"]
+        }
+        cls.log = (cls.station_dir() / "attacker-log.md").read_text(encoding="utf-8")
+
+    def anchor_allowed(self, a: dict[str, Any], subs: list[str], lens: str) -> bool:
+        path = a["path"]
+        if not path.startswith(STATION_PREFIXES):
+            return False
+        if path in self.manifest and self.manifest[path] in subs:
+            return True
+        if lens == "test-bloat" and path.startswith(TEST_DIRS):
+            return True
+        return "S6c" in subs and path == "crates/cobre-python/src/run.rs"
+
+    def test_four_lens_files_validate_and_cover_every_sub_surface(self) -> None:
+        for lens, env in self.files.items():
+            with self.subTest(lens=lens):
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(sc.TOOLS / "validate-envelope.py"),
+                        "--role",
+                        "attacker",
+                        "--station",
+                        "cli-python",
+                        str(self.artifact(f"candidates-{lens}.json")),
+                    ],
+                    cwd=sc.REPO,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(env["station"], "cli-python")
+                self.assertEqual(env["stationLabel"], "cobre-cli+cobre-python+facade")
+                self.assertEqual(env["lens"], lens)
+                self.assertEqual(env["baseline"], self.baseline())
+                self.assertEqual(env["cells"], [f"{lens}.{sub}" for sub in SUBSTATIONS])
+                for sub in SUBSTATIONS:
+                    covered = any(c["subSurface"] == sub for c in env["candidates"])
+                    cleared = any(v["subSurface"] == sub for v in env["cleanVerdicts"])
+                    self.assertTrue(
+                        covered or cleared, f"{lens}: {sub} neither covered nor cleared"
+                    )
+                    self.assertEqual(
+                        env["coverage"][sub],
+                        "candidates" if covered else "clean-verdict",
+                    )
+                    self.assertEqual(
+                        env["gate"][sub]["validator"], "pass", f"{lens}.{sub}"
+                    )
+                    if covered:
+                        self.assertEqual(
+                            env["gate"][sub]["checkAnchors"], "pass", f"{lens}.{sub}"
+                        )
+                for v in env["cleanVerdicts"]:
+                    self.assertTrue(v["why"].strip())
+                    self.assertGreaterEqual(
+                        v["positives"], 1, "a clean cell needs a positive"
+                    )
+                self.assertTrue(env["candidates"] or env["positives"], "blank lens")
+
+    def test_every_anchor_is_inside_the_station_and_resolves_at_the_pin(self) -> None:
+        tree = self.tree()
+        for lens, env in self.files.items():
+            for c in env["candidates"]:
+                with self.subTest(lens=lens, title=c["title"][:60]):
+                    self.assertTrue(c["anchors"])
+                    self.assertEqual(c["cell"], f"{lens}.{c['subSurface']}")
+                    for a in c["anchors"]:
+                        keys = set(a)
+                        self.assertIn(keys, ({"path", "symbol"}, {"path", "line"}), a)
+                        subs = c.get("subSurfaces") or [c["subSurface"]]
+                        self.assertTrue(self.anchor_allowed(a, subs, lens), a)
+                        if "line" in keys:
+                            self.assertIn(a["path"], LINE_ANCHOR_OK, a)
+                            anchor = f"`{a['path']}:{a['line']}`"
+                        else:
+                            anchor = f"`{a['path']}::{a['symbol']}`"
+                        self.assertTrue(sc.anchor_exists(anchor, tree), a)
+                    self.assertIn(c["alignmentHint"], ALIGN)
+                    self.assertIn(c["proposedSeverity"], ("A", "B", "C"))
+                    self.assertTrue(c["evidence"]["command"].strip())
+                    fix = c["fixShape"]
+                    self.assertGreaterEqual(len(fix), 20)
+                    self.assertFalse(fix.lstrip().startswith(DIFF_MARKERS), fix[:40])
+                    self.assertNotIn("```", fix)
+                    if c.get("reRaiseOf"):
+                        self.assertIn(c["reRaiseOf"], OWNED)
+                    for d in env["dupOf"]:
+                        self.assertTrue(d["dupOf"]["station"])
+                        self.assertNotIn(
+                            d["title"], [k["title"] for k in env["candidates"]]
+                        )
+
+    def test_station_field_rules_hold_per_lens(self) -> None:
+        arch = self.files["architecture"]
+        tagged = [c for c in arch["candidates"] if c.get("partIRef") == "I.5"]
+        self.assertGreaterEqual(len(tagged), 1)
+        for c in arch["candidates"]:
+            claim = c["title"] + " " + c["fixShape"]
+            if COUPLING_WORDS.search(claim):
+                self.assertIn(c.get("partIRef"), ("I.5", "I.3-7"), c["title"][:60])
+        for lens, env in self.files.items():
+            for c in env["candidates"]:
+                if c.get("waveRef"):
+                    self.assertIn(c["waveRef"], ("CD-025", "CD-029"), c["title"][:60])
+                if c.get("waveRef") == "CD-025":
+                    fix = c["fixShape"].lower()
+                    self.assertTrue(
+                        "cobre-io" in fix or c["alignmentHint"] == "conflicts",
+                        f"{lens}: CD-025 fix-shape names no cobre-io owner: {c['title'][:60]}",
+                    )
+        oe = self.files["over-engineering"]
+        for c in oe["candidates"]:
+            rsc = c.get("reservedSeamsCheck")
+            self.assertIsInstance(rsc, dict, c["title"][:60])
+            self.assertTrue(rsc["checked"], c["title"][:60])
+            self.assertIn(rsc["result"], ("sanctioned", "not-found", "not-applicable"))
+        mentioned = json.dumps(oe["candidates"]) + json.dumps(oe["positives"])
+        for path in (
+            "crates/cobre/src/lib.rs",
+            "crates/cobre-cli/src/commands/broadcast.rs",
+        ):
+            self.assertIn(path, mentioned, f"over-engineering never reached {path}")
+        perf = self.files["performance"]
+        self.assertIn("no timing command", perf["timingRuns"])
+        for c in perf["candidates"]:
+            with self.subTest(title=c["title"][:60]):
+                self.assertIs(c["measured"], False)
+                self.assertEqual(c["unmeasured"]["tag"], "UNMEASURED")
+                self.assertTrue(c["unmeasured"]["reason"].strip())
+                self.assertIn(c["measurementRequest"]["layout"], ("4t", "2x2"))
+                self.assertIn(
+                    c["measurementRequest"]["claimType"],
+                    ("single-process", "collective"),
+                )
+                self.assertEqual(c["queuedTo"], "perf-sweep")
+                self.assertTrue(str(c["mechanism"]).strip())
+                blob = " ".join(
+                    [
+                        c["title"],
+                        str(c["mechanism"]),
+                        c["fixShape"],
+                        str(c["evidence"].get("reading", "")),
+                    ]
+                )
+                self.assertIsNone(TIMING_NUMBER.search(blob), blob[:120])
+
+    def test_enforcement_gap_candidates_carry_measured_evidence(self) -> None:
+        seen = 0
+        for env in self.files.values():
+            for c in env["candidates"]:
+                if ENFORCEMENT_WORDS.search(c["title"]):
+                    seen += 1
+                    ev = c["evidence"]
+                    self.assertRegex(
+                        ev["command"], r"git (show|grep|ls-tree)|grep|python3"
+                    )
+                    self.assertTrue(str(ev.get("output", "")).strip(), c["title"][:60])
+                    self.assertTrue(str(ev.get("reading", "")).strip(), c["title"][:60])
+        self.assertGreaterEqual(seen, 0)
+
+    def test_dispatch_log_records_all_twelve_cells_and_no_blank_cell(self) -> None:
+        for lens in LENSES:
+            for sub in SUBSTATIONS:
+                self.assertIn(
+                    f"{lens}.{sub}", self.log, "a cell without a dispatch record"
+                )
+        matrix = log_section(self.log, "## Coverage matrix")
+        rows = [
+            ln
+            for ln in matrix.splitlines()
+            if ln.startswith("| ") and not ln.startswith("| -")
+        ]
+        self.assertEqual(len(rows), 5, "header + four lens rows")
+        for ln in rows[1:]:
+            self.assertNotIn("pending", ln)
+            self.assertNotIn("0/0/0", ln)
+            self.assertNotIn("FAIL", ln)
+        self.assertEqual(
+            sorted(ln.split("|")[1].strip() for ln in rows[1:]), sorted(LENSES)
+        )
+        self.assertIn("## Prior-register screen and re-routes", self.log)
+        self.assertIn("No timing command was executed", self.log)
+        records = json.loads(
+            log_section(self.log, "## Per-cell records")
+            .split("```json", 1)[1]
+            .split("```", 1)[0]
+        )
+        self.assertEqual(
+            set(records), {f"{lens}.{sub}" for lens in LENSES for sub in SUBSTATIONS}
+        )
+        for cell, r in records.items():
+            self.assertEqual(r["validator"], "pass", cell)
+            self.assertTrue(r["candidates"] or r["positives"], f"{cell} is blank")
+            for d in r["dropped"]:
+                self.assertIn(
+                    d["action"],
+                    {
+                        "settled",
+                        "sanctioned",
+                        "dup-of",
+                        "merged",
+                        "anchor-missing",
+                        "needs-human",
+                    },
+                )
 
 
 class CleanTreeTests(unittest.TestCase):

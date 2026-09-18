@@ -13,6 +13,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from typing import Any
 
@@ -599,6 +600,349 @@ class PriorRegisterTests(sc.StationCase):
         for item in ("parity goldens", "rank-invariance", "mpiexec -n 1/2"):
             self.assertIn(item, body)
         self.assertIn("This station executes no measurement and no fix", body)
+
+
+OWNED = {
+    "CD-001",
+    "CD-003-construction-hop",
+    "CD-004",
+    "CD-005",
+    "CD-006",
+    "CD-007",
+    "CD-012",
+    "CD-014-remnant",
+    "CD-015",
+    "CD-016",
+    "CD-018",
+    "CD-021",
+    "CD-022",
+    "CD-023",
+    "CD-024-successor",
+    "CD-028",
+    "CD-030",
+    "CD-034",
+    "CD-035",
+    "CD-037",
+    "CD-038",
+    "OD-009",
+}
+NOT_OURS = {"CD-002", "CD-009", "CD-011"}
+ALIGN = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
+RETIRE_COMMITS = {
+    "CD-001": "b051c410",
+    "CD-003-construction-hop": "4075c4e8",
+    "CD-006": "3f4c3db3",
+}
+PHASE0A_SHAPES = {
+    "study-block admission-gate carrier",
+    "engine-tagged setup stages",
+    "rank-0-executes MPI shape",
+}
+NINE_WORKSPACE_STRUCTS = (
+    "CapturedBasis",
+    "WorkspaceSizing",
+    "BackwardAccumulators",
+    "ByNodeScratch",
+    "ScratchBuffers",
+    "SolverWorkspace",
+    "WorkspacePool",
+    "BasisStore",
+    "BasisStoreSliceMut",
+)
+NODE_GRAPH_QUERIES = (
+    "frontier_node",
+    "stage_frontier",
+    "node_parent",
+    "node_opening_range",
+    "node_pinned_scenario",
+    "any_stage_node",
+    "build_parent_map",
+    "max_successor_outcome_count",
+    "backward_cut_levels",
+    "pool_cut_stride",
+    "forward_solve_counts",
+)
+
+
+def render_probe(title: str, rows: list[dict[str, Any]], baseline: str) -> str:
+    out = [f"## {title}", ""]
+    for d in rows:
+        anchors = [
+            d["baselineAnchor"],
+            *[a for a in d.get("anchors", []) if a != d["baselineAnchor"]],
+        ]
+        rid = (
+            d["id"]
+            .split("-construction-hop")[0]
+            .split("-successor")[0]
+            .split("-remnant")[0]
+        )
+        out += [f"**{rid} · probe · {d['id']}**", ""]
+        claim = d.get("survivingClaim") or d.get("priorTitle") or d["id"]
+        out += [" ".join(str(claim).split()), ""]
+        out.append(
+            "- **Anchors:** "
+            + " ".join(f"`{a['path']}::{a['symbol']}`" for a in anchors)
+        )
+        out.append(f"- **Baseline:** `{baseline}`")
+        overlaps = d.get("retiredOverlaps") or []
+        if overlaps:
+            refs = "; ".join(o["ref"].split(":", 1)[-1] for o in overlaps)
+            why = " / ".join(o["justification"] for o in overlaps)
+            out.append(f"- **Re-raise-of:** {refs}; NOT a re-raise — {why}")
+        out.append("")
+    return "\n".join(out) + "\n"
+
+
+class WaveReverifyTests(sc.StationCase):
+    SLUG = "sddp"
+    SECTION_TITLE = "sddp"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.env = sc.load_json(cls.station_dir() / "wave-dispositions.json")
+        cls.handoff = sc.load_json(cls.station_dir() / "partI-handoff.json")
+        cls.by_id = {d["id"]: d for d in cls.env["dispositions"]}
+
+    def test_roster_is_exactly_the_owned_set_and_disowns_the_three(self) -> None:
+        ids = [d["id"] for d in self.env["dispositions"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(set(ids), OWNED)
+        self.assertFalse(NOT_OURS & set(ids))
+        self.assertEqual({n["id"] for n in self.env["notOwned"]}, NOT_OURS)
+        for n in self.env["notOwned"]:
+            self.assertTrue(n["owningStation"])
+        self.assertEqual(self.env["baseline"], self.baseline())
+        self.assertEqual({d["wave"] for d in self.env["dispositions"]}, {4, 6, 7})
+
+    def test_every_anchor_is_symbol_only_and_resolves_at_the_baseline(self) -> None:
+        tree = self.tree()
+        for d in [*self.env["dispositions"], *self.env["existenceChecks"]]:
+            with self.subTest(id=d["id"]):
+                for a in [d["baselineAnchor"], *d.get("anchors", [])]:
+                    self.assertEqual(set(a), {"path", "symbol"}, a)
+                    self.assertNotIn("line", a)
+                    self.assertTrue(
+                        sc.anchor_exists(f"`{a['path']}::{a['symbol']}`", tree), a
+                    )
+                if d in self.env["dispositions"]:
+                    self.assertTrue(
+                        d["priorAnchor"]["raw"], "provenance anchors dropped"
+                    )
+
+    def test_anchor_probe_and_reraise_probe_pass_through_the_harness_checkers(
+        self,
+    ) -> None:
+        base = self.baseline()
+        rows = [*self.env["dispositions"], *self.env["existenceChecks"]]
+        with tempfile.TemporaryDirectory(prefix="sddp-wave-probe.") as tmp:
+            stub = pathlib.Path(tmp) / "anchor-probe.md"
+            title = "WAVE ANCHOR PROBE — sddp (test)"
+            stub.write_text(render_probe(title, rows, base), encoding="utf-8")
+            self.assertEqual(
+                sc.run_checker(
+                    "check-anchors.py",
+                    title,
+                    "--register",
+                    str(stub),
+                    "--baseline",
+                    base,
+                ),
+                0,
+            )
+            stub_r = pathlib.Path(tmp) / "reraise-probe.md"
+            title_r = "WAVE RERAISE PROBE — sddp (test)"
+            live = [d for d in self.env["dispositions"] if d["disposition"] != "retire"]
+            self.assertEqual(len(live), 19)
+            stub_r.write_text(render_probe(title_r, live, base), encoding="utf-8")
+            self.assertEqual(
+                sc.run_checker(
+                    "check-reraise.py",
+                    title_r,
+                    "--register",
+                    str(stub_r),
+                    "--baseline",
+                    base,
+                ),
+                0,
+            )
+        self.assertEqual(self.env["probes"]["anchorProbe"]["exit"], 0)
+        self.assertEqual(self.env["probes"]["reraiseProbe"]["exit"], 0)
+
+    def test_dispositions_are_well_formed(self) -> None:
+        for d in self.env["dispositions"]:
+            with self.subTest(id=d["id"]):
+                self.assertIn(d["disposition"], ("keep", "retire", "sharpen"))
+                if d["disposition"] == "retire":
+                    self.assertEqual(d["resolvingCommit"], RETIRE_COMMITS[d["id"]])
+                    self.assertEqual(
+                        subprocess.run(
+                            [
+                                "git",
+                                "cat-file",
+                                "-e",
+                                f"{d['resolvingCommit']}^{{commit}}",
+                            ],
+                            cwd=sc.REPO,
+                            check=False,
+                        ).returncode,
+                        0,
+                    )
+                else:
+                    self.assertIsNone(d["resolvingCommit"])
+                    self.assertTrue(d["survivingClaim"])
+                if d["disposition"] == "sharpen":
+                    self.assertTrue(d["supersededClaim"] and d["survivingClaim"])
+                h = d["alignmentHint"]
+                self.assertIn(h["value"], ALIGN)
+                self.assertRegex(h["citation"], r"Part (IV|V)\.\d")
+                self.assertTrue(h["argument"])
+                if h["value"] == "conflicts":
+                    self.assertTrue(h["guardrailBreach"])
+                    self.assertTrue(h["roadmapConsistentAlternative"])
+        self.assertEqual(set(RETIRE_COMMITS), set(self.env["byDisposition"]["retire"]))
+
+    def test_wave_4_restatements_name_their_phase_0a_shape(self) -> None:
+        restated = {
+            d["id"]: d["phase0aRestatement"]
+            for d in self.env["dispositions"]
+            if d["wave"] == 4 and d["phase0aRestatement"]
+        }
+        self.assertEqual(
+            set(restated),
+            {"CD-004", "CD-005", "CD-003-construction-hop", "CD-024-successor"},
+        )
+        for rid, r in restated.items():
+            with self.subTest(id=rid):
+                self.assertIn(r["artifact"], PHASE0A_SHAPES)
+                for key in ("shape", "guardrail", "byteNeutralityBar", "anchorOwner"):
+                    self.assertTrue(r[key], key)
+                self.assertIn("Engine enum stays at L4", r["guardrail"])
+                self.assertIn("no engine and no paradigm", r["guardrail"])
+        self.assertEqual(
+            restated["CD-004"]["artifact"], "study-block admission-gate carrier"
+        )
+        self.assertEqual(restated["CD-005"]["artifact"], "engine-tagged setup stages")
+        self.assertEqual(
+            restated["CD-003-construction-hop"]["artifact"], "rank-0-executes MPI shape"
+        )
+        cd004 = self.by_id["CD-004"]
+        self.assertEqual(cd004["disposition"], "sharpen")
+        self.assertIn("ConstructionConfig", cd004["supersededClaim"])
+        for name in ("BroadcastConfig", "StudyParams"):
+            self.assertIn(name, cd004["survivingClaim"])
+        self.assertEqual(cd004["alignmentHint"]["value"], "advances-0a")
+        self.assertRegex(cd004["alignmentHint"]["citation"], r"Part V\.1")
+        self.assertRegex(cd004["alignmentHint"]["citation"], r"Part IV\.4")
+        self.assertEqual(
+            self.by_id["CD-024-successor"]["alignmentHint"]["value"], "conflicts"
+        )
+
+    def test_retire_evidence_is_declaration_level(self) -> None:
+        tree = self.tree()
+        crates = "\n".join(tree.read_text(p) for p in tree.rs_files("crates"))
+        self.assertNotRegex(crates, r"\bfn rebuild_historical_library_non_root\b")
+        bare = [
+            line
+            for p in tree.rs_files("crates/cobre-sddp/src/setup")
+            for line in tree.read_text(p).splitlines()
+            if "rebuild_historical_library_non_root" in line
+        ]
+        self.assertEqual(len(bare), 3)
+        self.assertTrue(all("///" in line for line in bare), bare)
+        cd001 = self.by_id["CD-001"]
+        self.assertEqual(len(cd001["evidence"]["docCommentResidue"]), 3)
+        self.assertIn(
+            "doc-comment references remain",
+            cd001["evidence"]["docCommentResidueDisposition"],
+        )
+        self.assertTrue(
+            any(
+                "build_stochastic_context_for_study" in a["symbol"]
+                for a in [cd001["baselineAnchor"], *cd001["anchors"]]
+            )
+        )
+        self.assertNotIn("ConstructionConfig", crates)
+        self.assertNotIn("into_construction_config", crates)
+        node_graph = tree.read_text("crates/cobre-sddp/src/setup/node_graph.rs")
+        for name in NODE_GRAPH_QUERIES:
+            self.assertIn(f"fn {name}(&self", node_graph, name)
+            self.assertIsNone(
+                re.search(rf"^pub(?:\(crate\))? fn {name}\b", node_graph, re.M), name
+            )
+        self.assertTrue(all(self.by_id["CD-006"]["evidence"]["implMethods"].values()))
+
+    def test_cd_021_and_cd_023_are_sharpened_not_retired(self) -> None:
+        tree = self.tree()
+        ws = tree.read_text("crates/cobre-sddp/src/workspace/workspace.rs")
+        for t in NINE_WORKSPACE_STRUCTS:
+            self.assertIsNotNone(
+                re.search(rf"^(?:pub |pub\(crate\) )?struct {t}\b", ws, re.M), t
+            )
+        self.assertTrue(tree.is_file("crates/cobre-sddp/src/workspace/mod.rs"))
+        self.assertTrue(tree.is_file("crates/cobre-sddp/src/workspace/context.rs"))
+        cd021 = self.by_id["CD-021"]
+        self.assertEqual(cd021["disposition"], "sharpen")
+        self.assertEqual(
+            cd021["baselineAnchor"]["path"],
+            "crates/cobre-sddp/src/workspace/workspace.rs",
+        )
+        self.assertTrue(all(cd021["evidence"]["structCensus"].values()))
+        self.assertEqual(cd021["evidence"]["structCount"], 9)
+        for f in ("mod.rs", "partition.rs", "solver_phase.rs", "stage_solve.rs"):
+            self.assertTrue(tree.is_file(f"crates/cobre-sddp/src/solve/{f}"), f)
+        self.assertTrue(
+            tree.is_file("crates/cobre-sddp/src/training/stage_solve_prep.rs")
+        )
+        self.assertTrue(
+            tree.is_file("crates/cobre-sddp/src/training/stage_solve_prep/tests.rs")
+        )
+        self.assertIn(
+            "training::stage_solve_prep",
+            tree.read_text("crates/cobre-sddp/src/simulation/pipeline.rs"),
+        )
+        cd023 = self.by_id["CD-023"]
+        self.assertEqual(cd023["disposition"], "sharpen")
+        self.assertIn("solve/", cd023["survivingClaim"])
+        self.assertIn("training/stage_solve_prep.rs", cd023["survivingClaim"])
+
+    def test_pd_004_is_an_existence_check_only(self) -> None:
+        checks = self.env["existenceChecks"]
+        self.assertEqual([c["id"] for c in checks], ["PD-004"])
+        pd = checks[0]
+        self.assertTrue(pd["exists"])
+        self.assertIsNone(pd["disposition"])
+        self.assertNotIn("fixShape", pd)
+        self.assertEqual(
+            pd["baselineAnchor"],
+            {
+                "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+                "symbol": "run_enumerated_backward",
+            },
+        )
+        self.assertIn("perf", pd["queuedTo"])
+        self.assertNotIn("PD-004", self.by_id)
+
+    def test_part_i_handoff_is_exactly_item_7(self) -> None:
+        entries = self.handoff["entries"]
+        self.assertEqual([e["partIRef"] for e in entries], ["I.3-7"])
+        e = entries[0]
+        self.assertEqual(
+            e["baselineAnchor"],
+            {"path": "crates/cobre-sddp/src/setup/params.rs", "symbol": "from_config"},
+        )
+        self.assertEqual(e["owningStation"], "sddp")
+        self.assertEqual(e["disposition"], "sharpen")
+        self.assertEqual(e["proposedPhase"], "0a")
+        self.assertIn("CD-004", e["crossRef"])
+        self.assertIn("ConstructionConfig", e["changedSinceV012"])
+        self.assertIn("export_states", e["changedSinceV012"])
+        self.assertEqual(self.handoff["baseline"], self.baseline())
+        tree = self.tree()
+        for a in [e["baselineAnchor"], *e["anchors"]]:
+            self.assertTrue(sc.anchor_exists(f"`{a['path']}::{a['symbol']}`", tree), a)
+        params = tree.read_text("crates/cobre-sddp/src/setup/params.rs")
+        self.assertIn("export_states: config.exports.states", params)
 
 
 class CleanTreeTests(unittest.TestCase):

@@ -26,6 +26,6 @@ Reserved-seam re-raises (no entry re-raises a ratified seam without a sanction
 citation) are enforced twice above: `check-reraise` against the mirror corpus, and
 the `register` denylist against the Reserved-seam register.
 
-Test suite (`python3 -m unittest stations/stochastic/tests/test_station.py`): FAIL (exit 1)
+Test suite (`python3 -m unittest stations/stochastic/tests/test_station.py`): PASS (exit 0)
 
 Per-check logs: `plans/architecture-debt-audit/stations/stochastic/.<check>.log`.

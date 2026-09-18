@@ -1,0 +1,72 @@
+{
+  "station": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "targetStation": "perf-sweep (Epic 10)",
+  "layoutContract": "4t = solver-side / FFI-boundary claims (--threads 4); 2x2 = collective claims (mpiexec -n 2 x --threads 2)",
+  "queue": [
+    {
+      "id": "PD-032",
+      "candidateRef": "performance-02",
+      "attackerRef": "SC-PERF-002",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "cobre_clp_chg_bounds",
+      "anchor": "crates/cobre-solver/src/backends/clp/interface.rs:352",
+      "mechanism": "work proportional to the model dimension rather than to the number of patched indices, on every call: two FFI crossings each transferring the full retained bound array, plus one heap allocation and free of a full-length translation buffer inside the wrapper per crossing. Per-solve, not setup-time: the engine patches a handful of bounds per stage solve.",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:157",
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:164",
+        "crates/cobre-sddp/src/training/stage_solve_prep.rs:246",
+        "crates/cobre-sddp/src/training/forward/stage_solve.rs:95",
+        "crates/cobre-sddp/src/training/forward/enumerated.rs:321",
+        "crates/cobre-sddp/src/lp/builder/entries.rs:5893"
+      ],
+      "severity": "B",
+      "claim": "Narrowed to the allocation only: cobre_clp_chg_bounds (crates/cobre-solver/csrc/clp_wrapper.c:208) heap-allocates, fills and frees a full-dimension sentinel-translation buffer on every one of the four chg_* crossings, so each per-stage-solve bound patch, including the single-column theta pin in training/forward/stage_solve.rs and training/forward/enumerated.rs, pays a fresh malloc and free for a translation that ClpModel::chg{Row,Column}{Lower,Upper} then largely repeats internally. The transfer-width half of the title is stripped: Clp_C_Interface.h exposes no subset bound setter, so the whole-array push from the two Rust setters is the C surface the plain-C shim is bound to, not an unjustified divergence from the HiGHS by-set path.",
+      "byteNeutralFixShape": "Give the CLP path a subset-scoped bound write that mirrors the shape the sibling backend already has. Add index-scoped entry points to the cobre-owned C shim that take a count, an index array and the two bound arrays, translate the sentinels into a caller-owned scratch buffer retained on the Rust side instead of a per-crossing malloc, and reach the underlying per-index or ranged setter. Keep the retained mirror updated exactly as today so the frozen reload path and reproducibility contract are untouched, and keep the whole-array form for the load path that genuinely replaces every bound. If the underlying library truly offers no index-scoped setter that preserves the factorization, the narrower fix is still available: hoist the sentinel translation out of the shim into a retained Rust-side buffer so the per-crossing allocate and free disappears even when the transfer stays dimension-wide.",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "id": "PD-033",
+      "candidateRef": "performance-03",
+      "attackerRef": "SC-PERF-003",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "ClpSolver::add_rows",
+      "anchor": "crates/cobre-solver/src/backends/clp/interface.rs:215",
+      "mechanism": "allocation per call plus a full rebuild pass per call: five heap allocations on the Rust side, two more inside the wrapper, three retained buffers replaced rather than reused, and a rebuild of the retained column-major mirror proportional to the merged nonzero count for an append whose payload is only the new rows. Per-solve on the training path, not setup-time; this collides with the project hard rule against allocating on hot paths.",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/backward/lp_setup.rs:31",
+        "crates/cobre-sddp/src/cut/row.rs:257",
+        "crates/cobre-sddp/src/cut/row.rs:347",
+        "crates/cobre-sddp/src/training/lower_bound.rs:158"
+      ],
+      "severity": "B",
+      "claim": "Rust side only, and only the CSC trio: on the per-iteration append path (load_backward_lp, append_new_cuts_to_lp) CLP add_rows heap-allocates two scratch vectors plus three merged_nz-sized replacements for col_starts / row_indices / values and rewrites the whole mirror, discarding the capacity load_model reused one call earlier, when a retained-and-resized buffer set would yield byte-identical contents in the same write order. Stripped from the candidate: the wrapper's two batch-sized mallocs (a documented C-side sentinel-translation ownership boundary shared with the other bound wrappers, not debt), and the reusable-buffer-contract framing, whose only false element is the word 'patch' applied to the CSC trio -- the struct doc's reuse promise is scoped to load_model-resized buffers reused across solves, and the four retained bound vectors already honour it.",
+      "byteNeutralFixShape": "Move the append's working storage into caller-owned scratch on the solver struct, the way the freeze path and the sibling backend already do. Because a column-major mirror cannot absorb appended rows in place, keep two retained mirror buffer sets on the struct and swap the roles per append instead of allocating a new set and dropping the old one; keep the per-column counting vector and the write-cursor vector as retained buffers cleared and regrown without shrinking. Hoist the sentinel bound translation out of the wrapper into a retained buffer on the Rust side so the wrapper's two allocations per append disappear as well. The resulting mirror contents and the order in which nonzeros are written must be unchanged so reproducibility and order-invariance hold, and the struct doc's reusable-buffer statement then becomes true of this path too.",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "id": "PD-034",
+      "candidateRef": "performance-04",
+      "attackerRef": "SC-PERF-004",
+      "claimType": "single-process",
+      "layout": "4t",
+      "profiledSymbol": "ClpSolver::get_basis",
+      "anchor": "crates/cobre-solver/src/backends/clp/interface.rs:606",
+      "mechanism": "one FFI crossing per matrix element instead of one per capture: the crossing count grows with num_cols plus num_rows on both the read and the cold-write path. Per-solve, not setup-time: the engine captures a basis on the forward and backward solve paths and resets to a cold basis between solves.",
+      "exercisingCallSites": [
+        "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:154",
+        "crates/cobre-sddp/src/training/forward/stage_solve.rs:248",
+        "crates/cobre-sddp/src/training/forward/enumerated.rs:442"
+      ],
+      "severity": "B",
+      "claim": "Only the read side qualifies: ClpSolver::get_basis crosses the FFI once per column and once per row on the per-solve capture path, where the HiGHS sibling crosses once into retained i32 buffers. The cold reset is conceded out of the finding — reset_cold_basis is reachable only from the escalate_solve failure ladder through escalate_run, never between successful solves, so its per-element write crossings are not a hot-path defect.",
+      "byteNeutralFixShape": "Add bulk status transfer to the cobre-owned CLP shim so the trait method crosses once per capture instead of once per element: one shim function that fills a caller-provided i32 array for the columns and one for the rows by looping on the C or C++ side, and the symmetric writers for the cold reset. The Rust side keeps the retained i32 buffers the sibling backend already carries and converts into the shared status vocabulary in a plain loop with no crossing. The shim already reaches methods that exist only on the C++ simplex class, so the bulk loop has somewhere to live. The status mapping and the resulting basis contents must stay byte-identical so the determinism harness continues to pass unchanged; this fix shape changes only how many times the boundary is crossed, never which statuses are produced or how a rejected offer is reported.",
+      "measured": null,
+      "status": "UNMEASURED"
+    }
+  ]
+}

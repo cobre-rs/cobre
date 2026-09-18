@@ -51,7 +51,10 @@
       "gateExitAtBaseline": 0,
       "gateStdoutAtBaseline": "OK: no algorithm-specific vocabulary found in infrastructure crates.",
       "changeProposed": false,
-      "source": "plans/architecture-debt-audit/stations/solver-comm/partI-handoff.json#genericityGateBlindSpot"
+      "source": "plans/architecture-debt-audit/stations/solver-comm/partI-handoff.json#genericityGateBlindSpot",
+      "idAssigned": "CD-081",
+      "calibratedSeverity": "C — CD-011 precedent",
+      "secondBlindSpot": "the awk prefilter leaves every in-src #[cfg(test)] region unscanned (defender of architecture-08)"
     },
     "observation": {
       "kind": "doc-drift",
@@ -79,13 +82,108 @@
         "beyond-sddp-generalization.md IV.5 :1471",
         "beyond-sddp-generalization.md Part-V purification row :1372"
       ],
-      "idAssigned": null,
-      "note": "The claim holds at baseline and is sharper than the v0.12 record: vocabulary in L0 doc prose, one production propagation site (freeze.rs:158-162), all five fields write-only with the geometry already owned by StateSpace/StageRowLayout. No id here — the calibrate ticket mints it if the ingest confirms the pre-seeded candidate."
+      "idAssigned": "CD-079",
+      "note": "The claim holds at baseline and is sharper than the v0.12 record: vocabulary in L0 doc prose, one production propagation site (freeze.rs:158-162), all five fields write-only with the geometry already owned by StateSpace/StageRowLayout. No id here — the calibrate ticket mints it if the ingest confirms the pre-seeded candidate.",
+      "entries": [
+        {
+          "id": "CD-079",
+          "candidateRef": "architecture-06",
+          "class": "CD",
+          "alignmentHint": "advances-1",
+          "partIRef": "I.3-8"
+        },
+        {
+          "id": "TD-037",
+          "candidateRef": "test-bloat-03",
+          "class": "TD",
+          "alignmentHint": "neutral",
+          "partIRef": "I.3-8"
+        },
+        {
+          "id": "TD-040",
+          "candidateRef": "test-bloat-06",
+          "class": "TD",
+          "alignmentHint": "advances-1",
+          "partIRef": "I.3-8"
+        }
+      ],
+      "propagationSites": [
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "lines": "158-162",
+          "scope": "production",
+          "gatedBy": null,
+          "note": "freeze_rows_into_template copies the five from `base` to `out`; the file's #[cfg(test)] starts at :244"
+        },
+        {
+          "path": "crates/cobre-solver/src/trait_def.rs",
+          "lines": "380-384",
+          "scope": "test",
+          "gatedBy": "crates/cobre-solver/src/trait_def.rs:224 #[cfg(test)]",
+          "note": "a StageTemplate struct-literal fixture inside the test module"
+        },
+        {
+          "path": "crates/cobre-solver/src/backends/profiled.rs",
+          "lines": "252-256",
+          "scope": "test",
+          "gatedBy": "crates/cobre-solver/src/backends/profiled.rs:138 #[cfg(all(test, feature = \"highs\"))]",
+          "note": "a StageTemplate struct-literal fixture inside the highs-gated test module; the ticket text's :137 resolves to :138 at this baseline"
+        }
+      ],
+      "calibratedSeverity": "B (A-risk) — CD-010 precedent"
     }
   },
   "E10": {
-    "filledBy": "calibrate/record ticket (each Sev-A/B perf claim with its 4t or 2x2 layout; the cobre-comm per_rank_counts/prefix_displs consumer list is on inventory.json files[crates/cobre-comm/src/lib.rs].perfHelpers)",
-    "block": null
+    "filledBy": "calibrate/record ticket",
+    "block": [
+      {
+        "entryId": "PD-032",
+        "candidateRef": "performance-02",
+        "claim": "Narrowed to the allocation only: cobre_clp_chg_bounds (crates/cobre-solver/csrc/clp_wrapper.c:208) heap-allocates, fills and frees a full-dimension sentinel-translation buffer on every one of the four chg_* crossings, so each per-stage-sol…",
+        "layout": "4t",
+        "profiledSymbol": "cobre_clp_chg_bounds",
+        "exercisingCallSites": [
+          "crates/cobre-sddp/src/training/stage_solve_prep.rs:157",
+          "crates/cobre-sddp/src/training/stage_solve_prep.rs:164",
+          "crates/cobre-sddp/src/training/stage_solve_prep.rs:246",
+          "crates/cobre-sddp/src/training/forward/stage_solve.rs:95",
+          "crates/cobre-sddp/src/training/forward/enumerated.rs:321",
+          "crates/cobre-sddp/src/lp/builder/entries.rs:5893"
+        ],
+        "status": "UNMEASURED",
+        "byteNeutral": true
+      },
+      {
+        "entryId": "PD-033",
+        "candidateRef": "performance-03",
+        "claim": "Rust side only, and only the CSC trio: on the per-iteration append path (load_backward_lp, append_new_cuts_to_lp) CLP add_rows heap-allocates two scratch vectors plus three merged_nz-sized replacements for col_starts / row_indices / values…",
+        "layout": "4t",
+        "profiledSymbol": "ClpSolver::add_rows",
+        "exercisingCallSites": [
+          "crates/cobre-sddp/src/training/backward/lp_setup.rs:31",
+          "crates/cobre-sddp/src/cut/row.rs:257",
+          "crates/cobre-sddp/src/cut/row.rs:347",
+          "crates/cobre-sddp/src/training/lower_bound.rs:158"
+        ],
+        "status": "UNMEASURED",
+        "byteNeutral": true
+      },
+      {
+        "entryId": "PD-034",
+        "candidateRef": "performance-04",
+        "claim": "Only the read side qualifies: ClpSolver::get_basis crosses the FFI once per column and once per row on the per-solve capture path, where the HiGHS sibling crosses once into retained i32 buffers. The cold reset is conceded out of the findin…",
+        "layout": "4t",
+        "profiledSymbol": "ClpSolver::get_basis",
+        "exercisingCallSites": [
+          "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:154",
+          "crates/cobre-sddp/src/training/forward/stage_solve.rs:248",
+          "crates/cobre-sddp/src/training/forward/enumerated.rs:442"
+        ],
+        "status": "UNMEASURED",
+        "byteNeutral": true
+      }
+    ],
+    "layoutContract": "4t = solver-side / FFI-boundary claims (--threads 4); 2x2 = collective claims (mpiexec -n 2 x --threads 2)"
   },
   "records": [
     {
@@ -154,5 +252,6 @@
       "trigger": "the next licensed public-API break",
       "note": "assignedId stays null on purpose — a new OD/CD id here is a check-reraise failure; the candidate's own fixShape/evidence stays in candidates.<lens>.json for E5 to read"
     }
-  ]
+  ],
+  "calibratedAt": "2026-09-18"
 }

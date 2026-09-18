@@ -1,0 +1,160 @@
+{
+  "station": "solver-comm",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "targetStation": "test-corpus (Epic 8)",
+  "yardstick": "docs/design/testing-architecture.md",
+  "queue": [
+    {
+      "id": "TD-035",
+      "candidateRef": "test-bloat-01",
+      "attackerRef": "SC-TB-001",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-comm/tests/factory_tests.rs"
+      ],
+      "anchors": [
+        "crates/cobre-comm/src/factory.rs:74",
+        "crates/cobre-comm/src/factory.rs:419",
+        "crates/cobre-comm/src/ferrompi.rs:488",
+        "crates/cobre-comm/tests/factory_tests.rs:89"
+      ],
+      "claim": "Only crates/cobre-comm/src/factory.rs:419 is a verbatim vacuous restatement, asserting the same `CommBackend: Send + Sync` obligation that the production const fn at factory.rs:74 discharges under the identical `#[cfg(feature = \"mpi\")]` gate; of the two `FerrompiBackend` copies exactly one is redundant, because crates/cobre-comm/src/ferrompi.rs:488 and crates/cobre-comm/tests/factory_tests.rs:89 duplicate each other and the public-path reachability distinguishing the integration copy is already asserted by its siblings at factory_tests.rs:97 and :104. The title's claim that the const fn already performs the `FerrompiBackend` assertion does not hold: it entails it only transitively through the `Box<FerrompiBackend>` payload of `CommBackend::Mpi` at factory.rs:63, so that assertion is subsumed at this baseline rather than restated, and dropping both copies would unpin the `unsafe impl Send`/`Sync` claim at ferrompi.rs:66-76.",
+      "yardstick": "§3.2 (sustainability: a test earns its place by catching a class of regression a cheaper check cannot)",
+      "fixShape": "Keep one mechanism per type and prefer the const-fn form, because it fires without cargo test and is the one already documented as load-bearing. Retire the three #[test] restatements; if FerrompiBackend deserves the same guarantee, give it a production const-fn assertion next to its unsafe impl Send/Sync rather than two test copies, so the check and the soundness argument sit together. This is not about the unsafe impl itself, which the manifest comment justifies.",
+      "crossRef": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-036",
+      "candidateRef": "test-bloat-02",
+      "attackerRef": "SC-TB-002",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-comm/tests/factory_tests.rs",
+        "crates/cobre-comm/tests/local_conformance.rs"
+      ],
+      "anchors": [
+        "crates/cobre-comm/src/local.rs:406",
+        "crates/cobre-comm/tests/local_conformance.rs:198",
+        "crates/cobre-comm/src/local.rs:360",
+        "crates/cobre-comm/tests/local_conformance.rs:244",
+        "crates/cobre-comm/src/local.rs:453",
+        "crates/cobre-comm/tests/local_conformance.rs:290",
+        "crates/cobre-comm/src/local.rs:379",
+        "crates/cobre-comm/tests/local_conformance.rs:44",
+        "crates/cobre-comm/src/local.rs:292",
+        "crates/cobre-comm/tests/local_conformance.rs:30",
+        "crates/cobre-comm/src/factory.rs:303",
+        "crates/cobre-comm/tests/factory_tests.rs:71",
+        "crates/cobre-comm/src/factory.rs:322",
+        "crates/cobre-comm/tests/factory_tests.rs:11"
+      ],
+      "claim": "Only the src/local.rs to tests/local_conformance.rs overlap survives: the six body-identical LocalBackend Communicator assertions (allreduce identity sum, min and max, allreduce_buffer_mismatch, allgatherv_recv_too_small, broadcast_invalid_root) are duplicated with zero coverage residue beyond a single re-export smoke test, so the inline copies of those six are redundant. The factory.rs to tests/factory_tests.rs half of the title is dropped; neither of those two files is retirable, because the inline module needs the crate-private mpi_launch_detected() and the integration module asserts a CommBackend variant the inline module never checks.",
+      "yardstick": "§5.1 canonical per-crate layout (one owner per public contract)",
+      "fixShape": "Name tests/local_conformance.rs the single owner of the public SS1.1-SS1.8 Communicator contract, which is the role its own module doc already claims, and retire the inline copies of contracts that are reachable through the public re-exports, keeping inline only assertions that need super:: privates. Keep test_local_collective_sequence and test_local_barrier_repeated, which have no inline counterpart, and keep one inline smoke assertion if the crate wants a test that survives with the integration binary removed. The lever here is single-owner maintenance, not link cost: testing-architecture.md section 5.1 explicitly puts the non-solver crates out of scope for binary consolidation because their binaries do not link the solver, so no consolidation of the two comm binaries is being proposed.",
+      "crossRef": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-037",
+      "candidateRef": "test-bloat-03",
+      "attackerRef": "SC-TB-003",
+      "severity": "B",
+      "binaries": [
+        "crates/cobre-solver/src/backends/clp/tests.rs",
+        "crates/cobre-solver/src/backends/highs/tests.rs",
+        "crates/cobre-solver/tests/clp_determinism.rs",
+        "crates/cobre-solver/tests/clp_only_smoke.rs",
+        "crates/cobre-solver/tests/conformance.rs",
+        "crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs"
+      ],
+      "anchors": [
+        "crates/cobre-solver/src/lib.rs:164",
+        "crates/cobre-solver/src/types.rs:736",
+        "crates/cobre-solver/src/freeze.rs:262",
+        "crates/cobre-solver/src/backends/clp/tests.rs:20",
+        "crates/cobre-solver/src/backends/highs/tests.rs:19",
+        "crates/cobre-solver/tests/conformance.rs:34",
+        "crates/cobre-solver/tests/clp_determinism.rs:33",
+        "crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs:29",
+        "crates/cobre-solver/tests/clp_only_smoke.rs:24",
+        "crates/cobre-solver/src/backends/clp/tests.rs:52",
+        "crates/cobre-solver/src/backends/highs/tests.rs:45",
+        "crates/cobre-solver/tests/conformance.rs:57",
+        "crates/cobre-solver/tests/clp_determinism.rs:58"
+      ],
+      "claim": "Only the four in-src declarations are unjustified duplication: crates/cobre-solver/src/types.rs:736, src/freeze.rs:262, src/backends/clp/tests.rs:20 and src/backends/highs/tests.rs:19 are all #[cfg(test)] inside one crate and collapse to a single shared in-crate fixture module with no cargo feature and no coverage change - the clp_determinism.rs:13-14 reason does not apply to any of them, and freeze.rs:253 already names types.rs as the owner. The four integration-binary copies (conformance.rs:34, clp_determinism.rs:33, ffi_set_basis_non_alien_smoke.rs:29, clp_only_smoke.rs:24) are NOT confirmed under the proposed test_support hoist, because gating them on the non-default test-support feature empties three of them under CONTRIBUTING.md:71 and crates/cobre-solver/README.md:84 and voids the guarantee clp_only_smoke.rs:3-4 declares as its reason to exist.",
+      "yardstick": "§5.2 uniform test-support feature convention (not a dedicated test crate)",
+      "fixShape": "Add a fixtures submodule inside the already-shipped pub mod test_support at crates/cobre-solver/src/lib.rs:164, behind the existing test-support feature, and make it the single declaration of the SS1.1 stage template, the two-row batch and the empty batch. The four integration binaries import them exactly as conformance.rs:31-32 already imports test_support; the four in-src test modules reach them through crate::test_support. A binary that must also build without the feature keeps the whole-file gate that profile_retry_composition.rs:23 already demonstrates. Sequence this before the Phase-1 StageTemplate shed so the shed edits one builder instead of eight. Do not create a fixture crate: testing-architecture.md section 5.2 keeps the test-support cargo feature for exactly this purpose, and a separate crate would add a dev-dependency cycle, split the infra-genericity gate surface, and add no capability. Leave the genuinely distinct one-off builders alone (build_two_row_template and build_three_row_template in sentinel_inf_row_probe.rs, make_minimal_template in profile_retry_composition.rs are different LPs, not copies) but note they each re-type the five shed fields. Correct the three rationale comments instead of deleting them; the surviving fact is which module owns the fixture, and two of them currently name a path that does not resolve.",
+      "crossRef": "I.3-8 (partI-handoff.json)",
+      "needsHuman": [
+        "Owner call on the four integration binaries: either give cobre-solver a tests/common shared-fixture module (the cobre-sddp idiom, no feature gate) or accept that a test-support-gated fixture makes the documented clp-only invocations (CONTRIBUTING.md:71, crates/cobre-solver/README.md:84) run zero cobre-solver integration tests."
+      ],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-038",
+      "candidateRef": "test-bloat-04",
+      "attackerRef": "SC-TB-004",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-solver/src/backends/highs/tests.rs"
+      ],
+      "anchors": [
+        "crates/cobre-solver/src/backends/highs/tests.rs:846",
+        "crates/cobre-solver/src/backends/highs/tests.rs:796",
+        "crates/cobre-solver/src/backends/highs/tests.rs:787"
+      ],
+      "claim": "Narrower residue: test_research_probe_limit_status_on_ss11_lp (highs/tests.rs:846) asserts neither of the two model_status values it exists to observe (:857, :872 are printed only), so it cannot fail if a future HiGHS release lets SS1.1 reach the time or iteration limit — the exact premise the module comment's larger_lp justification rests on at :791-794. Dropped from the title: 'no behavioural assertion' (the two null-handle checks at :853/:867 and the helper's pass_lp == HIGHS_STATUS_OK at :833 do fail), and 'the fact is already prose' as a full substitute (the comment carries the conclusion, not the two observed status codes). The in-module fix precedent is the sibling test_research_partial_solution_availability (:1030), which asserts both statuses at :1044/:1065 while printing only the objective.",
+      "yardstick": "§3.2 (a test with no assertion is invisible and therefore dead)",
+      "fixShape": "Retire the #[test] and keep the module-comment sentence that records the finding, which is where the knowledge already lives. If the observed statuses must be held against a future HiGHS upgrade, give the test the assertion it lacks by pinning the two model-status codes instead of printing them; a printed value in a passing test is invisible under cargo test anyway. The other six test_research_* tests assert real properties at a layer the conformance binary cannot reach, because they set options not exposed through SolverInterface, and stay as they are.",
+      "crossRef": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-039",
+      "candidateRef": "test-bloat-05",
+      "attackerRef": "SC-TB-005",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-solver/tests/clp_only_smoke.rs",
+        "crates/cobre-solver/tests/conformance.rs"
+      ],
+      "anchors": [
+        "crates/cobre-solver/tests/clp_only_smoke.rs:48",
+        "crates/cobre-solver/tests/clp_only_smoke.rs:3",
+        "crates/cobre-solver/tests/conformance.rs:1450",
+        "crates/cobre-solver/tests/conformance.rs:26"
+      ],
+      "claim": "Narrowed to two anchors: the module-doc guarantee at clp_only_smoke.rs:3-4 is false under the very feature combination it names, because conformance.rs (six clp-gated tests) and clp_determinism.rs (crate-level clp gate at :16) already ship runnable integration tests that CI runs under --no-default-features --features clp, so this extra solver-linked binary does not earn its link cost. Conceded from the title: its single test is not a pure tolerance-only clone -- it asserts a strict SUBSET of the clp conformance coverage (no duals, no add_rows, no warm start) at a marginally TIGHTER tolerance (1e-9 against conformance 1e-8), so retiring it loses a slightly tighter objective/primal bound rather than nothing; and the redundancy claim holds against the clp-gated section of conformance.rs plus clp_determinism.rs jointly, not against conformance.rs alone.",
+      "yardstick": "§5.1 canonical per-crate layout (integration binaries are expensive; group into one binary)",
+      "fixShape": "Retire the binary and let the clp-gated section of conformance.rs be the clp-only guard it already is. If a standalone guard is genuinely wanted, the thing being guarded is a build-matrix property (that the clp-only feature combination still collects and links an integration binary), which belongs in the CI matrix rather than in a duplicated assertion; a surviving binary should then source its fixture from the test_support fixtures module and its module doc must be corrected, since the current wording states something conformance.rs already contradicts.",
+      "crossRef": null,
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    },
+    {
+      "id": "TD-040",
+      "candidateRef": "test-bloat-06",
+      "attackerRef": "SC-TB-006",
+      "severity": "C",
+      "binaries": [
+        "crates/cobre-solver/tests/conformance.rs"
+      ],
+      "anchors": [
+        "crates/cobre-solver/tests/conformance.rs:138",
+        "crates/cobre-solver/tests/conformance.rs:161",
+        "crates/cobre-solver/tests/conformance.rs:153"
+      ],
+      "claim": "Only test_fixture_stage_template_data (conformance.rs:137-158) is I.3-8 collateral - its assertions at :153-157 re-encode the five shed fields; test_fixture_row_batch_data (:160-170) carries none of them, so the title's second half holds for one of the two tests. What holds for both is narrower than the title: each asserts a same-file struct-literal builder against its own transcription, adds no relation the builder does not already contain, and invokes no SolverInterface method, while the objective and primal assertions at :72 and :176 already pin the same fixture against an LP-derived oracle.",
+      "yardstick": "§3.2 (a tautological test restates another's coverage)",
+      "fixShape": "If the fixtures move into the test_support fixtures module, one contract test belongs there beside the builder, asserting once that the shared SS1.1 LP is the LP the builders promise; the per-binary copy in conformance.rs is then redundant and goes with it. If the fixtures stay per-binary, delete both tests outright, because a constructor asserted against itself in the same file has no independent oracle. Either way the Phase-1 estimate for this site should carry five lines, not three.",
+      "crossRef": "I.3-8 (partI-handoff.json)",
+      "needsHuman": [],
+      "targetStation": "test-corpus"
+    }
+  ]
+}

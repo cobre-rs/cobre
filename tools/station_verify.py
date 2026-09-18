@@ -186,8 +186,14 @@ def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
 
 
 def crate_src_roots(inventory: dict[str, Any]) -> list[str]:
+    """The src roots the census covers: `crates{}` keys, `crates[]` rows (each carrying
+    its `srcRoot`, or `name` when the root is the default `crates/<name>/src`), the
+    nested `src.root`, or the single `crate`."""
     if "crates" in inventory:
-        return [f"crates/{crate}/src" for crate in inventory["crates"]]
+        crates = inventory["crates"]
+        if isinstance(crates, list):
+            return [c.get("srcRoot") or f"crates/{c['name']}/src" for c in crates]
+        return [f"crates/{crate}/src" for crate in crates]
     if "root" in inventory.get("src", {}):
         return [inventory["src"]["root"]]
     return [f"crates/{inventory['crate']}/src"]

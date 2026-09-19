@@ -1,0 +1,1271 @@
+{
+  "station": "test-corpus",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "source": "docs/design/testing-architecture.md",
+  "sourceBlob": "d310d0a3701bb6812cf862ee4c90e92695678a43",
+  "status": "Partially adopted (§5.2); the rest Proposal — the doc's own status line at the pin",
+  "classes": {
+    "current-state": "a §2 (or §1 / §3.2 factual) claim about the tree at the pin; drift between the sentence and the tree is a real finding (prose drift or a code fact the lens may cite)",
+    "target": "a §5 / §6 / §7 rule stated in present tense; a gap between the sentence and the tree is a roadmap item and NEVER a code defect"
+  },
+  "sectionRule": {
+    "1": "current-state (problem-statement summary of §2 facts)",
+    "2.*": "current-state",
+    "3.2": "classified individually — the section mixes fact and assessment; assessment clauses are excluded from the citable sentence",
+    "5.*": "target",
+    "6": "target (migration roadmap)",
+    "7": "target (non-goals: rules a lens must not propose against)"
+  },
+  "adjudicate": "true = a provisional class the defender pass may overturn; counterAnchors hold the verified tree facts the defender weighs. A §5 target stated in present tense must never be recorded as a code defect.",
+  "anchorGrammar": "path | path:line | path::symbol — resolved at the pin with tools/lib/station_checks.anchor_exists; `lines` locates `quote` in the source at the pin",
+  "rowCount": 66,
+  "adjudicateCount": 4,
+  "rows": [
+    {
+      "id": "ta-1-machinery-lives-in-sddp",
+      "section": "1",
+      "lines": "29-32",
+      "quote": "lives almost entirely in `cobre-sddp`",
+      "sentence": "The advanced machinery — the four test tiers, golden baselines, the determinism gate binary, the shared fixture harness — lives almost entirely in cobre-sddp; every other crate tests ad hoc.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/tests/mpi_wire.rs",
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": null,
+      "measured": "cobre-sddp holds tests/common/ (5 modules), tests/fixtures/ (10 decks) and benches/ (5 files); the one other harness is crates/cobre-stochastic/tests/common/mod.rs (261 lines); crates/cobre-io/tests/fixtures/ holds one parquet file",
+      "note": "'almost entirely' holds at the pin; the stricter 'only' qualifiers are measured in the §2.2 rows"
+    },
+    {
+      "id": "ta-1-one-binary-per-file",
+      "section": "1",
+      "lines": "32-33",
+      "quote": "The workspace links **one integration binary per",
+      "sentence": "The workspace links one integration binary per tests/*.rs file — most of them statically linking the C++ solver",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/Cargo.toml:59",
+        "crates/cobre-cli/Cargo.toml:24"
+      ],
+      "figure": "int-binaries-solver-linking",
+      "measured": "87 depth-1 tests/*.rs binaries at the pin, 62 (71%) in the three solver-linking crates",
+      "note": ""
+    },
+    {
+      "id": "ta-1-homing-inconsistent",
+      "section": "1",
+      "lines": "33-35",
+      "quote": "giant inline modules next to extracted",
+      "sentence": "homes unit tests inconsistently (giant inline modules next to extracted tests.rs siblings in the same directory)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/lp/builder/entries.rs:1680",
+        "crates/cobre-sddp/src/lp/builder/columns.rs:1305",
+        "crates/cobre-sddp/src/lp/builder/template.rs:1328",
+        "crates/cobre-sddp/src/lp/builder/layout.rs:1962"
+      ],
+      "figure": "homing-split",
+      "measured": "19 sibling src/**/tests.rs vs 312 source files carrying #[cfg(test)]; in lp/builder entries.rs and columns.rs keep 8,413 / 8,014 tail lines inline while template/tests.rs (5,356) and layout/tests.rs (3,565) are extracted",
+      "note": "dup-of the mirror bullet 'Mega-file / inline-test-giant asymmetry' (prior-register.md)"
+    },
+    {
+      "id": "ta-1-slow-suite-every-pr",
+      "section": "1",
+      "lines": "35",
+      "quote": "runs the entire slow suite on every PR",
+      "sentence": "runs the entire slow suite on every PR",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:32",
+        ".github/workflows/ci.yml:114"
+      ],
+      "figure": "slow-tests-in-pr-features",
+      "measured": "NON_SOLVER_FEATURES (ci.yml:32) includes slow-tests and is consumed by check :71, test :114, clippy :154, clp :219-233, docs :399, coverage :497",
+      "note": ""
+    },
+    {
+      "id": "ta-1-no-convention-no-nextest-no-hardening",
+      "section": "1",
+      "lines": "35-37",
+      "quote": "no nextest configuration, and no",
+      "sentence": "has no uniform cross-crate fixture-sharing convention, no nextest configuration, and no correctness-hardening tier (miri / sanitizers / fuzz)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-core/Cargo.toml:30",
+        ".github/workflows/ci.yml:73",
+        "crates/cobre-sddp/src/gemm.rs"
+      ],
+      "figure": "nextest-config",
+      "measured": ".config/nextest.toml absent; no workflow at the pin mentions miri, sanitizer, valgrind or fuzz; test-support declared by 5 crates and consumed by 5, with cobre-comm and cobre-python neither",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-int-binaries-per-crate",
+      "section": "2.1",
+      "lines": "53",
+      "quote": "Integration-test binaries, per crate",
+      "sentence": "Integration-test binaries, per crate: for d in crates/*/tests; do printf … find \"$d\" -maxdepth 1 -name '*.rs' | wc -l; done",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/deterministic.rs",
+        "crates/cobre-cli/tests/cli_validate.rs"
+      ],
+      "figure": "int-binaries",
+      "measured": "87 (cobre-sddp 40, cobre-cli 14, cobre-io 12, cobre-stochastic 9, cobre-solver 8, cobre-core 2, cobre-comm 2); 105 under the recursive tests/**/*.rs reading",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-solver-linking-subset",
+      "section": "2.1",
+      "lines": "54",
+      "quote": "that statically link the solver",
+      "sentence": "…that statically link the solver: the subset of the above whose crate depends on cobre-solver (cobre-sddp, cobre-cli, cobre-solver)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/Cargo.toml:59",
+        "crates/cobre-cli/Cargo.toml:24",
+        "crates/cobre-solver/tests/conformance.rs"
+      ],
+      "figure": "int-binaries-solver-linking",
+      "measured": "62 (cobre-sddp 40, cobre-cli 14, cobre-solver 8)",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-nextest-count",
+      "section": "2.1",
+      "lines": "55",
+      "quote": "cargo nextest list --features test-support",
+      "sentence": "Unit + integration test count: cargo nextest list --features test-support",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/lib.rs:46"
+      ],
+      "figure": "nextest-list",
+      "measured": "6,371 tests across 90 binaries: 5,365 lib-unit, 169 bin-unit, 839 integration",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-doctests",
+      "section": "2.1",
+      "lines": "56",
+      "quote": "`cargo test --doc`",
+      "sentence": "Doctests: cargo test --doc",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-core/src/lib.rs"
+      ],
+      "figure": "doctests",
+      "measured": "330 (329 passed, 1 ignored)",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-pytest",
+      "section": "2.1",
+      "lines": "57",
+      "quote": "pytest crates/cobre-python --collect-only -q",
+      "sentence": "pytest (cobre-python): pytest crates/cobre-python --collect-only -q",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-python/tests/conftest.py"
+      ],
+      "figure": "pytest-collect",
+      "measured": "218 collected",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-golden-cases",
+      "section": "2.1",
+      "lines": "58",
+      "quote": "Golden bit-exact cases",
+      "sentence": "Golden bit-exact cases: a small deliberate set × 2 backends (HiGHS/CLP); enumerate the tests/fixtures/parity_baselines* decks",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/parity.rs",
+        "crates/cobre-sddp/tests/common/parity_hash.rs"
+      ],
+      "figure": "golden-cases",
+      "measured": "10 decks (5 HiGHS + 5 CLP: D06, D15, D30, D34, D41); a 5-function parity_hash roster",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-to-bits",
+      "section": "2.1",
+      "lines": "59",
+      "quote": "git grep -c 'to_bits'",
+      "sentence": "to_bits/ULP determinism assertions: git grep -c 'to_bits' -- 'crates/**/*.rs'",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/parity_hash.rs"
+      ],
+      "figure": "to-bits",
+      "measured": "77 files / 1,103 occurrences",
+      "note": ""
+    },
+    {
+      "id": "ta-2.1-proptest-sites",
+      "section": "2.1",
+      "lines": "60",
+      "quote": "git grep -l 'proptest!'",
+      "sentence": "proptest! sites: git grep -l 'proptest!' -- 'crates/**/*.rs'",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-core/src/system/builder.rs",
+        "crates/cobre-io/src/windowed_history.rs",
+        "crates/cobre-sddp/src/lead_time/tests.rs",
+        "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+        "crates/cobre-sddp/src/stochastic/noise_key.rs",
+        "crates/cobre-stochastic/src/sampling/external.rs",
+        "crates/cobre-stochastic/src/season_cast/mod.rs"
+      ],
+      "figure": "proptest-sites",
+      "measured": "7 files / 8 invocations (season_cast/mod.rs has 2)",
+      "note": "§3.2 item 7 says 'only 5 sites' — see ta-3.2.7-hardening-gaps-proptest-5 for the drift"
+    },
+    {
+      "id": "ta-2.1-slow-tests-concentrated",
+      "section": "2.1",
+      "lines": "61",
+      "quote": "concentrated entirely in `cobre-sddp`",
+      "sentence": "Slow-gated (slow-tests) attributes: git grep -c 'slow-tests' -- 'crates/**/*.rs' — concentrated entirely in cobre-sddp",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/deterministic.rs",
+        "crates/cobre-sddp/Cargo.toml:46",
+        "crates/cobre-cli/Cargo.toml:57"
+      ],
+      "figure": "slow-tests-attrs",
+      "measured": "13 .rs files, all in cobre-sddp — holds under the doc's own command; 19 tracked files of any type (sddp 15, stochastic 2, cli 1, io 1) because Cargo.toml manifests forward the feature",
+      "note": "a lens using a broader census than the doc's command must say so before calling this drift"
+    },
+    {
+      "id": "ta-2.1-pyramid-invariant",
+      "section": "2.1",
+      "lines": "63-68",
+      "quote": "outnumber integration tests by roughly an order of magnitude",
+      "sentence": "unit tests outnumber integration tests by roughly an order of magnitude (a healthy pyramid), so the cost is not test count but integration-binary count × static-solver-link; and the solver-linking crates own most of the integration binaries and therefore most of the link cost",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/Cargo.toml:59",
+        "crates/cobre-sddp/tests/mpi_wire.rs"
+      ],
+      "figure": "nextest-list",
+      "measured": "5,534 unit (lib + bin) vs 839 integration = 6.6×; 62 of 87 binaries solver-linking",
+      "note": "6.6× sits inside the doc's 'roughly an order of magnitude' hedge — not drift"
+    },
+    {
+      "id": "ta-2.2-sole-home-tiers-harness",
+      "section": "2.2",
+      "lines": "72-74",
+      "quote": "is the sole home of: all four test tiers, the only large",
+      "sentence": "cobre-sddp is the sole home of: all four test tiers, the only large tests/common/ harness (StubComm/Rank0Of2, build_setup_*, make_* builders, parity_hash, permute)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [
+        "crates/cobre-stochastic/tests/common/mod.rs (261 lines) — a second, smaller tests/common/; 'only large' still holds"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32",
+        "crates/cobre-sddp/tests/common/builders.rs",
+        "crates/cobre-sddp/tests/common/parity_hash.rs",
+        "crates/cobre-sddp/tests/common/permute.rs:83"
+      ],
+      "figure": null,
+      "measured": "5 common modules in cobre-sddp (anticipated_structural_assertions.rs, builders.rs, mod.rs, parity_hash.rs, permute.rs)",
+      "note": ""
+    },
+    {
+      "id": "ta-2.2-stubcomm-rank0of2-in-common",
+      "section": "2.2",
+      "lines": "73",
+      "quote": "`tests/common/` harness (`StubComm`/`Rank0Of2`",
+      "sentence": "[cobre-sddp's] tests/common/ harness (StubComm/Rank0Of2, …)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32",
+        "crates/cobre-sddp/tests/common/mod.rs:86"
+      ],
+      "figure": "test-support-declarers-vs-consumers",
+      "measured": "pub struct StubComm at mod.rs:32, pub struct Rank0Of2 at mod.rs:86",
+      "note": "this §2 fact is the counter-anchor for the §5.2 / §5.8 'cobre-comm' sentences (the adjudicate rows)"
+    },
+    {
+      "id": "ta-2.2-only-fixtures",
+      "section": "2.2",
+      "lines": "74-75",
+      "quote": "the only `tests/fixtures/` (dual golden",
+      "sentence": "the only tests/fixtures/ (dual golden baselines + deterministic case decks)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [
+        "crates/cobre-io/tests/fixtures/d56_reject_ar_coefficients.parquet — a second tests/fixtures/ directory exists at the pin (one file)"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": "golden-cases",
+      "measured": "cobre-sddp/tests/fixtures/: 10 entries; cobre-io/tests/fixtures/: 1 file — the literal 'only' fails, the golden-deck claim holds",
+      "note": "minor prose-drift candidate for the ingest ticket; not a code defect"
+    },
+    {
+      "id": "ta-2.2-mpi-wire-gate",
+      "section": "2.2",
+      "lines": "75-76",
+      "quote": "determinism-gate binary",
+      "sentence": "the mpi_wire.rs determinism-gate binary (with its power self-checks)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/mpi_wire.rs:576",
+        "crates/cobre-sddp/tests/mpi_wire.rs:703",
+        "crates/cobre-sddp/tests/mpi_wire.rs:2003"
+      ],
+      "figure": null,
+      "measured": "self-checks at the pin: retries > 0 (:576), n_openings >= 3 (:703), fan_nodes >= 2 (:2003)",
+      "note": ""
+    },
+    {
+      "id": "ta-2.2-only-benches",
+      "section": "2.2",
+      "lines": "76",
+      "quote": "and the only `benches/`",
+      "sentence": "and the only benches/",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/benches/cut_selection.rs"
+      ],
+      "figure": null,
+      "measured": "one benches/ directory workspace-wide, 5 files",
+      "note": ""
+    },
+    {
+      "id": "ta-2.2-other-crates-per-file-fixtures",
+      "section": "2.2",
+      "lines": "76-78",
+      "quote": "constructing fixtures per-file",
+      "sentence": "Every other crate is unit-behavioral only, constructing fixtures per-file.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [
+        "crates/cobre-stochastic/tests/common/mod.rs (261 lines) — one other crate does share fixtures through a common module"
+      ],
+      "anchors": [
+        "crates/cobre-stochastic/tests/forward_sampler.rs:61",
+        "crates/cobre-cli/tests/cli_validate.rs"
+      ],
+      "figure": null,
+      "measured": "cobre-cli has no tests/common/ (TD-065); cobre-stochastic's integration binaries re-declare byte-identical preludes despite its common module (TD-024, TD-030)",
+      "note": "TD-024 / TD-030 / TD-065 already record the per-file fixture spread — cross-reference, never re-raise"
+    },
+    {
+      "id": "ta-2.3-runner-inconsistent",
+      "section": "2.3",
+      "lines": "82-83",
+      "quote": "**Runner is inconsistent**",
+      "sentence": "Runner is inconsistent: the HiGHS Test job uses cargo test; the CLP job and the shuffle-matrix job use cargo nextest.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:114",
+        ".github/workflows/ci.yml:233",
+        ".github/workflows/invariance-shuffle.yml:34"
+      ],
+      "figure": "ci-runner-split",
+      "measured": "cargo test --workspace at ci.yml:114 (test job); cargo nextest run at ci.yml:233 (clp job) and invariance-shuffle.yml:34 / :55",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-no-nextest-toml",
+      "section": "2.3",
+      "lines": "83-85",
+      "quote": "no profiles, retries, partitioning, JUnit, or",
+      "sentence": "There is no .config/nextest.toml — no profiles, retries, partitioning, JUnit, or archive.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:233"
+      ],
+      "figure": "nextest-config",
+      "measured": "absent at the pin (git cat-file -e)",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-non-solver-features-includes-slow",
+      "section": "2.3",
+      "lines": "86-88",
+      "quote": "**includes `slow-tests`**",
+      "sentence": "No CI cadence tiering: NON_SOLVER_FEATURES (used by Test, CLP, and Coverage) includes slow-tests, so the full slow suite runs on every PR.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:32",
+        ".github/workflows/ci.yml:114",
+        ".github/workflows/ci.yml:233",
+        ".github/workflows/ci.yml:497"
+      ],
+      "figure": "slow-tests-in-pr-features",
+      "measured": "holds; the parenthetical under-lists the consumers — check :71, clippy :154 and docs :399 read the same variable",
+      "note": "the under-listing is a prose-drift observation, not a defect claim"
+    },
+    {
+      "id": "ta-2.3-slow-tests-local-only",
+      "section": "2.3",
+      "lines": "88-89",
+      "quote": "convenience, not as a CI tier",
+      "sentence": "The slow-tests cargo feature therefore functions only as a local-dev convenience, not as a CI tier.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:32",
+        "crates/cobre-sddp/tests/deterministic.rs"
+      ],
+      "figure": "slow-tests-in-pr-features",
+      "measured": "inference from the previous row; every PR job that tests enables slow-tests",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-one-lighter-job",
+      "section": "2.3",
+      "lines": "89",
+      "quote": "The one lighter job is `Check`",
+      "sentence": "The one lighter job is Check.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:35",
+        ".github/workflows/ci.yml:71"
+      ],
+      "figure": null,
+      "measured": "check job at ci.yml:35 runs cargo check --workspace --all-targets with NON_SOLVER_FEATURES (:71) and executes no test",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-shuffle-dispatch-only",
+      "section": "2.3",
+      "lines": "90-93",
+      "quote": "**`workflow_dispatch`-only**",
+      "sentence": "Order-invariance shuffle matrix (invariance-shuffle.yml) is workflow_dispatch-only — its nightly cron is commented out — so a hard-rule determinism guarantee is exercised in automation only on manual dispatch.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/invariance-shuffle.yml:4",
+        ".github/workflows/invariance-shuffle.yml:6"
+      ],
+      "figure": "shuffle-cadence",
+      "measured": "workflow_dispatch at :4; the schedule/cron lines at :6-7 are comments",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-coverage",
+      "section": "2.3",
+      "lines": "94",
+      "quote": "**Coverage** via `cargo-llvm-cov`",
+      "sentence": "Coverage via cargo-llvm-cov → codecov (HiGHS backend). Good.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:496",
+        ".github/workflows/ci.yml:497",
+        ".github/workflows/ci.yml:498"
+      ],
+      "figure": null,
+      "measured": "cargo install cargo-llvm-cov (:496), cargo llvm-cov --workspace (:497), codecov-action (:498)",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-mpi-slurm",
+      "section": "2.3",
+      "lines": "95-96",
+      "quote": "**Real multi-rank MPI** via a SLURM Docker cluster",
+      "sentence": "Real multi-rank MPI via a SLURM Docker cluster on examples/4ree (mpi-slurm.yml). Good.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/mpi-slurm.yml:101"
+      ],
+      "figure": null,
+      "measured": "mpi-slurm.yml:101 stages examples/4ree into the cluster",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-in-process-mpi",
+      "section": "2.3",
+      "lines": "96-97",
+      "quote": "In-process MPI via `StubComm`/`Rank0Of2`",
+      "sentence": "In-process MPI via StubComm/Rank0Of2 across the in-process rank-shape tests.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32",
+        "crates/cobre-sddp/tests/common/mod.rs:86",
+        "crates/cobre-sddp/tests/mpi_wire.rs"
+      ],
+      "figure": null,
+      "measured": "both types live in cobre-sddp/tests/common/mod.rs",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-absent-hardening-snapshot",
+      "section": "2.3",
+      "lines": "98-99",
+      "quote": "**Absent**: miri, sanitizers/valgrind, fuzzing",
+      "sentence": "Absent: miri, sanitizers/valgrind, fuzzing, snapshot tooling (insta/expect-test)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/gemm.rs",
+        ".github/workflows/ci.yml"
+      ],
+      "figure": null,
+      "measured": "no workflow token miri / sanitizer / valgrind / fuzz / insta / nextest archive at the pin; Cargo.lock carries proptest and criterion, no insta, expect-test or trybuild",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-test-support-inconsistent",
+      "section": "2.3",
+      "lines": "99-100",
+      "quote": "feature exists but is applied inconsistently",
+      "sentence": "[Absent:] a uniform cross-crate fixture convention (the test-support feature exists but is applied inconsistently)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-core/Cargo.toml:30",
+        "crates/cobre-io/Cargo.toml:33",
+        "crates/cobre-sddp/Cargo.toml:55",
+        "crates/cobre-solver/Cargo.toml:31",
+        "crates/cobre-stochastic/Cargo.toml:26",
+        "crates/cobre-cli/Cargo.toml:62"
+      ],
+      "figure": "test-support-declarers-vs-consumers",
+      "measured": "5 declarers, 5 consumers (cobre-cli consumes only), 8 neither including cobre-comm and cobre-python",
+      "note": ""
+    },
+    {
+      "id": "ta-2.3-python-no-cargo-test",
+      "section": "2.3",
+      "lines": "100-102",
+      "quote": "unit tests and doctests never compile in CI",
+      "sentence": "[Absent:] any cargo test/doctest run for the workspace-excluded cobre-python (its Rust unit tests and doctests never compile in CI)",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:562",
+        ".github/workflows/ci.yml:567",
+        "crates/cobre-python/Cargo.toml:17"
+      ],
+      "figure": null,
+      "measured": "SUPERSEDED at the pin: ci.yml:562-568 runs cargo test --manifest-path crates/cobre-python/Cargo.toml (one matrix cell, :563); the crate is cdylib-only (:17) and its 13 rustdoc fences are all tagged python, so no Rust doctest exists",
+      "note": "prose drift already recorded by the cli-python station as SN-06 (BACKLOG L5350) and by prior-register.md (Python item, dup-of-likely) — cite, never re-raise"
+    },
+    {
+      "id": "ta-3.2.1-binary-sharding",
+      "section": "3.2",
+      "lines": "129-134",
+      "quote": "**Binary sharding — the dominant structural cost.**",
+      "sentence": "Rust links one binary per tests/*.rs; with n binaries and m libraries the linker does m·n work, and Cargo runs integration binaries sequentially. Cobre amplifies this by statically linking a C++ LP solver into every solver-linked binary.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/Cargo.toml:59",
+        "crates/cobre-solver/tests/conformance.rs"
+      ],
+      "figure": "int-binaries-solver-linking",
+      "measured": "62 solver-linking binaries at the pin",
+      "note": "the closing 'This is Layer 1; its mechanics are in §5.1' points at a target and is not itself a fact"
+    },
+    {
+      "id": "ta-3.2.2-no-crate-standard",
+      "section": "3.2",
+      "lines": "135-139",
+      "quote": "**Per-crate non-uniformity.**",
+      "sentence": "There is no crate testing standard: tiers, the shared harness, fixtures, and golden management exist only in cobre-sddp.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/tests/parity.rs",
+        "crates/cobre-stochastic/tests/common/mod.rs"
+      ],
+      "figure": null,
+      "measured": "harness, fixtures and goldens in cobre-sddp; cobre-stochastic carries a 261-line common module and no goldens",
+      "note": "'a contributor … has no template to follow' and 'the user's central concern' are assessment, not citable fact"
+    },
+    {
+      "id": "ta-3.2.3-fixture-fragmentation",
+      "section": "3.2",
+      "lines": "140-145",
+      "quote": "**Fixture / test-support fragmentation.**",
+      "sentence": "The cross-crate mechanism is a test-support cargo feature that gates internal symbols behind #[cfg(any(test, feature = \"test-support\"))]; the reusable builders live in cobre-sddp/tests/common/; cobre-python (workspace-excluded) shares nothing and its Rust tests never run in CI. Three different sharing mechanisms, none uniform.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-core/src/lib.rs:50",
+        "crates/cobre-sddp/src/lib.rs:46",
+        "crates/cobre-sddp/tests/common/builders.rs",
+        "crates/cobre-python/Cargo.toml:34"
+      ],
+      "figure": "test-support-declarers-vs-consumers",
+      "measured": "gate confirmed at core :50, io :61, sddp :46/:94/:137, stochastic :32; builders in tests/common/; cobre-python [dev-dependencies] (:34) names no cobre-* test-support so 'shares nothing' holds; 'its Rust tests never run in CI' is SUPERSEDED (ci.yml:567)",
+      "note": "cite the superseded clause only through SN-06"
+    },
+    {
+      "id": "ta-3.2.4-inline-giant-asymmetry",
+      "section": "3.2",
+      "lines": "146-149",
+      "quote": "**Inline-giant vs extracted-sibling asymmetry",
+      "sentence": "lp/builder/entries.rs and columns.rs keep multi-thousand-line test modules inline while their siblings template.rs/layout.rs use extracted tests.rs. The homing rule is a coin-flip.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/lp/builder/entries.rs:1680",
+        "crates/cobre-sddp/src/lp/builder/columns.rs:1305",
+        "crates/cobre-sddp/src/lp/builder/template.rs:1328",
+        "crates/cobre-sddp/src/lp/builder/layout.rs:1962",
+        "crates/cobre-sddp/src/lp/builder/template/tests.rs",
+        "crates/cobre-sddp/src/lp/builder/layout/tests.rs"
+      ],
+      "figure": "homing-split",
+      "measured": "entries.rs 8,413 inline tail lines (4 modules), columns.rs 8,014 (12 modules); template/tests.rs 5,356, layout/tests.rs 3,565; layout.rs also keeps one inline module at :1965 — mixed, not purely extracted",
+      "note": "dup-of the mirror bullet; CD-007 and TD-047 own adjacent readings (prior-register.md)"
+    },
+    {
+      "id": "ta-3.2.5-no-cadence-tiering",
+      "section": "3.2",
+      "lines": "150-154",
+      "quote": "**No CI cadence tiering.** Everything",
+      "sentence": "Everything (including the entire slow suite) runs on every PR, while the order-invariance shuffle — a hard-rule guarantee — runs only on manual dispatch.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:32",
+        ".github/workflows/invariance-shuffle.yml:4"
+      ],
+      "figure": "slow-tests-in-pr-features",
+      "measured": "holds (rows ta-2.3-non-solver-features-includes-slow, ta-2.3-shuffle-dispatch-only)",
+      "note": "'This is backwards' is assessment; 'the project's own recorded intent' is the CLAUDE.md slow-tests hard rule (default cargo test skips them), a root-level file outside the anchor roots"
+    },
+    {
+      "id": "ta-3.2.6-runner-nextest-config",
+      "section": "3.2",
+      "lines": "155-159",
+      "quote": "**Runner inconsistency + zero nextest configuration.**",
+      "sentence": "cargo test vs nextest across jobs; no profiles, no per-test process isolation guarantees documented, no partitioning/sharding, no JUnit dashboard feed, and no use of nextest archive",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:114",
+        ".github/workflows/ci.yml:233"
+      ],
+      "figure": "ci-runner-split",
+      "measured": "no 'nextest archive' token anywhere under .github at the pin; .config/nextest.toml absent",
+      "note": ""
+    },
+    {
+      "id": "ta-3.2.7-hardening-gaps-proptest-5",
+      "section": "3.2",
+      "lines": "160-164",
+      "quote": "property testing at only 5 sites",
+      "sentence": "No miri on the pure-Rust unsafe (the isolated gemm kernel, raw-buffer reuse); no sanitizer/valgrind job for the C++ solver / MPI / PyO3 FFI; no fuzzing of the parser-heavy cobre-io; property testing at only 5 sites",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/gemm.rs",
+        "crates/cobre-core/src/system/builder.rs",
+        "crates/cobre-stochastic/src/season_cast/mod.rs"
+      ],
+      "figure": "proptest-sites",
+      "measured": "no hardening workflow at the pin; proptest! in 7 files / 8 invocations — the '5 sites' figure DRIFTS under both readings",
+      "note": "prose-drift candidate handed to ingest by E08-1 (inventory figure proptest-sites, driftAgainstDoc true)"
+    },
+    {
+      "id": "ta-3.2.8-golden-matrix-adhoc",
+      "section": "3.2",
+      "lines": "165-169",
+      "quote": "**Ad hoc golden and matrix management.**",
+      "sentence": "Golden re-baselining is prose discipline; the HiGHS×CLP × mpi/numa/shared-memory × slow feature matrix is uncodified (the CLP suite can silently rot, per the register's backend-scoped-parity caveat); MPI tests carry no rank-weight, so concurrent multi-rank tests can oversubscribe cores.",
+      "class": "current-state",
+      "driftIsFinding": true,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".claude/rules/testing.md:89",
+        ".github/workflows/ci.yml:166",
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": "nextest-config",
+      "measured": "re-baselining is the prose section at testing.md:89; no nextest.toml so no test-groups or rank weights; clp job at ci.yml:166 is the only CLP surface",
+      "note": ""
+    },
+    {
+      "id": "ta-5.1-one-integration-binary",
+      "section": "5.1",
+      "lines": "249-252",
+      "quote": "**One integration binary per crate**",
+      "sentence": "One integration binary per crate (tests/it.rs or tests/it/main.rs), submodules by domain via plain (#[path]-free) mod in the greenfield case.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/deterministic.rs",
+        "crates/cobre-sddp/tests/mpi_wire.rs"
+      ],
+      "figure": "int-binaries",
+      "measured": "40 binaries in cobre-sddp at the pin",
+      "note": "the gap is §6 phase 1 (Layer 1 consolidation), never a defect"
+    },
+    {
+      "id": "ta-5.1-homing-threshold",
+      "section": "5.1",
+      "lines": "253-256",
+      "quote": "**One deterministic unit-test homing rule**",
+      "sentence": "One deterministic unit-test homing rule: inline when the test module is below a fixed threshold (proposal: ~500 test-LOC or ~40 test fns), extracted to a sibling tests.rs above it.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/lp/builder/entries.rs:1680",
+        "crates/cobre-stochastic/src/tree/generate.rs:341"
+      ],
+      "figure": "homing-split",
+      "measured": "no ratified threshold at the pin (TD-031); TD-008 and TD-031 applied the proposal as a yardstick",
+      "note": "the doc itself says 'proposal' and 'Pick the threshold once here' — a target stated in present tense"
+    },
+    {
+      "id": "ta-5.1-migration-invariants",
+      "section": "5.1",
+      "lines": "351-354",
+      "quote": "**No test is deleted, skipped, renamed, or weakened**",
+      "sentence": "No test is deleted, skipped, renamed, or weakened; test-function count is identical before and after, verified mechanically by the §6 count-parity gate.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": "nextest-list",
+      "measured": "the parity baseline for any consolidation is the 6,371 listed tests",
+      "note": "source of lens Rule 2 (lens-rules.md)"
+    },
+    {
+      "id": "ta-5.2-keep-feature-three-crates",
+      "section": "5.2",
+      "lines": "398-399",
+      "quote": "Keep the `test-support` cargo-feature mechanism the repo already uses",
+      "sentence": "Keep the test-support cargo-feature mechanism the repo already uses (cobre-core, cobre-solver, cobre-sddp) and make it uniform and complete",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": true,
+      "counterAnchors": [
+        "declarers at the pin: crates/cobre-core/Cargo.toml:30, crates/cobre-io/Cargo.toml:33, crates/cobre-sddp/Cargo.toml:55, crates/cobre-solver/Cargo.toml:31, crates/cobre-stochastic/Cargo.toml:26 — five, of which the sentence names three",
+        "crates/cobre-cli/Cargo.toml:62 consumes the feature but declares none (the ticket's 'six declarers' counted this consumer line)",
+        "crates/cobre-comm/Cargo.toml declares no test-support feature"
+      ],
+      "anchors": [
+        "crates/cobre-core/Cargo.toml:30",
+        "crates/cobre-solver/Cargo.toml:31",
+        "crates/cobre-sddp/Cargo.toml:55",
+        "crates/cobre-io/Cargo.toml:33",
+        "crates/cobre-stochastic/Cargo.toml:26"
+      ],
+      "figure": "test-support-declarers-vs-consumers",
+      "measured": "5 declarers / 5 consumers / 8 neither",
+      "note": "provisional class; the defender decides whether the three-crate parenthetical is prose drift (an under-count) or an illustrative list inside a target — a §5 target stated in present tense must never be recorded as a code defect"
+    },
+    {
+      "id": "ta-5.2-adoption-uniform",
+      "section": "5.2",
+      "lines": "425-431",
+      "quote": "The convention is the adopted standard for the crates that own",
+      "sentence": "Adoption (2026-09-15). The convention is the adopted standard for the crates that own shareable fixtures: each exposes them behind its own test-support feature under the gate above, and consumers enable it as a dev-dependency feature. Two of its bullets are not yet carried out: crates/cobre-sddp/tests/common/ still holds its own fixture directory …, and crates/cobre-python/Cargo.toml's [dev-dependencies] does not yet name cobre-sddp with that feature.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": true,
+      "counterAnchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32 (pub struct StubComm) — the baseline home of the type",
+        "crates/cobre-sddp/tests/common/mod.rs:86 (pub struct Rank0Of2) — the baseline home of the type",
+        "crates/cobre-comm/Cargo.toml declares no test-support feature (git grep 'test-support' over it at the pin returns nothing); the crate is in the inventory's `neither` list",
+        "TD-053 and TD-056 (sddp station) anchor the same two symbols at crates/cobre-sddp/tests/common/mod.rs::StubComm / ::Rank0Of2 and name no destination crate",
+        "crates/cobre-cli/Cargo.toml:62 consumes test-support and declares none, yet cobre-cli owns per-file fixtures (TD-065 make_valid_case) that no feature exposes",
+        "declarers at the pin are five (core :30, io :33, sddp :55, solver :31, stochastic :26), not the ticket's six",
+        "both 'not yet carried out' facts verified at the pin: crates/cobre-sddp/tests/common/mod.rs exists; crates/cobre-python/Cargo.toml:34 [dev-dependencies] names no cobre-sddp"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32",
+        "crates/cobre-python/Cargo.toml:34",
+        "crates/cobre-cli/Cargo.toml:62"
+      ],
+      "figure": "test-support-declarers-vs-consumers",
+      "measured": "5 declarers / 5 consumers; cobre-comm and cobre-python neither",
+      "note": "provisional class; the defender pass decides prose-drift ('adopted standard … each exposes' narrated as already uniform) vs target-in-present-tense; a §5 target stated in present tense must never be recorded as a code defect"
+    },
+    {
+      "id": "ta-5.2-helpers-live-with-type",
+      "section": "5.2",
+      "lines": "411-418",
+      "quote": "**Helpers live with the type they build**",
+      "sentence": "Helpers live with the type they build … Generic scaffolding (the golden-SHA helper, the two-tier comparator of §5.4, the permute order-shuffle helper, RNG-seed and TempDir conventions) lives in cobre-core behind its test-support feature",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-core/Cargo.toml:30",
+        "crates/cobre-sddp/tests/common/permute.rs:83",
+        "crates/cobre-sddp/tests/common/parity_hash.rs"
+      ],
+      "figure": null,
+      "measured": "permute and parity_hash live in cobre-sddp/tests/common/ at the pin",
+      "note": "the gap is §6 phase 3, never a defect"
+    },
+    {
+      "id": "ta-5.2-stubcomm-in-comm",
+      "section": "5.2",
+      "lines": "415-416",
+      "quote": "`StubComm`/`Rank0Of2` live in `cobre-comm` (they impl",
+      "sentence": "StubComm/Rank0Of2 live in cobre-comm (they impl its Communicator)",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": true,
+      "counterAnchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32 (pub struct StubComm) — the baseline home of the type",
+        "crates/cobre-sddp/tests/common/mod.rs:86 (pub struct Rank0Of2) — the baseline home of the type",
+        "crates/cobre-comm/Cargo.toml declares no test-support feature (git grep 'test-support' over it at the pin returns nothing); the crate is in the inventory's `neither` list",
+        "TD-053 and TD-056 (sddp station) anchor the same two symbols at crates/cobre-sddp/tests/common/mod.rs::StubComm / ::Rank0Of2 and name no destination crate"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32",
+        "crates/cobre-sddp/tests/common/mod.rs:86"
+      ],
+      "figure": null,
+      "measured": "both types live in cobre-sddp/tests/common/mod.rs at the pin",
+      "note": "provisional class; the same claim as §5.8 (ta-5.8-stubcomm-home) inside a target bullet — adjudicate once, apply to both rows; a §5 target stated in present tense must never be recorded as a code defect"
+    },
+    {
+      "id": "ta-5.2-common-collapses",
+      "section": "5.2",
+      "lines": "417-421",
+      "quote": "**Every crate exposes its shareable fixtures the same way**",
+      "sentence": "Every crate exposes its shareable fixtures the same way — a test-support feature gating them behind #[cfg(any(test, feature = \"test-support\"))] … cobre-sddp/tests/common/ collapses into cobre-sddp's test-support surface so cobre-cli and cobre-python reach it",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs",
+        "crates/cobre-sddp/Cargo.toml:55",
+        "crates/cobre-sddp/src/lib.rs:46"
+      ],
+      "figure": null,
+      "measured": "tests/common/ still present at the pin (the doc's own Adoption paragraph says so)",
+      "note": ""
+    },
+    {
+      "id": "ta-5.2-python-dev-dep",
+      "section": "5.2",
+      "lines": "422-424",
+      "quote": "**`cobre-python` dev-depends on `cobre-sddp`'s `test-support`**",
+      "sentence": "cobre-python dev-depends on cobre-sddp's test-support, which (with the §5.11 CI wiring) lets its Rust tests share the same fixtures.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-python/Cargo.toml:34"
+      ],
+      "figure": null,
+      "measured": "[dev-dependencies] at :34 names no cobre-sddp at the pin",
+      "note": ""
+    },
+    {
+      "id": "ta-5.2-resolves-oracle-item",
+      "section": "5.2",
+      "lines": "436-438",
+      "quote": "register's oracle-harness-duplication item",
+      "sentence": "This convention also resolves the register's oracle-harness-duplication item (hoist the close/tolerance helpers into cobre-core's test-support surface).",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/extensive_form_oracle.rs:77",
+        "crates/cobre-sddp/tests/branching_value_oracle.rs:93",
+        "crates/cobre-sddp/tests/node_native_backward_gate.rs:76",
+        "crates/cobre-sddp/tests/mpi_wire.rs:2816"
+      ],
+      "figure": null,
+      "measured": "four fn close carriers at the pin",
+      "note": "names a third destination beside the mirror's two (cobre_sddp::test_support or one binary) — an owner pick recorded in prior-register.md; dup-of the mirror item"
+    },
+    {
+      "id": "ta-5.3-tier-taxonomy",
+      "section": "5.3",
+      "lines": "442-460",
+      "quote": "Keep the four tiers from `testing.md`",
+      "sentence": "Keep the four tiers from testing.md; name two more that already exist implicitly (property, compile-fail) and one to add (hardening) … write the analytical test before adding a behavioral case, and a behavioral case before promoting anything into the golden set",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".claude/rules/testing.md:15",
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": null,
+      "measured": null,
+      "note": ""
+    },
+    {
+      "id": "ta-5.4-two-tier-comparator",
+      "section": "5.4",
+      "lines": "464-474",
+      "quote": "Encode the determinism contract in shared comparators",
+      "sentence": "Encode the determinism contract in shared comparators (cobre-core's test-support surface): Exact (to_bits/SHA) for within-mode reproducibility and cross-rank/thread invariance; ULP-tolerance for cross-mode / cross-algorithm equivalence (assert_equivalent_vertex)",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/parity_hash.rs",
+        "crates/cobre-solver/tests/clp_determinism.rs"
+      ],
+      "figure": "to-bits",
+      "measured": "77 files hand-roll to_bits at the pin; no shared comparator exists",
+      "note": ""
+    },
+    {
+      "id": "ta-5.5-nextest-everywhere",
+      "section": "5.5",
+      "lines": "478-488",
+      "quote": "Adopt `cargo-nextest` as the sole runner",
+      "sentence": "Adopt cargo-nextest as the sole runner (keep a separate cargo test --doc) and commit a .config/nextest.toml: [profile.ci] retries + flaky-marking, JUnit, test-groups, slow-timeout, --partition hash:m/n, nextest archive for the SLURM/MPI path",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:114",
+        ".github/workflows/ci.yml:233"
+      ],
+      "figure": "nextest-config",
+      "measured": "absent at the pin; §6 phase 2",
+      "note": ""
+    },
+    {
+      "id": "ta-5.6-cadence-tiering",
+      "section": "5.6",
+      "lines": "492-510",
+      "quote": "Split the monolithic per-PR run into cadence tiers",
+      "sentence": "Split the monolithic per-PR run into cadence tiers … (a) remove slow-tests from the per-PR feature set (NON_SOLVER_FEATURES) … (b) put the shuffle matrix on the nightly cadence (uncomment the cron) … This is a policy change with a tradeoff … and should be ratified explicitly",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:32",
+        ".github/workflows/invariance-shuffle.yml:6"
+      ],
+      "figure": "slow-tests-in-pr-features",
+      "measured": "both levers unmoved at the pin",
+      "note": "the doc itself marks this unratified; §6 phase 4 — a policy decision, never a defect"
+    },
+    {
+      "id": "ta-5.7-matrix-policy",
+      "section": "5.7",
+      "lines": "514-520",
+      "quote": "Declare the `{backend} × {feature set} × {CI job}` matrix",
+      "sentence": "Declare the {backend} × {feature set} × {CI job} matrix in one place … State the backend-scoping of the parity roster (the register's open caveat) inline in the roster.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:166",
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": null,
+      "measured": null,
+      "note": ""
+    },
+    {
+      "id": "ta-5.8-stubcomm-home",
+      "section": "5.8",
+      "lines": "524-526",
+      "quote": "Keep `StubComm`/`Rank0Of2` (in `cobre-comm`'s `test-support` surface)",
+      "sentence": "Keep StubComm/Rank0Of2 (in cobre-comm's test-support surface) as the in-process rank-shape harness for PR-tier determinism gates; keep the SLURM job for real multi-rank on the extended tier.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": true,
+      "counterAnchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32 (pub struct StubComm) — the baseline home of the type",
+        "crates/cobre-sddp/tests/common/mod.rs:86 (pub struct Rank0Of2) — the baseline home of the type",
+        "crates/cobre-comm/Cargo.toml declares no test-support feature (git grep 'test-support' over it at the pin returns nothing); the crate is in the inventory's `neither` list",
+        "TD-053 and TD-056 (sddp station) anchor the same two symbols at crates/cobre-sddp/tests/common/mod.rs::StubComm / ::Rank0Of2 and name no destination crate"
+      ],
+      "anchors": [
+        "crates/cobre-sddp/tests/common/mod.rs:32",
+        "crates/cobre-sddp/tests/common/mod.rs:86",
+        ".github/workflows/mpi-slurm.yml:101"
+      ],
+      "figure": "test-support-declarers-vs-consumers",
+      "measured": "both types live in cobre-sddp/tests/common/mod.rs at the pin; cobre-comm exposes no test-support surface",
+      "note": "provisional class; the defender pass decides prose-drift vs target-in-present-tense; a §5 target stated in present tense must never be recorded as a code defect"
+    },
+    {
+      "id": "ta-5.8-rank-weight",
+      "section": "5.8",
+      "lines": "527-530",
+      "quote": "Give every multi-rank test an explicit **rank weight**",
+      "sentence": "Give every multi-rank test an explicit rank weight (nextest test-group max-threads) and a max-rank budget",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/mpi_wire.rs",
+        ".github/workflows/mpi-slurm.yml"
+      ],
+      "figure": "nextest-config",
+      "measured": "no nextest.toml, so no test-groups or weights at the pin",
+      "note": ""
+    },
+    {
+      "id": "ta-5.8-order-of-accuracy",
+      "section": "5.8",
+      "lines": "531-532",
+      "quote": "**order-of-accuracy** verification",
+      "sentence": "Frame the forward-sampler convergence test explicitly as an order-of-accuracy verification (observed vs theoretical rate).",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-stochastic/tests/forward_sampler.rs"
+      ],
+      "figure": null,
+      "measured": null,
+      "note": ""
+    },
+    {
+      "id": "ta-5.9-hardening",
+      "section": "5.9",
+      "lines": "536-547",
+      "quote": "Add Tier-3, off the PR path",
+      "sentence": "Add Tier-3, off the PR path: miri on the pure-Rust unsafe only; valgrind / -Zsanitizer=address for the C++ solver + MPI + PyO3 FFI; one cargo-fuzz target for the cobre-io parsers; expand proptest from 5 sites (permute → assert identical bits) with proptest-regressions/ committed",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/gemm.rs",
+        "crates/cobre-io/src/lib.rs",
+        "crates/cobre-core/src/system/builder.rs"
+      ],
+      "figure": "proptest-sites",
+      "measured": "7 files / 8 invocations at the pin",
+      "note": "'from 5 sites' restates the §3.2 item-7 figure; the drift belongs to ta-3.2.7-hardening-gaps-proptest-5, not to this target"
+    },
+    {
+      "id": "ta-5.10-golden-snapshot",
+      "section": "5.10",
+      "lines": "551-557",
+      "quote": "Keep SHA-bit-exact for the small deliberate golden set",
+      "sentence": "Keep SHA-bit-exact for the small deliberate golden set; adopt insta (or expect-test) for the verbose text goldens; one just/script regen entrypoint per golden family",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/parity.rs",
+        ".claude/rules/testing.md:89"
+      ],
+      "figure": "golden-cases",
+      "measured": "no insta / expect-test in Cargo.lock at the pin",
+      "note": ""
+    },
+    {
+      "id": "ta-5.11-python-parity",
+      "section": "5.11",
+      "lines": "561-566",
+      "quote": "Wire the crate's Rust tests into CI",
+      "sentence": "Wire the crate's Rust tests into CI (a cargo test -p cobre-python / cargo check --tests step), closing the register's 'Python-Rust tests invisible to CI' item. Have it dev-depend on cobre-sddp's test-support feature …; keep the pytest output-parity suite unchanged.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:567",
+        "crates/cobre-python/Cargo.toml:34",
+        "crates/cobre-python/tests/conftest.py"
+      ],
+      "figure": null,
+      "measured": "the CI half is already carried at the pin (ci.yml:562-568, cargo test --manifest-path, one matrix cell); the dev-dep half is not (:34)",
+      "note": "a met target is not a finding; the stale 'closing the register's item' status belongs to the mirror merge (prior-register.md, Python item)"
+    },
+    {
+      "id": "ta-6-count-parity-gate",
+      "section": "6",
+      "lines": "568-571",
+      "quote": "gated on `cargo nextest list` count parity",
+      "sentence": "Each phase is behavior-neutral and gated on cargo nextest list count parity (no test added, removed, or renamed except the module-path prefix).",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/tests/parity.rs"
+      ],
+      "figure": "nextest-list",
+      "measured": "6,371 listed tests is the parity baseline",
+      "note": "Rule 2 corroboration (lens-rules.md)"
+    },
+    {
+      "id": "ta-6-phase-order",
+      "section": "6",
+      "lines": "573-593",
+      "quote": "**Layer 1 — binary consolidation**",
+      "sentence": "Order by leverage: 1 Layer 1 binary consolidation; 2 .config/nextest.toml + nextest as the sole runner; 3 standardize the test-support feature; 4 CI cadence tiering (ratify first); 5 unit-test homing lint + inline-giant asymmetry; 6 Tier-3 hardening; 7 insta for text goldens",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".github/workflows/ci.yml:114"
+      ],
+      "figure": null,
+      "measured": null,
+      "note": "roadmap; every gap a lens finds against §5 maps onto one of these phases"
+    },
+    {
+      "id": "ta-7-no-loom-trybuild-blanket-miri",
+      "section": "7",
+      "lines": "594-601",
+      "quote": "**`loom`**",
+      "sentence": "loom — not warranted today; trybuild — adopt only if a proc-macro/DSL ships; blanket miri — scope it to pure-Rust unsafe",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        "crates/cobre-sddp/src/gemm.rs"
+      ],
+      "figure": null,
+      "measured": null,
+      "note": "a lens proposing any of these is dismissed under §7"
+    },
+    {
+      "id": "ta-7-no-coverage-reduction",
+      "section": "7",
+      "lines": "602-604",
+      "quote": "**Reducing coverage to shrink the suite**",
+      "sentence": "Reducing coverage to shrink the suite — the cost is per-binary and per-feature-combo, never per-test; deleting tests saves nothing structural and forfeits the suite's best asset.",
+      "class": "target",
+      "driftIsFinding": false,
+      "adjudicate": false,
+      "counterAnchors": [],
+      "anchors": [
+        ".claude/rules/testing.md:113",
+        "crates/cobre-sddp/Cargo.toml:59"
+      ],
+      "figure": null,
+      "measured": null,
+      "note": "source of lens Rule 2 (lens-rules.md)"
+    }
+  ]
+}

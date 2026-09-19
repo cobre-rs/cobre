@@ -1,6 +1,6 @@
-# Next-step roadmap — 2026-09-17
+# Next-step roadmap — 2026-09-17, amended 2026-09-19
 
-Companion to `PRIORITIES.md` §6. That section ranks the unrun stations; this file is the
+Companion to `PRIORITIES.md` §6 (2026-09-17) and §8 (2026-09-19, the live sequence). That section ranks the unrun stations; this file is the
 operating sequence the owner agreed to on 2026-09-17, including the user-reported bug
 CD-074 (`BACKLOG.md`, section "USER-REPORTED BUG (2026-09-17)") and the SpecForge
 reconciliation. Amend in place; do not fork a second copy.
@@ -26,7 +26,7 @@ reconciliation. Amend in place; do not fork a second copy.
    `LB 3.03e12 > UB 1.87e11` at iteration 37 is benign CVaR reporting or a second defect.
    Reproduction of the abort itself is not requested.
 
-3. **Fix CD-074 as one plan off `develop`, released in v0.16.0.** DONE (`<merge-sha>`) —
+3. **Fix CD-074 as one plan off `develop`, released in v0.16.0.** DONE (`3356da2d`) —
    shipped as the state-canonicalization plan (projection onto the admissible box via the
    single read-back seam `assemble_outgoing_state`; runtime verdict retired; over-commitment
    moved to the cobre-io load-time validator `check_committed_value_bounds`).
@@ -71,6 +71,8 @@ reconciliation. Amend in place; do not fork a second copy.
 
 7. **Remaining stations in the existing order:** cli-python, W8 setup-perf
    (opportunistic), build-ci + test-corpus, generalization-alignment, unified-roadmap.
+   — cli-python DONE (ratified 2026-09-18); solver-comm and sddp also ratified 2026-09-18; the
+   rest is re-sequenced in the 2026-09-19 section below.
 
 ## SpecForge reconciliation (2026-09-17, ticket bodies read)
 
@@ -185,3 +187,61 @@ approval); **supersede** = outcome already produced outside the spec, close with
 E03-6 finalize (DONE 2026-09-17) → re-pin (DONE) + re-calibrate `CAL`/`CAL-ENUM` (DONE, on the
 re-sanctioned deck) → E04 (run) → E05 (with CD-074 lens; regenerate lp-inventory) → E06 (matrices
 as prior evidence) → E07 → E08 (after §5.1 ratification) → E09 → E10 → E11.
+
+## Sequence after stations 4–6 (2026-09-19; the live sequence — `PRIORITIES.md` §8 holds the table)
+
+Merged into `develop` at `3356da2d`: the three station ratifications (solver-comm, sddp, cli-python;
+`PRIORITIES.md` §7 tiers their 104 new ids and 26 sharpened priors), the opened build-ci station, and
+the state-canonicalization plan that fixed CD-074 (drift tally later removed, `7fbb3da2`). No release
+has been cut since v0.15.0.
+
+### Owner decisions (2026-09-19)
+
+1. **Hybrid sequencing.** Tier the three ratified stations (done, §7); fix Tier 6 now as one plan;
+   run build-ci (E07) and the performance sweep (E10) alongside it because their inputs are already
+   in hand and they touch nothing the wave edits; alignment (E09), test-corpus (E08) and the unified
+   roadmap (E11) follow, in that order.
+2. **No release-scoping cutoff.** The wave plans everything not gated on an unrun station (Tiers 6,
+   7, 8 of `PRIORITIES.md` §7 plus the W17 Sev-C items and W8 setup-perf) and lands as much as time
+   allows; releases are cut from whatever has merged. (The 2026-09-17 constraint "no standalone patch
+   release" stands.)
+
+### Steps
+
+1. Register housekeeping — DONE in this change (`3356da2d` recorded; §7, §8, this section).
+2. `/plan` the ungated quality wave off `develop`: Tier 6 → Tier 7 → Tier 8 → W17 and W8 as outline
+   epics. Bars and CHANGELOG duties as listed in §8 step 1.
+3. build-ci station E07-2 … E07-6 (read-only), alongside step 2.
+4. performance-sweep station E10 at the register pin, alongside step 2; the 15 B perf rows of W14
+   schedule only from its claim table.
+5. Release (owner) from whatever has merged — `plans/state-canonicalization/RELEASE-CHECKLIST.md`.
+6. generalization-alignment station E09 → the Phase-0a/0b plan (W15: CD-004, CD-005, CD-025, CD-079,
+   OD-043, CD-088, CD-092, W10).
+7. Ratify `testing-architecture.md` §5.1 → test-corpus station E08 → W9 + W16 as one wave.
+8. W8 setup-perf rides step 2 as an outline epic (PD-009 first).
+9. reconciliation + unified-roadmap E11: lift §5 + §7 waves into the register's roadmap section;
+   mirror write-backs as enumerated in §8 step 8.
+
+### Open owner calls carried into step 2
+
+- CD-082: the constructor-input half lands in Tier 6; the fail-loud construction-time check was
+  decided to ride CD-004's carrier (R6-nh-2) — confirm the split when the ticket is specced.
+
+### Preconditions found while verifying this amendment (2026-09-19, this host)
+
+- **Re-pin before E07/E10 run.** `check-anchors.py` exits 2 with `baseline-drift: HEAD 3356da2d !=
+  baseline 077dbe2c` — the evaluated surfaces (crates/, docs/, scripts/, schemas/) changed when the
+  state-canonicalization plan merged, so the drift rule now bites. Run `tools/pin-baseline.sh --repin`
+  at the tip the stations will evaluate (the five ratified stations keep their entries' own `Baseline:`
+  fields, as X1 already established). The step-1 wave changes crates/ again, so pin once, after it
+  merges, unless E07/E10 run first at `3356da2d`.
+- **The harness needs `python3` ≥ 3.10 on PATH.** The tools use `@dataclass(slots=True)` and the unit
+  tests spawn the literal `python3`; this host's `/usr/bin/python3` is 3.8 and every checker and all 20
+  harness tests fail on import (pre-existing, unrelated to this change). `~/.local/bin/python3.13`
+  exists; put a 3.10+ interpreter first on PATH as `python3` before running `verify-harness.sh` /
+  `verify-station.sh`. With 3.13, `fields-check` and `check-roadmap-dag` self-tests pass; `check-anchors`
+  fails only on the drift above.
+- **`plans/generalizing/` is absent on this host** (untracked, never committed; present on the owner's
+  other machine). `check-reraise.py` aborts with `CorpusMissing: plans/generalizing/refinement-todo.md`,
+  and the alignment station (E09) reads `plans/generalizing/beyond-sddp-generalization.md`. Copy or
+  track the corpus before E09 or any station verify runs here.

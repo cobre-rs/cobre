@@ -1,4 +1,4 @@
-# Prioritized remediation — 2026-09 quality evaluation (stations core-io + stochastic)
+# Prioritized remediation — 2026-09 quality evaluation (stations core-io + stochastic; §7–§8 extend it to solver-comm, sddp, cli-python)
 
 Independent validation and prioritization of the 112 findings ratified at the two owner gates
 (`stations/core-io/gate.md`, `stations/stochastic/gate.md`). This document ranks; it changes no
@@ -12,11 +12,14 @@ register entry. Finding IDs are owned by `BACKLOG.md`; every ID below links to i
 - **Method:** every entry re-derived against source by the main session (all Tier-1/Tier-2 items
   by hand) plus five read-only validators, one per lens/station. Outcome: **0 refuted, 26 partial
   (count/anchor/severity corrections), 86 verified.** Partials never changed a defect's existence.
-- **Status of the evaluation:** 2 of 11 stations ratified. Of the remaining nine
-  (`BACKLOG.md:3674–3708`) only `reconciliation` has content: the Tier-1 fix wave (2026-09-11).
-  The tracked mirror `docs/design/reserved-seams-and-deferred-debt.md` now carries an ID-free
-  2026-09 section grouped by the tiers below; it received nothing before that wave despite the
-  register preamble (`BACKLOG.md:14–20`) naming it as the second write surface.
+- **Status of the evaluation (updated 2026-09-19):** 5 of 11 stations ratified — core-io and
+  stochastic (2026-09-08, at `a136840d`; §1–§5 below), solver-comm, sddp and cli-python (2026-09-18,
+  at `077dbe2c`; §7). build-ci is opened (inventory, gate-wiring census, prior register at `60d10309`)
+  but its attacker, ingest, calibrate, verify and gate steps have not run; test-corpus,
+  generalization-alignment, performance-sweep and unified-roadmap are unrun; `reconciliation` holds the
+  Tier-1…W7 fix waves and the 2026-09-17 post-plan section. The tracked mirror
+  `docs/design/reserved-seams-and-deferred-debt.md` carries the core-io + stochastic tiers only; the
+  write-backs the three later gates routed to E11 are listed in §8.
 - **Tier 1 status (2026-09-11):** all four FIXED — `fix/quality-tier1` (a729a259 … 0d4c8c22,
   merged to `develop`) plus two follow-ups found during execution on `fix/quality-tier1-followups`:
   19521701 (thermal joins rule 49 by declared-id membership; rule 16 retired) and 3b363161
@@ -43,6 +46,10 @@ register entry. Finding IDs are owned by `BACKLOG.md`; every ID below links to i
   open with hardened detection** (golden CLI-vs-Python determinism test, import-resolving parity gate).
   Anchor drift on open entries: TD-017 only (pre-existing). Details in the register's post-plan section.
   Next baseline `develop` @ `077dbe2c`.
+- **CD-074 (2026-09-17 → 2026-09-19):** FIXED on `develop` at `3356da2d` by the state-canonicalization
+  plan (18/18 tickets); the drift tally it first shipped was removed as overengineering (`7fbb3da2`).
+  No release has been cut since v0.15.0 (`main` = `a136840d`). Owner decision 2026-09-19: no
+  release-scoping cutoff — everything ungated in §7 is planned as one wave and lands as time allows (§8).
 
 ---
 
@@ -253,7 +260,10 @@ Every one of the 112 ratified IDs appears in exactly one wave (verified mechanic
 
 ---
 
-## 6. Next steps (proposed 2026-09-17, after the reconciliation)
+## 6. Next steps (proposed 2026-09-17, after the reconciliation) — SUPERSEDED by §8 on 2026-09-19
+
+Steps 0 (CD-074), 1 (re-pin), 2 (cli-python) and 3 (sddp) are DONE; step 4 (W8) stays opportunistic;
+step 5's order is re-cut in §8 after the three owner gates. Kept for provenance.
 
 Nine of eleven stations are unrun. Ordered by what the tree just made cheap or urgent:
 
@@ -270,3 +280,170 @@ Owner decisions this ordering assumes: CD-074 ships as a hotfix ahead of the `sd
 redesign is its own ticket (step 0); the remaining stations evaluate at the new pin (step 1); the
 cli-python station may cite the plan's matrices as prior evidence instead of re-deriving them; CD-025's
 hoist stays Wave 5 (not folded into the cli-python station's fixes).
+
+---
+
+## 7. Stations 4–6 — solver-comm, sddp, cli-python (tiered 2026-09-19)
+
+Scope: the three owner gates of 2026-09-18 (`stations/solver-comm/gate.md`, `stations/sddp/gate.md`,
+`stations/cli-python/gate.md`), all at baseline `077dbe2c`. Minted: 20 + 44 + 40 = **104 new ids**
+(3 × B (A-risk), 39 × B, 62 × C) plus **26 sharpened or kept prior ids** (sddp 22, cli-python 4);
+3 prior ids retired to Cleared (CD-001, CD-003-construction-hop, CD-006); 0 rejected, 1 deferred
+(OD-043, trigger CD-004).
+
+**Validation basis.** Unlike §1–§5, no independent re-derivation pass was run: every entry below went
+through one read-only defender, a calibration pass (reviewer downgraded 18, upgraded 1) and an owner
+gate that answered 94 needs-human items. The gate answers (`Owner decision (2026-09-18, …)` bullets
+on the entries) fix the fix-shape; the per-ticket spec scoring of the fix plan is the validation point
+for Tier 6, exactly as the Tier-1 execution was for §1. Line refs below are `BACKLOG.md` heading
+lines at `3356da2d`; anchors inside entries are symbol-level at `077dbe2c`.
+
+**Tiering rule.** Tiers 6–8 are ordered by what gates them, not by severity: Tier 6 is what users
+can hit; Tier 7 is what the owner already said to do now and what nothing else gates; Tier 8 is
+what waits for a licensed public-API break. Tiers 9–11 are gated by an unrun station (perf sweep,
+alignment, test-corpus). Sev-C entries with no gate and no owner "now" land when the surrounding
+code is next touched (§Deprioritized below), the same rule §2 applied.
+
+### Tier 6 — user-visible and latent-correctness (first epics of the wave)
+
+Every row is alignment-neutral in effect: no seam, crate or dispatch topology moves, even where the
+entry carries a provisional `advances-0a` tag for Epic 9's bookkeeping.
+
+| ID | Register | Defect | Fix-shape (owner-decided) | Effort | Parity / contract bar |
+| --- | --- | --- | --- | --- | --- |
+| CD-082 | `:4557` | `cobre validate` exits 0 for three `ResolvedParametersError` classes whenever `policy.boundary` is set: the two validate paths build `StudySetup` against an empty scalar-parameter table, so `MissingSeason`, `PerStageBlockCoverage`, `MissingSpecificProductivity` surface only at `cobre run`. | Make the scalar table a constructor input of `StudySetup::new` / `new_with_boundary_requirements` (unpatched params unrepresentable); the fail-loud leg is a construction-time check at the LP-build / admission site (R6-nh-2) — `ResolvedParameters::get` stays infallible. | M | parity goldens, permute harness, `mpiexec -n 1/2`; both front ends' `validate` gain the three rejections (Python `cobre.io.validate` in lockstep). |
+| CD-029 (prior, sharpened) | `:1244`; sharpened at `:5307` | Boundary reconciliation bypasses `PrepPhase` through two hand-mirrored front-end copies; `cobre validate --json` emits NO error object on a boundary reject; the CLI copy reads the checkpoint twice. | Fold the boundary check into cobre-sddp `PrepPhase` as its fourth phase (L3, R4 hold closed) with a fourth `prep_phase_metadata` row (R5-nh-4); both front ends call it; emit the `--json` error object and add a `--json` reject test (R5-nh-20); correct the "four steps" prose. | M | needs-rebaseline: the `--json` object gains a phase — CHANGELOG describes the contract change. |
+| CD-091 | `:5647` | The CLI's `LoadError` → kind map is a 3-arm match with a catch-all to exit 4 and NO `--json` object for `ParseError` / `SchemaError`; the bindings keep a private total 5-variant map. | One kind map in cobre-io beside `LoadError` (R5-nh-6); both front ends call it; every CLI early return routes through `emit_validate_json` under `--json`; `CaseValidationError` retired, no alias (R5-nh-5). | M | needs-rebaseline: `--json` `error.phase` vocabulary changes — CHANGELOG. `test_validate.py:222` pins the Python kinds; nothing asserts `CaseValidationError`. |
+| CD-095 | `:5719` | `load_simulation` / `load_simulation_arrow` with `entity_type=None` iterate a hand-kept 10-name `ENTITY_TYPES` and silently omit four written families (`hydro_bus_generation`, `in_transit`, `transit_seed`, `anticipated_lanes`) while their docstrings promise all. | cobre-io exposes the family names it writes beside `SIMULATION_FAMILIES`; both readers iterate it. New read-side regression on a deck with travel-time arcs and post-study stages. | S | read-only: all three write-path parity layers hold by construction. |
+| CD-096 | `:5733` | `load_convergence` drops `mean_rows_in_lp` while claiming schema parity; the key-presence test cannot see it. | Iterate the parquet file's own schema fields (the arrow sibling already does); regression asserting returned keys == written field names; the arrow doc table states the set by reference. | S | read-only. |
+| CD-086 | `:4926` (5c) | Under `Traversal::Enumerated` no `slot_increments` fold and no `sync_stage_metadata`, so `CutPool::record_binding` never fires: the DCS resident-set seed and `enforce_budget`'s eviction key degrade silently on a pairing no gate rejects. | Road (a): typed admission-gate rejection of enumerated + dynamic cut selection beside the existing enumerated preconditions in `setup/mod.rs`; named test + `.claude/rules/sddp.md` entry; eviction reader in scope (R6-nh-19/20). | S–M | byte-neutral on every shipped golden (no deck pairs them). |
+| CD-084 | `:4754` (5b) | `fill_anticipated_columns` keys the deposit slot off the raw delivery axis; the three sibling residue owners use `PointResolution::ring_index`. Latent (the diverging deck is rejected at validation) but a wrong column bound compiles. | One ring-residue walker in `lp/builder` (fpha_cursor.rs style) that the row fill, column fill and `build_anticipated_slot_row_pos` all drive (R6-nh-38). | S | byte-neutral against every golden; cites the ring-axis and column-bound-pinning contracts. |
+| CD-089 | `:5612` | The simulate-arm gate is written twice in non-equivalent form (CLI: `n_scenarios > 0`; bindings: `config.simulation.enabled && n_scenarios > 0`), agreeing only through the setup normalization. | The engine answers the phase plan as one small owned value (trained-then-simulated / simulate-from-policy / nothing); both L4 entry points consume it; each keeps its own no-op rendering (R5-nh-1). | S | CLI-vs-Python value golden, file-set parity, 18-name floor. |
+| CD-090 | `:5629` | The solver-stats log-to-totals fold is duplicated line for line in cobre-cli and cobre-python; the bit-for-bit `total_lp_solves` caveat lives as prose in one copy. | One fold in cobre-sddp `solver_stats.rs` over `&[SolverStatsLogEntry]` with the rank filter as an argument; the caveat becomes a doc + named regression. | S | value golden. |
+| OD-040 residue | `:5218` (5d) | Four `cast_sign_loss` allows in `resolve_fitting_bounds` are unmitigated: a negative discretization count wraps past the `< 2` / `< 1` guards into `build_grid`. | Non-negativity validation of the four discretization counts at the cobre-io input boundary (the R6-nh-30 re-file lands as code, recorded on the entry); the 42-site rationale sweep is NOT done (R6-nh-29: mirror prose corrected down to D4 at E11). | S | byte-neutral; CHANGELOG: previously accepted negative counts now fail validation. |
+
+Not in Tier 6 although B or A-risk: CD-004 (single Config projection), CD-005 (StudySetup split behind
+a parity re-baseline), CD-025 (shared output orchestration in cobre-io) and CD-079 (StageTemplate
+sheds five fields) — they ARE the Phase-0a/0b work and wait for Tier 10; the perf B rows wait for Tier 9.
+
+### Tier 7 — owner-directed now-fixes and ungated Sev-B structure (same plan, later epics)
+
+| Group | IDs | Owner direction at the gate | Effort |
+| --- | --- | --- | --- |
+| Doc-only corrections that land now | CD-076 (L0 vocabulary reword, R10), CD-028 (`claim_scatter.rs` consumer list, R6-nh-21), CD-083 false rustdoc line, OD-038 + `BlockGrid::advance_fpha_base` rustdoc (R6-nh-13/14), CD-080 README row (keep the mapping unconditional) | now-fix; the CD-083 / OD-038 removals themselves are Tier 8 | S |
+| Deletions the owner ordered now | OD-032 `is_homogeneous` + 4 tests (R8); TD-039 `clp_only_smoke.rs` (R11); TD-051 `test_mpi_allgatherv_nonuniform_workers.rs` (R6-nh-24/43); `StudySetup::set_budget` (CD-005 R6-nh-1) | delete now; coverage-neutral | S |
+| Ungated Sev-B structure | CD-078 (CLP basis-code constants, one owner in `ffi/clp.rs`); OD-035 (HiGHS retry tolerance pair → one helper, FFI order verbatim, pinned by the escalation tests); CD-085 (typed `commitment_hold_{incoming,outgoing}_col` resolvers, R6-nh-11); CD-087 private half (intra-crate alias retirement, `lp` aliases first, R6-nh-27) | as recorded | S / S / S / M |
+| Backward-pass symmetry pair (priors, neutral) | CD-022 (successor-outcome reification inlined twice), CD-015 (by-scenario merge-and-commit tail vs `by_node_finish`), CD-016 delta (the two diverged `slot_increments` fold bounds), CD-014-remnant relief | as recorded at the sddp gate; hot-path code — `.claude/architecture-rules.md` applies | M |
+| Test-side items the owner said "now" | TD-057 + TD-065 (`crates/cobre-cli/tests/common/`, R5-nh-22/23); TD-044 (per-binary hoist, R6-nh-8); TD-048 (parameterize in place, R6-nh-17); TD-064 + TD-063 (`*_lines` helpers, delete the `format_*_string` twins, R5-nh-35) | now; the cross-binary lift stays E08's call | S–M |
+
+### Tier 8 — licensed public-API break batch (CD-019 precedent)
+
+Every 0.x minor release licenses a public-API break and the unreleased section already removes the
+`report` / `summary` subcommands and their Python mirrors, so the batch is not gated on a release
+decision: owner decision 2026-09-19 (no release-scoping cutoff) puts it in the wave after Tiers 6–7.
+
+| ID | Removal | Consumers to update |
+| --- | --- | --- |
+| OD-033 (B) | CLP hot-start acquire half: `cobre_clp_mark_hot_start`, `cobre_clp_solve_from_hot_start`, the two safe wrappers, their harness tests (R6) | none in production |
+| OD-037 (C) | `Col`, `Row` newtypes + 3 tests (R6-nh-12) | `lp/indexer/mod.rs` re-export, lib.rs |
+| OD-038 (C) | `FphaRowRange` + smoke test (R6-nh-13) | re-export; docs corrected in Tier 7 |
+| CD-083 (C) | `CutManagementConfig::warm_start_cuts` (R6-nh-3) | two production literals, `train_inner` reset, test literals |
+| CD-087 public half (C) | `pub use policy::orchestration` (R6-nh-27) | cobre-cli, cobre-python, the corpus, `scripts/ci/check_python_parity.py` literal |
+| CD-019 / mirror "Superseded cut-sync public methods" | `sync_cuts`, `pack_local_records`, `sync_packed_records` and their tests (E5 dup-of, no new id) | none in production; `test_mpi_sync_cuts_invariant.rs`'s count-mismatch copy retires with them |
+
+### Tier 9 — performance rows, gated on the performance sweep (E10)
+
+All UNMEASURED by rule; the sweep measures each at its layout on the sanctioned decks
+(`measurements/CAL*`) and the fix ticket lands only IMPROVED or NEUTRAL with the three bars green.
+Owner shaping already recorded: PD-036 → `NodeGraph` field (R6-nh-6); PD-039 is a warm-start-chain
+change that must clear `opening_order_determinism` (R6-nh-15); PD-042 keeps the over-inclusion,
+shared-block fix only (R6-nh-23); PD-045 `StageContext` span only (R6-nh-32); PD-050 proceeds as a
+supported bulk reader (R5-nh-14); PD-032/PD-034 shape questions (index-scoped CLP bound writer, bulk
+basis accessor) are answered by the fix ticket against the profile (R15).
+
+| Station | B rows (layout `4t` unless noted) | Sev-C rows (record only) |
+| --- | --- | --- |
+| solver-comm | PD-032 (`cobre_clp_chg_bounds` per-crossing alloc), PD-033 (CLP `add_rows` scratch), PD-034 (`ClpSolver::get_basis` per-element FFI) | — |
+| sddp | PD-036, PD-038, PD-039, PD-040, PD-041, PD-042, PD-044, PD-045, PD-047 (enumerated deck, `2t`) | PD-035, PD-037, PD-043, PD-046, PD-048 |
+| cli-python | PD-049 (`load_policy` holds the GIL through decode), PD-050 (per-cell type resolution), PD-051 (`cut_matrix` per-element PyFloat) | PD-052, PD-053, PD-054, PD-055 |
+| do-not-touch | PD-004 (existence-and-queue only, profile first) | — |
+
+### Tier 10 — the Phase-0a / 0b structural cluster, gated on generalization-alignment (E9)
+
+These are the seams Part V §V.1 (Phase 0a) and §IV.2 (the 0b carve) define; they land as ONE plan
+after the alignment station adjudicates the `advances-*` rows in `stations/{sddp,cli-python}/alignment-queue.json`
+and `stations/solver-comm/handoffs.json`. Nothing here is blocked on a `conflicts` hold — all four
+holds were closed by their alternatives at the gates.
+
+| ID | Sev | Direction fixed at the gate |
+| --- | --- | --- |
+| CD-004 (+ OD-043 deferred to it) | B (A-risk) | one Config projection; `BroadcastConfig` and `StudyParams::from_config` stop being hand-kept twins; `broadcast.rs` placement resolves with it (R5-nh-34); CD-024-successor rides it (R4) |
+| CD-005 | B | `StudySetup` lifecycle split with the NCS fields moved as one unit, behind a parity re-baseline naming all three bars (R5) |
+| CD-025 (+ CD-088 rides it, R6-nh-28) | B | shared output-orchestration entry point in cobre-io (L2): one call-site list of outputs and guards, both front ends wire through it; emit-condition coverage waits for it (R5-nh-18) |
+| CD-079 | B (A-risk) | `StageTemplate` sheds `n_state`/`n_transfer`/`n_dual_relevant`/`n_hydro`/`max_par_order`; E9 decides whether it sheds now or once at the 0b carve (R13); TD-040 and TD-037's I.3-8 collateral travel with it |
+| CD-092 | C | rendered prep-phase message owned once (rides CD-029 / CD-091) |
+| W10 (core-io / stochastic) | — | CD-061, CD-065, CD-070, CD-071 as already scheduled in §5 |
+
+### Tier 11 — test-corpus rows, gated on the test-corpus station (E08)
+
+`testing-architecture.md` §5.1 (homing threshold, binary consolidation) must be ratified first (§Tier 4
+step 0 left it a proposal). Rows: solver-comm TD-035, TD-036, TD-037, TD-038, TD-040; sddp TD-041,
+TD-042, TD-043, TD-045, TD-046, TD-047, TD-049, TD-050, TD-052, TD-053, TD-054, TD-055, TD-056;
+cli-python TD-058, TD-059, TD-060, TD-061, TD-062, TD-066, TD-067, TD-068, TD-069, TD-070, TD-071,
+TD-072, TD-073 — plus W9's 17 rows from §5. Owner directions already fixed: TD-053/TD-056 StubComm
+pair into cobre-sddp `test_support` (R6-nh-25/36); TD-054 cfg-gated declarative macro (R6-nh-26);
+TD-042 uniform spread + one canary literal (R6-nh-7); TD-045 consolidate behind `test-support`
+(R6-nh-9, workflow fix at E07); TD-037 `tests/common` module in cobre-solver; TD-047 one extracted
+`tests.rs` per module (R6-nh-16); TD-055 checklist to prose (R6-nh-35); TD-059 pinned 1dtoy numbers
+retired (R5-nh-36); TD-072 `__file__`-resolved paths (R5-nh-29). TD-039, TD-044, TD-048, TD-051,
+TD-057, TD-063, TD-064, TD-065 were pulled forward into Tier 7 by the owner's "now" answers.
+
+### Deprioritized (Sev C, no gate, no owner "now" — land when the area is next touched)
+
+- solver-comm: CD-075 (lints-table drift checker in `scripts/ci`, "keep forbid + checker" — a build-ci
+  station input), CD-077, CD-081, OD-034.
+- sddp: OD-036 (`ncs_stochastic_dormant_for_test` visibility), OD-039 (rank-distribution parameter;
+  the two-comment correction goes to E07, R6-nh-41), OD-041 (tailrace trio markers, crate-wide pass
+  R6-nh-31), OD-042 (`SimulationInputs::new` wrapper), CD-088 rides CD-025.
+- cli-python: CD-093 (seven doc fences made honest, no `[lib]`, R5-nh-8), CD-094 (three dead
+  re-exports in `summary.rs`), CD-097, CD-098, OD-044, OD-045 (two over-broad cast suppressions; the
+  mirror prose goes to E11, R5-nh-19), OD-046, OD-047 (complete the three twins, R5-nh-21), OD-048.
+- Prior sddp keeps at C: CD-018, CD-021, CD-023, CD-007 (inline-test giants — E08's homing question),
+  CD-012, CD-030, CD-037, CD-038, OD-009; cli-python: CD-002 (downgraded B → C), CD-009.
+
+### Interim waves (checker vocabulary, continues §5's table; for the unified-roadmap station to lift)
+
+| Wave | Entry | Findings | Depends on | Phase | Effort | Trigger/deadline |
+| ---- | --- | --- | --- | --- | --- | --- |
+| 11 | W11-tier6-user-visible | CD-082, CD-084, CD-086, CD-089, CD-090, CD-091, CD-095, CD-096, OD-040 (+ prior CD-029) | - | neutral | M | the ungated wave (owner decision 2026-09-19) |
+| 12 | W12-now-fixes-and-ungated-b | CD-076, CD-078, CD-080, CD-085, OD-032, OD-035, TD-039, TD-044, TD-048, TD-051, TD-057, TD-063, TD-064, TD-065 (+ priors CD-028, CD-015, CD-022, CD-016, CD-014-remnant, CD-005's `set_budget`) | W11-tier6-user-visible | neutral | M | same plan as W11, later epics |
+| 13 | W13-public-api-break-batch | OD-033, OD-037, OD-038, CD-083, CD-087 (+ prior CD-019 cut-sync methods) | W12-now-fixes-and-ungated-b | serves 0b | S | the ungated wave, after W11–W12 (0.x minor releases license the break) |
+| 14 | W14-perf-sweep-gated | PD-032, PD-033, PD-034, PD-036, PD-038, PD-039, PD-040, PD-041, PD-042, PD-044, PD-045, PD-047, PD-049, PD-050, PD-051 | - | neutral | M | performance-sweep station (E10) measures first |
+| 15 | W15-phase-0a-0b-structural | CD-079, CD-088, CD-092, OD-043 (deferred, trigger CD-004) (+ priors CD-004, CD-005, CD-025) | W11-tier6-user-visible | serves 0a | L | generalization-alignment station (E9) adjudicates; one plan after |
+| 16 | W16-test-corpus-4-6 | TD-035, TD-036, TD-037, TD-038, TD-040, TD-041, TD-042, TD-043, TD-045, TD-046, TD-047, TD-049, TD-050, TD-052, TD-053, TD-054, TD-055, TD-056, TD-058, TD-059, TD-060, TD-061, TD-062, TD-066, TD-067, TD-068, TD-069, TD-070, TD-071, TD-072, TD-073 | W12-now-fixes-and-ungated-b | neutral | M | test-corpus station (E08), after §5.1 ratification; runs with W9 |
+| 17 | W17-sev-c-opportunistic | CD-075, CD-077, CD-081, OD-034, PD-035, PD-037, PD-043, PD-046, PD-048, OD-036, OD-039, OD-041, OD-042, CD-093, CD-094, CD-097, CD-098, PD-052, PD-053, PD-054, PD-055, OD-044, OD-045, OD-046, OD-047, OD-048 | - | neutral | S | the ungated wave, last epics (outline) |
+
+Every one of the 104 new ids appears in exactly one wave (verified mechanically when this section
+was written; prior ids in parentheses are not double-counted against §5).
+
+---
+
+## 8. Next steps (agreed with the owner 2026-09-19; supersedes §6)
+
+Owner decisions this section rests on: **(a)** hybrid sequencing — tier the three ratified stations,
+fix Tier 6 now, and run the two evaluation stations whose inputs are already in hand alongside it,
+before alignment, test-corpus and the unified roadmap; **(b)** no release-scoping cutoff — the wave
+plans **everything that is not gated on an unrun station** (Tiers 6, 7, 8, the Sev-C W17 items and
+W8 setup-perf) and lands as much as time allows; releases are cut from whatever has merged.
+
+| # | Step | Why in this position | Inputs in hand | Owner call still open |
+| --- | --- | --- | --- | --- |
+| 0 | **Register housekeeping** — `3356da2d` written into the CD-074 status and ROADMAP step 3; this section and §7; ROADMAP.md 2026-09-19 sequence. | The tracker must describe the merged tree before anything schedules from it. | done in the same change | none |
+| 1 | **Plan and execute the ungated quality wave** (`/plan` off `develop`): epics for Tier 6 (§7), then Tier 7, then Tier 8, then W17 and W8 as outline epics. Per-ticket bars: the parity goldens, `tests/common/permute.rs`, `mpiexec -n 1/2`, the CLI-vs-Python value golden and file-set parity, full local CI gates incl. `cargo doc -D warnings` and `check-doc-paths.sh`, cobre-python manifest build, schema regen if any schema-bearing type moves. CHANGELOG describes the two `--json` contract changes (CD-029, CD-091), the enumerated + DCS rejection (CD-086) and the negative-count rejection (OD-040) as behaviour. | User-visible defects are live (validate exit-0 gap, missing Python families/column, silent `--json` gaps); every fix-shape is owner-decided; none waits on E9/E10. | §7 tables; the gate `Owner decision` bullets; `plans/state-canonicalization/RELEASE-CHECKLIST.md` for the release bar | none |
+| 2 | **build-ci station (E07-2 … E07-6)**, alongside step 1. | Opened at `60d10309` with inventory, gate census and prior register; inputs queued by three gates: NH9 (`invariance-shuffle.yml` without `test-support`), NH40 (hull/ as a second unsafe island vs CLAUDE.md), NH41 (`CutSelectionStrategy::Dynamic` docs reversed), R16 (`backend-testing.md` phantom cite), CD-081's genericity-gate blind spot, CD-075's lints-table checker, the `doc = false` intra-doc-link gap, the parity-script surface. Read-only; touches nothing step 1 edits. | `stations/build-ci/`, `stations/*/handoffs.json`, `tools/verify-station.sh` | none |
+| 3 | **performance-sweep station (E10)**, alongside step 1, after step 2 or interleaved. | All five perf queues exist now (31 rows: 8 + 7 + 3 + 10 + 3); `CAL`/`CAL-ENUM` re-calibrated at the pin on the re-sanctioned decks; the 15 B rows of W14 cannot schedule until measured. Measure at the pin, not on the step-1 tree, so the claim table matches the register's baseline. | `tools/perf-run.sh`, `measurements/CAL*`, `stations/*/perf-queue.json` | per the standing rule, the owner runs any production-scale benchmark manually |
+| 4 | **Release** from whatever has merged, whenever the owner chooses: version-bump sites, both lockfiles, license regen, schema check, CHANGELOG cut, back-merge (`plans/state-canonicalization/RELEASE-CHECKLIST.md`). | Not a gate on anything above. | the checklist | owner runs the release |
+| 5 | **generalization-alignment station (E09)** → then the **Phase-0a/0b plan** (W15). | Adjudicates 23 queued alignment rows and the I.3-7 / I.3-8 / I.5 handoffs; unblocks CD-004, CD-005, CD-025, CD-079 and W10. Runs after the wave so it reads the tree Tier 6 leaves. | `stations/{sddp,cli-python}/alignment-queue.json`, `stations/solver-comm/handoffs.json`, `plans/generalizing/beyond-sddp-generalization.md` | the I.3-8 shed timing (R13) |
+| 6 | **Ratify `testing-architecture.md` §5.1, then the test-corpus station (E08)** → W9 + W16 as one test-corpus wave. | 56 TD rows wait on it; the owner's "now" items are already pulled into W12. | `stations/*/td-queue.json` | §5.1 ratification |
+| 7 | **W8 setup-perf** (PD-009 first) — folded into step 1 as an outline epic. | Ungated since W6. | §Deprioritized | none |
+| 8 | **reconciliation + unified-roadmap (E11)**: fold §5 and §7's waves into the register's roadmap section in `check-roadmap-dag.py` vocabulary; write the mirror back. | Last, so it lifts a settled schedule. Mirror write-backs owed: the three stations' fixed items (none recorded yet); the stale "Python-binding Rust tests invisible to CI" entry (:347) and every `testing-architecture.md` trace (R5-nh-31); the facade reserved-seam row + CLAUDE.md / ARCHITECTURE.md listings (R5-nh-32); the Legacy cost-scale seam row; the `#[allow]` census clause corrected down to comments.md D4 (R6-nh-29, R5-nh-19); the shared-filesystem deployment assumption (R5-nh-12); CD-025's destination wording; `schemas/policy.fbs` path drift; the README status vocabulary rows; the HiGHS wall-clock retry reproducibility follow-up (R12); `BroadcastNodeGraph` recorded as removed (R5-nh-17); the `LEGACY_COST_SCALE_FACTOR` nit (R5-nh-10). | `tools/check-roadmap-dag.py`, `docs/design/reserved-seams-and-deferred-debt.md` | none |

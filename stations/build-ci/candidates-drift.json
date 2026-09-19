@@ -1,0 +1,768 @@
+{
+  "station": "build-ci",
+  "stationLabel": "build-ci-docs",
+  "subStation": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "drift",
+  "gatedAt": "2026-09-19",
+  "worker": "adversarial-attacker (Opus, read-only)",
+  "attempt": 1,
+  "candidates": [
+    {
+      "title": "docs/design/README.md declares a closed five-value status vocabulary and a delete-on-ship convention that three of its eight rows and two still-present docs contradict",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 4
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 24
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 26
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 27
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 31
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git show 077dbe2c:docs/design/README.md | sed -n '4,16p;24p;26,27p;31p' && git show 077dbe2c:docs/design/anticipated-fixed-post-horizon-commitments.md | sed -n '3p'",
+        "output": ":4 `Each doc carries a **status** at its top; this index is the map. Status vocabulary:` then exactly five bullets — :6 Live spec, :8 Decision record, :10 Living register, :12 Proposal, :14 Design brief. :24 `Partially adopted (§5.2); the rest Proposal`. :26 and :27 `Implemented (retained pending fold into the live spec)`. :31 `A proposal that ships is **deleted from this directory** once its content lands in its authoritative home`. anticipated-fixed-post-horizon-commitments.md:3 `**Status: Implemented** (retained pending fold into the live spec). This is the`",
+        "reading": "The vocabulary at :4-16 is introduced as a closed list of five values. Three of the eight rows in the table at :18-27 carry a value outside it: :24, :26 and :27. Rows :26 and :27 additionally contradict the convention at :29-36 — both docs self-declare Implemented and both still sit in the directory (anticipated-fixed-post-horizon-commitments.md:3 and external-scenarios-are-authoritative.md:3), which is exactly the state :31 says must not persist. Row :24 differs only from the vocabulary: testing-architecture.md:3 carries the same out-of-vocabulary string verbatim, so the index and the doc agree with each other and disagree with the vocabulary. The mirror row :22 is untouched."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Resolve the two Implemented docs one way or the other rather than leaving the index describing a state its own convention forbids: either fold each doc's durable rationale into the home it describes and delete the doc, which is what the maintenance convention already prescribes, or admit a sixth status value and say in the vocabulary block what it means and what discharges it. Row :24 needs only the vocabulary decision, because the row and the doc already agree. Prefer the fold-and-delete reading, since it needs no new vocabulary and the convention is already written. No gate is proposed: the index is small enough that the vocabulary itself is the guard once it is honest.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "Each doc carries a **status** at its top; this index is the map. Status vocabulary: — followed by exactly five values (Live spec, Decision record, Living register, Proposal, Design brief), and at :31 `A proposal that ships is **deleted from this directory** once its content lands in its authoritative home`",
+        "path": "docs/design/README.md",
+        "line": 4
+      },
+      "treeFact": {
+        "text": "**Status: Implemented** (retained pending fold into the live spec). — a sixth status value, in a doc that the convention at :31 says should no longer be in this directory",
+        "path": "docs/design/anticipated-fixed-post-horizon-commitments.md",
+        "line": 3
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "docs/design/external-scenarios-are-authoritative.md",
+          "line": 3,
+          "why": "the second Implemented doc still present in the directory, row :27"
+        },
+        {
+          "path": "docs/design/testing-architecture.md",
+          "line": 3,
+          "why": "row :24's out-of-vocabulary value, carried identically by the doc itself"
+        }
+      ]
+    },
+    {
+      "title": "docs/design/README.md calls itself the map of the directory while post-horizon-input-unification.md has no row in the table",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 4
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 18
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 27
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git ls-tree -r --name-only 077dbe2c docs/design | wc -l && git show 077dbe2c:docs/design/README.md | sed -n '18,27p' | grep -c '^|' && git show 077dbe2c:docs/design/post-horizon-input-unification.md | sed -n '3p'",
+        "output": "9 tracked files under docs/design (README.md plus eight docs); the table at :18-27 has ten pipe rows, of which two are the header and separator, leaving eight doc rows; post-horizon-input-unification.md:3 `> **Status:** Proposal (not yet implemented). A target design for the input`",
+        "reading": "Eight docs sit beside the README and the table carries eight rows, but the sets are not the same: post-horizon-input-unification.md (263 lines) has no row, and no row names it. The doc carries a correct, in-vocabulary status of its own at :3, so the defect is the index's coverage, not the doc. A reader who trusts :4 (`this index is the map`) will not learn that a Proposal for the input-data lifecycle exists."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Add the missing row to the table with the status the doc already declares, keeping the row's summary to the shape the other rows use. The durable form of the claim at :4 is that the index covers every doc in the directory, so if the index is to stay hand-maintained, say that indexing is a condition of adding a doc; the cheaper alternative is to drop the map claim at :4 and let each doc own its status, which removes the fan-out but loses the directory overview. Prefer adding the row.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "Each doc carries a **status** at its top; this index is the map.",
+        "path": "docs/design/README.md",
+        "line": 4
+      },
+      "treeFact": {
+        "text": "> **Status:** Proposal (not yet implemented). A target design for the input — the status line of a tracked design doc that the index does not list",
+        "path": "docs/design/post-horizon-input-unification.md",
+        "line": 3
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "docs/design/README.md",
+          "line": 12,
+          "why": "the Proposal vocabulary entry the un-indexed doc's own status already conforms to"
+        }
+      ]
+    },
+    {
+      "title": "Two index rows disagree with the status the doc itself carries: one doc declares a status outside the vocabulary, the other carries no status line at all",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 4
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 23
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 25
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "for f in $(git ls-tree -r --name-only 077dbe2c docs/design | grep -v README); do printf '%-60s ' \"$f\"; git show 077dbe2c:$f | grep -in -m1 status || echo '(NO STATUS LINE)'; done",
+        "output": "backward-warm-start-channels.md → `10:> **Status**: Design evaluation — no implementation in this document. It records`; anticipated-thermals-and-water-travel-time.md → no line matches `status` case-insensitively anywhere in the file; the other six docs each emit a :3 status line",
+        "reading": "Row :23 files backward-warm-start-channels.md as `Decision record`, a value the vocabulary defines at :8; the doc's own line :10 says `Design evaluation`, which is not one of the five values and is not the row's value. Row :25 files anticipated-thermals-and-water-travel-time.md as `Live spec`, but the file carries no status line at all — its :3 is prose, so a reader who opens the doc first, as :4 tells them to, finds nothing. Six of eight docs put their status at :3; these two are the exceptions."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Bring each doc's own first lines into agreement with its row: give anticipated-thermals-and-water-travel-time.md the status line every sibling has, and restate backward-warm-start-channels.md's status in the row's vocabulary term, keeping the `no implementation in this document` clause as the row summary or as prose under the status. Since the doc is the thing a reader opens, the doc's line is the site to fix and the row is the mirror, not the reverse.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "Each doc carries a **status** at its top; this index is the map. — with row :23 assigning `Decision record` and row :25 assigning `Live spec`",
+        "path": "docs/design/README.md",
+        "line": 4
+      },
+      "treeFact": {
+        "text": "> **Status**: Design evaluation — no implementation in this document. It records — neither the row's value nor one of the five vocabulary values",
+        "path": "docs/design/backward-warm-start-channels.md",
+        "line": 10
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "docs/design/anticipated-thermals-and-water-travel-time.md",
+          "line": 3,
+          "why": "the line where every sibling carries its status; this doc opens straight into prose and carries none anywhere"
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 8,
+          "why": "the Decision record definition row :23 invokes"
+        }
+      ]
+    },
+    {
+      "title": "ARCHITECTURE.md's crate map counts five dependencies for cobre-python while naming six on the same line, and its cobre-cli entry omits cobre-core",
+      "anchors": [
+        {
+          "path": "ARCHITECTURE.md",
+          "line": 95
+        },
+        {
+          "path": "ARCHITECTURE.md",
+          "line": 88
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git show 077dbe2c:ARCHITECTURE.md | sed -n '87,88p;95,96p' && git show 077dbe2c:crates/cobre-cli/Cargo.toml | sed -n '20,26p' && git show 077dbe2c:crates/cobre-python/Cargo.toml | sed -n '22,27p'",
+        "output": "ARCHITECTURE.md:95-96 `Depends on the same five crates as cobre-cli (cobre-core, cobre-io, cobre-sddp, cobre-stochastic, cobre-solver, cobre-comm)`; :87-88 `Wires cobre-io, cobre-stochastic, cobre-solver, cobre-comm, and cobre-sddp into a single executable`; cobre-cli declares six cobre-* path dependencies at :21-26 beginning `cobre-core = { version = \"0.15.0\", path = \"../cobre-core\", features = [\"serde\"] }`; cobre-python declares the same six at :22-27",
+        "reading": "The word `five` at :95 is contradicted twice over: the parenthetical on the same line names six crates, and both manifests declare six cobre-* path dependencies. The count most likely mirrors the five-name list at :87-88, which is itself incomplete — it omits cobre-core, a direct dependency of cobre-cli at :21. So one enumeration is short by one crate and one count is short by one crate, in the section ARCHITECTURE.md owns as the authoritative crate map (CLAUDE.md:10 defers to it). Neither claim is guarded: check-doc-paths.sh scans only README.md, CONTRIBUTING.md and CLAUDE.md, and check_doc_voice.py only README.md and CONTRIBUTING.md, so no gate reads ARCHITECTURE.md."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the count rather than correcting it, and let the parenthetical carry the fact — the dependency list is a manifest-owned enumeration and a hand-written number in front of it can only rot again. Add cobre-core to the cobre-cli wiring sentence at :87-88 so the two entries name the same set. If a number must survive anywhere in the crate map, it belongs in a generated artifact, not in prose; nothing in this station's sweep generates it today.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "Depends on the same five crates as `cobre-cli` (`cobre-core`, `cobre-io`, `cobre-sddp`, `cobre-stochastic`, `cobre-solver`, `cobre-comm`)",
+        "path": "ARCHITECTURE.md",
+        "line": 95
+      },
+      "treeFact": {
+        "text": "cobre-core = { version = \"0.15.0\", path = \"../cobre-core\", features = [\"serde\"] } — the first of six cobre-* path dependencies declared at :21-26",
+        "path": "crates/cobre-cli/Cargo.toml",
+        "line": 21
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 22,
+          "why": "the same six-crate set on the binding side, :22-27"
+        },
+        {
+          "path": "scripts/ci/check-doc-paths.sh",
+          "line": 11,
+          "why": "the scanned-sources list that excludes ARCHITECTURE.md, so no gate reads this claim"
+        }
+      ]
+    },
+    {
+      "title": "ci.yml's per-crate feature table calls itself the deduplicated union across crates but credits test-support to cobre-solver alone, while four other crates declare it",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 18
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 22
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "env (workflow level)",
+        "step": "NON_SOLVER_FEATURES value at :32",
+        "line": 32
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | sed -n '17,25p;32p' && for c in cobre-core cobre-io cobre-solver cobre-sddp cobre-stochastic; do echo \"== $c\"; git show 077dbe2c:crates/$c/Cargo.toml | grep -n '^test-support'; done",
+        "output": "ci.yml:17-18 `Features are unified workspace-wide by name, so this is the deduplicated union across crates:` then :19-25, of which :22 reads `cobre-solver: test-support`; :32 `NON_SOLVER_FEATURES: \"mpi numa shared-memory serde schema slow-tests flatc-conformance test-support\"`. Declarations: cobre-core:30, cobre-io:33, cobre-solver:31, cobre-sddp:55, cobre-stochastic:26 — five crates declare test-support",
+        "reading": "The comment block presents itself as a per-crate attribution of the union, and the union value at :32 is correct, but the attribution is wrong for four of the five crates that declare test-support: cobre-core:30, cobre-io:33, cobre-sddp:55 and cobre-stochastic:26 are all absent from the table, which names only cobre-solver at :22. Behaviour is unaffected because features are unified by name, exactly as :17 says; the damage is to the reader who uses the table to decide which crate a feature belongs to, or who prunes the union by crate. Every other row checks out: cobre-comm:21/:22/:27, cobre-core:22/:26, cobre-io:16/:19/:25, cobre-sddp:46, cobre-stochastic:18, cobre-cli:54/:57."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "The table is a hand-maintained per-crate enumeration of manifest facts with nothing to keep it true, so either complete it and accept that it will rot again, or replace it with the rule it is trying to convey: features are unified workspace-wide by name, the union is the value below, and each crate's own [features] table is the owner of which features it declares. Prefer the second — it keeps the reason the union exists, which is the part of the comment that is load-bearing and correct, and drops the part that cannot stay true. If the per-crate view is genuinely wanted at review time, it belongs in a generated report, not in a workflow comment.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "sanctioned",
+        "citation": "crates/cobre-io/Cargo.toml:19, crates/cobre-stochastic/Cargo.toml:18 and crates/cobre-cli/Cargo.toml:55-57 declare slow-tests as reserved no-ops with a comment saying so; CLAUDE.md § Hard Rules `Unwired config is reserved, not dead`",
+        "rule": "Checked before touching the feature declarations this comment enumerates: the candidate is about the attribution comment only and proposes deleting no declaration."
+      },
+      "reRaiseOf": null,
+      "docClaim": {
+        "text": "Features are unified workspace-wide by name, so this is the deduplicated union across crates: — followed at :22 by `cobre-solver: test-support`",
+        "path": ".github/workflows/ci.yml",
+        "line": 18
+      },
+      "treeFact": {
+        "text": "test-support = [] — cobre-core also declares test-support, as do cobre-io:33, cobre-sddp:55 and cobre-stochastic:26",
+        "path": "crates/cobre-core/Cargo.toml",
+        "line": 30
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-io/Cargo.toml",
+          "line": 33,
+          "why": "test-support = [\"cobre-core/test-support\", \"dep:tempfile\"], unattributed in the table"
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 55,
+          "why": "test-support = [\"cobre-core/test-support\"], unattributed in the table"
+        },
+        {
+          "path": "crates/cobre-stochastic/Cargo.toml",
+          "line": 26,
+          "why": "test-support = [\"cobre-core/test-support\"], unattributed in the table"
+        }
+      ]
+    },
+    {
+      "title": "The genericity hard rule names three forbidden tokens while the gate it is enforced by rejects eleven alternatives, including standalone cut and Cut",
+      "anchors": [
+        {
+          "path": "CLAUDE.md",
+          "line": 39
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 79
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-infra-genericity.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Infra genericity gate",
+        "line": 262
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:CLAUDE.md | sed -n '39,41p' && git show 077dbe2c:scripts/ci/check-infra-genericity.sh | sed -n '79p'",
+        "output": "CLAUDE.md:39-41 `**Infrastructure crate genericity** — cobre-core, cobre-io, cobre-solver, cobre-stochastic, cobre-comm must contain zero algorithm-specific references (no \"sddp\", \"SDDP\", \"Benders\" in types, functions, or doc comments)`; :79 `PATTERN='\\bSddp\\b|\\bsddp\\b|\\bSDDP\\b|\\bBenders\\b|\\bCut\\b|\\bcut\\b|cut pool|cutting-plane|cutting[.]plane|outer approximation|CutSync[[:alnum:]_]*|CutSelection[[:alnum:]_]*|\\bMetadataCuts\\b'`",
+        "reading": "The rule prose enumerates three token spellings and scopes them to types, functions and doc comments. The gate that makes the rule real rejects eleven alternatives and scopes them to every non-test line of every .rs file under the five src directories at :62-68. The gap is not cosmetic: standalone `cut` and `Cut`, the phrases `cut pool`, `cutting-plane`, `cutting.plane` and `outer approximation`, and the CutSync / CutSelection / MetadataCuts type prefixes all hard-fail the build (exit 1, :48) while a contributor reading the hard rule has been told only about sddp, SDDP and Benders. The register already treats the cut tokens as ratified — CD-061's body calls them `the ratified sddp/SDDP/Benders/standalone-cut tokens` — so the enforced set is settled and the prose is the side that is short."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Amend the rule prose so it states the enforced concept rather than a partial token list: infrastructure crates carry no decomposition-algorithm vocabulary, the gate owns the exact spellings, and the gate is the place to read them. Name the gate in the bullet so a reader has one hop to the authoritative list instead of a three-item sample that reads exhaustive. This is a two-site rule, so the amendment lands with the prose at CLAUDE.md:39-41 and stays consistent with the script at check-infra-genericity.sh:79 and its step at ci.yml:261-262; no new gate and no widening of the scanned set is proposed, and the pattern itself is not changed.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 39
+        },
+        "script": {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 79
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 262
+        }
+      },
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "CD-061",
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "**Infrastructure crate genericity** — cobre-core, cobre-io, cobre-solver, cobre-stochastic, cobre-comm must contain zero algorithm-specific references (no \"sddp\", \"SDDP\", \"Benders\" in types, functions, or doc comments)",
+        "path": "CLAUDE.md",
+        "line": 39
+      },
+      "treeFact": {
+        "text": "PATTERN='\\bSddp\\b|\\bsddp\\b|\\bSDDP\\b|\\bBenders\\b|\\bCut\\b|\\bcut\\b|cut pool|cutting-plane|cutting[.]plane|outer approximation|CutSync[[:alnum:]_]*|CutSelection[[:alnum:]_]*|\\bMetadataCuts\\b' — eleven alternatives, not three",
+        "path": "scripts/ci/check-infra-genericity.sh",
+        "line": 79
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 62,
+          "why": "SCAN_DIRS :62-68 — every non-test .rs line under five src dirs, wider than the prose's types/functions/doc-comments scope"
+        }
+      ]
+    },
+    {
+      "title": "A shipped conformance test states it verifies the contracts of a backend-testing.md that has never existed in this repository, and two gate blind spots keep the reference invisible",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 18
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 57
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 84
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 276
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-comment-refs.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Check comment references (un-rottable-ref gate)",
+        "line": 276
+      },
+      "evidence": {
+        "command": "git grep -n backend-testing 077dbe2c && git ls-tree -r --name-only 077dbe2c | grep -c backend-testing && git log --oneline --all --diff-filter=A -- '*backend-testing*'",
+        "output": "one hit tree-wide: `077dbe2c:crates/cobre-comm/tests/local_conformance.rs:4://! contracts of `backend-testing.md` SS1.1-SS1.8, adapted for the identity`; the ls-tree count is 0; the add-filtered log over all refs is empty",
+        "reading": "The only mention of backend-testing.md in the tree is the citation itself, and no commit on any ref ever added such a file, so this is not a moved or deleted doc — the cited contract has no home and the eight sub-section references SS1.1 to SS1.8 resolve to nothing. The design-doc index at :18-27 lists eight docs and names no backend-testing.md, and testing-architecture.md, the doc that does own the testing standard, has no 1.1-1.8 subsections (its section 1 is `Problem statement` and numbering resumes at 2.1). Two independent reasons the gate cannot see it: check-comment-refs.sh scans only the ten crates/*/src directories at :57-68, so a file under crates/cobre-comm/tests is out of scope; and E3b's token pattern at :84 requires a docs/, artifacts/ or plans/ prefix, so a bare filename would not match even inside the scanned set. E3b also never changes the exit code (:19-26, :42-43), so the gate is blocking for E3a only."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Fix the citation at its source: state the contract the test actually verifies, by naming the surfaces under test as the file's first line already does, or point at testing-architecture.md if that is where the conformance standard now lives. Do not invent the missing doc to satisfy the pointer. For the enforcement half, amend the existing gate rather than adding one: extend its scanned set to the crates/*/tests trees, which is where conformance suites keep their contract prose, and give E3b a bare-.md-filename token class alongside its prefixed one. The precedent for the filename class is a sibling gate, not a new library — check-no-plan-leaks.sh:119 already matches a .md filename to decide whether a section reference is anchored, so the pattern shape can be reused. E3b stays advisory, so neither change can newly fail a build.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 57
+        },
+        "script": {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 57
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 276
+        }
+      },
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "//! contracts of `backend-testing.md` SS1.1-SS1.8, adapted for the identity",
+        "path": "crates/cobre-comm/tests/local_conformance.rs",
+        "line": 4
+      },
+      "treeFact": {
+        "text": "the design-doc index table at :18-27 — eight rows, none of which is backend-testing.md, and no such file is tracked at the pin",
+        "path": "docs/design/README.md",
+        "line": 18
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "docs/design/testing-architecture.md",
+          "line": 27,
+          "why": "section 1 is `Problem statement` with no 1.1-1.8 subsections, so the cited sections do not resolve into the surviving testing-standard doc either"
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 119,
+          "why": "SECTION_REF_ALLOW — the existing bare-.md-filename matching precedent the E3b amendment can reuse"
+        }
+      ]
+    },
+    {
+      "title": "Four gate headers cite rule-file sections that do not resolve, and a sibling gate sanctions the filename-plus-section form as durable",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-doc-paths.sh",
+          "line": 5
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 6
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 5
+        },
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 7
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 48
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-doc-paths.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Check repo-relative doc paths/links",
+        "line": 274
+      },
+      "evidence": {
+        "command": "git grep -n 'doc-integrity.md §\\|comments.md §' 077dbe2c -- scripts/ && git show 077dbe2c:.claude/rules/doc-integrity.md | grep -n '^## ' && git show 077dbe2c:.claude/rules/comments.md | grep -n '^## 4\\|^### Durability'",
+        "output": "check-doc-paths.sh:5 and :43 cite `doc-integrity.md §6.4`; check-doc-placeholders.sh:6 cites `doc-integrity.md §5 \"stale snapshots / executable claims\"`; check-comment-refs.sh:5 and check-comment-line-refs.sh:7 cite `comments.md §4 \"Durability\"`. doc-integrity.md top-level sections are 1 Scope matrix (:22), 2 The one adaptation (:63), 3 Six prose-only failure modes (:85), 4 Applying the rules (:133), 5 Voice register (:173). comments.md `## 4.` is `Relocation routing — where the \"why\" actually lives` (:152) and `### Durability` is :312, under `## 10. Principles`",
+        "reading": "Three distinct failures. doc-integrity.md has five top-level sections and no §6, so the two citations of §6.4 in check-doc-paths.sh resolve to nothing; the failure mode the script means, `Executable/resolvable claim with no compiler backstop`, is §3 item 4 at :107. check-doc-placeholders.sh:6 cites §5 with the title `stale snapshots / executable claims`, but §5 is the Voice register and the named content is §3 items 2 and 4 — a number that resolves to the wrong section, which misleads more quietly than one that resolves to nothing. check-comment-refs.sh:5 and check-comment-line-refs.sh:7 cite `comments.md §4 \"Durability\"`, but §4 is Relocation routing and Durability is a third-level heading at :312 under §10. The same repository sanctions this shape: check-no-plan-leaks.sh:48 calls a citation anchored by an .md filename before the section mark `the N3-sanctioned durable form`, with nothing checking that the section exists. Two counter-examples prove the durable form is available and already used: CLAUDE.md:58 cites comments.md §1 and §1 is indeed The Deletion Test, and check-allow-rationale.sh:5 cites directive D4, which resolves at comments.md:365 because directive ids do not move when sections are renumbered."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Re-point the four citations at what they mean and prefer the coordinate that survives renumbering: the directive id where one exists, as check-allow-rationale.sh already does with D4, and otherwise the section heading's title rather than its number. The narrower question the owner should settle is whether rule-file section numbers are a citable coordinate at all, because five gates depend on them and nothing checks them. If they are to stay citable, the guard belongs in the gate that already parses .claude/rules tokens: check-comment-refs.sh's E3a pattern at :75 extracts .claude/ paths and allows the .claude/rules/ prefix, so rejecting a trailing section suffix on that token class is an amendment to an existing check rather than a new framework, and it would need the same scanned-set extension the phantom-doc candidate describes, since these citations live in shell headers that no gate reads. Do not add a second scan library for it.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "# Wired enforcement of .claude/rules/doc-integrity.md §6.4 (\"Executable/ — repeated at :43 as `per §6.4's scope bound`",
+        "path": "scripts/ci/check-doc-paths.sh",
+        "line": 5
+      },
+      "treeFact": {
+        "text": "## 5. Voice register — sober reference, not marketing — the last top-level section in the rule file; there is no §6, and the failure mode the header names is §3 item 4 at :107",
+        "path": ".claude/rules/doc-integrity.md",
+        "line": 173
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": ".claude/rules/comments.md",
+          "line": 152,
+          "why": "## 4. Relocation routing — not Durability, which is :312 under ## 10. Principles"
+        },
+        {
+          "path": ".claude/rules/doc-integrity.md",
+          "line": 107,
+          "why": "the Executable/resolvable-claim failure mode, §3 item 4 — where §6.4 was pointing"
+        },
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 5,
+          "why": "the durable form already in use: a citation by directive id (D4), which resolves at comments.md:365"
+        },
+        {
+          "path": "CLAUDE.md",
+          "line": 58,
+          "why": "a resolving section citation — comments.md §1 is The Deletion Test"
+        }
+      ]
+    },
+    {
+      "title": "The roadmap's Part-I item 6 records a genericity-gate exemption for the four cobre-io policy files that the gate retired before this baseline",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 74
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 70
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-infra-genericity.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Infra genericity gate",
+        "line": 262
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:scripts/ci/check-infra-genericity.sh | sed -n '38,44p;62,68p;70,74p' && git ls-tree -r --name-only 077dbe2c crates/cobre-io/src/output/policy/",
+        "output": ":38-44 `Explicitly excluded files: None. The output/policy/ files formerly sat here pending a value-function-artifact format-version bump; that bump landed ... so the exemption is retired and the directory module is scanned like every other infra source file.`; :70-73 `Empty: the value-function-artifact format break retired the former output/policy/ exemption. Add an entry here only with owner sign-off.`; :74 `EXCLUDED_FILES=()`; SCAN_DIRS includes crates/cobre-io/src at :64; the four files checkpoint.rs, codec.rs, mod.rs and records.rs are all present",
+        "reading": "The brief's Part-I item 6 row carries the parenthetical `the genericity gate exempts the four policy files`, and at this baseline no file is exempt: EXCLUDED_FILES is empty at :74, the script states twice (:38-44 and :70-73) that the policy exemption was retired by the value-function-artifact format break, and the four files it names all sit under the scanned crates/cobre-io/src tree with no `test` in their basenames, so the tail-block and basename skips at :96-100 do not apply either. The four files are therefore scanned like every other infra source file. This is the enforcement half of the row only; whether the checkpoint format is still cut-shaped in substance is not re-verified here."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Strike the exemption parenthetical from the Part-I row and let the row's surviving claim stand on the format itself, which is the part the roadmap actually reasons about. Record the retirement where the roadmap can see it, so the next re-verification does not have to rediscover the script's own rationale. The gate needs no change: its emptiness is the sanctioned state and adding an entry back is explicitly owner-sign-off territory. The disposition of the row as a whole is not this station's to set.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.3-6",
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "`cobre-io`'s policy checkpoint format is literally cut records (the genericity gate exempts the four policy files)",
+        "path": "plans/architecture-debt-audit/tools/target-layering-brief.md",
+        "line": 91
+      },
+      "treeFact": {
+        "text": "EXCLUDED_FILES=() — empty; no file is exempt from the genericity scan at this baseline",
+        "path": "scripts/ci/check-infra-genericity.sh",
+        "line": 74
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-io/src/output/policy/records.rs",
+          "line": 1,
+          "why": "one of the four files the brief row names; present at the pin and inside the scanned crates/cobre-io/src tree"
+        }
+      ]
+    },
+    {
+      "title": "The unsafe-code hard rule enumerates one unsafe island in cobre-sddp while the crate's own manifest states there are two",
+      "anchors": [
+        {
+          "path": "CLAUDE.md",
+          "line": 19
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 112
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git show 077dbe2c:CLAUDE.md | sed -n '19p' && git show 077dbe2c:crates/cobre-sddp/Cargo.toml | sed -n '112,121p' && git grep -n 'unsafe' 077dbe2c -- crates/cobre-sddp/src/hull/ffi.rs crates/cobre-sddp/src/hull/mod.rs",
+        "output": "CLAUDE.md:19 `... cobre-sddp overrides for the matrixmultiply::dgemm call its cut-selection kernel needs (isolated in src/gemm.rs)`; crates/cobre-sddp/Cargo.toml:112-121 `Override unsafe_code to \"allow\" for this crate because it has two unsafe surfaces, each isolated behind a safe wrapper: (1) the cut-selection kernel calls matrixmultiply::dgemm (a pub unsafe fn) via src/gemm.rs, and (2) the convex-hull fitter binds the vendored qhull C library through the unsafe extern \"C\" shim in src/hull/ffi.rs and the RAII/SAFETY-guarded blocks in src/hull/mod.rs`; hull/ffi.rs:27 `unsafe extern \"C\" {` and hull/mod.rs unsafe blocks at :82, :152, :192",
+        "reading": "The hard rule attributes the cobre-sddp override to one cause, the dgemm call in src/gemm.rs. The crate's manifest says in its own words that there are two unsafe surfaces and names the second: the qhull FFI shim at src/hull/ffi.rs:27 plus the guarded blocks in src/hull/mod.rs at :82, :152 and :192. The crate list in the rule is otherwise exact — the four crates it names as overriding the workspace forbid are the only four that do, at cobre-comm/Cargo.toml:36, cobre-python:47, cobre-sddp:121 and cobre-solver:38 — so the defect is confined to the island enumeration. A reader auditing unsafe surfaces from the hard rule alone would not know to look at the convex-hull fitter."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "State the rule in a form that cannot fall behind a crate's manifest: each overriding crate documents its own unsafe surfaces in its [lints] rationale, and the hard rule names the overriding crates and points at those rationales instead of re-listing the islands. If the enumeration is kept in CLAUDE.md, it has to name the qhull FFI shim as the second island, and it will need editing again the next time a surface is added or removed. There is no scripts/ci gate for unsafe_code, so the enforcing surfaces to keep consistent with the prose are the workspace lint at Cargo.toml:36, the four per-crate overrides, and the clippy step at ci.yml:154 that fails on the resulting warnings.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 19
+        },
+        "script": {
+          "path": "Cargo.toml",
+          "line": 36
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 154
+        }
+      },
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": {
+        "text": "`unsafe_code = \"forbid\"` workspace default — cobre-solver, cobre-comm, and cobre-python override to allow for FFI/MPI/PyO3; cobre-sddp overrides for the matrixmultiply::dgemm call its cut-selection kernel needs (isolated in `src/gemm.rs`)",
+        "path": "CLAUDE.md",
+        "line": 19
+      },
+      "treeFact": {
+        "text": "unsafe extern \"C\" { — the qhull binding, the second unsafe surface in cobre-sddp, which the hard rule does not mention",
+        "path": "crates/cobre-sddp/src/hull/ffi.rs",
+        "line": 27
+      },
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 112,
+          "why": "the crate's own override rationale, :112-121, which states there are two unsafe surfaces and names both"
+        },
+        {
+          "path": "crates/cobre-sddp/src/hull/mod.rs",
+          "line": 82,
+          "why": "the first of three SAFETY-guarded blocks in the hull fitter, with :152 and :192"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 36,
+          "why": "unsafe_code = \"forbid\" — the workspace default the rule prose describes"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "EXCLUDED_FILES=() in scripts/ci/check-infra-genericity.sh:74 is empty by decision, not by neglect",
+      "why": "The emptiness IS the retired policy exemption, stated twice in the script's own words (:38-44 and :70-73) with re-entry gated on owner sign-off. Correct and worth protecting; the drift candidate against it targets the roadmap row that still records the exemption, never the gate.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh:70-73 and the station's sanctioned list"
+    },
+    {
+      "subject": "CLAUDE.md:10's workspace line is written in invariant form",
+      "why": "It names the five reserved stubs and the maturin-built exclusion, gives no member count, and hands the crate map to ARCHITECTURE.md as the single owner. This is the shape the doc-integrity house rule asks for, and it is why the count drift in this station landed in ARCHITECTURE.md rather than here.",
+      "sanctionedBy": "CLAUDE.md:10; the member list it describes is Cargo.toml:3-17 with the stubs at :12-16 and the exclusion at :21-23"
+    },
+    {
+      "subject": "CLAUDE.md:12's test command and ci.yml:32's NON_SOLVER_FEATURES value are the same feature string",
+      "why": "Examined character for character: `mpi numa shared-memory serde schema slow-tests flatc-conformance test-support` in both places. A hand-mirrored literal that has not drifted.",
+      "sanctionedBy": "CLAUDE.md:12 and .github/workflows/ci.yml:32"
+    },
+    {
+      "subject": "CLAUDE.md:117's schema-regeneration command matches the remediation the schema gate prints",
+      "why": "The gate's own echo at scripts/ci/check_schemas.sh:38-39 reproduces the documented command, so a contributor following either surface runs the same thing. The gate is the guard that keeps the committed schemas and the live export in step.",
+      "sanctionedBy": "CLAUDE.md:114-117 and scripts/ci/check_schemas.sh:38-39"
+    },
+    {
+      "subject": "The crate list in the unsafe-code hard rule is exact",
+      "why": "Exactly four crates override the workspace forbid — cobre-comm/Cargo.toml:36, cobre-python:47, cobre-sddp:121, cobre-solver:38 — and CLAUDE.md:19 names those four and no others. Only the island enumeration inside the cobre-sddp clause drifts.",
+      "sanctionedBy": "Cargo.toml:35-36 plus the four per-crate [lints.rust] tables"
+    },
+    {
+      "subject": "ARCHITECTURE.md:102-106's umbrella-crate claim and :110-113's stub-shape claim both hold",
+      "why": "crates/cobre/Cargo.toml carries no [dependencies] section at all and src/lib.rs is present, matching `re-exports nothing yet, Cargo.toml has no dependencies`. Each of the five reserved stubs has a Cargo.toml with an empty [dependencies], one src/lib.rs or src/main.rs, and a README, matching the stated shape. These are the ratified reserved seams, examined and clean.",
+      "sanctionedBy": "ARCHITECTURE.md:108-125 and CLAUDE.md:10; per-crate empty [dependencies] at cobre-mcp:19, cobre-tui:15, cobre-flow:15, cobre-uc:15, cobre-emt:15"
+    },
+    {
+      "subject": "The three reserved slow-tests declarations describe themselves accurately",
+      "why": "Every `feature = \"slow-tests\"` gating site at the pin lives under crates/cobre-sddp, so the no-op declarations in cobre-io:19, cobre-stochastic:18 and cobre-cli:57 are correctly documented as reserved seams, and CLAUDE.md:47's three named test families match the wording cobre-sddp/Cargo.toml:40-45 uses for them.",
+      "sanctionedBy": "crates/cobre-cli/Cargo.toml:55-57, crates/cobre-io/Cargo.toml:19, crates/cobre-stochastic/Cargo.toml:18, and CLAUDE.md § Hard Rules `Unwired config is reserved, not dead`"
+    },
+    {
+      "subject": "No plan-structure token escapes into tracked Markdown outside the plan-leak gate's scanned set",
+      "why": "The gate scans CHANGELOG.md, README.md and the crate trees including tests and benches. Running its formal token patterns across every tracked .md outside plans/ returns only the rule's own self-quotation at CLAUDE.md:49 and a quoted example at .claude/rules/comments.md:221, so the unscanned docs carry no live leak.",
+      "sanctionedBy": "scripts/ci/check-no-plan-leaks.sh:5, :64 and :156-158"
+    },
+    {
+      "subject": "The section-reference allowlist has no live escape inside its own scanned scope",
+      "why": "No section mark appears anywhere under crates/*/src at the pin, so the filename-anchored allowance at check-no-plan-leaks.sh:119 is currently exercised by nothing in production source. That bounds the drifted-citation finding to shell headers, which no gate reads, and is why it is not a severity-A escape.",
+      "sanctionedBy": "scripts/ci/check-no-plan-leaks.sh:115-119"
+    },
+    {
+      "subject": "check-doc-paths.sh's scope bounds are stated and honored",
+      "why": "The header declares its scanned sources exactly, excludes `src/` as a prefix with the reason that crate-relative shorthand would otherwise produce guaranteed false positives, and excludes cobre-docs and the solver submodules as legitimately absent. The mechanics match the bound the rule file asks it to honor; only the header's section citation drifts.",
+      "sanctionedBy": "scripts/ci/check-doc-paths.sh:10-11, :28-33 and :43-54"
+    }
+  ],
+  "handoffs": [
+    {
+      "partIRef": "I.3-6",
+      "claim": "cobre-io's policy checkpoint format is literally cut records, with the parenthetical that the genericity gate exempts the four policy files (target-layering-brief.md:91, from beyond-sddp-generalization.md I.3 item 6)",
+      "baselineEvidence": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 74,
+          "shows": "EXCLUDED_FILES=() — empty; no file is exempt from the genericity scan at this baseline"
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 70,
+          "shows": "the comment block :70-73 states the value-function-artifact format break retired the former output/policy/ exemption and that a new entry requires owner sign-off; the header repeats it at :38-44"
+        }
+      ],
+      "stationVerdict": "claim-stale",
+      "note": "Only the exemption parenthetical is re-verified and only the enforcement half is stale. The four files crates/cobre-io/src/output/policy/{mod,records,codec,checkpoint}.rs all exist at the pin, sit under the scanned crates/cobre-io/src tree (SCAN_DIRS :64), carry no `test` in their basenames, and are therefore scanned like every other infra source file; the gate exits 0. Whether the checkpoint format is still cut-shaped in substance is not examined here, and this station sets no disposition and no Alignment value."
+    }
+  ],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "Whether the two docs that self-declare Implemented should be folded into their authoritative homes and deleted, as docs/design/README.md:31 prescribes, or whether the status vocabulary should gain a sixth value for the retained-pending-fold state, is the owner's decision and it governs three of the eight index rows.",
+    "Whether section numbers in .claude/rules/*.md are a citable coordinate at all is the owner's call: five gates cite them, four citations do not resolve, and the alternative is to require directive ids and heading titles instead, as check-allow-rationale.sh:5 already does.",
+    "Whether `doc = false` on the bindings' lib target at crates/cobre-python/Cargo.toml:18 is a sanctioned seam or a rustdoc-coverage gap needs the owner, per the inbound cli-python handoff; this lens found no in-sweep document that claims rustdoc coverage for the bindings, so there is no paired drift to raise and the fact is left to the architecture lens."
+  ],
+  "outOfScope": [],
+  "coverage": {
+    "P1 README vocabulary": [
+      "docs/design/README.md declares a closed five-value status vocabulary and a delete-on-ship convention that three of its eight rows and two still-present docs contradict",
+      "docs/design/README.md calls itself the map of the directory while post-horizon-input-unification.md has no row in the table",
+      "Two index rows disagree with the status the doc itself carries: one doc declares a status outside the vocabulary, the other carries no status line at all"
+    ],
+    "P2 crate-map claims": [
+      "ARCHITECTURE.md's crate map counts five dependencies for cobre-python while naming six on the same line, and its cobre-cli entry omits cobre-core",
+      "A shipped conformance test states it verifies the contracts of a backend-testing.md that has never existed in this repository, and two gate blind spots keep the reference invisible"
+    ],
+    "P3 Part-I item 6": [
+      "The roadmap's Part-I item 6 records a genericity-gate exemption for the four cobre-io policy files that the gate retired before this baseline"
+    ],
+    "P4 inbound handoffs": [
+      "A shipped conformance test states it verifies the contracts of a backend-testing.md that has never existed in this repository, and two gate blind spots keep the reference invisible",
+      "The unsafe-code hard rule enumerates one unsafe island in cobre-sddp while the crate's own manifest states there are two"
+    ],
+    "P5 rule-prose vs enforcement": [
+      "(positive) CLAUDE.md:12's test command and ci.yml:32's NON_SOLVER_FEATURES value are the same feature string",
+      "(positive) CLAUDE.md:117's schema-regeneration command matches the remediation the schema gate prints",
+      "(positive) The three reserved slow-tests declarations describe themselves accurately"
+    ]
+  },
+  "gate": {
+    "validator": "pass",
+    "validatorErrors": [],
+    "rejections": [],
+    "demotedAnchors": [],
+    "stamps": [],
+    "droppedKeys": [],
+    "headerFixes": [],
+    "gateNotes": []
+  }
+}

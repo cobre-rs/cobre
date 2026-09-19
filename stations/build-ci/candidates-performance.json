@@ -1,0 +1,574 @@
+{
+  "station": "build-ci",
+  "stationLabel": "build-ci-docs",
+  "subStation": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "gatedAt": "2026-09-19",
+  "worker": "adversarial-attacker (Opus, read-only)",
+  "attempt": 2,
+  "candidates": [
+    {
+      "title": "The schemas job carries the MPICH Cache/Build/Set triple although its only compile is the default-feature release CLI binary, and the sibling docs-examples job runs that identical build with no triple and says in writing why none is needed",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 310
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 316
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 339
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 344
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 360
+        },
+        {
+          "path": "scripts/ci/check_schemas.sh",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 42
+        },
+        {
+          "path": "crates/cobre-comm/Cargo.toml",
+          "line": 20
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check_schemas.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "schemas",
+        "step": "Verify schema freshness",
+        "line": 339
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | sed -n '310p;339p;344,346p;360p' && git show 077dbe2c:scripts/ci/check_schemas.sh | sed -n '23p' && git show 077dbe2c:crates/cobre-cli/Cargo.toml | sed -n '42p;54p' && git show 077dbe2c:crates/cobre-comm/Cargo.toml | sed -n '17p;20,22p'",
+        "output": "ci.yml:310       - name: Cache MPICH\nci.yml:339         run: ./scripts/ci/check_schemas.sh --build\nci.yml:344   # output shape cannot silently drift. Minimal setup: only the default-feature\nci.yml:345   # (HiGHS) `cobre` binary is needed - no MPICH or flatc, since the default CLI\nci.yml:346   # build enables neither `mpi` nor `flatc-conformance`.\nci.yml:360         run: ./scripts/ci/check-docs-examples.sh --build\ncheck_schemas.sh:23   cargo build --release --bin cobre\ncobre-cli/Cargo.toml:42 default = [\"highs\"]\ncobre-cli/Cargo.toml:54 mpi = [\"cobre-comm/mpi\"]\ncobre-comm/Cargo.toml:17 ferrompi = { version = \"0.5\", optional = true }\ncobre-comm/Cargo.toml:20 [features]\ncobre-comm/Cargo.toml:21 mpi = [\"dep:ferrompi\"]",
+        "reading": "The schemas job's single compile is `cargo build --release --bin cobre` (check_schemas.sh:23, invoked at ci.yml:339). That target resolves cobre-cli's default feature set at cobre-cli/Cargo.toml:42, where `mpi` is opt-in at :54; cobre-comm declares no `default` list in its `[features]` block opened at :20 and makes `ferrompi` optional at :17, so no MPI-linked crate enters this build graph. The counter-example is in the same file: docs-examples at ci.yml:360 runs the byte-identical build with no Cache/Build/Set triple, and the rationale comment above it at :344-346 states that only the default-feature HiGHS binary is needed and that the default CLI build enables neither mpi nor flatc-conformance. Six of the eight ci.yml MPICH consumers (check, test, clippy, clp, docs, coverage) pass `NON_SOLVER_FEATURES` (ci.yml:32), which contains `mpi`; schemas is one of the two that do not.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Pointer for the cross-cutting perf epic, not a fix this station ships: treat the MPICH Cache/Build/Set triple as a per-job requirement derived from the job's feature string rather than a copied prelude, and drop it from any job whose cargo invocation does not pass a feature set containing `mpi`. The amend target already exists and already carries its own written rationale, so this is a pull, not a push: docs-examples is the pattern to copy, and its comment is the precedent for recording in the workflow WHY a job's setup is minimal. The blast radius is one job's step block plus one comment; nothing outside .github/workflows/ci.yml changes, and the schema-freshness gate's own behaviour is untouched because the binary it builds is the same binary either way. If the owner would rather keep every job's prelude identical for uniformity, that is a defensible call and the amend is then the comment alone, stating that the triple is carried deliberately even where the feature set does not demand it.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "A source build of an external MPI implementation is configured as a setup step on a job whose compile graph contains no MPI-linked crate, so on a cold cache key that job pays a full third-party configure-and-make cycle for a toolchain nothing it builds consumes. The cost is a cache-MISS cost only, paid whenever the key changes; on a warm key the step is skipped by the `if: steps.mpich-cache.outputs.cache-hit != 'true'` guard and only the restore remains.",
+      "citedContext": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 32,
+          "why": "NON_SOLVER_FEATURES contains `mpi`, which is what makes the other six ci.yml MPICH consumers legitimate and isolates schemas and python as the two that are not"
+        }
+      ]
+    },
+    {
+      "title": "The python job carries the MPICH Cache/Build/Set triple on every instance of its version matrix although none of its three compiles enables an mpi feature",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 511
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 516
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 522
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 559
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 561
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 568
+        },
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 38
+        },
+        {
+          "path": "crates/cobre-comm/Cargo.toml",
+          "line": 20
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "python",
+        "step": "Build MPICH from source",
+        "line": 522
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | sed -n '511p;516p;522p;559p;561p;567,568p' && git show 077dbe2c:crates/cobre-python/Cargo.toml | sed -n '38p' && git show 077dbe2c:crates/cobre-comm/Cargo.toml | sed -n '20,22p'",
+        "output": "ci.yml:511         python-version: [\"3.12\", \"3.13\", \"3.14\"]\nci.yml:516       - name: Cache MPICH\nci.yml:522       - name: Build MPICH from source\nci.yml:559           maturin develop --release\nci.yml:561         run: cargo build --release -p cobre-cli\nci.yml:567           cargo test --manifest-path crates/cobre-python/Cargo.toml \\\nci.yml:568             --no-default-features --features highs\ncobre-python/Cargo.toml:38 default = [\"extension-module\", \"highs\"]\ncobre-comm/Cargo.toml:20 [features]\ncobre-comm/Cargo.toml:21 mpi = [\"dep:ferrompi\"]\ncobre-comm/Cargo.toml:22 numa = [\"mpi\", \"ferrompi/numa\"]",
+        "reading": "The python job compiles in three places and no mpi feature is reachable from any of them: `maturin develop --release` (ci.yml:559) resolves cobre-python's default set at cobre-python/Cargo.toml:38, which is extension-module plus highs and declares no mpi feature at all; `cargo build --release -p cobre-cli` (ci.yml:561) resolves cobre-cli's defaults, where mpi is opt-in; and the bindings' Rust test run (ci.yml:567-568) passes `--no-default-features --features highs` explicitly. cobre-comm opens `[features]` at :20 with mpi optional and declares no `default` list, so the transitive graph never pulls ferrompi. The triple at ci.yml:516-541 is nonetheless configured with no matrix condition, while every other conditional step in the job carries `if: matrix.python-version == '3.12'` (ci.yml:563, :580, :588) - so the setup the job does not need is the one thing that is not narrowed, and it expands with the matrix declared at :511.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Same pointer as the schemas entry and it should be carried as one epic item, not two fixes: derive the MPICH prelude from the job's feature string. This job is the sharper instance because the triple has no matrix condition while three of the job's other steps do, so the unneeded setup is the one part of the job that replicates across every matrix entry. State for the owner what the entry is NOT claiming: nothing about the bindings' feature set is wrong, and nothing about the parity or notebook steps changes - only that a source build of an MPI implementation is configured as a prelude to compiles whose feature resolution excludes it. If the owner wants the python job to keep the option of an MPI-enabled bindings test later, the roadmap-consistent shape is to add the triple back behind the same kind of condition the job already uses for its single-version steps, rather than to carry it unconditionally now.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "An unconditional setup step inside a matrix job multiplies by the matrix: the same third-party source build is configured once per matrix entry, each in its own runner, so a cold key is missed independently by every entry. Because the cargo invocations in the job resolve to feature sets without mpi, the toolchain those builds install is never linked against.",
+      "citedContext": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 563,
+          "why": "an example of the job narrowing a step to one matrix entry, which is the shape the unconditional prelude does not follow"
+        }
+      ]
+    },
+    {
+      "title": "The eight MPICH consumers in ci.yml share one immutable cache key with no dependency edge anywhere in the workflow, so a key change is missed concurrently by every job instance rather than once by a populator",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 12
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 45
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 47
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 315
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 506
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 521
+        },
+        {
+          "path": ".github/workflows/mpi-slurm.yml",
+          "line": 61
+        },
+        {
+          "path": ".github/workflows/release-mpi.yml",
+          "line": 73
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "check",
+        "step": "Cache MPICH",
+        "line": 45
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | grep -nE 'needs:|Cache MPICH|key: mpich|runs-on:|python-version: \\[' | head -30",
+        "output": "12:  MPICH_VERSION: \"4.2.3\"\n37:    runs-on: ubuntu-latest\n43:      - name: Cache MPICH\n47:          key: mpich-${{ env.MPICH_VERSION }}-${{ runner.os }}-${{ runner.arch }}\n... (every runs-on in the file is ubuntu-latest; the eight Cache MPICH steps are at 43 81 124 174 310 371 462 516 and every key: line is byte-identical)\n511:        python-version: [\"3.12\", \"3.13\", \"3.14\"]\n(no line of ci.yml matches `needs:`)",
+        "reading": "`needs:` matches nowhere in ci.yml, so all fourteen jobs are eligible to start together. Every `runs-on:` in the file is ubuntu-latest, so the `runner.os` and `runner.arch` components of the key at :47 and its seven copies never differentiate between consumers, and the only varying component is `MPICH_VERSION` at :12. Seven single jobs plus the python job's matrix at :511 give ten concurrent consumers of that one key, and actions/cache@v5 entries are immutable once written, so the save from whichever instance finishes first is the one that survives while the others discard theirs. The same key string also appears in mpi-slurm.yml:61 and release-mpi.yml:73, which is why a key change is a fleet-wide event and not a single-job one.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Pointer for the perf epic and the one structural finding P1 asks for: the cache is correct, what is missing is an ordering. The roadmap-consistent shape is one small populator job that owns the Cache/Build/Set triple for the shared key and a `needs:` edge from each consumer to it, leaving each consumer with a restore-only step. That converts a concurrent cold-key miss into a single miss, and it is a pull rather than a push because the triple already has ten consumers across three workflows, so it is not a one-consumer abstraction. Name the trade-off honestly for the owner, because it is real and it is the owner's call: a populator edge serializes the whole workflow behind one job even on a warm key, where today every consumer restores in parallel and nothing waits. A second, weaker shape avoids that by leaving the graph alone and only removing consumers, which is what the schemas and python entries do; the two shapes compose, and doing the consumer removal first shrinks the population the ordering question applies to.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "One immutable cache entry with many concurrent readers and no writer election: because no dependency edge orders the consumers, a key change is observed as a miss by all of them at once, each performs the identical third-party configure-and-make, and all but one of the resulting saves is discarded as a duplicate key. The runner-os and runner-arch components cannot split that population because every job in the file targets the same runner label, and the matrix job contributes one consumer per entry.",
+      "citedContext": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 205,
+          "why": "the clp job's written rationale for a distinct cache key suffix shows the workflow already reasons explicitly about cache scoping, so key sharing here is a considered surface rather than an unexamined one"
+        }
+      ]
+    },
+    {
+      "title": "Three job definitions each compile the release cobre binary independently, with no artifact handoff and no cache-sharing directive anywhere in the workflow, while three cache-separating directives are present",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 337
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 339
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 358
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 360
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 545
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 561
+        },
+        {
+          "path": "scripts/ci/check_schemas.sh",
+          "line": 23
+        },
+        {
+          "path": "scripts/ci/check-docs-examples.sh",
+          "line": 86
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-docs-examples.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "docs-examples",
+        "step": "Verify init/run structural invariants",
+        "line": 360
+      },
+      "evidence": {
+        "command": "git grep -nE 'upload-artifact|download-artifact|shared-key' 077dbe2c -- .github/workflows/ci.yml; git show 077dbe2c:.github/workflows/ci.yml | grep -nE 'rust-cache|prefix-key'; git show 077dbe2c:scripts/ci/check_schemas.sh | grep -n 'cargo build'; git show 077dbe2c:scripts/ci/check-docs-examples.sh | grep -n 'cargo build'",
+        "output": "(the first grep prints nothing: no upload-artifact, no download-artifact, no shared-key in ci.yml)\n70:      - uses: Swatinem/rust-cache@v2\n110:      - uses: Swatinem/rust-cache@v2\n153:      - uses: Swatinem/rust-cache@v2\n207:      - uses: Swatinem/rust-cache@v2\n209:          prefix-key: clp\n337:      - uses: Swatinem/rust-cache@v2\n358:      - uses: Swatinem/rust-cache@v2\n398:      - uses: Swatinem/rust-cache@v2\n412:      - uses: Swatinem/rust-cache@v2\n442:      - uses: Swatinem/rust-cache@v2\n493:      - uses: Swatinem/rust-cache@v2\n495:          prefix-key: cov\n543:      - uses: Swatinem/rust-cache@v2\n545:          prefix-key: python\ncheck_schemas.sh:23:  cargo build --release --bin cobre\ncheck-docs-examples.sh:86:  cargo build --release --bin cobre",
+        "reading": "The same release binary is produced by three job definitions: schemas via check_schemas.sh:23, docs-examples via check-docs-examples.sh:86, and python via `cargo build --release -p cobre-cli` at ci.yml:561, which selects the same target because cobre-cli declares `[[bin]] name = \"cobre\"` and no library target. Nothing in the workflow links those three builds: `upload-artifact` and `download-artifact` match nowhere in ci.yml, so no job consumes another's binary, and `shared-key` matches nowhere either, so no rust-cache use is declared as sharing scope with another job. The asymmetry is that the opposite directive is used deliberately three times - `prefix-key` at :209, :495 and :545 - each to SEPARATE a cache, with the clp separation carrying its rationale in a comment. The workflow therefore expresses cache separation explicitly and cache sharing not at all, and the python job multiplies its copy of the build across the matrix at :511.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Pointer for the perf epic: give the release cobre binary one producer in the workflow and let the consumers receive it, instead of three independent producers. Two shapes, with a genuine trade-off the owner should pick between. First, build once and pass the binary between jobs, which needs the producer job plus a `needs:` edge from each consumer and makes the two script gates accept a prebuilt binary rather than building one - both scripts already separate building from checking behind their `--build` flag, so that seam exists. Second, keep three builders and declare the two that run the identical command as sharing one rust-cache scope, which is a one-line amend per job and does not touch the scripts or the job graph, but leaves the compile itself duplicated on a cold cache. Both are pull-not-push: the first reuses the `--build` seam the scripts already have, the second uses the same rust-cache input the workflow already parameterises three times in the separating direction. State the counter-consideration: separate builds are independent, so one job's broken build cannot mask another's, and the first shape gives that up.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "The same compile unit is reached from three independent job graphs with nothing declaring them equivalent, so each pays its own build of the identical artifact. Neither of the two mechanisms that would deduplicate it is present: no artifact is published or consumed between jobs, and no cache scope is declared shared, while the reverse directive that splits cache scopes is used deliberately three times.",
+      "citedContext": [
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 15,
+          "why": "the `[[bin]] name = \"cobre\"` target with no library target beside it is what makes the package-scoped build in the python job the same artifact as the two bin-scoped builds"
+        }
+      ]
+    },
+    {
+      "title": "Ten of the fourteen quality-scripts steps each enumerate the crates tree themselves, and the shared scan library they already source exposes only a per-file predicate and no enumeration helper",
+      "anchors": [
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 21
+        },
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 32
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 127
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 155
+        },
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 118
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 104
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 180
+        },
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 680
+        },
+        {
+          "path": "scripts/ci/quality-report.sh",
+          "line": 91
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 262
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/lib/comment_scan.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "cfg(test) boundary drift guard (shared scan lib)",
+        "line": 268
+      },
+      "evidence": {
+        "command": "git grep -nE 'find .*(\\*\\.rs|-name)' 077dbe2c -- scripts/ci | sed 's/^077dbe2c://' && git grep -n 'comment_scan.sh' 077dbe2c -- scripts/ci | grep source | sed 's/^077dbe2c://' && git show 077dbe2c:scripts/ci/lib/comment_scan.sh | grep -nE '^cs_'",
+        "output": "check-allow-rationale.sh:450:done < <(find \"${REPO_ROOT}/crates\" -type f \\( -name \"mod.rs\" -o -name \"lib.rs\" \\) -print0 2>/dev/null)\ncheck-allow-rationale.sh:680:done < <(find \"${REPO_ROOT}/crates\" -type f -name '*.rs' -path '*/src/*' -print0 2>/dev/null)\ncheck-comment-banners.sh:148:    done < <(find \"$dir\" -name \"*.rs\" -print0)\ncheck-comment-bloat.sh:47:mapfile -t files < <(find \"$ROOT/crates\" -type f -name '*.rs' -path '*/src/*' 2>/dev/null | sort)\ncheck-comment-line-refs.sh:118:    done < <(find \"$dir\" -name \"*.rs\" -print0)\ncheck-comment-refs.sh:155:    done < <(find \"$dir\" -name \"*.rs\" -print0)\ncheck-cut-selection-determinism.sh:112:    done < <(find \"$root\" -name 'Cargo.toml' ...)\ncheck-cut-selection-determinism.sh:127:            done < <(find \"$rs_dir\" -name '*.rs' -print0)\ncheck-doc-placeholders.sh:104:    done < <(find \"$dir\" -name \"*.rs\" -print0)\ncheck-infra-genericity.sh:127:    done < <(find \"$dir\" -name \"*.rs\" -print0)\ncheck-no-plan-leaks.sh:180:    done < <(find \"$dir\" -name \"*.rs\" -print0)\nquality-report.sh:91:        done < <(find \"$dir\" -name \"*.rs\" -print0)\n--\ncheck-comment-line-refs.sh:43:source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\"\ncheck-comment-refs.sh:51:source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\"\ncheck-doc-placeholders.sh:49:source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\"\ncheck-no-plan-leaks.sh:102:source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\"\n--\n21:cs_emit_production_lines() {\n32:cs_emit_comment_lines() {",
+        "reading": "This is the structural answer P2 asks for. Of the fourteen script steps in the quality-scripts job at ci.yml:261-300, ten perform their own recursive enumeration of the crates tree: the genericity gate at :262 (find :127), the cut-selection gate at :264 (:112 and :127), the plan-leak gate at :270 (:180), the past-inflows gate at :272 (a recursive `grep -rlI` at :52 rather than a find), the comment-ref gate at :276 (:155), the line-ref gate at :280 (:118 and :126), the banner gate at :284 (:148), the placeholder gate at :286 (:104), the rationale gate at :292 (:450 and :680), and the hotspot report at :300 (:91) which additionally invokes check-comment-bloat.sh (its own walk at :47). The remaining four read fixed or diff-scoped inputs. The shared library four of them already source exposes exactly two helpers, `cs_emit_production_lines` at :21 and `cs_emit_comment_lines` at :32, and both take a single file: the library shares the cfg(test) boundary PREDICATE and no part of the WALK, which is why sourcing it does not remove a caller's find. One refinement to the census note at the prompt's structural-shape paragraph: check-allow-rationale.sh is diff-scoped only for its added-suppression pass (`git diff --unified=0 \"${BASE}\"...HEAD` at :422 with BASE resolved at :369-370); it also runs two unconditional whole-crates walks at :450 and :680, and the script's own header at :652-658 calls the second one a whole-tree re-measurement.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pointer for the perf epic, expressed as an amend and explicitly not as a new framework: extend the shared library that already has four sourcing callers with an enumeration helper beside its two per-file helpers, so the walk becomes a library concern like the boundary predicate already is, and have the existing callers take their file list from it. Proposing a NEW shared scan library or a gate-runner framework would be the push-shaped answer and should be tagged as conflicting, because the library to amend already exists and already has consumers. Two honest caveats for the owner. First, the walk is the cheap half and the per-file work is the expensive half, so the pointer is worth only as much as the per-file passes can also be folded, and the library's own header at :11-16 records that two gates cannot use the streaming helpers at all, which bounds how much can fold. Second, the gates are independently runnable today and a shared enumeration makes them share a failure mode, which is a real loss the boundary-drift guard at :42-65 exists precisely to manage.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "Each gate owns its own traversal, so one job invocation walks the same directory tree once per gate and reads the same files once per gate. The extraction that already happened went to the per-file predicate rather than to the enumeration, so adding a sourcing caller does not reduce the number of walks; only a library-owned enumeration would.",
+      "citedContext": [
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 422,
+          "why": "the diff-scoped pass, which is the one scoped traversal in the job and the shape the whole-tree walks are being contrasted with"
+        },
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 653,
+          "why": "the script's own header calling its second pass a whole-tree re-measurement, which is why the gate counts on both sides of the scoped/unscoped split"
+        }
+      ]
+    },
+    {
+      "title": "Three jobs install their cargo tool from source with cargo install while the same workflow already uses a prebuilt-binary install action for its one other tool",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 215
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 217
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 413
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 443
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 496
+        },
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 29
+        },
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 50
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "security",
+        "step": "cargo install cargo-audit --locked",
+        "line": 413
+      },
+      "evidence": {
+        "command": "git grep -nE 'cargo install|taiki-e/install-action' 077dbe2c -- .github/workflows",
+        "output": "ci.yml:215:        uses: taiki-e/install-action@v2\nci.yml:413:      - run: cargo install cargo-audit --locked\nci.yml:443:      - run: cargo install cargo-about --version 0.9.0 --locked --features cli\nci.yml:496:      - run: cargo install cargo-llvm-cov --locked\ninvariance-shuffle.yml:29:        uses: taiki-e/install-action@v2\ninvariance-shuffle.yml:50:        uses: taiki-e/install-action@v2",
+        "reading": "The prebuilt-binary install action is already a wired dependency of this repository's CI: it appears at ci.yml:215 to install nextest, with `tool: nextest` at :217, and twice more in invariance-shuffle.yml at :29 and :50. Three other ci.yml jobs instead build their tool from source in the job: security at :413, license-notices at :443 and coverage at :496. All three of the from-source installs are `--locked`, and the license one additionally pins `--version 0.9.0`, so the reproducibility intent is explicit and must survive any amend. The asymmetry is in the acquisition method only, not in the pinning discipline.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pointer for the perf epic and a pull-not-push amend: acquire the three tools the same way the workflow already acquires nextest, through the install action that is already a dependency here, keeping each tool's existing version pin as the action's version input so the current reproducibility guarantee is unchanged. Nothing new is introduced - no new action, no new job, no composite - so this is an amend of an existing pattern to three call sites. Two things the owner should weigh, because they are the reason the current shape may be deliberate. The pinned license tool has an exact version and a feature selection (`--features cli`); if the prebuilt distribution for that version or that feature set does not exist, that call site stays as it is and the amend covers only the other two. And a from-source install exercises the tool's own build, which a prebuilt download does not; if that is valued for the audit tooling, say so in a comment at the call site rather than leaving the asymmetry unexplained, which is the pattern the clp cache separation at :205-206 already sets.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "Acquiring a tool by compiling it inside the job makes the tool's own dependency graph part of that job's build work, and it is work the job's own cargo cache does not necessarily carry across runs; acquiring the same tool as a prebuilt binary replaces that compile with a download. The workflow already contains both methods, so the cost difference is a shape difference between call sites rather than a missing capability.",
+      "citedContext": []
+    },
+    {
+      "title": "Nine of the fourteen job definitions check out every vendored submodule recursively, and on each of them at least one vendored superbuild tree is fetched that the job's feature set never compiles",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 42
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 173
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 219
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 309
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 356
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 515
+        },
+        {
+          "path": "crates/cobre-solver/build.rs",
+          "symbol": "main"
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "clp",
+        "step": "actions/checkout@v6",
+        "line": 171
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | grep -cE 'submodules: recursive'; git show 077dbe2c:.gitmodules | grep -E 'path ='; git show 077dbe2c:crates/cobre-solver/build.rs | grep -nE 'CARGO_FEATURE'; git show 077dbe2c:crates/cobre-sddp/build.rs | sed -n '11p'",
+        "output": "9\n\tpath = crates/cobre-solver/vendor/HiGHS\n\tpath = crates/cobre-solver/vendor/Clp\n\tpath = crates/cobre-solver/vendor/CoinUtils\n\tpath = crates/cobre-sddp/vendor/qhull\nbuild.rs:30:    if env::var(\"CARGO_FEATURE_HIGHS\").is_ok() {\nbuild.rs:182:    if env::var(\"CARGO_FEATURE_CLP\").is_ok() {\ncobre-sddp/build.rs:11://! no `CARGO_FEATURE_*` variables and never invokes the LP solver's toolchain.",
+        "reading": "Nine of the fourteen job definitions pass `submodules: recursive` to actions/checkout@v6 (ci.yml:42, :80, :123, :173, :309, :356, :370, :461, :515), which fetches all four vendored trees registered in the submodule config, namely the solver's HiGHS, Clp and CoinUtils trees and the sddp crate's qhull tree. The solver build script compiles each vendored superbuild only under its own feature: HiGHS behind CARGO_FEATURE_HIGHS at build.rs:30 and the Clp/CoinUtils pair behind CARGO_FEATURE_CLP at :182. Exactly one of those two branches is ever live per job: the clp job builds with `--no-default-features --features \"clp ...\"` (ci.yml:219, :221, :223), so it fetches the HiGHS tree and never compiles it, and every other submodule-fetching job builds with the default highs feature, so each fetches the Clp and CoinUtils trees and never compiles them. The qhull tree is the counter-case and is cited so the entry does not overreach: cobre-sddp/build.rs:11 states it reads no CARGO_FEATURE_* variables, so it is compiled unconditionally and its fetch is needed everywhere.",
+        "readingCheck": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pointer for the perf epic, and the honest part of the pointer is that the obvious amend is not available: actions/checkout has no per-submodule selection input, so `submodules: recursive` is all-or-nothing and there is no one-line version of this fix. The shape that does exist is to stop asking checkout for submodules on the jobs where the set is wrong and initialise the needed trees explicitly in a following step, which trades one line for a few on each affected job and moves the submodule list into the workflow where it can drift from the submodule config. That trade-off is the owner's call and the entry does not presume it: uniform recursive checkout is a defensible choice precisely because it cannot drift. Two narrower shapes are worth putting in front of the owner alongside it: apply the change only to the clp job, which is the single asymmetric case and the one whose unused tree is the largest of the four; or leave the checkout alone and record in a comment that the vendored set is fetched whole deliberately, which is what the docs-examples rationale comment does for its own minimal setup. This entry claims nothing about the build scripts themselves - the two feature gates are cited as context, and the link-demand facts at that level are another station's.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": "UNMEASURED",
+      "mechanism": "Submodule acquisition is requested at whole-set granularity while compilation is gated per feature, so the fetch set is a superset of the build set on every job and the difference is paid as checkout work for source trees no compiler in that job opens. The mismatch is structural rather than accidental: one of the two mutually exclusive solver backends is always the one not selected, so there is no feature configuration in which the recursive set is exactly right.",
+      "citedContext": [
+        {
+          "path": ".gitmodules",
+          "line": 1,
+          "why": "the submodule registry that `submodules: recursive` expands to: four paths, three of them under the solver crate's vendor directory and one under the sddp crate's, which is the set every recursive checkout fetches in full"
+        },
+        {
+          "path": "crates/cobre-sddp/build.rs",
+          "line": 11,
+          "why": "the qhull build script's statement that it reads no CARGO_FEATURE_* variables, which is why that one vendored tree is legitimately fetched by every job"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "The MPICH cache key carries the version it caches, so a version bump invalidates the entry instead of serving a stale toolchain",
+      "why": "Correct and worth protecting: the key at .github/workflows/ci.yml:47 interpolates env.MPICH_VERSION, declared at :12, so the value that determines what gets built is part of the identity of what gets stored. The os and arch components make the same key safe to reuse from a workflow that runs on a different runner label, which mpi-slurm.yml:61 and release-mpi.yml:73 do. Any pointer about this cache must preserve both properties.",
+      "sanctionedBy": ".github/workflows/ci.yml:12 and :47"
+    },
+    {
+      "subject": "The docs-examples job's deliberately minimal setup, with the reason written down next to it",
+      "why": "Examined and clean, and it is the pattern the two MPICH entries above point at: the comment at .github/workflows/ci.yml:341-348 states that only the default-feature HiGHS binary is needed and that the default CLI build enables neither mpi nor flatc-conformance, so a reader can tell that the absent setup is absent on purpose. This is the repository's own precedent for recording a setup decision in the workflow rather than leaving it to be re-derived.",
+      "sanctionedBy": ".github/workflows/ci.yml:344-346"
+    },
+    {
+      "subject": "fetch-depth: 0 is scoped to the one job that needs a merge base, with its reason stated",
+      "why": "Correct and worth protecting: the full-history checkout appears once, at .github/workflows/ci.yml:257, and the comment at :255-256 ties it to the rationale gate's merge-base computation. The other thirteen job definitions take the default shallow checkout. This is the scoped-cost shape the whole-tree-walk entry is asking the gate scans to move toward, already applied correctly at the workflow level.",
+      "sanctionedBy": ".github/workflows/ci.yml:255-257"
+    },
+    {
+      "subject": "The three prefix-key cache separations, one of them with a written rationale for why sharing would be wrong",
+      "why": "Examined and sanctioned: the separations at .github/workflows/ci.yml:209, :495 and :545 are deliberate, and the clp one carries the reason at :205-206, that sharing the HiGHS target directory would stop the job from actually compiling the vendored COIN superbuild. That comment is also the evidence that this workflow reasons about cache scope on purpose, which is what makes the absence of any sharing directive a finding rather than an oversight.",
+      "sanctionedBy": ".github/workflows/ci.yml:205-209"
+    },
+    {
+      "subject": "The five reserved stub members and their cost on workspace-wide jobs",
+      "why": "Examined and sanctioned, recorded here so the lens is on record as having checked it rather than raising it: the stubs are ratified reserved seams, so their per-crate compile unit on each job that builds the whole workspace is a sanctioned cost and not debt, and a performance entry about a reserved crate could only ever be about workspace cost, never about removing it. The cost is bounded to crate-level metadata for sources of a handful of lines each, so it is not worth a pointer.",
+      "sanctionedBy": "ARCHITECTURE.md:108-125 and Cargo.toml:12-16"
+    },
+    {
+      "subject": "Every MPICH source build is guarded by its own cache-hit condition",
+      "why": "Correct and worth protecting, and it is the reason every entry above is framed as a cache-miss cost: each Build step carries `if: steps.mpich-cache.outputs.cache-hit != 'true'` (ci.yml:317 and its seven siblings), so on a warm key nothing is compiled and only the restore remains. A pointer that ignored this guard would be overstating the cost, and the perf epic should inherit the framing rather than re-derive it.",
+      "sanctionedBy": ".github/workflows/ci.yml:317"
+    }
+  ],
+  "handoffs": [],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "Whether the MPICH prelude should stay uniform across every ci.yml job for readability even where the job's feature set does not demand it, or be derived per job from that feature set, is a workflow-style decision the owner owns; both MPICH entries above are written to be actionable either way.",
+    "Whether introducing a populator job and dependency edges for the shared MPICH key is worth serializing the workflow behind one job on a warm key is an owner trade-off, since today every consumer restores in parallel and nothing waits.",
+    "Whether the release cobre binary should have one producer and be passed between jobs, at the cost of losing the independence that stops one job's broken build from masking another's, is the owner's call between the two shapes named in that entry.",
+    "Whether the license tool's exact version pin and its feature selection are available as a prebuilt distribution is an external fact this read-only station cannot check at the baseline, and it decides whether that one call site can join the install-action amend."
+  ],
+  "outOfScope": [],
+  "coverage": {
+    "P1 CI wall-time / cache": [
+      "The schemas job carries the MPICH Cache/Build/Set triple although its only compile is the default-feature release CLI binary, and the sibling docs-examples job runs that identical build with no triple and says in writing why none is needed",
+      "The python job carries the MPICH Cache/Build/Set triple on every instance of its version matrix although none of its three compiles enables an mpi feature",
+      "The eight MPICH consumers in ci.yml share one immutable cache key with no dependency edge anywhere in the workflow, so a key change is missed concurrently by every job instance rather than once by a populator"
+    ],
+    "P2 gate-runtime shape": [
+      "The eight MPICH consumers in ci.yml share one immutable cache key with no dependency edge anywhere in the workflow, so a key change is missed concurrently by every job instance rather than once by a populator",
+      "Ten of the fourteen quality-scripts steps each enumerate the crates tree themselves, and the shared scan library they already source exposes only a per-file predicate and no enumeration helper"
+    ],
+    "P3 build-graph shape": [
+      "The schemas job carries the MPICH Cache/Build/Set triple although its only compile is the default-feature release CLI binary, and the sibling docs-examples job runs that identical build with no triple and says in writing why none is needed",
+      "The python job carries the MPICH Cache/Build/Set triple on every instance of its version matrix although none of its three compiles enables an mpi feature",
+      "Three job definitions each compile the release cobre binary independently, with no artifact handoff and no cache-sharing directive anywhere in the workflow, while three cache-separating directives are present",
+      "Nine of the fourteen job definitions check out every vendored submodule recursively, and on each of them at least one vendored superbuild tree is fetched that the job's feature set never compiles"
+    ]
+  },
+  "gate": {
+    "validator": "pass",
+    "validatorErrors": [],
+    "rejections": [],
+    "demotedAnchors": [],
+    "stamps": [],
+    "droppedKeys": [],
+    "headerFixes": [],
+    "gateNotes": []
+  }
+}

@@ -1267,6 +1267,465 @@ class IngestTests(TestCorpusCase):
         )
 
 
+CAL_SECTION_TITLE = "STATION 8 — test corpus and test-support (2026-09)"
+CAL_SCAFFOLD = "★ QUALITY EVALUATION (2026-09, baseline a136840d) — test-corpus"
+FINDING_ID_RE = re.compile(r"^(CD|PD|OD|TD)-\d{3}$")
+HEADING_ID_RE = re.compile(r"^\*\*((?:CD|PD|OD|TD)-\d{3}) · Sev ([ABC]) ·", re.M)
+CAL_LENS_ORDER = ("test-bloat", "architecture", "over-engineering", "performance")
+CAL_CLASS_BY_LENS = {
+    "test-bloat": "TD",
+    "architecture": "CD",
+    "over-engineering": "OD",
+    "performance": "PD",
+}
+NEUTRAL_KINDS = {
+    "consolidation",
+    "re-homing",
+    "feature-surface-unification",
+    "cadence-tiering",
+}
+ALIGNMENT_VOCAB = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
+SEED_DISPOSITIONS = {
+    "delta-confirmed",
+    "delta-dismissed",
+    "dup-of",
+    "stale-at-pin",
+    "fix-shape-refused",
+}
+CAL_HEADINGS = (
+    "#### Seed dispositions (owned prior TD ids — reused, never re-minted)",
+    "#### Re-measured figures",
+    "#### Merged into existing entries (dup-of)",
+    "#### Positives (recorded so the report is not a defect-only list)",
+    "#### ↩︎ Cleared (dismissed or sanctioned — do not re-raise)",
+    "#### Phase-0a gate substrate (informational)",
+    "#### Queued out",
+    "#### Owner gate — decisions",
+    "#### Findings by lens",
+    "#### Test-suite bloat (TD)",
+    "#### Architecture (CD)",
+    "#### Over-engineering (OD)",
+    "#### Performance (PD)",
+)
+_STATION_ORDER = [
+    "core-io",
+    "stochastic",
+    "solver-comm",
+    "sddp",
+    "cli-python",
+    "build-ci",
+    "test-corpus",
+]
+
+
+def register_before_station(register: str, own_section: str, slug: str) -> str:
+    """The register as it stood when this station minted: its own section and every LATER crate-station section removed."""
+    prior = register.replace(own_section, "")
+    for later in _STATION_ORDER[_STATION_ORDER.index(slug) + 1 :]:
+        marker = f"## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — {later}"
+        if marker in prior:
+            block = prior.split(marker, 1)[1].split("\n## ", 1)[0]
+            prior = prior.replace(marker + block, "")
+    return prior
+
+
+def inventory_lookup(inv: dict, key: str):
+    """Resolve a flattened inventory key (`figures.<id>.perCrate.<crate>`): lists keyed by id / crate, dicts by key."""
+    node = inv
+    for part in key.split("."):
+        if isinstance(node, list):
+            node = next(x for x in node if (x.get("id") or x.get("crate")) == part)
+        else:
+            node = node[part]
+    return node
+
+
+def _sentence_hits(text: str) -> list[tuple[str, bool]]:
+    out = []
+    for m in DELETION_RE.finditer(text):
+        start = max(text.rfind(". ", 0, m.start()), text.rfind("; ", 0, m.start())) + 1
+        ends = [
+            e
+            for e in (text.find(". ", m.end()), text.find("; ", m.end()), len(text))
+            if e != -1
+        ]
+        sentence = text[start : min(ends)]
+        out.append((sentence, bool(NEGATED_RE.search(sentence))))
+    return out
+
+
+class CalibrationTests(TestCorpusCase):
+    """E08-5: id assignment, the claimKind and coverage gates, seed folds, the section, gate-substrate.json."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.assigned = cls.cal["assigned"]
+        cls.by_ref = {r["candidateRef"]: r for r in cls.assigned}
+        cls.gs = sc.load_json(cls.station_dir() / "gate-substrate.json")
+        cls.verdicts = sc.load_json(cls.station_dir() / "verdicts.json")["verdicts"]
+        cls.seeds = sc.load_json(cls.station_dir() / "seeds.json")["seeds"]
+        cls.inventory = sc.load_json(cls.station_dir() / "inventory.json")
+        cls.register = sc.BACKLOG.read_text(encoding="utf-8")
+        start = cls.register.index("\n### " + CAL_SECTION_TITLE + "\n")
+        end = cls.register.find("\n## ", start + 1)
+        cls.section = cls.register[start:end]
+        cls.t = cls.tree()
+
+    def block(self, heading: str) -> str:
+        start = self.section.index("\n" + heading + "\n")
+        nxt = self.section.find("\n#### ", start + 1)
+        return self.section[start : nxt if nxt > 0 else len(self.section)]
+
+    def run_tool(
+        self, tool: str, title: str, *extra: str
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(sc.TOOLS / tool), *extra, title],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_ids_well_formed_contiguous_unique_and_fresh(self) -> None:
+        self.assertTrue(self.assigned)
+        by_class: dict[str, list[int]] = {}
+        for r in self.assigned:
+            self.assertRegex(r["id"], FINDING_ID_RE)
+            self.assertEqual(r["class"], CAL_CLASS_BY_LENS[r["lens"]])
+            self.assertNotEqual(
+                r["class"],
+                "PD",
+                "every performance verdict was dismissed; no PD may be minted",
+            )
+            by_class.setdefault(r["class"], []).append(int(r["id"].split("-")[1]))
+        for cls_, nums in by_class.items():
+            floor = self.cal["idFloorsSeen"][cls_]
+            self.assertEqual(nums, list(range(floor, floor + len(nums))), cls_)
+        self.assertGreaterEqual(
+            self.cal["idFloorsSeen"]["TD"],
+            74,
+            "TD-001 is a floor; the crate stations already minted TD-001..073",
+        )
+        headings = HEADING_ID_RE.findall(self.register)
+        ids = [h[0] for h in headings]
+        self.assertEqual(
+            len(ids), len(set(ids)), "duplicate finding heading in the register"
+        )
+        section_ids = [h[0] for h in HEADING_ID_RE.findall(self.section)]
+        self.assertEqual(section_ids, [r["id"] for r in self.assigned])
+        prior = register_before_station(self.register, self.section, "test-corpus")
+        for r in self.assigned:
+            self.assertNotRegex(prior, rf"\b{r['id']}\b", r["id"])
+
+    def test_assignment_order_is_lens_yardstick_candidate(self) -> None:
+        keys = [
+            (CAL_LENS_ORDER.index(r["lens"]), r["yardstickRef"], r["candidateRef"])
+            for r in self.assigned
+        ]
+        self.assertEqual(keys, sorted(keys))
+        for r in self.assigned:
+            v = self.verdicts[r["candidateRef"]]
+            self.assertEqual(v["verdict"], "confirmed")
+            self.assertEqual(v["disposition"], "defended")
+            self.assertNotEqual(_norm(r["survivingClaim"]), _norm(v["title"]))
+            self.assertEqual(r["survivingClaim"], v["survivingClaim"])
+
+    def test_claimkind_gate_and_downgrades(self) -> None:
+        for r in self.assigned:
+            self.assertIn(r["severity"], "ABC")
+            self.assertIn(r["claimKind"], ("tree-fact", "prose-drift"))
+            if r["claimKind"] != "tree-fact":
+                self.assertEqual(r["severity"], "C", r["id"])
+                self.assertEqual(
+                    r["anchors"][0]["path"],
+                    YARDSTICK,
+                    "a prose-drift row anchors on the drifting sentence first",
+                )
+                self.assertIn("- **Drift (doc ↔ tree):**", self.entry(r["id"]))
+            if r["reviewerRating"] != r["severity"]:
+                self.assertTrue(r["downgradeReason"], r["id"])
+                self.assertIn("- **Reviewer rating:**", self.entry(r["id"]))
+        self.assertEqual(
+            self.cal["counts"]["downgrades"],
+            sum(1 for r in self.assigned if r["downgradeReason"]),
+        )
+        self.assertEqual(
+            [
+                t["candidateRef"]
+                for t in self.cal["targetGaps"]
+                if t["candidateRef"] in self.by_ref
+            ],
+            [],
+        )
+        for t in self.cal["targetGaps"]:
+            self.assertIsNone(t["severity"])
+            self.assertFalse(t["actionable"])
+            self.assertTrue(self.verdicts[t["candidateRef"]]["targetNotDefect"])
+
+    def entry(self, fid: str) -> str:
+        start = self.section.index(f"\n**{fid} · Sev ")
+        rest = self.section[start + 1 :]
+        m = re.search(r"\n(?:\*\*(?:CD|PD|OD|TD)-\d{3} · Sev |#### )", rest)
+        return rest[: m.start()] if m else rest
+
+    def test_seeded_confirmations_fold_and_every_seed_is_dispositioned_once(
+        self,
+    ) -> None:
+        seed_ids = [s["id"] for s in self.seeds]
+        rows = self.cal["seeds"]
+        self.assertEqual([r["seedId"] for r in rows], seed_ids)
+        for r in rows:
+            self.assertIn(r["stationDisposition"], SEED_DISPOSITIONS)
+            self.assertIsNone(r["mintedId"])
+            if r["stationDisposition"] == "delta-confirmed":
+                self.assertNotIn(
+                    r["candidateRef"],
+                    self.by_ref,
+                    "a seeded confirmation folds onto its TD id and mints nothing",
+                )
+                self.assertIn(r["fixShapeKind"], NEUTRAL_KINDS)
+            if r["stationDisposition"] == "stale-at-pin":
+                self.assertTrue(r["retireProposed"])
+        for r in self.assigned:
+            self.assertIsNone(self.verdicts[r["candidateRef"]].get("seedRef"), r["id"])
+        table = self.block(
+            "#### Seed dispositions (owned prior TD ids — reused, never re-minted)"
+        )
+        table_ids = re.findall(r"^\| (TD-\d{3}) \| ", table, re.M)
+        self.assertEqual(table_ids, seed_ids)
+        self.assertEqual(
+            len(self.cal["retireProposed"]), self.cal["counts"]["retireProposed"]
+        )
+        self.assertEqual(len(self.cal["fixShapeRefused"]), 4)
+        for r in self.cal["fixShapeRefused"]:
+            self.assertIn("Cost discipline", r["sanctionedBy"])
+
+    def test_alignment_vocabulary_citation_and_no_conflicts(self) -> None:
+        for r in self.assigned:
+            self.assertIn(r["alignmentHint"], ALIGNMENT_VOCAB)
+            self.assertRegex(r["alignmentCites"], r"Part (IV|V) §")
+            self.assertFalse(r["conflicts"])
+            body = self.entry(r["id"])
+            self.assertIn(f"- **Alignment:** {r['alignmentHint']} (provisional;", body)
+            self.assertNotIn("HELD", body)
+        self.assertEqual(self.cal["counts"]["conflicts"], 0)
+
+    def test_harness_checkers_exit_zero_over_both_titles(self) -> None:
+        for title in (CAL_SECTION_TITLE, CAL_SCAFFOLD):
+            for tool, extra in (
+                ("check-anchors.py", ()),
+                ("check-reraise.py", ()),
+                ("fields-check.py", ("--require", "Alignment")),
+            ):
+                r = self.run_tool(tool, title, *extra)
+                self.assertEqual(
+                    r.returncode, 0, f"{tool} {title}: {(r.stdout + r.stderr)[-1200:]}"
+                )
+
+    def test_fix_shapes_are_coverage_neutral(self) -> None:
+        for r in self.assigned:
+            self.assertIn(r["fixShapeKind"], NEUTRAL_KINDS, r["id"])
+            if r["fixShapeKind"] == "cadence-tiering":
+                self.assertTrue(
+                    r["targetTier"],
+                    f"{r['id']}: cadence tiering must name the tier tests move INTO",
+                )
+                self.assertIn("target tier:", self.entry(r["id"]))
+            self.assertEqual(
+                [h for h in r["deletionVerbHits"] if not h["negated"]], [], r["id"]
+            )
+        fix_lines = [
+            ln for ln in self.section.splitlines() if ln.startswith("- **Fix-shape:**")
+        ]
+        self.assertEqual(len(fix_lines), len(self.assigned))
+        for ln in fix_lines:
+            self.assertRegex(
+                ln,
+                r"\(shape: (consolidation|re-homing|feature-surface-unification|cadence-tiering)",
+            )
+            self.assertEqual(
+                [s for s, negated in _sentence_hits(ln) if not negated], [], ln[:120]
+            )
+        positives = self.block(
+            "#### Positives (recorded so the report is not a defect-only list)"
+        )
+        for r in self.cal["fixShapeRefused"]:
+            self.assertIn(f"- **{r['seedId']}**", positives)
+
+    def test_measurement_definitions_resolve_in_inventory(self) -> None:
+        for r in self.assigned:
+            body = self.entry(r["id"])
+            self.assertIn("- **Measurement:**", body)
+            self.assertIn("- **Claim kind:**", body)
+            if r["measurementKey"]:
+                self.assertIn(r["measurementDefinition"], ("binary", "file"))
+                self.assertEqual(
+                    inventory_lookup(self.inventory, r["measurementKey"]),
+                    r["measuredValue"],
+                )
+                self.assertIn(f"(definition: {r['measurementDefinition']}", body)
+                self.assertTrue(r["measurementCommand"])
+            else:
+                self.assertEqual(r["measurementDefinition"], "n/a")
+        self.assertEqual(self.cal["counts"]["definitionFlipNeedsHuman"], 0)
+        self.assertEqual(self.cal["needsHuman"], [])
+
+    def test_gate_substrate_is_informational_and_resolves_at_the_pin(self) -> None:
+        gs = self.gs
+        self.assertTrue(gs["informational"])
+        self.assertEqual(
+            (gs["findings"], gs["ids"], gs["proposedChanges"]), ([], [], [])
+        )
+        self.assertEqual(gs["baseline"], self.baseline())
+
+        def line(anchor: str) -> str:
+            path, ln = anchor.rsplit(":", 1)
+            lines = self.t.read_text(path).splitlines()
+            self.assertLessEqual(int(ln), len(lines), anchor)
+            return lines[int(ln) - 1]
+
+        roster = gs["goldenRoster"]
+        self.assertEqual(roster["cases"], ["D06", "D15", "D30", "D34", "D41"])
+        self.assertEqual(
+            [b["module"] for b in roster["backends"]],
+            ["parity_hash_highs", "parity_hash_clp"],
+        )
+        for b in roster["backends"]:
+            self.assertIn(f"mod {b['module']}", line(b["anchor"]))
+            self.assertIn("run_golden_case(", line(b["runGoldenCaseCall"]))
+            self.assertEqual(sorted(b["caseTests"]), roster["cases"])
+            for case, anchor in b["caseTests"].items():
+                self.assertIn(f"fn parity_hash_{case.lower()}", line(anchor))
+            self.assertEqual(
+                b["caseTestsGated"],
+                5,
+                "each of the five golden case tests is slow-tests gated",
+            )
+            self.assertGreaterEqual(b["slowTestsGatedFns"], 5)
+        for name, ln in roster["helpers"].items():
+            if ln is not None:
+                self.assertIn(f"fn {name}", line(f"{roster['helperOwner']}:{ln}"))
+        self.assertEqual(roster["helpersAbsentAtPin"], [])
+        self.assertEqual(
+            {
+                k: roster["helpers"][k]
+                for k in (
+                    "compute_parity_hash",
+                    "run_golden_case",
+                    "regen_golden_case",
+                    "assert_permutation_hash",
+                )
+            },
+            {
+                "compute_parity_hash": 48,
+                "run_golden_case": 375,
+                "regen_golden_case": 390,
+                "assert_permutation_hash": 406,
+            },
+            "the ticket's helper anchors resolve at their stated lines at the pin",
+        )
+        gates = gs["determinismGates"]
+        for m in gates["modules"]:
+            self.assertIn(f"mod {m['name']} {{", line(m["anchor"]))
+        self.assertTrue(
+            set(gates["ticketNamedModules"]) <= {m["name"] for m in gates["modules"]}
+        )
+        for d in gs["baselineDirs"]:
+            files = [f for f in self.t.ls_files(d["path"]) if f.endswith(".sha256")]
+            self.assertEqual(len(files), 5, d["path"])
+            self.assertEqual(
+                sorted(pathlib.Path(f).stem for f in files), roster["cases"]
+            )
+        ev = roster["gating"]["ciEvidence"]
+        self.assertIn("slow-tests", line(ev[0].split(" ")[0]))
+        self.assertIn("cargo test --workspace", line(ev[1].split(" ")[0]))
+        self.assertTrue(roster["gating"]["inCi"])
+
+    def test_section_structure_and_placeholder_replaced(self) -> None:
+        self.assertEqual(self.register.count("\n### " + CAL_SECTION_TITLE + "\n"), 1)
+        self.assertIn(
+            "## " + CAL_SCAFFOLD + "\n\n### " + CAL_SECTION_TITLE + "\n", self.register
+        )
+        self.assertNotIn("_(no entries yet)_", self.section)
+        positions = [self.section.index("\n" + h + "\n") for h in CAL_HEADINGS]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn(
+            "_No confirmed finding under this lens at the baseline",
+            self.block("#### Performance (PD)"),
+        )
+        self.assertIn(
+            "_(pending — filled by the gate ticket)_",
+            self.block("#### Owner gate — decisions"),
+        )
+        self.assertIn(f"- **Baseline:** `{self.baseline()}`", self.section)
+
+    def test_re_measured_figures_table_covers_the_inventory(self) -> None:
+        table = self.block("#### Re-measured figures").replace("\\|", "|")
+        for f in self.inventory["figures"]:
+            row = next(
+                (ln for ln in table.splitlines() if f"(`{f['id']}`)" in ln), None
+            )
+            self.assertIsNotNone(row, f["id"])
+            assert row is not None
+            self.assertIn(f"| {f['definition']} |", row)
+            self.assertIn(f["command"][:60].replace("\\|", "|"), row)
+
+    def test_dup_of_merges_name_mirror_items_without_td_ids(self) -> None:
+        block = self.block("#### Merged into existing entries (dup-of)")
+        self.assertEqual(len(self.cal["dupOf"]), 3)
+        for d in self.cal["dupOf"]:
+            self.assertIn(
+                f"- **{d['mirrorRef']}** (`{d['mirrorAnchor']}`) ← {d['candidateRef']}",
+                block,
+            )
+            self.assertNotIn(d["candidateRef"], self.by_ref)
+            for anchor in sc.anchors_in(d["sharpenedAnchor"]):
+                self.assertTrue(sc.anchor_exists(anchor, self.t), anchor)
+        self.assertNotRegex(block, r"\bTD-0(7[4-9]|[89]\d)\b")
+        self.assertEqual(self.cal["counts"]["dupOf"], 3)
+
+    def test_cleared_lists_every_dismissal(self) -> None:
+        cleared = self.block(
+            "#### ↩︎ Cleared (dismissed or sanctioned — do not re-raise)"
+        )
+        dismissed = [
+            ref for ref, v in self.verdicts.items() if v["verdict"] == "dismissed"
+        ]
+        self.assertEqual(
+            sorted(d["candidateRef"] for d in self.cal["cleared"]), sorted(dismissed)
+        )
+        for ref in dismissed:
+            self.assertIn(f"- **{ref}**", cleared)
+            self.assertNotIn(ref, self.by_ref)
+        self.assertEqual(
+            len(self.cal["targetGaps"]),
+            sum(1 for v in self.verdicts.values() if v["claimKind"] == "target-gap"),
+        )
+        for r in self.cal["retireProposed"]:
+            self.assertIn(f"- **{r['seedId']}**", cleared)
+
+    def test_counts_sum(self) -> None:
+        c = self.cal["counts"]
+        self.assertEqual(c["received"], len(self.verdicts))
+        self.assertEqual(c["confirmed"], c["minted"] + c["foldedOntoSeeds"])
+        self.assertEqual(c["received"], c["confirmed"] + c["dismissed"] + c["dupOf"])
+        self.assertEqual(c["minted"], len(self.assigned))
+        self.assertEqual(c["seeds"], 72)
+        self.assertEqual(sum(c["seedsByDisposition"].values()), 72)
+        self.assertEqual(
+            c["byClass"],
+            {
+                k: v
+                for k, v in dict(
+                    (cls_, sum(1 for r in self.assigned if r["class"] == cls_))
+                    for cls_ in ("TD", "CD", "OD")
+                ).items()
+                if v
+            },
+        )
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_is_modified(self) -> None:
         station = "plans/architecture-debt-audit/stations/test-corpus/"

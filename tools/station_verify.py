@@ -8,7 +8,7 @@ caught rather than passing silently. Read-only: nothing here writes a file.
 
 Subcommands (each prints its findings and exits 0 clean / 1 violation / 3 no section):
   register   <audit-dir> <station-slug>     Alignment vocabulary + do-not-touch denylist + non-empty
-  inventory  <inventory.json> <repo-root>   frozen module census == the .rs set at the census baseline
+  inventory  <inventory.json> <repo-root>   frozen census == the .rs (gate census: .sh/.py) set at the census baseline
   genericity <repo-root> <partI-handoff>    the genericity gate + EXCLUDED_FILES=() + I.3-6 disposition
   readonly   <repo-root> <baseline-sha>     no station write to any evaluated surface (worktree or commit)
 """
@@ -49,6 +49,8 @@ EVALUATED_ROOTS = (
     "tests",
 )
 EVALUATED_FILES = ("Cargo.toml", "Cargo.lock")
+MODULE_SUFFIXES = (".rs",)
+GATE_SUFFIXES = (".sh", ".py")
 
 
 def alignment_violations(entries: list[bp.Entry]) -> list[tuple[str, str, str]]:
@@ -156,14 +158,17 @@ def register_violations(
 
 
 def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
-    """Every .rs path the inventory's frozen census names, once each.
+    """Every path the inventory's frozen census names, once each.
 
-    Four census shapes are accepted so the verifier serves every station unchanged: a
+    Five census shapes are accepted so the verifier serves every station unchanged: a
     top-level `files[]` whose rows each carry a `path` (single- or multi-crate; wins when
     present), the nested `src.files[]` shape of a census split into src/ and tests/ roots
-    (the src rows are the module census; `src.root` names the tree root), and the
+    (the src rows are the module census; `src.root` names the tree root), the
     multi-crate `crates{}.modules[]` shape (a `file` module is one .rs path; a `directory`
-    module contributes the .rs names in its `files[]`).
+    module contributes the .rs names in its `files[]`), and the crate-less `gates.files[]`
+    shape of a station whose corpus is the scripts/ci gate set (each row carries a `path`;
+    `gates.root` names the tree root and the census is its executable set, see
+    `census_suffixes`).
     """
     if "files" in inventory:
         return [f["path"] for f in inventory["files"]]
@@ -182,13 +187,17 @@ def reconstruct_listed(inventory: dict[str, Any]) -> list[str]:
                         if name.endswith(".rs")
                     ]
         return listed
-    raise KeyError("inventory carries neither `files`, `src.files` nor `crates`")
+    if "files" in inventory.get("gates", {}):
+        return [f["path"] for f in inventory["gates"]["files"]]
+    raise KeyError(
+        "inventory carries neither `files`, `src.files`, `crates` nor `gates.files`"
+    )
 
 
 def crate_src_roots(inventory: dict[str, Any]) -> list[str]:
-    """The src roots the census covers: `crates{}` keys, `crates[]` rows (each carrying
+    """The tree roots the census covers: `crates{}` keys, `crates[]` rows (each carrying
     its `srcRoot`, or `name` when the root is the default `crates/<name>/src`), the
-    nested `src.root`, or the single `crate`."""
+    nested `src.root`, the gate census's `gates.root`, or the single `crate`."""
     if "crates" in inventory:
         crates = inventory["crates"]
         if isinstance(crates, list):
@@ -196,7 +205,16 @@ def crate_src_roots(inventory: dict[str, Any]) -> list[str]:
         return [f"crates/{crate}/src" for crate in crates]
     if "root" in inventory.get("src", {}):
         return [inventory["src"]["root"]]
+    if "root" in inventory.get("gates", {}):
+        return [inventory["gates"]["root"]]
     return [f"crates/{inventory['crate']}/src"]
+
+
+def census_suffixes(inventory: dict[str, Any]) -> tuple[str, ...]:
+    """The file suffixes the census enumerates under its roots: a gate census is the
+    executable .sh/.py set (data files such as the allowlist are not gates); every
+    module census is the .rs set."""
+    return GATE_SUFFIXES if "gates" in inventory else MODULE_SUFFIXES
 
 
 def inventory_diff(listed: list[str], tree: list[str]) -> tuple[list[str], list[str]]:
@@ -279,8 +297,14 @@ def _cmd_register(audit: pathlib.Path, station: str) -> int:
     return EXIT_VIOLATION if bad else EXIT_OK
 
 
-def baseline_rs_files(root: pathlib.Path, baseline: str, roots: list[str]) -> list[str]:
-    """Every tracked .rs under `roots` in the tree at `baseline` (the station's evaluated tree)."""
+def baseline_rs_files(
+    root: pathlib.Path,
+    baseline: str,
+    roots: list[str],
+    suffixes: tuple[str, ...] = MODULE_SUFFIXES,
+) -> list[str]:
+    """Every tracked file carrying one of `suffixes` under `roots` in the tree at
+    `baseline` (the station's evaluated tree); the default is the .rs module set."""
     out: list[str] = []
     for src_root in roots:
         listing = _git(root, "ls-tree", "-r", "--name-only", baseline, "--", src_root)
@@ -288,7 +312,7 @@ def baseline_rs_files(root: pathlib.Path, baseline: str, roots: list[str]) -> li
             raise RuntimeError(
                 listing.stderr.strip() or f"{src_root} at {baseline[:8]}"
             )
-        out += [p for p in listing.stdout.split() if p.endswith(".rs")]
+        out += [p for p in listing.stdout.split() if p.endswith(suffixes)]
     return out
 
 
@@ -297,11 +321,12 @@ def _cmd_inventory(inventory_path: pathlib.Path, root: pathlib.Path) -> int:
     listed = reconstruct_listed(inventory)
     if len(listed) != len(set(listed)):
         dupes = sorted({p for p in listed if listed.count(p) > 1})
-        print(f"FAIL inventory self-consistency: duplicate module paths {dupes}")
+        print(f"FAIL inventory self-consistency: duplicate census paths {dupes}")
         return EXIT_VIOLATION
     roots = crate_src_roots(inventory)
+    suffixes = census_suffixes(inventory)
     baseline = str(inventory["baseline"])
-    tree = baseline_rs_files(root, baseline, roots)
+    tree = baseline_rs_files(root, baseline, roots, suffixes)
     absent, unlisted = inventory_diff(listed, tree)
     if absent or unlisted:
         print(
@@ -314,8 +339,8 @@ def _cmd_inventory(inventory_path: pathlib.Path, root: pathlib.Path) -> int:
             print(f"  present-but-unlisted {path}")
         return EXIT_VIOLATION
     print(
-        f"inventory and the tree at {baseline[:8]} agree on {len(set(tree))} .rs files "
-        f"under {', '.join(roots)}"
+        f"inventory and the tree at {baseline[:8]} agree on {len(set(tree))} "
+        f"{'/'.join(suffixes)} files under {', '.join(roots)}"
     )
     return EXIT_OK
 

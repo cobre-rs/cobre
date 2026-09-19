@@ -424,7 +424,13 @@ def readonly_block(run: Run) -> None:
             "the workspace carries changes beyond the station's own directory: "
             + "; ".join(beyond[:6])
         )
-    tracked_mod = [ln for ln in porcelain if not ln.startswith("??")]
+    # The run itself regenerates the station's verification.md, so a tracked modification inside the
+    # station directory is the station's own write (byte-identical on a re-run); any other counts.
+    tracked_mod = [
+        ln
+        for ln in porcelain
+        if not ln.startswith("??") and not ln[3:].startswith(station_prefix)
+    ]
     if tracked_mod:
         fails.append("tracked files are modified: " + "; ".join(tracked_mod[:6]))
     diff = subprocess.run(

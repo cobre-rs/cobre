@@ -1876,11 +1876,11 @@ class SectionVerifyTests(TestCorpusCase):
         block = text[text.index(VERIFY_MARKER) :]
         self.assertNotIn("| FAIL |", block)
         self.assertIn("Station-specific result: PASS", block)
-        self.assertNotRegex(
-            text,
-            r"\b20\d\d-\d\d-\d\d\b",
-            "the report carries no run date (byte-stable)",
-        )
+        # The shared head prints inventory.json's baseline record verbatim (its fixed measuredOn
+        # date); no run date may appear anywhere, so the report is byte-stable across runs.
+        dates = set(re.findall(r"\b20\d\d-\d\d-\d\d\b", text))
+        self.assertLessEqual(dates, {self.inv["baseline"]["measuredOn"]}, sorted(dates))
+        self.assertNotRegex(block, r"\b20\d\d-\d\d-\d\d\b")
 
     def test_shared_count_census_branch_and_its_failure_path(self) -> None:
         rows = self.sv.count_census_rows(self.inv)

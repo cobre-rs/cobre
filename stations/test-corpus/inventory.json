@@ -1,0 +1,675 @@
+{
+  "station": "test-corpus",
+  "baseline": {
+    "sha": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+    "describe": "v0.15.0-100-g077dbe2c",
+    "measuredOn": "2026-09-19",
+    "head": "fca70afcf6586dfe8a68b4d04e500bf576932b17",
+    "source": "plans/architecture-debt-audit/BACKLOG.md header `Baseline: <sha40> (pinned …)` — the register pin; the ticket's a136840d (v0.15.0-1-ga136840d) is the superseded scaffold pin",
+    "assertion": "every evaluated surface at HEAD is identical to the pin (git diff --quiet <pin> HEAD -- crates .github scripts schemas examples tests docs Cargo.toml Cargo.lock, the ID-free mirror exempt); censuses read the pin's tree, toolchain figures run on the worktree"
+  },
+  "yardstick": {
+    "path": "docs/design/testing-architecture.md",
+    "statusLine": "Partially adopted (§5.2); the rest Proposal — Snapshot figures are calibration-time context; re-measure before acting",
+    "sections": {
+      "ta-2.1": "Shape table (metric → how to re-measure)",
+      "ta-2.2": "Where the sophistication lives",
+      "ta-2.3": "Tooling & CI topology",
+      "ta-3.2": "Sustainability & uniformity problems"
+    }
+  },
+  "definitions": {
+    "binary": "depth-1 crates/<c>/tests/*.rs — one linked integration binary each (the §2.1 command's find -maxdepth 1)",
+    "file": "git-tracked files matching the census (a recursive reading sweeps tests/common/*.rs and tests/fixtures/**)",
+    "occurrence": "git grep -o token count",
+    "invocation": "proptest! macro invocations",
+    "test": "tests as enumerated by the runner",
+    "doctest": "doc examples cargo test --doc compiled and ran",
+    "deck": "fixture directories",
+    "function": "distinct fn definitions",
+    "line": "resolved file:line anchors at the pin",
+    "n/a": "presence / boolean"
+  },
+  "figures": [
+    {
+      "id": "int-binaries",
+      "source": "ta-2.1",
+      "figure": "Integration-test binaries, per crate (depth-1 tests/*.rs — what Cargo links)",
+      "command": "for c in cobre cobre-core cobre-io cobre-stochastic cobre-solver cobre-comm cobre-sddp cobre-cli cobre-mcp cobre-tui cobre-flow cobre-uc cobre-emt cobre-python; do printf '%s %s\\n' \"$c\" \"$(git ls-tree --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates/$c/tests/ 2>/dev/null | grep -c '\\.rs$')\"; done",
+      "definition": "binary",
+      "value": 87,
+      "status": "measured",
+      "perCrate": {
+        "cobre": 0,
+        "cobre-core": 2,
+        "cobre-io": 12,
+        "cobre-stochastic": 9,
+        "cobre-solver": 8,
+        "cobre-comm": 2,
+        "cobre-sddp": 40,
+        "cobre-cli": 14,
+        "cobre-mcp": 0,
+        "cobre-tui": 0,
+        "cobre-flow": 0,
+        "cobre-uc": 0,
+        "cobre-emt": 0,
+        "cobre-python": 0
+      },
+      "altDefinition": {
+        "integrationFiles": 105,
+        "perCrate": {
+          "cobre": 0,
+          "cobre-core": 2,
+          "cobre-io": 13,
+          "cobre-stochastic": 10,
+          "cobre-solver": 8,
+          "cobre-comm": 2,
+          "cobre-sddp": 56,
+          "cobre-cli": 14,
+          "cobre-mcp": 0,
+          "cobre-tui": 0,
+          "cobre-flow": 0,
+          "cobre-uc": 0,
+          "cobre-emt": 0,
+          "cobre-python": 0
+        },
+        "note": "recursive tests/**/*.rs — what a grep-based lens sees; sweeps in tests/common/*.rs and tests/fixtures/**"
+      },
+      "docValue": null,
+      "docNote": "the §2.1 table gives the command, not a frozen number"
+    },
+    {
+      "id": "int-binaries-solver-linking",
+      "source": "ta-2.1",
+      "figure": "…that statically link the solver (crates depending on cobre-solver: cobre-sddp, cobre-cli, cobre-solver)",
+      "command": "for c in cobre-sddp cobre-cli cobre-solver; do printf '%s %s\\n' \"$c\" \"$(git ls-tree --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates/$c/tests/ | grep -c '\\.rs$')\"; done",
+      "definition": "binary",
+      "value": 62,
+      "status": "measured",
+      "perCrate": {
+        "cobre-sddp": 40,
+        "cobre-cli": 14,
+        "cobre-solver": 8
+      },
+      "ofTotalBinaries": 87
+    },
+    {
+      "id": "nextest-list",
+      "source": "ta-2.1",
+      "figure": "Unit + integration test count (cargo nextest list --features test-support)",
+      "command": "cargo nextest list --features test-support",
+      "definition": "test",
+      "value": 6371,
+      "status": "measured",
+      "listedBinaries": 90,
+      "perCrateTests": {
+        "cobre-cli": 235,
+        "cobre-comm": 65,
+        "cobre-core": 347,
+        "cobre-io": 1908,
+        "cobre-sddp": 2921,
+        "cobre-solver": 154,
+        "cobre-stochastic": 741
+      },
+      "perCrateBinaries": {
+        "cobre-cli": 15,
+        "cobre-comm": 3,
+        "cobre-core": 3,
+        "cobre-io": 12,
+        "cobre-sddp": 41,
+        "cobre-solver": 6,
+        "cobre-stochastic": 10
+      },
+      "parse": "non-TTY list output: one `<binary-id> <test>` line per test (a lib unit-test binary id is the bare crate name, an integration binary is `<crate>::<file>`); binaries are the distinct first tokens"
+    },
+    {
+      "id": "doctests",
+      "source": "ta-2.1",
+      "figure": "Doctests (cargo test --doc)",
+      "command": "cargo test --doc",
+      "definition": "doctest",
+      "value": 330,
+      "status": "measured",
+      "perCrate": {
+        "cobre-comm": 5,
+        "cobre-core": 73,
+        "cobre-io": 135,
+        "cobre-sddp": 80,
+        "cobre-solver": 5,
+        "cobre-stochastic": 32
+      },
+      "testLines": 330,
+      "blocks": 13,
+      "docTestHeadersOnStderr": 11,
+      "passed": 329,
+      "failed": 0,
+      "ignored": 1,
+      "parse": "sum of `running N tests` lines on stdout; per-crate attribution from the `test crates/<crate>/... - ... ... ok|ignored` lines (the `Doc-tests <crate>` headers go to stderr and are fewer than the blocks, so they are not zipped)"
+    },
+    {
+      "id": "pytest-collect",
+      "source": "ta-2.1",
+      "figure": "pytest (cobre-python) collected tests",
+      "command": "pytest crates/cobre-python --collect-only -q",
+      "definition": "test",
+      "value": 218,
+      "status": "measured",
+      "parse": "the `N tests collected` summary line"
+    },
+    {
+      "id": "golden-cases",
+      "source": "ta-2.1",
+      "figure": "Golden bit-exact cases: the tests/fixtures/parity_baselines* decks × two backends (HiGHS / CLP)",
+      "command": "for d in parity_baselines parity_baselines_clp; do printf '%s %s\\n' \"$d\" \"$(git ls-tree --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates/cobre-sddp/tests/fixtures/$d/ | wc -l)\"; done; git ls-tree --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates/cobre-sddp/tests/fixtures/parity_baselines/ crates/cobre-sddp/tests/fixtures/parity_baselines_clp/ ; git grep -ho 'fn parity_hash_[a-z0-9_]*' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-sddp/tests | sort -u; printf 'occurrences %s\\n' \"$(git grep -o 'parity_hash_' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-sddp/tests | wc -l)\"",
+      "definition": "deck",
+      "value": 10,
+      "status": "measured",
+      "decks": {
+        "parity_baselines": 5,
+        "parity_baselines_clp": 5
+      },
+      "deckFiles": [
+        "crates/cobre-sddp/tests/fixtures/parity_baselines/D06.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines/D15.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines/D30.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines/D34.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines/D41.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines_clp/D06.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines_clp/D15.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines_clp/D30.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines_clp/D34.sha256",
+        "crates/cobre-sddp/tests/fixtures/parity_baselines_clp/D41.sha256"
+      ],
+      "rosterFunctions": [
+        "parity_hash_d06",
+        "parity_hash_d15",
+        "parity_hash_d30",
+        "parity_hash_d34",
+        "parity_hash_d41"
+      ],
+      "goldenRosterSize": 5,
+      "prefixOccurrences": 47,
+      "note": "roster size is the count of distinct parity_hash_* test functions, not the occurrence count of the prefix"
+    },
+    {
+      "id": "to-bits",
+      "source": "ta-2.1",
+      "figure": "to_bits/ULP determinism assertions (files carrying `to_bits`)",
+      "command": "git grep -c 'to_bits' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs' | wc -l ; git grep -o 'to_bits' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs' | wc -l",
+      "definition": "file",
+      "value": 77,
+      "status": "measured",
+      "altDefinition": {
+        "occurrences": 1103
+      }
+    },
+    {
+      "id": "proptest-sites",
+      "source": "ta-2.1",
+      "figure": "proptest! sites",
+      "command": "git grep -l 'proptest!' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs' | wc -l ; git grep -c 'proptest!' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs'; printf 'total %s\\n' \"$(git grep -o 'proptest!' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs' | wc -l)\"",
+      "definition": "file",
+      "value": 7,
+      "status": "measured",
+      "altDefinition": {
+        "invocations": 8,
+        "perFile": {
+          "crates/cobre-core/src/system/builder.rs": 1,
+          "crates/cobre-io/src/windowed_history.rs": 1,
+          "crates/cobre-sddp/src/lead_time/tests.rs": 1,
+          "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs": 1,
+          "crates/cobre-sddp/src/stochastic/noise_key.rs": 1,
+          "crates/cobre-stochastic/src/sampling/external.rs": 1,
+          "crates/cobre-stochastic/src/season_cast/mod.rs": 2
+        }
+      },
+      "docValue": 5,
+      "docAnchor": "ta-3.2 item 7 ('property testing at only 5 sites')",
+      "driftAgainstDoc": true,
+      "driftNote": "the doc's 5 matches neither reading; handed to ingest as a prose-drift candidate, not adjudicated here"
+    },
+    {
+      "id": "slow-tests-attrs",
+      "source": "ta-2.1",
+      "figure": "Slow-gated (`slow-tests`) attributes — .rs files carrying the token (git-tracked census at the pin)",
+      "command": "git grep -c 'slow-tests' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs' | wc -l ; git grep -l 'slow-tests' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**' | sed 's#^077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:##' | sed 's#crates/\\([^/]*\\)/.*#\\1#' | sort | uniq -c; printf 'tracked-files %s\\n' \"$(git grep -l 'slow-tests' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**' | wc -l)\"; printf 'occurrences-rs %s\\n' \"$(git grep -o 'slow-tests' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/**/*.rs' | wc -l)\"",
+      "definition": "file",
+      "value": 13,
+      "status": "measured",
+      "altDefinition": {
+        "trackedFilesAnyType": 19,
+        "occurrencesInRs": 196,
+        "perCrateTrackedFiles": {
+          "cobre-cli": 1,
+          "cobre-io": 1,
+          "cobre-sddp": 15,
+          "cobre-stochastic": 2
+        }
+      },
+      "docClaim": "concentrated entirely in cobre-sddp",
+      "docClaimHolds": false,
+      "censusHygiene": "git grep at the pin — a naive recursive grep over the worktree also sweeps the untracked build directories under crates/*/ and is never used here"
+    },
+    {
+      "id": "nextest-config",
+      "source": "ta-2.3",
+      "figure": ".config/nextest.toml presence (§2.3: no profiles, retries, partitioning, JUnit or archive)",
+      "command": "git cat-file -e 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:.config/nextest.toml 2>/dev/null && echo present || echo absent",
+      "definition": "n/a",
+      "value": "absent",
+      "status": "measured"
+    },
+    {
+      "id": "ci-runner-split",
+      "source": "ta-2.3",
+      "figure": "Per-job runner split in .github/workflows/ci.yml (cargo test in the HiGHS Test job vs cargo nextest run in the CLP job)",
+      "command": "git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:.github/workflows/ci.yml | grep -n 'cargo test --workspace\\|cargo nextest run'",
+      "definition": "line",
+      "value": 2,
+      "status": "measured",
+      "anchors": {
+        ".github/workflows/ci.yml:114": "- run: cargo test --workspace --features \"${{ env.NON_SOLVER_FEATURES }}\"",
+        ".github/workflows/ci.yml:233": "run: cargo nextest run --workspace --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\" --no-fail-fast"
+      }
+    },
+    {
+      "id": "slow-tests-in-pr-features",
+      "source": "ta-2.3",
+      "figure": "slow-tests inside NON_SOLVER_FEATURES (the PR feature set), so the slow suite runs on every PR",
+      "command": "git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:.github/workflows/ci.yml | grep -n 'NON_SOLVER_FEATURES'",
+      "definition": "line",
+      "value": true,
+      "status": "measured",
+      "definitionAnchor": ".github/workflows/ci.yml:32",
+      "definition_line": "NON_SOLVER_FEATURES: \"mpi numa shared-memory serde schema slow-tests flatc-conformance test-support\"",
+      "consumerAnchors": [
+        ".github/workflows/ci.yml:71",
+        ".github/workflows/ci.yml:114",
+        ".github/workflows/ci.yml:154",
+        ".github/workflows/ci.yml:219",
+        ".github/workflows/ci.yml:221",
+        ".github/workflows/ci.yml:223",
+        ".github/workflows/ci.yml:233",
+        ".github/workflows/ci.yml:399",
+        ".github/workflows/ci.yml:497"
+      ]
+    },
+    {
+      "id": "shuffle-cadence",
+      "source": "ta-2.3",
+      "figure": "invariance-shuffle.yml cadence: workflow_dispatch only, nightly cron commented out",
+      "command": "git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:.github/workflows/invariance-shuffle.yml | grep -n 'workflow_dispatch\\|schedule\\|cron'",
+      "definition": "line",
+      "value": "workflow_dispatch-only",
+      "status": "measured",
+      "anchors": {
+        ".github/workflows/invariance-shuffle.yml:4": "workflow_dispatch:",
+        ".github/workflows/invariance-shuffle.yml:6": "# schedule:",
+        ".github/workflows/invariance-shuffle.yml:7": "#   - cron: \"0 3 * * *\""
+      }
+    },
+    {
+      "id": "test-support-declarers-vs-consumers",
+      "source": "ta-3.2",
+      "figure": "test-support declarers versus consumers across crates/*/Cargo.toml; StubComm/Rank0Of2 home",
+      "command": "git grep -n 'test-support' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/*/Cargo.toml' | sed 's#^077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:##' ; git grep -n 'struct StubComm\\b\\|struct Rank0Of2\\b' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates | sed 's#^077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:##'; printf 'cobre-comm-hits %s\\n' \"$(git grep -l 'StubComm\\|Rank0Of2' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- 'crates/cobre-comm/**' | wc -l)\"",
+      "definition": "line",
+      "value": {
+        "declarers": [
+          "cobre-core",
+          "cobre-io",
+          "cobre-sddp",
+          "cobre-solver",
+          "cobre-stochastic"
+        ],
+        "consumers": [
+          "cobre-cli",
+          "cobre-core",
+          "cobre-io",
+          "cobre-sddp",
+          "cobre-stochastic"
+        ],
+        "neither": [
+          "cobre",
+          "cobre-comm",
+          "cobre-emt",
+          "cobre-flow",
+          "cobre-mcp",
+          "cobre-python",
+          "cobre-tui",
+          "cobre-uc"
+        ]
+      },
+      "status": "measured",
+      "declarerAnchors": {
+        "cobre-core": "crates/cobre-core/Cargo.toml:30",
+        "cobre-io": "crates/cobre-io/Cargo.toml:33",
+        "cobre-sddp": "crates/cobre-sddp/Cargo.toml:55",
+        "cobre-solver": "crates/cobre-solver/Cargo.toml:31",
+        "cobre-stochastic": "crates/cobre-stochastic/Cargo.toml:26"
+      },
+      "consumerAnchors": {
+        "cobre-cli": [
+          "crates/cobre-cli/Cargo.toml:62"
+        ],
+        "cobre-core": [
+          "crates/cobre-core/Cargo.toml:40"
+        ],
+        "cobre-io": [
+          "crates/cobre-io/Cargo.toml:53",
+          "crates/cobre-io/Cargo.toml:54"
+        ],
+        "cobre-sddp": [
+          "crates/cobre-sddp/Cargo.toml:77"
+        ],
+        "cobre-stochastic": [
+          "crates/cobre-stochastic/Cargo.toml:41",
+          "crates/cobre-stochastic/Cargo.toml:42"
+        ]
+      },
+      "stubCommRank0Of2": {
+        "harnessHome": [
+          "crates/cobre-sddp/tests/common/mod.rs:32:pub struct StubComm;",
+          "crates/cobre-sddp/tests/common/mod.rs:86:pub struct Rank0Of2;"
+        ],
+        "otherDefinitions": [
+          "crates/cobre-sddp/examples/dhat_baseline.rs:44:struct StubComm;",
+          "crates/cobre-sddp/src/simulation/pipeline/tests.rs:109:struct StubComm {",
+          "crates/cobre-sddp/src/test_support.rs:3555:    struct StubComm;",
+          "crates/cobre-sddp/src/training/backward/tests.rs:233:struct StubComm;",
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:2216:    struct StubComm;",
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:2258:    struct Rank0Of2;",
+          "crates/cobre-sddp/src/training/session/mod.rs:1654:    struct StubComm;",
+          "crates/cobre-sddp/src/training/session/mod.rs:2767:    struct Rank0Of2;",
+          "crates/cobre-sddp/src/training/training/tests.rs:173:struct StubComm;",
+          "crates/cobre-sddp/tests/simulation_pipeline_integration.rs:78:struct StubComm {"
+        ],
+        "cobreCommHits": 0,
+        "note": "§5.8 names cobre-comm as the intended home; at the pin the harness pair lives in crates/cobre-sddp/tests/common/mod.rs and every other definition is a per-file or cfg(test)-local stub"
+      }
+    },
+    {
+      "id": "homing-split",
+      "source": "ta-3.2",
+      "figure": "Inline-giant versus extracted-sibling homing split (§3.2 item 4): sibling src/**/tests.rs files vs source files carrying #[cfg(test)], per crate",
+      "command": "git ls-tree -r --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates | grep '/src/.*tests\\.rs$' | sed 's#crates/\\([^/]*\\)/.*#\\1#' | sort | uniq -c ; for c in cobre cobre-core cobre-io cobre-stochastic cobre-solver cobre-comm cobre-sddp cobre-cli cobre-mcp cobre-tui cobre-flow cobre-uc cobre-emt cobre-python; do printf '%s %s\\n' \"$c\" \"$(git grep -l '#\\[cfg(test)\\]' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- \"crates/$c/src/*.rs\" \"crates/$c/src/**/*.rs\" 2>/dev/null | wc -l)\"; done ; git ls-tree -r --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates/cobre-sddp/src/lp/builder/ | grep -E '/(entries|columns|template|layout)(/tests)?\\.rs$'; git grep -c '#\\[cfg(test)\\]' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-sddp/src/lp/builder/entries.rs crates/cobre-sddp/src/lp/builder/columns.rs crates/cobre-sddp/src/lp/builder/template.rs crates/cobre-sddp/src/lp/builder/layout.rs | sed 's#^077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:##'",
+      "definition": "file",
+      "value": {
+        "siblingTestsRsTotal": 19,
+        "inlineCfgTestFilesTotal": 312
+      },
+      "status": "measured",
+      "perCrate": {
+        "cobre": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 0
+        },
+        "cobre-core": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 31
+        },
+        "cobre-io": {
+          "siblingTestsRs": 1,
+          "inlineCfgTestModules": 100
+        },
+        "cobre-stochastic": {
+          "siblingTestsRs": 2,
+          "inlineCfgTestModules": 36
+        },
+        "cobre-solver": {
+          "siblingTestsRs": 2,
+          "inlineCfgTestModules": 8
+        },
+        "cobre-comm": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 6
+        },
+        "cobre-sddp": {
+          "siblingTestsRs": 14,
+          "inlineCfgTestModules": 114
+        },
+        "cobre-cli": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 12
+        },
+        "cobre-mcp": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 0
+        },
+        "cobre-tui": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 0
+        },
+        "cobre-flow": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 0
+        },
+        "cobre-uc": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 0
+        },
+        "cobre-emt": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 0
+        },
+        "cobre-python": {
+          "siblingTestsRs": 0,
+          "inlineCfgTestModules": 5
+        }
+      },
+      "item4Anchors": {
+        "lpBuilderFiles": [
+          "crates/cobre-sddp/src/lp/builder/columns.rs",
+          "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "crates/cobre-sddp/src/lp/builder/layout.rs",
+          "crates/cobre-sddp/src/lp/builder/layout/tests.rs",
+          "crates/cobre-sddp/src/lp/builder/template.rs",
+          "crates/cobre-sddp/src/lp/builder/template/tests.rs"
+        ],
+        "cfgTestLinesPerFile": {
+          "crates/cobre-sddp/src/lp/builder/columns.rs": 12,
+          "crates/cobre-sddp/src/lp/builder/entries.rs": 4,
+          "crates/cobre-sddp/src/lp/builder/layout.rs": 2,
+          "crates/cobre-sddp/src/lp/builder/template.rs": 1
+        },
+        "note": "entries.rs and columns.rs keep inline #[cfg(test)] modules while template.rs and layout.rs have extracted tests.rs siblings"
+      }
+    }
+  ],
+  "figureStatus": {
+    "measured": 15
+  },
+  "perCrate": [
+    {
+      "crate": "cobre",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 0,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-core",
+      "integrationBinaries": 2,
+      "integrationFiles": 2,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 31,
+      "declaresTestSupport": true,
+      "consumesTestSupport": true
+    },
+    {
+      "crate": "cobre-io",
+      "integrationBinaries": 12,
+      "integrationFiles": 13,
+      "siblingTestsRs": 1,
+      "inlineCfgTestModules": 100,
+      "declaresTestSupport": true,
+      "consumesTestSupport": true
+    },
+    {
+      "crate": "cobre-stochastic",
+      "integrationBinaries": 9,
+      "integrationFiles": 10,
+      "siblingTestsRs": 2,
+      "inlineCfgTestModules": 36,
+      "declaresTestSupport": true,
+      "consumesTestSupport": true
+    },
+    {
+      "crate": "cobre-solver",
+      "integrationBinaries": 8,
+      "integrationFiles": 8,
+      "siblingTestsRs": 2,
+      "inlineCfgTestModules": 8,
+      "declaresTestSupport": true,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-comm",
+      "integrationBinaries": 2,
+      "integrationFiles": 2,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 6,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-sddp",
+      "integrationBinaries": 40,
+      "integrationFiles": 56,
+      "siblingTestsRs": 14,
+      "inlineCfgTestModules": 114,
+      "declaresTestSupport": true,
+      "consumesTestSupport": true
+    },
+    {
+      "crate": "cobre-cli",
+      "integrationBinaries": 14,
+      "integrationFiles": 14,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 12,
+      "declaresTestSupport": false,
+      "consumesTestSupport": true
+    },
+    {
+      "crate": "cobre-mcp",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 0,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-tui",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 0,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-flow",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 0,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-uc",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 0,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-emt",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 0,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    },
+    {
+      "crate": "cobre-python",
+      "integrationBinaries": 0,
+      "integrationFiles": 0,
+      "siblingTestsRs": 0,
+      "inlineCfgTestModules": 5,
+      "declaresTestSupport": false,
+      "consumesTestSupport": false
+    }
+  ],
+  "harness": {
+    "home": "crates/cobre-sddp (the only crate with tests/common/, tests/fixtures/ and benches/ at the pin — §2.2)",
+    "commonModules": [
+      "anticipated_structural_assertions.rs",
+      "builders.rs",
+      "mod.rs",
+      "parity_hash.rs",
+      "permute.rs"
+    ],
+    "fixtureDecks": {
+      "count": 10,
+      "names": [
+        "b6a_hydro_inflow_cascade",
+        "chronological_storage",
+        "custom_cycle_evaporation_month_mismatch",
+        "nonzero_stage_fpha_override",
+        "parallel_storage",
+        "parity_baselines",
+        "parity_baselines_clp",
+        "pumping_transfer",
+        "travel_time_arc",
+        "weekly_cycle_evaporation"
+      ],
+      "parityBaselines": 5,
+      "parityBaselinesClp": 5
+    },
+    "benches": {
+      "count": 5,
+      "files": [
+        "crates/cobre-sddp/benches/backward_stats_gather.rs",
+        "crates/cobre-sddp/benches/cut_application_anticipated_state.rs",
+        "crates/cobre-sddp/benches/cut_selection.rs",
+        "crates/cobre-sddp/benches/cut_selection_kernel.rs",
+        "crates/cobre-sddp/benches/dcs_batched_scoring.rs"
+      ],
+      "benchDirectoriesWorkspaceWide": 1
+    },
+    "goldenRosterSize": 5,
+    "goldenRoster": [
+      "parity_hash_d06",
+      "parity_hash_d15",
+      "parity_hash_d30",
+      "parity_hash_d34",
+      "parity_hash_d41"
+    ],
+    "parityHashPrefixOccurrences": 47,
+    "mpiWireBinary": [
+      "crates/cobre-sddp/tests/mpi_wire.rs"
+    ],
+    "oracleDuplicationAnchors": {
+      "fn close": {
+        "crates/cobre-sddp/tests/branching_value_oracle.rs": 93,
+        "crates/cobre-sddp/tests/extensive_form_oracle.rs": 77
+      },
+      "note": "the mirror already tracks the extensive_form_oracle / branching_value_oracle `fn close` duplication; sharpened to pin line numbers for the ingest dup-of merge"
+    },
+    "permuteHelper": true
+  },
+  "readOnlyProof": {
+    "surfacesPorcelain": "",
+    "leakOutsidePlans": null,
+    "porcelainLines": [
+      "?? plans/architecture-debt-audit/stations/test-corpus/"
+    ]
+  }
+}

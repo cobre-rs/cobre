@@ -511,6 +511,7 @@ TIMING_RE = re.compile(
     re.I,
 )
 DIFF_RE = re.compile(r"^\s*[-+]{3} |^\s*@@ |```", re.M)
+ALIGN_VOCAB = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
 PROMPT_ANCHOR_RE = re.compile(
     r"`((?:[\w.-]+/)+[\w.-]+|Cargo\.toml|ARCHITECTURE\.md|CLAUDE\.md):(\d+)"
 )
@@ -912,6 +913,270 @@ class CandidateEnvelopeTests(sc.StationCase):
         self.assertIn("`drift`", self.log)
         self.assertIn("ARCHITECTURE.md`, `CLAUDE.md`", self.log)
         self.assertIn("valid: performance", self.log)
+
+
+INGEST_STATES = {
+    "accepted",
+    "rejected-anchor",
+    "rejected-sanctioned-advisory",
+    "rejected-re-raise",
+    "rejected-defender",
+    "merged",
+    "held-conflicts",
+    "unresolved",
+}
+INGEST_DISPOSITIONS = {
+    "defended",
+    "dup-of",
+    "anchor-missing",
+    "cleared-sanctioned",
+    "re-raise-rejected",
+    "conflicts-held",
+    "returned-for-sharpening",
+}
+ENFORCEMENT = {
+    "blocking",
+    "advisory-by-design",
+    "unwired",
+    "transitively-advisory",
+    "not-a-gate",
+}
+HANDOFF_FORBIDDEN = {"disposition", "severity", "id", "alignment", "recommendation"}
+PROBE_TITLE = "INGEST ANCHOR PROBE — build-ci (2026-09, baseline)"
+
+
+class IngestTests(sc.StationCase):
+    SLUG = "build-ci"
+    SECTION_TITLE = "build-ci"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.doc = sc.load_json(cls.station_dir() / "verdicts.json")
+        cls.verdicts = cls.doc["verdicts"]
+        cls.env = {
+            lens: sc.load_json(cls.station_dir() / f"candidates-{lens}.json")
+            for lens in LENSES
+        }
+        cls.log = (cls.station_dir() / "ingest-log.md").read_text(encoding="utf-8")
+        cls.probe = (cls.station_dir() / "anchor-probe.md").read_text(encoding="utf-8")
+        cls.brief = (cls.station_dir() / "defender-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        cls.handoff = sc.load_json(cls.station_dir() / "partI-handoff.json")
+        cls.census = sc.load_json(cls.station_dir() / "gate-census.json")
+        cls.t = cls.tree()
+        cls.files = set(cls.t.files())
+
+    def received(self) -> dict[str, dict]:
+        out = {}
+        for lens, env in self.env.items():
+            for i, c in enumerate(env["candidates"]):
+                out[f"{lens}-{i:02d}"] = c
+        return out
+
+    def line_resolves(self, path: str, line) -> bool:
+        return (
+            path in self.files
+            and isinstance(line, int)
+            and 1 <= line <= len(self.t.read_text(path).splitlines())
+        )
+
+    def test_every_candidate_has_exactly_one_verdict_entry(self) -> None:
+        received = self.received()
+        self.assertEqual(set(self.verdicts), set(received))
+        self.assertEqual(self.doc["baseline"], self.baseline())
+        self.assertEqual(self.doc["counts"]["received"], len(received))
+        for ref, e in self.verdicts.items():
+            self.assertEqual(e["candidateRef"], ref)
+            self.assertEqual(e["title"], received[ref]["title"])
+            self.assertIn(e["disposition"], INGEST_DISPOSITIONS, ref)
+            self.assertIn(e["state"], INGEST_STATES, ref)
+            self.assertIn(
+                e["verdict"], (None, "confirmed", "dismissed", "unresolved"), ref
+            )
+
+    def test_states_follow_disposition_verdict_and_basis(self) -> None:
+        for ref, e in self.verdicts.items():
+            d, v, st = e["disposition"], e["verdict"], e["state"]
+            if d == "dup-of":
+                self.assertEqual(st, "merged", ref)
+                self.assertIn(e["mergedInto"], self.verdicts, ref)
+                self.assertIn(
+                    ref, self.verdicts[e["mergedInto"]]["mergedFrom"] or [], ref
+                )
+                self.assertIsNone(v)
+            elif d == "anchor-missing":
+                self.assertEqual(st, "rejected-anchor", ref)
+            elif d == "cleared-sanctioned":
+                self.assertEqual(st, "rejected-sanctioned-advisory", ref)
+            elif d == "defended":
+                self.assertIn(v, ("confirmed", "dismissed", "unresolved"), ref)
+                if v == "confirmed":
+                    self.assertEqual(st, "accepted", ref)
+                    self.assertTrue(e["survivingClaim"], ref)
+                    self.assertNotEqual(
+                        e["survivingClaim"].strip(), e["title"].strip(), ref
+                    )
+                    self.assertNotIn(e["title"], e["survivingClaim"], ref)
+                    self.assertIsNone(e.get("dismissalBasis"), ref)
+                elif v == "dismissed":
+                    self.assertIn(
+                        st, ("rejected-defender", "rejected-sanctioned-advisory"), ref
+                    )
+                    self.assertIn(
+                        e["dismissalBasis"], self.doc["dismissalBasisVocabulary"], ref
+                    )
+                    self.assertTrue(e["basisCitation"], ref)
+                    if e["dismissalBasis"] == "sanctioned-advisory":
+                        self.assertEqual(st, "rejected-sanctioned-advisory", ref)
+                        self.assertIn(
+                            e["sanctionedBy"], self.doc["sanctionedByClosedSet"], ref
+                        )
+                    else:
+                        self.assertIsNone(e.get("sanctionedBy"), ref)
+                else:
+                    self.assertEqual(st, "unresolved", ref)
+                    self.assertTrue(e["needsHuman"], ref)
+            if st == "rejected-sanctioned-advisory":
+                cite = e.get("sanctionedBy") or "; ".join(
+                    e["sanctionedAdvisoryScreen"]["touches"]
+                )
+                self.assertTrue(cite, ref)
+
+    def test_accepted_anchors_resolve_and_symbols_sit_on_build_rs(self) -> None:
+        for ref, e in self.verdicts.items():
+            for a in e["anchors"]:
+                self.assertTrue(SWEEP_RE.match(a["path"]), f"{ref}: {a['path']}")
+                if "symbol" in a:
+                    self.assertIn(a["path"], BUILD_RS, ref)
+                    self.assertTrue(
+                        sc.symbol_resolves(a["path"], a["symbol"], self.t), ref
+                    )
+                else:
+                    self.assertTrue(
+                        self.line_resolves(a["path"], a["line"]), f"{ref}: {a}"
+                    )
+        blocks = re.findall(r"^\*\*CD-9\d\d · probe · (\S+)\*\*", self.probe, re.M)
+        self.assertEqual(sorted(blocks), sorted(self.verdicts))
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "check-anchors.py"),
+                PROBE_TITLE,
+                "--register",
+                str(self.station_dir() / "anchor-probe.md"),
+                "--baseline",
+                self.baseline(),
+                "--json",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr or r.stdout)
+        self.assertEqual(json.loads(r.stdout)["failures"], [])
+
+    def test_defended_verdicts_carry_strength_measurement_and_tags(self) -> None:
+        rows = {r["script"]: r for r in self.census["rows"]}
+        for ref, e in self.verdicts.items():
+            if e["disposition"] != "defended" or e["verdict"] == "unresolved":
+                continue
+            self.assertIn(e["enforcementStrength"], ENFORCEMENT, ref)
+            self.assertNotEqual(e["enforcementStrength"], "unwired", ref)
+            cand = self.received()[ref]
+            script = cand.get("script")
+            if script:
+                expected = rows[script]["class"]
+                if expected == "unwired":
+                    expected = "transitively-advisory"
+                self.assertEqual(e["enforcementStrength"], expected, ref)
+            self.assertEqual(
+                e["measurement"],
+                "UNMEASURED" if e["lens"] == "performance" else "n/a",
+                ref,
+            )
+            if e["lens"] == "performance":
+                blob = (e["argument"] or "") + " " + (e.get("survivingClaim") or "")
+                self.assertIsNone(TIMING_RE.search(blob), ref)
+                self.assertNotIn("PD-", blob, ref)
+            self.assertIn(e["alignmentHint"], ALIGN_VOCAB, ref)
+            self.assertEqual(e["conflicts"], e["alignmentHint"] == "conflicts", ref)
+            for tag in ("partIRef", "reRaiseOf"):
+                self.assertEqual(e.get(tag), cand.get(tag), f"{ref}: {tag}")
+            self.assertFalse(DIFF_RE.search(e["argument"] or ""), ref)
+        sharpens = [
+            e for e in self.verdicts.values() if e.get("priorRelation") == "sharpens"
+        ]
+        self.assertTrue(sharpens)
+        for e in sharpens:
+            self.assertEqual(e["priorId"], "CD-061")
+            self.assertEqual(e["reRaiseOf"], "CD-061")
+
+    def test_part_i_handoff_is_evidence_without_a_disposition(self) -> None:
+        h = self.handoff
+        self.assertEqual(h["partIRef"], "I.3-6")
+        self.assertEqual(h["stationVerdict"], "claim-stale")
+        self.assertEqual(h["baseline"], self.baseline())
+        self.assertFalse(HANDOFF_FORBIDDEN & {k.lower() for k in h}, sorted(h))
+        self.assertTrue(h["baselineEvidence"])
+        lines = {e["line"] for e in h["baselineEvidence"]}
+        self.assertTrue({74, 70} <= lines, lines)
+        for e in h["baselineEvidence"]:
+            self.assertEqual(e["path"], "scripts/ci/check-infra-genericity.sh")
+            self.assertTrue(self.line_resolves(e["path"], e["line"]), e)
+        script = self.t.read_text("scripts/ci/check-infra-genericity.sh").splitlines()
+        self.assertEqual(script[73].strip(), "EXCLUDED_FILES=()")
+        self.assertIn("retired", script[71])
+        self.assertIn("formerly sat here", script[39])
+        drift = [e for e in self.verdicts.values() if e.get("partIRef") == "I.3-6"]
+        self.assertEqual([e["lens"] for e in drift], ["drift"])
+        self.assertEqual(len(self.env["drift"]["handoffs"]), 1)
+
+    def test_defender_brief_fixes_the_station_obligations(self) -> None:
+        for s in self.doc["sanctionedByClosedSet"]:
+            self.assertIn(s, self.brief, s)
+        for token in (
+            "blocking | advisory-by-design | unwired | transitively-advisory",
+            "not-a-gate",
+            "UNMEASURED",
+            "strictly narrower",
+            "cobre-model",
+            "cobre-network",
+            "quality-report.sh:132",
+            self.baseline(),
+        ):
+            self.assertIn(token, self.brief, token)
+        for basis in self.doc["dismissalBasisVocabulary"]:
+            self.assertIn(basis, self.brief, basis)
+
+    def test_ingest_log_has_one_roster_row_per_candidate_and_the_pin(self) -> None:
+        self.assertIn(self.baseline(), self.log)
+        roster = self.log.split("## Per-candidate roster", 1)[1]
+        rows = [
+            ln
+            for ln in roster.splitlines()
+            if re.match(
+                r"^\| (architecture|over-engineering|drift|performance)-\d\d \|", ln
+            )
+        ]
+        self.assertEqual(
+            sorted(r.split("|")[1].strip() for r in rows), sorted(self.verdicts)
+        )
+        for heading in (
+            "## Candidate census",
+            "### Anchor rejections",
+            "## Cleared (sanctioned)",
+            "## Dup-of merges",
+            "## Pull-don't-push and two-site screen",
+            "## Part-I item-6 evidence package",
+            "## Defender summary",
+            "## Reconciliation",
+        ):
+            self.assertIn(heading, self.log, heading)
+        self.assertIn("quality-report.sh:132", self.log)
+        self.assertIn("transitively-advisory", self.log)
+        self.assertIn("mpi-slurm.yml", self.log)
+        self.assertIn("release-mpi.yml", self.log)
 
 
 if __name__ == "__main__":

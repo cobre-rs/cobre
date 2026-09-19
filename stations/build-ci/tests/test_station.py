@@ -11,6 +11,7 @@ import collections
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -1512,6 +1513,361 @@ class CalibrationTests(sc.StationCase):
             self.section.count("**Informational · UNMEASURED ·"),
             len(self.cal["informational"]),
         )
+
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(sc.TOOLS))
+import census_checks  # noqa: E402
+import station_verify  # noqa: E402
+
+STATION_CHECKS = (
+    "check-anchors",
+    "check-reraise",
+    "fields-check",
+    "fields-check-alignment",
+    "census",
+    "oracle-genericity",
+    "oracle-doc-paths",
+    "oracle-doc-voice",
+    "premises",
+    "read-only",
+)
+GATE_GLOBS = ("scripts/ci/*.sh", "scripts/ci/*.py", "scripts/ci/lib/*.sh")
+GUARDED = ("crates", "docs/design", "schemas", "scripts", ".github", "Cargo.toml")
+JOBS_BLOCK_RE = re.compile(r"^jobs:\n(.*?)(?=^[a-z]|\Z)", re.S | re.M)
+
+
+class SectionVerifyTests(sc.StationCase):
+    """Executable proof of the station verification (E07-5).
+
+    verify-station.sh runs this module, so nothing here may invoke it (recursion); the station
+    driver verify-census.sh is run once with --no-shared for the same reason. Every census figure
+    is recounted from the baseline tree and compared with inventory.json, gate-census.json and the
+    rendered section; the failure paths are proven on tampered copies through census_checks.
+    """
+
+    SLUG = "build-ci"
+    SECTION_TITLE = SECTION_TITLE
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.driver = cls.station_dir() / "verify-census.sh"
+        cls.driver_run = cls.run_driver(SECTION_TITLE, "--no-shared")
+        cls.inv = sc.load_json(cls.station_dir() / "inventory.json")
+        cls.census = sc.load_json(cls.station_dir() / "gate-census.json")
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.lines = backlog_parse.read_register(sc.BACKLOG)
+        cls.heading = census_checks.resolve_heading(cls.lines, SECTION_TITLE)
+        cls.section = census_checks.section_body(cls.lines, cls.heading[0])
+        cls.t = cls.tree()
+        cls.measured = cls.recount(cls.t)
+
+    @classmethod
+    def run_driver(cls, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(cls.driver), *args],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    @classmethod
+    def recount(cls, t: sc.Tree) -> dict:
+        """The census re-measured from the baseline tree, in census_checks' measured shape."""
+        workflows = t.ls_files(".github/workflows/*.yml")
+        ci = t.read_text(".github/workflows/ci.yml")
+        block = JOBS_BLOCK_RE.search(ci).group(1)
+        wiring = "\n".join(t.read_text(w) for w in workflows) + t.read_text(
+            "scripts/pre-commit"
+        )
+        gate_files = t.ls_files(*GATE_GLOBS)
+        unwired = [
+            g.rsplit("/", 1)[-1]
+            for g in gate_files
+            if g.rsplit("/", 1)[-1] not in wiring
+        ]
+        transitive = [
+            f"{path}:{n}"
+            for path in t.ls_files("scripts/ci/*.sh")
+            if path != "scripts/ci/check-comment-bloat.sh"
+            for n, line in enumerate(t.read_text(path).splitlines(), 1)
+            if "check-comment-bloat.sh" in line
+        ]
+        return {
+            "mpichCi": ci.count("Build MPICH from source"),
+            "mpichTotal": sum(
+                t.read_text(w).count("Build MPICH from source") for w in workflows
+            ),
+            "schemas": len(t.ls_files("schemas/*.json")),
+            "fbs": t.is_file("crates/cobre-io/schemas/policy.fbs"),
+            "rootFbs": t.is_file("schemas/policy.fbs"),
+            "buildRs": len(
+                [p for p in t.ls_files("crates/*/build.rs") if "/vendor/" not in p]
+            ),
+            "workflows": len(workflows),
+            "actionsDir": t.is_dir(".github/actions"),
+            "jobsRaw": len(re.findall(r"^  [a-z0-9-]+:$", ci, re.M)),
+            "jobIds": re.findall(r"^  ([a-z0-9_-]+):$", block, re.M),
+            "unwired": unwired,
+            "transitive": transitive,
+            "gateFiles": gate_files,
+        }
+
+    def test_checkers_exit_zero_over_the_station_title(self) -> None:
+        for tool in ("check-anchors.py", "check-reraise.py", "fields-check.py"):
+            self.assertEqual(sc.run_checker(tool, SECTION_TITLE), 0, tool)
+        self.assertEqual(
+            sc.run_checker("fields-check.py", SECTION_TITLE, "--require", "Alignment"),
+            0,
+        )
+
+    def test_heading_resolves_exactly_once(self) -> None:
+        self.assertEqual(len(self.heading), 1)
+        self.assertEqual(self.lines[self.heading[0] - 1], f"### {SECTION_TITLE}")
+        scaffold = [
+            n
+            for n, raw in enumerate(self.lines, 1)
+            if raw.endswith("— build-ci") and raw.startswith("## ★ QUALITY EVALUATION")
+        ]
+        self.assertEqual(len(scaffold), 1)
+        self.assertLess(scaffold[0], self.heading[0])
+
+    def test_zero_or_many_headings_exit_two_listing_candidates(self) -> None:
+        run = self.run_driver("STATION 7", "--no-shared")
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn("0 headings match 'STATION 7'", run.stderr)
+        self.assertIn(f"### {SECTION_TITLE}", run.stderr)
+        dup = [*self.lines, f"### {SECTION_TITLE}"]
+        self.assertEqual(len(census_checks.resolve_heading(dup, SECTION_TITLE)), 2)
+        self.assertEqual(len(census_checks.heading_candidates(dup)), 3)
+        self.assertEqual(
+            census_checks.main(["heading", str(sc.BACKLOG), "★ STATION 7"]), 2
+        )
+
+    def test_no_tracked_evaluated_surface_is_modified(self) -> None:
+        self.assertEqual(sc.tracked_modifications(), [])
+        diff = subprocess.run(
+            ["git", "diff", "--stat", "HEAD", "--", *GUARDED],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        self.assertEqual(diff, "")
+
+    def test_census_in_inventory_equals_a_fresh_recount(self) -> None:
+        m = self.measured
+        self.assertEqual(m["jobIds"], list(JOB_IDS))
+        self.assertEqual(m["jobsRaw"], len(JOB_IDS) + 1)
+        self.assertEqual(m["unwired"], ["check-comment-bloat.sh"])
+        self.assertEqual(m["transitive"], ["scripts/ci/quality-report.sh:132"])
+        self.assertEqual((m["mpichCi"], m["mpichTotal"]), (8, 10))
+        self.assertEqual((m["schemas"], m["fbs"], m["rootFbs"]), (18, True, False))
+        self.assertEqual((m["buildRs"], m["workflows"], m["actionsDir"]), (3, 8, False))
+        self.assertEqual(len(m["gateFiles"]), 17)
+        self.assertEqual(census_checks.inventory_findings(self.inv, m), [])
+        self.assertEqual(census_checks.census_completeness(self.census, m), [])
+        self.assertEqual(census_checks.tree_findings(m), [])
+        self.assertEqual(
+            census_checks.section_figure_findings(self.section, self.inv, m), []
+        )
+
+    def test_shared_verifier_accepts_the_gate_census_shape(self) -> None:
+        listed = station_verify.reconstruct_listed(self.inv)
+        roots = station_verify.crate_src_roots(self.inv)
+        suffixes = station_verify.census_suffixes(self.inv)
+        self.assertEqual((roots, suffixes), (["scripts/ci"], (".sh", ".py")))
+        tree = station_verify.baseline_rs_files(
+            sc.REPO, self.inv["baseline"], roots, suffixes
+        )
+        self.assertEqual(sorted(tree), self.measured["gateFiles"])
+        self.assertEqual(station_verify.inventory_diff(listed, tree), ([], []))
+        self.assertEqual(
+            station_verify.census_suffixes({"crate": "cobre-core"}), (".rs",)
+        )
+        tampered = json.loads(json.dumps(self.inv))
+        tampered["gates"]["files"].append(
+            {"path": "scripts/ci/gone.sh", "kind": "sh", "lines": 1}
+        )
+        absent, unlisted = station_verify.inventory_diff(
+            station_verify.reconstruct_listed(tampered), tree
+        )
+        self.assertEqual((absent, unlisted), (["scripts/ci/gone.sh"], []))
+        with self.assertRaises(KeyError):
+            station_verify.reconstruct_listed({"baseline": self.inv["baseline"]})
+
+    def test_tampered_census_and_inventory_fail_naming_recorded_versus_measured(
+        self,
+    ) -> None:
+        m = self.measured
+        short = json.loads(json.dumps(self.census))
+        short["rows"] = [
+            r
+            for r in short["rows"]
+            if not r["script"].endswith("check-no-plan-leaks.sh")
+        ]
+        bad = census_checks.census_completeness(short, m)
+        self.assertTrue(
+            any("census rows 16 != measured gate files 17" in b for b in bad), bad
+        )
+        self.assertTrue(
+            any("only-on-disk ['scripts/ci/check-no-plan-leaks.sh']" in b for b in bad),
+            bad,
+        )
+        unclassified = json.loads(json.dumps(self.census))
+        unclassified["rows"][0]["class"] = "wired"
+        self.assertTrue(
+            any(
+                "outside the vocabulary" in b
+                for b in census_checks.census_completeness(unclassified, m)
+            )
+        )
+        headless = json.loads(json.dumps(self.census))
+        row = next(r for r in headless["rows"] if r["class"] == "blocking")
+        row["workflowJob"] = None
+        self.assertTrue(
+            any(
+                "without workflow/job/step" in b
+                for b in census_checks.census_completeness(headless, m)
+            )
+        )
+        no_invoker = json.loads(json.dumps(self.census))
+        next(r for r in no_invoker["rows"] if r["class"] == "unwired")[
+            "transitiveInvocation"
+        ] = None
+        self.assertTrue(
+            any(
+                "without its invoking gate anchored" in b
+                for b in census_checks.census_completeness(no_invoker, m)
+            )
+        )
+        drifted = json.loads(json.dumps(self.inv))
+        drifted["ci"]["ciJobCount"] = 15
+        self.assertEqual(
+            census_checks.inventory_findings(drifted, m),
+            ["inventory.ci.ciJobCount recorded 15 but re-measured 14"],
+        )
+        raw = dict(m, jobsRaw=14)
+        self.assertTrue(
+            any("raw job-id grep = 14" in b for b in census_checks.tree_findings(raw))
+        )
+
+    def test_section_quoting_fifteen_jobs_or_a_copied_figure_fails(self) -> None:
+        m = self.measured
+        fifteen = self.section.replace(
+            "8 workflows, 14 `ci.yml` jobs", "8 workflows, 15 `ci.yml` jobs"
+        )
+        bad = census_checks.section_figure_findings(fifteen, self.inv, m)
+        self.assertTrue(any("(8, 15) but re-measured (8, 14)" in b for b in bad), bad)
+        self.assertTrue(
+            any("'15 `ci.yml` jobs'" in b and "raw grep's 15" in b for b in bad), bad
+        )
+        copied = self.section.replace("census (17 gate files", "census (16 gate files")
+        self.assertTrue(
+            any(
+                "census heading (16,) but re-measured (17,)" in b
+                for b in census_checks.section_figure_findings(copied, self.inv, m)
+            )
+        )
+        stale = self.section.replace("(18 JSON exports)", "(19 JSON exports)")
+        self.assertTrue(
+            any(
+                "schema exports (19,)" in b
+                for b in census_checks.section_figure_findings(stale, self.inv, m)
+            )
+        )
+
+    def test_body_assertions_hold_and_fail_on_tampered_entries(self) -> None:
+        self.assertEqual(census_checks.body_findings(self.section, self.cal), [])
+        entries = census_checks.entries_of(self.section)
+        self.assertEqual(sorted(entries), sorted(r["id"] for r in self.cal["assigned"]))
+        for block in entries.values():
+            self.assertEqual(len(re.findall(r"^- \*\*Alignment:\*\*", block, re.M)), 1)
+        downgraded = [r["id"] for r in self.cal["assigned"] if r.get("downgradeReason")]
+        self.assertEqual(len(downgraded), 5)
+        no_align = self.section.replace(
+            "- **Alignment:** neutral", "- **Alignment:** undecided", 1
+        )
+        self.assertTrue(
+            any(
+                "Alignment values ['undecided']" in b
+                for b in census_checks.body_findings(no_align, self.cal)
+            )
+        )
+        dropped = re.sub(
+            r"^- \*\*Reviewer rating:\*\* A.*\n", "", self.section, count=1, flags=re.M
+        )
+        bad = census_checks.body_findings(dropped, self.cal)
+        self.assertTrue(
+            any("calibration downgrade from A not recorded" in b for b in bad), bad
+        )
+        described = (
+            "**CD-999 · Sev B · duplication · effort S · confidence high**\n"
+            "Calibration downgraded from the reviewer's A.\n\n- **Alignment:** neutral\n"
+        )
+        self.assertEqual(
+            census_checks.body_findings(described, {"assigned": []}),
+            ["CD-999: a downgrade is described without the reviewer's original rating"],
+        )
+        one_site = self.section.replace("rule = `CLAUDE.md:39`", "rule = (none)", 1)
+        self.assertTrue(
+            any(
+                "does not name rule + script + ci_step" in b
+                for b in census_checks.body_findings(one_site, self.cal)
+            )
+        )
+        self.assertIn(
+            "zero entries", census_checks.body_findings("#### empty\n", self.cal)[0]
+        )
+
+    def test_verify_census_no_shared_exits_zero_with_every_check_passing(self) -> None:
+        out = self.driver_run.stdout
+        self.assertEqual(self.driver_run.returncode, 0, out + self.driver_run.stderr)
+        self.assertIn("## Station-specific checks — build-ci", out)
+        self.assertIsNotNone(
+            re.search(r"^\| verify-station \| .* \| - \| SKIP", out, re.M)
+        )
+        for check in STATION_CHECKS:
+            self.assertIsNotNone(
+                re.search(rf"^\| {check} \| .* \| 0 \| PASS \|$", out, re.M), check
+            )
+        self.assertNotIn("| FAIL |", out)
+        self.assertIn(
+            "14 ci.yml jobs (the raw `grep -nE '^  [a-z0-9-]+:$'` census command matches 15",
+            out,
+        )
+        self.assertIn("17 gate files", out)
+        self.assertIn(
+            "8x `Build MPICH from source` in ci.yml (10 across the workflows", out
+        )
+        self.assertIn("18 `schemas/*.json` + `crates/cobre-io/schemas/policy.fbs`", out)
+        self.assertIn("3 build.rs · 8 workflows", out)
+
+    def test_driver_is_shell_clean_and_writes_only_beside_itself(self) -> None:
+        self.assertEqual(
+            subprocess.run(["bash", "-n", str(self.driver)], check=False).returncode, 0
+        )
+        if shutil.which("shellcheck"):
+            run = subprocess.run(
+                ["shellcheck", str(self.driver)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(run.returncode, 0, run.stdout)
+        text = self.driver.read_text(encoding="utf-8")
+        redirects = re.findall(r">\s*\"?\$\{?([A-Z_]+)\}?(?=[/\"\s])", text)
+        self.assertTrue(redirects)
+        self.assertEqual(set(redirects), {"SCRATCH", "BLOCK"})
+        for measured in (
+            "M_MPICH_CI",
+            "M_GATEFILES",
+            "M_SCHEMAS",
+            "M_BUILDRS",
+            "M_WORKFLOWS",
+        ):
+            self.assertIn(f'{measured}="', text, measured)
 
 
 if __name__ == "__main__":

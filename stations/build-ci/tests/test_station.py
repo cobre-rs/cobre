@@ -1179,5 +1179,340 @@ class IngestTests(sc.StationCase):
         self.assertIn("release-mpi.yml", self.log)
 
 
+SECTION_TITLE = "STATION 7 — build/CI/scripts/schemas/docs (2026-09)"
+FINDING_ID_RE = re.compile(r"^(CD|PD|OD|TD)-\d{3}$")
+HEADING_ID_RE = re.compile(r"^\*\*((?:CD|PD|OD|TD)-\d{3}) · Sev ([ABC]) ·", re.M)
+RANK = {"A": 3, "B": 2, "C": 1}
+WIRING_VOCAB = {"blocking", "advisory-by-design", "unwired", "transitively-advisory"}
+
+
+class CalibrationTests(sc.StationCase):
+    SLUG = "build-ci"
+    SECTION_TITLE = SECTION_TITLE
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.td = sc.load_json(cls.station_dir() / "td-queue.json")
+        cls.census = sc.load_json(cls.station_dir() / "gate-census.json")
+        cls.verdicts = sc.load_json(cls.station_dir() / "verdicts.json")["verdicts"]
+        cls.register = sc.BACKLOG.read_text(encoding="utf-8")
+        start = cls.register.index("\n### " + SECTION_TITLE + "\n")
+        end = cls.register.find("\n## ", start + 1)
+        cls.section = cls.register[start:end]
+        cls.t = cls.tree()
+
+    def run_tool(self, tool: str, *extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(sc.TOOLS / tool), *extra, SECTION_TITLE],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+
+    def entry_block(self, fid: str) -> str:
+        start = self.section.index(f"\n**{fid} · Sev ")
+        rest = self.section[start + 1 :]
+        m = re.search(
+            r"\n(?:\*\*(?:CD|PD|OD|TD)-\d{3} · Sev |\*\*Informational · |#### )", rest
+        )
+        return rest[: m.start()] if m else rest
+
+    def test_ids_are_well_formed_contiguous_and_unique_across_the_register(
+        self,
+    ) -> None:
+        rows = self.cal["assigned"]
+        self.assertTrue(rows)
+        by_class: dict[str, list[int]] = {}
+        for r in rows:
+            self.assertRegex(r["id"], FINDING_ID_RE)
+            self.assertIn(
+                r["class"], ("CD", "OD")
+            )  # no PD (informational station), no TD (epic 8)
+            by_class.setdefault(r["class"], []).append(int(r["id"].split("-")[1]))
+        for cls_, nums in by_class.items():
+            floor = self.cal["idFloorsSeen"][cls_]
+            self.assertEqual(nums, list(range(floor, floor + len(nums))), cls_)
+        headings = HEADING_ID_RE.findall(self.register)
+        ids = [h[0] for h in headings]
+        self.assertEqual(
+            len(ids), len(set(ids)), "duplicate finding heading in the register"
+        )
+        section_ids = [h[0] for h in HEADING_ID_RE.findall(self.section)]
+        self.assertEqual(sorted(section_ids), sorted(r["id"] for r in rows))
+        prior = self.register[: self.register.index("\n### " + SECTION_TITLE + "\n")]
+        for r in rows:
+            self.assertNotRegex(prior, rf"^\*\*{r['id']} ·", r["id"])
+        refs = [r["candidateRef"] for r in rows]
+        self.assertEqual(
+            refs,
+            sorted(
+                refs,
+                key=lambda x: (
+                    ["architecture", "drift", "over-engineering", "performance"].index(
+                        x.rsplit("-", 1)[0]
+                    ),
+                    x,
+                ),
+            ),
+        )
+
+    def test_every_confirmed_verdict_is_minted_or_informational_and_nothing_else_is(
+        self,
+    ) -> None:
+        confirmed = {
+            ref for ref, e in self.verdicts.items() if e["verdict"] == "confirmed"
+        }
+        minted = {r["candidateRef"] for r in self.cal["assigned"]}
+        info = {r["candidateRef"] for r in self.cal["informational"]}
+        self.assertEqual(minted | info, confirmed)
+        self.assertFalse(minted & info)
+        self.assertTrue(all(r.startswith("performance-") for r in info))
+        self.assertFalse(any(r.startswith("performance-") for r in minted))
+        for r in self.cal["informational"]:
+            self.assertEqual(r["status"], "UNMEASURED")
+        self.assertNotRegex(
+            self.section, r"^\*\*PD-\d{3}", "PD entry in an informational-only station"
+        )
+        cleared = {c["candidateRef"] for c in self.cal["cleared"]}
+        self.assertEqual(
+            cleared,
+            {ref for ref, e in self.verdicts.items() if e["verdict"] == "dismissed"},
+        )
+        self.assertEqual(
+            {d["candidateRef"] for d in self.cal["dupOf"]},
+            {ref for ref, e in self.verdicts.items() if e["disposition"] == "dup-of"},
+        )
+
+    def test_severity_calibration_downgrades_are_auditable(self) -> None:
+        for r in self.cal["assigned"]:
+            self.assertIn(r["severity"], ("A", "B", "C"), r["id"])
+            self.assertIn(r["reviewerRating"], ("A", "B", "C"), r["id"])
+            self.assertLessEqual(
+                RANK[r["severity"]], RANK[r["reviewerRating"]], r["id"]
+            )
+            if RANK[r["severity"]] < RANK[r["reviewerRating"]]:
+                self.assertTrue(r["downgradeReason"], r["id"])
+                self.assertIn(
+                    f"- **Reviewer rating:** {r['reviewerRating']} — downgraded to {r['severity']}",
+                    self.section,
+                    r["id"],
+                )
+            else:
+                self.assertIsNone(r["downgradeReason"], r["id"])
+            self.assertTrue(r["calibrationBasis"], r["id"])
+            self.assertIn(r["effort"], ("S", "M", "L"))
+            self.assertIn(r["confidence"], ("high", "med", "low"))
+        self.assertEqual(
+            self.cal["counts"]["downgrades"],
+            sum(1 for r in self.cal["assigned"] if r["downgradeReason"]),
+        )
+        self.assertEqual(self.cal["counts"]["upgrades"], 0)
+
+    def test_alignment_carries_a_roadmap_citation_and_conflicts_are_held_with_alternatives(
+        self,
+    ) -> None:
+        for r in self.cal["assigned"]:
+            self.assertIn(r["alignmentHint"], ALIGN_VOCAB, r["id"])
+            self.assertTrue(r["alignmentCites"], r["id"])
+            self.assertEqual(r["conflicts"], r["alignmentHint"] == "conflicts", r["id"])
+            if r["conflicts"]:
+                self.assertTrue(r.get("alternative"), r["id"])
+            block = self.entry_block(r["id"])
+            line = re.search(r"^- \*\*Alignment:\*\* (.+)$", block, re.M)
+            self.assertIsNotNone(line, r["id"])
+            self.assertTrue(
+                line.group(1).startswith(r["alignmentHint"] + " ("), r["id"]
+            )
+            self.assertTrue(
+                "Part " in line.group(1) or "advances no phase" in line.group(1),
+                r["id"],
+            )
+        self.assertEqual(self.cal["counts"]["conflicts"], 0)
+        mpich = next(
+            r
+            for r in self.cal["assigned"]
+            if r["candidateRef"] == "over-engineering-00"
+        )
+        self.assertEqual(mpich["alignmentHint"], "neutral")
+        self.assertIn("one-consumer objection waived", mpich["waiver"])
+        self.assertEqual(
+            self.cal["pullDontPush"]["mpichConsumers"],
+            {"ci.yml": 8, "mpi-slurm.yml": 1, "release-mpi.yml": 1},
+        )
+        self.assertIn(
+            "**Pull-don't-push:** one-consumer objection waived", self.section
+        )
+
+    def test_two_site_rule_names_three_site_kinds_on_every_hard_rule_fix_shape(
+        self,
+    ) -> None:
+        hard = [r for r in self.cal["assigned"] if r["hardRule"]]
+        self.assertEqual(
+            sorted(r["hardRule"] for r in hard), ["infra-genericity", "unsafe-code"]
+        )
+        for r in hard:
+            kinds = {s["kind"] for s in r["sites"]}
+            self.assertEqual(kinds, {"rule", "script", "ci_step"}, r["id"])
+            for s in r["sites"]:
+                self.assertTrue(self.line_ok(s["path"], s["line"]), s)
+                if s["kind"] == "ci_step":
+                    self.assertTrue(s["job"] and s["step"], s)
+            self.assertIn(f"- **Two-site rule ({r['hardRule']}):**", self.section)
+        gen = next(r for r in hard if r["hardRule"] == "infra-genericity")
+        self.assertEqual(gen["severity"], "B")
+        self.assertEqual(gen["category"], "leaky-boundary")
+        self.assertIn("CD-010", gen["calibrationBasis"])
+        self.assertTrue(
+            any(
+                a["path"] == "scripts/ci/check-infra-genericity.sh"
+                and a.get("line") == 62
+                for a in gen["anchors"]
+            )
+        )
+        sites = {s["kind"]: s for s in gen["sites"]}
+        self.assertEqual(
+            (sites["rule"]["path"], sites["rule"]["line"]), ("CLAUDE.md", 39)
+        )
+        self.assertEqual(
+            (sites["script"]["path"], sites["script"]["line"]),
+            ("scripts/ci/check-infra-genericity.sh", 62),
+        )
+        self.assertEqual(
+            (
+                sites["ci_step"]["path"],
+                sites["ci_step"]["line"],
+                sites["ci_step"]["job"],
+                sites["ci_step"]["step"],
+            ),
+            (
+                ".github/workflows/ci.yml",
+                261,
+                "quality-scripts",
+                "Infra genericity gate",
+            ),
+        )
+        self.assertEqual(gen["alignmentHint"], "advances-1")
+        self.assertIn("IV.1", gen["alignmentCites"])
+        self.assertIn(
+            "framework", gen["fixShape"]
+        )  # amends the existing gate; a new framework is disclaimed
+
+    def line_ok(self, path: str, line: int) -> bool:
+        files = set(self.t.files())
+        return path in files and 1 <= line <= len(self.t.read_text(path).splitlines())
+
+    def test_gate_rows_carry_the_census_enforcement_and_the_census_table_renders(
+        self,
+    ) -> None:
+        rows = {r["script"]: r for r in self.census["rows"]}
+        for r in self.cal["assigned"]:
+            if r["isGate"]:
+                self.assertIn(r["enforcement"], WIRING_VOCAB, r["id"])
+                if r["script"]:
+                    expected = rows[r["script"]]["class"]
+                    if expected == "unwired" and rows[r["script"]].get(
+                        "transitiveInvocation"
+                    ):
+                        expected = "transitively-advisory"
+                    self.assertEqual(r["enforcement"], expected, r["id"])
+                self.assertIn(
+                    f"- **Enforcement:** {r['enforcement']}",
+                    self.entry_block(r["id"]),
+                    r["id"],
+                )
+            else:
+                self.assertIsNone(r["enforcement"], r["id"])
+        table = self.section.split("#### Gate-wiring census", 1)[1].split("\n#### ", 1)[
+            0
+        ]
+        trows = [ln for ln in table.splitlines() if ln.startswith("| `")]
+        self.assertEqual(len(trows), 17)
+        for ln in trows:
+            cells = [c.strip() for c in ln.strip("|").split("|")]
+            wiring = cells[2].strip("*")
+            self.assertIn(wiring, WIRING_VOCAB, ln)
+            if wiring != "transitively-advisory":
+                self.assertNotEqual(cells[3], "-", ln)
+                self.assertNotEqual(cells[4], "-", ln)
+        bloat = next(ln for ln in trows if "check-comment-bloat.sh" in ln)
+        self.assertIn("**transitively-advisory**", bloat)
+        self.assertIn("negative grep", bloat)
+        self.assertIn("scripts/ci/quality-report.sh:132", bloat)
+        self.assertEqual(sum(1 for ln in trows if "transitively-advisory" in ln), 1)
+
+    def test_drift_entries_name_the_document_and_the_contradicting_tree_fact(
+        self,
+    ) -> None:
+        drift = [r for r in self.cal["assigned"] if r["lens"] == "drift"]
+        self.assertTrue(drift)
+        for r in drift:
+            self.assertTrue(r["docClaim"] and r["treeFact"], r["id"])
+            for side in ("docClaim", "treeFact"):
+                self.assertTrue(
+                    self.line_ok(r[side]["path"], r[side]["line"]), (r["id"], side)
+                )
+            self.assertIn(
+                f"doc claim `{r['docClaim']['path']}:{r['docClaim']['line']}`",
+                self.section,
+                r["id"],
+            )
+            self.assertIn(
+                f"tree fact `{r['treeFact']['path']}:{r['treeFact']['line']}`",
+                self.section,
+                r["id"],
+            )
+        item6 = next(r for r in drift if r["partIRef"] == "I.3-6")
+        self.assertEqual(
+            (item6["treeFact"]["path"], item6["treeFact"]["line"]),
+            ("scripts/ci/check-infra-genericity.sh", 74),
+        )
+        block = self.section.split("#### Part-I cross-references", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        for token in (
+            "claim-stale",
+            "check-infra-genericity.sh:74",
+            ":38-44",
+            "Epic 9",
+            "NO disposition",
+        ):
+            self.assertIn(token, block, token)
+        self.assertNotIn("Alignment:** advances", block)
+
+    def test_td_queue_is_an_explicit_empty_envelope_naming_epic_8(self) -> None:
+        self.assertEqual(self.td["rows"], [])
+        self.assertIn("epic 8", self.td["emptyReason"])
+        self.assertIn("epic 8", self.td["owner"])
+        self.assertEqual(self.td["baseline"], self.baseline())
+        self.assertIn("testing-architecture.md", self.td["yardstick"])
+
+    def test_the_three_register_checkers_pass_over_the_station_section(self) -> None:
+        for tool, extra in (
+            ("check-anchors.py", ()),
+            ("check-reraise.py", ()),
+            ("fields-check.py", ()),
+            ("fields-check.py", ("--require", "Alignment")),
+        ):
+            r = self.run_tool(tool, *extra)
+            self.assertEqual(r.returncode, 0, f"{tool} {extra}: {r.stdout}{r.stderr}")
+        self.assertIn(self.baseline(), self.section)
+        self.assertIn("_(pending — filled by the gate ticket)_", self.section)
+        for heading in (
+            "#### Architecture (CD)",
+            "#### Over-engineering",
+            "#### Drift",
+            "#### Performance (informational",
+            "#### Positives",
+            "#### ↩︎ Cleared",
+            "#### Owner gate — decisions",
+        ):
+            self.assertIn(heading, self.section, heading)
+        self.assertEqual(
+            self.section.count("**Informational · UNMEASURED ·"),
+            len(self.cal["informational"]),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

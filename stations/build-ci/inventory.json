@@ -1,0 +1,977 @@
+{
+  "station": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "baselineSource": "plans/architecture-debt-audit/BACKLOG.md header line `Baseline: <sha40> (pinned <date>)`; the ticket's a136840d is the superseded scaffold pin — figures minted there are recorded under ticketFigureDeviations",
+  "registerHead": "7b84601c28f57f40e0c3abb016632ff38dec6279",
+  "generatedAt": "2026-09-18",
+  "anchorRule": "{path, line} for every YAML, shell, TOML, JSON and Markdown anchor (resolved against `git show <baseline>:<path>`); {path, symbol} only on the three build.rs files (check-anchors.py's declaration vocabulary is Rust); BACKLOG.md anchors are HEAD lines of the live register and say so",
+  "workspace": {
+    "manifest": "Cargo.toml",
+    "membersAnchor": {
+      "path": "Cargo.toml",
+      "line": 3,
+      "endLine": 17
+    },
+    "members": [
+      {
+        "name": "cobre",
+        "path": "crates/cobre",
+        "manifestLine": 4,
+        "stub": false
+      },
+      {
+        "name": "cobre-core",
+        "path": "crates/cobre-core",
+        "manifestLine": 5,
+        "stub": false
+      },
+      {
+        "name": "cobre-io",
+        "path": "crates/cobre-io",
+        "manifestLine": 6,
+        "stub": false
+      },
+      {
+        "name": "cobre-stochastic",
+        "path": "crates/cobre-stochastic",
+        "manifestLine": 7,
+        "stub": false
+      },
+      {
+        "name": "cobre-solver",
+        "path": "crates/cobre-solver",
+        "manifestLine": 8,
+        "stub": false
+      },
+      {
+        "name": "cobre-comm",
+        "path": "crates/cobre-comm",
+        "manifestLine": 9,
+        "stub": false
+      },
+      {
+        "name": "cobre-sddp",
+        "path": "crates/cobre-sddp",
+        "manifestLine": 10,
+        "stub": false
+      },
+      {
+        "name": "cobre-cli",
+        "path": "crates/cobre-cli",
+        "manifestLine": 11,
+        "stub": false
+      },
+      {
+        "name": "cobre-mcp",
+        "path": "crates/cobre-mcp",
+        "manifestLine": 12,
+        "stub": true
+      },
+      {
+        "name": "cobre-tui",
+        "path": "crates/cobre-tui",
+        "manifestLine": 13,
+        "stub": true
+      },
+      {
+        "name": "cobre-flow",
+        "path": "crates/cobre-flow",
+        "manifestLine": 14,
+        "stub": true
+      },
+      {
+        "name": "cobre-uc",
+        "path": "crates/cobre-uc",
+        "manifestLine": 15,
+        "stub": true
+      },
+      {
+        "name": "cobre-emt",
+        "path": "crates/cobre-emt",
+        "manifestLine": 16,
+        "stub": true
+      }
+    ],
+    "memberCount": 13,
+    "stubs": [
+      "cobre-mcp",
+      "cobre-tui",
+      "cobre-flow",
+      "cobre-uc",
+      "cobre-emt"
+    ],
+    "stubFacts": [
+      {
+        "name": "cobre-mcp",
+        "files": [
+          "crates/cobre-mcp/Cargo.toml",
+          "crates/cobre-mcp/README.md",
+          "crates/cobre-mcp/src/main.rs"
+        ],
+        "manifestLines": 22,
+        "description": {
+          "anchor": {
+            "path": "crates/cobre-mcp/Cargo.toml",
+            "line": 3
+          },
+          "text": "Reserved crate name. The Cobre MCP server is not yet implemented; depend on cobre-cli for command-line interaction with Cobre."
+        },
+        "sources": [
+          {
+            "path": "crates/cobre-mcp/src/main.rs",
+            "lines": 6
+          }
+        ],
+        "featuresTable": false
+      },
+      {
+        "name": "cobre-tui",
+        "files": [
+          "crates/cobre-tui/Cargo.toml",
+          "crates/cobre-tui/README.md",
+          "crates/cobre-tui/src/lib.rs"
+        ],
+        "manifestLines": 18,
+        "description": {
+          "anchor": {
+            "path": "crates/cobre-tui/Cargo.toml",
+            "line": 3
+          },
+          "text": "Reserved crate name. The Cobre terminal UI is not yet implemented; depend on cobre-cli for command-line interaction with Cobre."
+        },
+        "sources": [
+          {
+            "path": "crates/cobre-tui/src/lib.rs",
+            "lines": 1
+          }
+        ],
+        "featuresTable": false
+      },
+      {
+        "name": "cobre-flow",
+        "files": [
+          "crates/cobre-flow/Cargo.toml",
+          "crates/cobre-flow/README.md",
+          "crates/cobre-flow/src/lib.rs"
+        ],
+        "manifestLines": 18,
+        "description": {
+          "anchor": {
+            "path": "crates/cobre-flow/Cargo.toml",
+            "line": 3
+          },
+          "text": "Reserved crate name. The Cobre power flow algorithms are not yet implemented."
+        },
+        "sources": [
+          {
+            "path": "crates/cobre-flow/src/lib.rs",
+            "lines": 1
+          }
+        ],
+        "featuresTable": false
+      },
+      {
+        "name": "cobre-uc",
+        "files": [
+          "crates/cobre-uc/Cargo.toml",
+          "crates/cobre-uc/README.md",
+          "crates/cobre-uc/src/lib.rs"
+        ],
+        "manifestLines": 18,
+        "description": {
+          "anchor": {
+            "path": "crates/cobre-uc/Cargo.toml",
+            "line": 3
+          },
+          "text": "Reserved crate name. The Cobre MILP unit commitment solver for hydrothermal dispatch is not yet implemented."
+        },
+        "sources": [
+          {
+            "path": "crates/cobre-uc/src/lib.rs",
+            "lines": 1
+          }
+        ],
+        "featuresTable": false
+      },
+      {
+        "name": "cobre-emt",
+        "files": [
+          "crates/cobre-emt/Cargo.toml",
+          "crates/cobre-emt/README.md",
+          "crates/cobre-emt/src/lib.rs"
+        ],
+        "manifestLines": 18,
+        "description": {
+          "anchor": {
+            "path": "crates/cobre-emt/Cargo.toml",
+            "line": 3
+          },
+          "text": "Reserved crate name. The Cobre electromagnetic transient analysis is not yet implemented."
+        },
+        "sources": [
+          {
+            "path": "crates/cobre-emt/src/lib.rs",
+            "lines": 1
+          }
+        ],
+        "featuresTable": false
+      }
+    ],
+    "excluded": [
+      {
+        "name": "cobre-python",
+        "path": "crates/cobre-python",
+        "anchor": {
+          "path": "Cargo.toml",
+          "line": 22
+        },
+        "reasonAnchor": {
+          "path": "Cargo.toml",
+          "line": 18,
+          "endLine": 20
+        },
+        "reason": "cobre-python requires a Python interpreter with PyO3 and is built separately via maturin. Excluding it from the workspace prevents cargo-dist and `cargo test --workspace` from requiring a compatible Python installation."
+      }
+    ],
+    "buildScripts": [
+      {
+        "path": "crates/cobre-solver/build.rs",
+        "symbol": "main",
+        "line": 20,
+        "lines": 359,
+        "role": "cmake builds of the vendored HiGHS (`highs` feature, default) and CLP (`clp` feature) solver libraries; cc-linked into the crate"
+      },
+      {
+        "path": "crates/cobre-sddp/build.rs",
+        "symbol": "main",
+        "line": 46,
+        "lines": 125,
+        "role": "cc build of the vendored reentrant `libqhull_r` (17 translation units enumerated) into a static archive; identical for both LP backends"
+      },
+      {
+        "path": "crates/cobre-cli/build.rs",
+        "symbol": "main",
+        "line": 30,
+        "lines": 53,
+        "role": "copies templates/1dtoy into OUT_DIR/templates/1dtoy for `include_bytes!` in templates.rs; the canonical source is examples/1dtoy (hand-kept in sync)"
+      }
+    ],
+    "submodules": [
+      {
+        "path": "crates/cobre-sddp/vendor/qhull",
+        "commit": "613debeaea72ee66626dace9ba1a2eff11b5d37d",
+        "short": "613debea",
+        "tag": "2020.2",
+        "url": "https://github.com/qhull/qhull.git",
+        "gitmodulesAnchor": {
+          "path": ".gitmodules",
+          "line": 11
+        }
+      },
+      {
+        "path": "crates/cobre-solver/vendor/Clp",
+        "commit": "9310c186d546e21d482be3455166ee6fb4cd6302",
+        "short": "9310c186",
+        "tag": "releases/1.17.11",
+        "url": "https://github.com/coin-or/Clp.git",
+        "gitmodulesAnchor": {
+          "path": ".gitmodules",
+          "line": 5
+        }
+      },
+      {
+        "path": "crates/cobre-solver/vendor/CoinUtils",
+        "commit": "1f3484e0578944a506452e1e35360c09e1490315",
+        "short": "1f3484e0",
+        "tag": "releases/2.11.13",
+        "url": "https://github.com/coin-or/CoinUtils.git",
+        "gitmodulesAnchor": {
+          "path": ".gitmodules",
+          "line": 8
+        }
+      },
+      {
+        "path": "crates/cobre-solver/vendor/HiGHS",
+        "commit": "1d267d97c16928bb5f86fcb2cba2d20f94c8720c",
+        "short": "1d267d97",
+        "tag": "v1.13.1",
+        "url": "https://github.com/ERGO-Code/HiGHS.git",
+        "gitmodulesAnchor": {
+          "path": ".gitmodules",
+          "line": 2
+        }
+      }
+    ],
+    "otherVendorTrees": [
+      {
+        "path": "crates/cobre-solver/vendor/coin-build",
+        "kind": "tree"
+      }
+    ],
+    "features": {
+      "slowTestsDeclarations": [
+        {
+          "crate": "cobre-io",
+          "anchor": {
+            "path": "crates/cobre-io/Cargo.toml",
+            "line": 19
+          },
+          "noOpReservedForConsistency": true
+        },
+        {
+          "crate": "cobre-stochastic",
+          "anchor": {
+            "path": "crates/cobre-stochastic/Cargo.toml",
+            "line": 18
+          },
+          "noOpReservedForConsistency": true
+        },
+        {
+          "crate": "cobre-sddp",
+          "anchor": {
+            "path": "crates/cobre-sddp/Cargo.toml",
+            "line": 46
+          },
+          "noOpReservedForConsistency": false
+        },
+        {
+          "crate": "cobre-cli",
+          "anchor": {
+            "path": "crates/cobre-cli/Cargo.toml",
+            "line": 57
+          },
+          "noOpReservedForConsistency": true
+        }
+      ],
+      "nonSolverFeatures": {
+        "value": "mpi numa shared-memory serde schema slow-tests flatc-conformance test-support",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 32
+        },
+        "list": [
+          "mpi",
+          "numa",
+          "shared-memory",
+          "serde",
+          "schema",
+          "slow-tests",
+          "flatc-conformance",
+          "test-support"
+        ]
+      }
+    }
+  },
+  "ci": {
+    "workflows": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "lines": 593
+      },
+      {
+        "path": ".github/workflows/invariance-shuffle.yml",
+        "lines": 56
+      },
+      {
+        "path": ".github/workflows/mpi-slurm.yml",
+        "lines": 134
+      },
+      {
+        "path": ".github/workflows/publish.yml",
+        "lines": 110
+      },
+      {
+        "path": ".github/workflows/release-mpi.yml",
+        "lines": 178
+      },
+      {
+        "path": ".github/workflows/release-python.yml",
+        "lines": 199
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "lines": 296
+      },
+      {
+        "path": ".github/workflows/slurm-base-image.yml",
+        "lines": 44
+      }
+    ],
+    "workflowCount": 8,
+    "totalWorkflowLines": 1610,
+    "ciJobs": [
+      {
+        "id": "check",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 35
+        }
+      },
+      {
+        "id": "test",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 73
+        }
+      },
+      {
+        "id": "clippy",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 116
+        }
+      },
+      {
+        "id": "clp",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 166
+        }
+      },
+      {
+        "id": "fmt",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 237
+        }
+      },
+      {
+        "id": "quality-scripts",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 248
+        }
+      },
+      {
+        "id": "schemas",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 302
+        }
+      },
+      {
+        "id": "docs-examples",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 349
+        }
+      },
+      {
+        "id": "docs",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 363
+        }
+      },
+      {
+        "id": "security",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 405
+        }
+      },
+      {
+        "id": "deny",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 419
+        }
+      },
+      {
+        "id": "license-notices",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 435
+        }
+      },
+      {
+        "id": "coverage",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 454
+        }
+      },
+      {
+        "id": "python",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 504
+        }
+      }
+    ],
+    "ciJobCount": 14,
+    "triggers": {
+      "push": [
+        "main",
+        "develop"
+      ],
+      "pull_request": [
+        "main"
+      ],
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 3,
+        "endLine": 7
+      },
+      "asymmetry": "push runs on main and develop; pull_request runs only for PRs targeting main — a recorded fact for the architecture lens, not a finding here"
+    },
+    "env": {
+      "NON_SOLVER_FEATURES": {
+        "value": "mpi numa shared-memory serde schema slow-tests flatc-conformance test-support",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 32
+        }
+      },
+      "MPICH_VERSION": {
+        "value": "4.2.3",
+        "anchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 12
+        }
+      }
+    },
+    "mpichFromSourceBlocks": {
+      ".github/workflows/ci.yml": 8,
+      ".github/workflows/mpi-slurm.yml": 1,
+      ".github/workflows/release-mpi.yml": 1
+    },
+    "mpichFromSourceTotal": 10,
+    "githubTopLevel": [
+      "workflows"
+    ],
+    "compositeActionsDir": null
+  },
+  "gates": {
+    "root": "scripts/ci",
+    "treeEntries": 18,
+    "shCount": 14,
+    "pyCount": 2,
+    "libHelpers": [
+      "scripts/ci/lib/comment_scan.sh"
+    ],
+    "topLevelExecutables": 16,
+    "totalExecutables": 17,
+    "files": [
+      {
+        "path": "scripts/ci/check-allow-rationale.sh",
+        "kind": "sh",
+        "lines": 710
+      },
+      {
+        "path": "scripts/ci/check-comment-banners.sh",
+        "kind": "sh",
+        "lines": 174
+      },
+      {
+        "path": "scripts/ci/check-comment-bloat.sh",
+        "kind": "sh",
+        "lines": 114
+      },
+      {
+        "path": "scripts/ci/check-comment-line-refs.sh",
+        "kind": "sh",
+        "lines": 157
+      },
+      {
+        "path": "scripts/ci/check-comment-refs.sh",
+        "kind": "sh",
+        "lines": 230
+      },
+      {
+        "path": "scripts/ci/check-cut-selection-determinism.sh",
+        "kind": "sh",
+        "lines": 296
+      },
+      {
+        "path": "scripts/ci/check-doc-paths.sh",
+        "kind": "sh",
+        "lines": 257
+      },
+      {
+        "path": "scripts/ci/check-doc-placeholders.sh",
+        "kind": "sh",
+        "lines": 123
+      },
+      {
+        "path": "scripts/ci/check-docs-examples.sh",
+        "kind": "sh",
+        "lines": 139
+      },
+      {
+        "path": "scripts/ci/check-infra-genericity.sh",
+        "kind": "sh",
+        "lines": 143
+      },
+      {
+        "path": "scripts/ci/check-no-past-inflows.sh",
+        "kind": "sh",
+        "lines": 75
+      },
+      {
+        "path": "scripts/ci/check-no-plan-leaks.sh",
+        "kind": "sh",
+        "lines": 225
+      },
+      {
+        "path": "scripts/ci/check_schemas.sh",
+        "kind": "sh",
+        "lines": 43
+      },
+      {
+        "path": "scripts/ci/quality-report.sh",
+        "kind": "sh",
+        "lines": 134
+      },
+      {
+        "path": "scripts/ci/check_doc_voice.py",
+        "kind": "py",
+        "lines": 252
+      },
+      {
+        "path": "scripts/ci/check_python_parity.py",
+        "kind": "py",
+        "lines": 240
+      },
+      {
+        "path": "scripts/ci/lib/comment_scan.sh",
+        "kind": "lib",
+        "lines": 65
+      }
+    ],
+    "allowlist": {
+      "path": "scripts/ci/allow-rationale-allowlist.txt",
+      "lines": 21,
+      "activeEntries": 0,
+      "state": "intentionally empty (sanctioned)",
+      "anchor": {
+        "path": "scripts/ci/allow-rationale-allowlist.txt",
+        "line": 1
+      }
+    },
+    "pycache": {
+      "path": "scripts/ci/__pycache__",
+      "trackedAtBaseline": false,
+      "gitignoreAnchor": {
+        "path": ".gitignore",
+        "line": 69
+      },
+      "pattern": "__pycache__/",
+      "note": "a build artifact of the worktree, never a gate"
+    },
+    "wiringSites": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/invariance-shuffle.yml",
+      ".github/workflows/mpi-slurm.yml",
+      ".github/workflows/publish.yml",
+      ".github/workflows/release-mpi.yml",
+      ".github/workflows/release-python.yml",
+      ".github/workflows/release.yml",
+      ".github/workflows/slurm-base-image.yml",
+      "scripts/pre-commit"
+    ],
+    "otherScripts": [
+      {
+        "path": "scripts/README.md",
+        "lines": 49,
+        "role": "not a gate (scripts/ outside scripts/ci)"
+      },
+      {
+        "path": "scripts/gen/inject_wheel_licenses.py",
+        "lines": 78,
+        "role": "not a gate (scripts/ outside scripts/ci)"
+      },
+      {
+        "path": "scripts/loc-stats.sh",
+        "lines": 164,
+        "role": "not a gate (scripts/ outside scripts/ci)"
+      },
+      {
+        "path": "scripts/pre-commit",
+        "lines": 16,
+        "role": "not a gate (scripts/ outside scripts/ci)"
+      }
+    ]
+  },
+  "schemas": {
+    "jsonCount": 18,
+    "jsonFiles": [
+      "schemas/buses.schema.json",
+      "schemas/config.schema.json",
+      "schemas/correlation.schema.json",
+      "schemas/energy_contracts.schema.json",
+      "schemas/generic_constraints.schema.json",
+      "schemas/generic_parameters.schema.json",
+      "schemas/hydros.schema.json",
+      "schemas/initial_conditions.schema.json",
+      "schemas/lines.schema.json",
+      "schemas/load_factors.schema.json",
+      "schemas/non_controllable_factors.schema.json",
+      "schemas/non_controllable_sources.schema.json",
+      "schemas/penalties.schema.json",
+      "schemas/post_study_stages.schema.json",
+      "schemas/production_models.schema.json",
+      "schemas/pumping_stations.schema.json",
+      "schemas/stages.schema.json",
+      "schemas/thermals.schema.json"
+    ],
+    "flatbuffers": "crates/cobre-io/schemas/policy.fbs",
+    "rootPolicyFbsExists": false,
+    "flatbuffersLines": 411
+  },
+  "slurm": {
+    "harnessDir": "tests/slurm",
+    "files": [
+      "tests/slurm/Dockerfile",
+      "tests/slurm/Dockerfile.base",
+      "tests/slurm/cgroup.conf",
+      "tests/slurm/docker-compose.yml",
+      "tests/slurm/entrypoint.sh",
+      "tests/slurm/run-tests.sh",
+      "tests/slurm/slurm.conf"
+    ],
+    "driver": "tests/mpi_slurm.sh",
+    "driverLines": 115
+  },
+  "designDocs": {
+    "index": "docs/design/README.md",
+    "indexLines": 36,
+    "docs": [
+      "docs/design/anticipated-fixed-post-horizon-commitments.md",
+      "docs/design/anticipated-thermals-and-water-travel-time.md",
+      "docs/design/backward-warm-start-channels.md",
+      "docs/design/enumerated-traversal-distribution.md",
+      "docs/design/external-scenarios-are-authoritative.md",
+      "docs/design/policy-graph-limitations.md",
+      "docs/design/post-horizon-input-unification.md",
+      "docs/design/reserved-seams-and-deferred-debt.md",
+      "docs/design/testing-architecture.md"
+    ],
+    "docCount": 9,
+    "statusVocabulary": [
+      "Live spec",
+      "Decision record",
+      "Living register",
+      "Proposal",
+      "Design brief"
+    ],
+    "statusVocabularyAnchor": {
+      "path": "docs/design/README.md",
+      "line": 4,
+      "endLine": 16,
+      "perValue": {
+        "Live spec": 6,
+        "Decision record": 8,
+        "Living register": 10,
+        "Proposal": 12,
+        "Design brief": 14
+      }
+    },
+    "maintenanceConvention": {
+      "anchor": {
+        "path": "docs/design/README.md",
+        "line": 29
+      },
+      "rule": "a proposal that ships is deleted from docs/design once its content lands in its authoritative home"
+    },
+    "statusTable": [
+      {
+        "doc": "policy-graph-limitations.md",
+        "status": "Live spec",
+        "line": 20,
+        "inVocabulary": true
+      },
+      {
+        "doc": "enumerated-traversal-distribution.md",
+        "status": "Live spec",
+        "line": 21,
+        "inVocabulary": true
+      },
+      {
+        "doc": "reserved-seams-and-deferred-debt.md",
+        "status": "Living register",
+        "line": 22,
+        "inVocabulary": true
+      },
+      {
+        "doc": "backward-warm-start-channels.md",
+        "status": "Decision record",
+        "line": 23,
+        "inVocabulary": true
+      },
+      {
+        "doc": "testing-architecture.md",
+        "status": "Partially adopted (§5.2); the rest Proposal",
+        "line": 24,
+        "inVocabulary": false
+      },
+      {
+        "doc": "anticipated-thermals-and-water-travel-time.md",
+        "status": "Live spec",
+        "line": 25,
+        "inVocabulary": true
+      },
+      {
+        "doc": "anticipated-fixed-post-horizon-commitments.md",
+        "status": "Implemented (retained pending fold into the live spec)",
+        "line": 26,
+        "inVocabulary": false
+      },
+      {
+        "doc": "external-scenarios-are-authoritative.md",
+        "status": "Implemented (retained pending fold into the live spec)",
+        "line": 27,
+        "inVocabulary": false
+      }
+    ],
+    "indexedDocCount": 8,
+    "docsNotInIndex": [
+      {
+        "path": "docs/design/post-horizon-input-unification.md",
+        "lines": 263,
+        "statusLineInDoc": 3
+      }
+    ],
+    "outOfVocabularyRows": [
+      {
+        "path": "docs/design/README.md",
+        "line": 24,
+        "doc": "testing-architecture.md",
+        "status": "Partially adopted (§5.2); the rest Proposal"
+      },
+      {
+        "path": "docs/design/README.md",
+        "line": 26,
+        "doc": "anticipated-fixed-post-horizon-commitments.md",
+        "status": "Implemented (retained pending fold into the live spec)"
+      },
+      {
+        "path": "docs/design/README.md",
+        "line": 27,
+        "doc": "external-scenarios-are-authoritative.md",
+        "status": "Implemented (retained pending fold into the live spec)"
+      }
+    ]
+  },
+  "figureCorrections": [
+    {
+      "claim": "17 gates in scripts/ci plus lib/comment_scan.sh (epic body)",
+      "observed": "14 .sh + 2 .py top-level executables = 16, plus scripts/ci/lib/comment_scan.sh = 17 shell/python files; 18 tree entries counting the data file allow-rationale-allowlist.txt; scripts/ci/__pycache__ is a gitignored artifact, never a gate",
+      "commands": [
+        "git ls-tree -r --name-only 077dbe2c scripts/ci"
+      ]
+    },
+    {
+      "claim": "schemas/policy.fbs (epic body, BACKLOG, mirror)",
+      "observed": "no schemas/policy.fbs at the workspace root; the FlatBuffers schema lives at crates/cobre-io/schemas/policy.fbs",
+      "commands": [
+        "git ls-tree -r --name-only 077dbe2c schemas | grep fbs",
+        "git ls-tree -r --name-only 077dbe2c crates/cobre-io/schemas"
+      ]
+    }
+  ],
+  "ticketFigureDeviations": {
+    "note": "Ticket figures were minted at the superseded pin a136840d; this inventory measures the register pin 077dbe2c. The workflows grew (ci.yml gained the bindings' Rust-tests step and lines around it), check-comment-line-refs.sh grew (it scans .py/.pyi), .gitignore gained lines, and the register and the mirror moved, so the line anchors the ticket quotes are recorded here as deviations; the counts the ticket asserts (13 members, 5 stubs, 3 build.rs, 4 submodules, 8 workflows, 14 jobs, 16+1 gates, 18 schemas, README + 9 docs) hold at the pin.",
+    "changed": [
+      {
+        "figure": "ci.totalWorkflowLines",
+        "ticket": 1602,
+        "measured": 1610
+      },
+      {
+        "figure": "ci.workflows[ci.yml].lines",
+        "ticket": 585,
+        "measured": 593
+      },
+      {
+        "figure": "ci.ciJobs[docs-examples..python].anchor.line",
+        "ticket": [
+          350,
+          364,
+          406,
+          420,
+          436,
+          455,
+          505
+        ],
+        "measured": [
+          349,
+          363,
+          405,
+          419,
+          435,
+          454,
+          504
+        ]
+      },
+      {
+        "figure": "gates.advisory[check-comment-line-refs.sh].terminalExit0",
+        "ticket": 134,
+        "measured": 157
+      },
+      {
+        "figure": "gates.pycache.gitignoreAnchor.line",
+        "ticket": 67,
+        "measured": 69
+      },
+      {
+        "figure": "priorRegister.schemasPolicyFbsDrift.backlogLines",
+        "ticket": [
+          1952
+        ],
+        "measured": [
+          2013,
+          3182
+        ],
+        "note": "BACKLOG.md anchors are HEAD lines of the live register"
+      },
+      {
+        "figure": "priorRegister.schemasPolicyFbsDrift.mirrorLine",
+        "ticket": 591,
+        "measured": 614,
+        "atHead": 620
+      },
+      {
+        "figure": "designDocs.indexedDocs",
+        "ticket": "README plus 9 docs (all indexed)",
+        "measured": "README plus 9 docs, 8 indexed — docs/design/post-horizon-input-unification.md has no row in the status table",
+        "note": "a fact for the drift lens, not a finding here"
+      },
+      {
+        "figure": "designDocs.outOfVocabularyRows",
+        "ticket": [
+          26,
+          27
+        ],
+        "measured": [
+          24,
+          26,
+          27
+        ],
+        "note": "a third out-of-vocabulary status sits on line 24 ('Partially adopted (§5.2); the rest Proposal', testing-architecture.md)"
+      },
+      {
+        "figure": "Cargo.toml exclude anchor",
+        "ticket": 20,
+        "measured": 22,
+        "note": "the exclude block spans lines 18-22: comment 18-20, `exclude = [` 21, the entry 22"
+      }
+    ]
+  },
+  "commands": {
+    "members": "git show 077dbe2c:Cargo.toml | sed -n '3,22p'",
+    "buildScripts": "git ls-tree -r --name-only 077dbe2c | grep '/build.rs$' | grep -v /vendor/",
+    "submodules": "git ls-tree 077dbe2c crates/cobre-solver/vendor/ crates/cobre-sddp/vendor/ ; git submodule status",
+    "workflowLines": "for f in $(git ls-tree -r --name-only 077dbe2c .github/workflows); do git show 077dbe2c:$f | wc -l; done",
+    "jobIds": "git show 077dbe2c:.github/workflows/ci.yml | grep -nE '^  [a-z0-9-]+:$'   # the first hit (push) is the trigger key, not a job",
+    "triggers": "git show 077dbe2c:.github/workflows/ci.yml | sed -n '3,7p'",
+    "mpichBlocks": "for f in $(git ls-tree -r --name-only 077dbe2c .github/workflows); do git show 077dbe2c:$f | grep -c 'Build MPICH from source'; done",
+    "gates": "git ls-tree -r --name-only 077dbe2c scripts/ci",
+    "allowlist": "git show 077dbe2c:scripts/ci/allow-rationale-allowlist.txt | grep -cvE '^\\s*(#|$)'",
+    "pycache": "git show 077dbe2c:.gitignore | grep -n __pycache__",
+    "census": "for f in scripts/ci/*.sh scripts/ci/*.py scripts/ci/lib/*.sh; do n=$(basename \"$f\"); grep -rq \"$n\" .github/workflows/ scripts/pre-commit || echo \"UNWIRED: $n\"; done   # at 077dbe2c",
+    "schemas": "git ls-tree -r --name-only 077dbe2c schemas | grep -c '\\.json$'; git ls-tree -r --name-only 077dbe2c crates/cobre-io/schemas",
+    "slurm": "git ls-tree -r --name-only 077dbe2c tests/slurm tests/mpi_slurm.sh",
+    "designDocs": "git ls-tree -r --name-only 077dbe2c docs/design; git show 077dbe2c:docs/design/README.md | sed -n '4,29p'"
+  }
+}

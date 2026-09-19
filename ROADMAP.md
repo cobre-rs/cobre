@@ -26,7 +26,14 @@ reconciliation. Amend in place; do not fork a second copy.
    `LB 3.03e12 > UB 1.87e11` at iteration 37 is benign CVaR reporting or a second defect.
    Reproduction of the abort itself is not requested.
 
-3. **Fix CD-074 as one plan off `develop`, two tickets, released in v0.16.0.**
+3. **Fix CD-074 as one plan off `develop`, released in v0.16.0.** DONE (`<merge-sha>`) —
+   shipped as the state-canonicalization plan (projection onto the admissible box via the
+   single read-back seam `assemble_outgoing_state`; runtime verdict retired; over-commitment
+   moved to the cobre-io load-time validator `check_committed_value_bounds`).
+   AMENDMENT: Ticket A's per-run drift tally (below) was REMOVED as overengineering after
+   landing (owner decision, `7fbb3da2`) — sub-tolerance clamps are absorbed silently, with no
+   run-summary tally, metadata, or CLI/Python surface. The projection, the load-time reject,
+   and the byte-neutrality-for-in-bounds-solves property all stand.
    Do not ship a constant-only hotfix; projection onto the enforced delivery box is the
    redesign's core and is what unblocks users.
    - **Ticket A — solve-time projection.** Replace relax-the-bound with project-the-pin
@@ -56,10 +63,11 @@ reconciliation. Amend in place; do not fork a second copy.
    amendment (see "Owner decisions" §2 below, owner to confirm): pin once, now, at `077dbe2c`, and
    record CD-074 at the pin with a later fixed-status bullet.
 
-6. **sddp station with one extra lens:** CD-074 is a specimen of a class — a pinned state
-   coupled by an equality to a bounded column, reconciled ad hoc for one family. Audit
-   every state family (storage, inflow lags, transit buckets, commitment hold) for the
-   same shape and decide whether drift handling belongs in one shared seam.
+6. **sddp station with one extra lens:** ABSORBED by the state-canonicalization plan — the
+   class CD-074 was a specimen of (a pinned state coupled by an equality to a bounded column,
+   reconciled ad hoc per family) is now handled in ONE shared seam `assemble_outgoing_state`
+   across every state family (storage, inflow lags, transit buckets, commitment hold). No
+   separate audit lens remains for this shape.
 
 7. **Remaining stations in the existing order:** cli-python, W8 setup-perf
    (opportunistic), build-ci + test-corpus, generalization-alignment, unified-roadmap.

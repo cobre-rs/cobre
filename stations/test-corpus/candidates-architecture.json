@@ -1,0 +1,251 @@
+{
+  "station": "test-corpus",
+  "stationLabel": "test-corpus",
+  "subStation": "sec-architecture",
+  "worker": "sec-architecture",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "primary": false,
+  "informational": false,
+  "gatedAt": "2026-09-19",
+  "dispatcher": "adversarial-attacker (Opus, read-only) — one worker over the whole corpus",
+  "workers": {
+    "sec-architecture": "ok: 3 candidates, 5 positives, 0 seeds"
+  },
+  "attempts": {
+    "sec-architecture": 1
+  },
+  "candidates": [
+    {
+      "title": "The test-support surface has two activation regimes: cobre-core, cobre-io and cobre-stochastic pin the feature with a self dev-dependency while cobre-sddp and cobre-solver leave it to the command line",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/Cargo.toml",
+          "line": 40
+        },
+        {
+          "path": "crates/cobre-io/Cargo.toml",
+          "line": 54
+        },
+        {
+          "path": "crates/cobre-stochastic/Cargo.toml",
+          "line": 42
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-solver/Cargo.toml",
+          "line": 51
+        },
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "line": 9
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'path = \"\\.\"' 077dbe2c -- 'crates/*/Cargo.toml' | sed 's#^[a-f0-9]*:##'; git grep -n 'cfg(feature = \"test-support\")' 077dbe2c -- crates/cobre-solver/src | sed 's#^[a-f0-9]*:##'; git grep -l 'cobre_sddp::test_support' 077dbe2c -- 'crates/cobre-sddp/tests/*.rs' | wc -l; git grep -n 'cobre_solver::test_support' 077dbe2c -- 'crates/cobre-solver/tests/*.rs' | sed 's#^[a-f0-9]*:##'; git grep -n 'cobre-solver/test-support' 077dbe2c -- Cargo.toml 'crates/*/Cargo.toml'",
+        "output": "crates/cobre-core/Cargo.toml:40:cobre-core = { path = \".\", features = [\"test-support\"] }\ncrates/cobre-io/Cargo.toml:54:cobre-io = { path = \".\", features = [\"test-support\"] }\ncrates/cobre-stochastic/Cargo.toml:42:cobre-stochastic = { path = \".\", features = [\"test-support\"] }\ncrates/cobre-solver/src/backends/highs/solver.rs:6:#[cfg(feature = \"test-support\")]\ncrates/cobre-solver/src/backends/highs/solver.rs:580:#[cfg(feature = \"test-support\")]\ncrates/cobre-solver/src/lib.rs:163:#[cfg(feature = \"test-support\")]\n24\ncrates/cobre-solver/tests/_clp_sign_convention_probe.rs:21:use cobre_solver::test_support::{\ncrates/cobre-solver/tests/conformance.rs:32:use cobre_solver::test_support;\n(no output for the last command: no manifest in the workspace enables cobre-solver/test-support)",
+        "reading": "Five crates declare the feature (declarerAnchors: cobre-core Cargo.toml:30, cobre-io :33, cobre-sddp :55, cobre-solver :31, cobre-stochastic :26) but only three make it self-activating: cobre-core:40, cobre-io:54 and cobre-stochastic:42 each carry `<crate> = { path = \".\", features = [\"test-support\"] }` in their own [dev-dependencies], so the gated surface is present in every dev build of those crates. cobre-sddp's [dev-dependencies] (Cargo.toml:74-90) enables test-support only on cobre-core (:77), never on itself, and cobre-solver's (Cargo.toml:51-52) holds matrixmultiply alone. The `test` arm of `#[cfg(any(test, feature = \"test-support\"))]` covers only in-crate unit tests: an integration binary links the lib as an ordinary dependency, for which `test` is unset, so the 24 depth-1 cobre-sddp binaries that import cobre_sddp::test_support and the 2 cobre-solver binaries that import cobre_solver::test_support (tests/conformance.rs:32, tests/_clp_sign_convention_probe.rs:21) resolve that import only when --features test-support arrives on the command line; the workspace command in CLAUDE.md and NON_SOLVER_FEATURES in .github/workflows/ci.yml:32 both supply it, so CI is green and the asymmetry is invisible there. No cargo command was run for this candidate: the consequence follows from the manifests, the cfg predicates and Cargo's feature resolution. cobre-solver is the sharpest instance: it is the only crate whose src/ gates the surface with the narrower `#[cfg(feature = \"test-support\")]` (src/lib.rs:163, src/backends/highs/solver.rs:6 and :580 — every other declarer's src/ uses the wide predicate) and no manifest anywhere enables cobre-solver/test-support (inventory perCrate.cobre-solver.consumesTestSupport = false). Two crate-local promises are narrower than they read: cobre-sddp/Cargo.toml:51-53 and crates/cobre-sddp/src/test_support.rs:9-10 both say the builders are reachable by plain `cargo test` and by downstream integration tests via the feature, which holds for the crate's unit tests and for downstream crates carrying the dev-dep, but not for the crate's own 24 consuming integration binaries. This is the tree state behind the §2.3 Absent bullet (docs/design/testing-architecture.md:99-100, 'the test-support feature exists but is applied inconsistently'): the claim holds, and the inconsistency is the activation path, not the declaration. Adjacent, not re-raised: the mirror item 'Python-binding Rust tests invisible to CI' residue (b) records the same missing-dev-dep shape for crates/cobre-python/Cargo.toml:34."
+      },
+      "yardstickRef": "ta-2.3",
+      "claimKind": "tree-fact",
+      "measurementDefinition": "binary",
+      "measuredValue": {
+        "key": "figures.int-binaries.perCrate.cobre-sddp",
+        "value": 40
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Unify the feature surface. Give cobre-sddp and cobre-solver the same self dev-dependency the other three declarers carry, so each crate's own integration binaries see the gated surface in every dev build instead of depending on a command-line flag, and widen cobre-solver's three src/ gates to the predicate every other declarer uses unless the raw FFI handle is deliberately narrowed. Then correct the two crate-local promises to say which builds reach the builders. No test is added, removed, renamed, skipped or weakened and no baseline moves, so cargo nextest list --features test-support reports the same count before and after.",
+      "alignmentHint": "neutral",
+      "seedRef": null,
+      "dupOf": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:240 (deferred-debt register) and CLAUDE.md Hard Rules 'Unwired config is reserved, not dead' were both checked: this candidate removes no seam and no unconsumed surface, it adds an activation path for a surface already consumed by 26 binaries",
+        "rule": "rule 6"
+      },
+      "citedContext": [
+        {
+          "path": "crates/cobre-solver/src/lib.rs",
+          "line": 163,
+          "why": "cited, not anchored: outside the test surface the partition enumerates (tests/, inline #[cfg(test)] modules, sibling tests.rs, benches, workflows, manifests); demoted at the gate under rule 11 / anchor-form"
+        }
+      ],
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    },
+    {
+      "title": "The yardstick's §2.2 map says every crate other than cobre-sddp constructs fixtures per-file, but cobre-stochastic and cobre-io each carry a shared multi-binary harness module at the pin",
+      "anchors": [
+        {
+          "path": "docs/design/testing-architecture.md",
+          "line": 76
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/common/mod.rs",
+          "line": 13
+        },
+        {
+          "path": "crates/cobre-io/tests/helpers/mod.rs",
+          "line": 9
+        },
+        {
+          "path": "docs/design/testing-architecture.md",
+          "line": 417
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:docs/design/testing-architecture.md | sed -n '72,78p'; git grep -n '^mod helpers;\\|^mod common;' 077dbe2c -- 'crates/*/tests/*.rs' | sed 's#^[a-f0-9]*:##' | awk -F/ '{print $2}' | sort | uniq -c; git show 077dbe2c:crates/cobre-stochastic/tests/common/mod.rs | wc -l; git show 077dbe2c:crates/cobre-io/tests/helpers/mod.rs | wc -l",
+        "output": "`cobre-sddp` is the sole home of: all four test tiers, the only large\n`tests/common/` harness (`StubComm`/`Rank0Of2`, `build_setup_*`, `make_*`\nbuilders, `parity_hash`, `permute`), the only `tests/fixtures/` (dual golden\nbaselines + deterministic case decks), the `mpi_wire.rs` determinism-gate binary\n(with its power self-checks), and the only `benches/`. Every other crate is unit\n\n- behavioral only, constructing fixtures per-file.\n      6 cobre-io\n     33 cobre-sddp\n      8 cobre-stochastic\n261\n204",
+        "reading": "The §2.2 sentence at docs/design/testing-architecture.md:76-78 is present tense and unqualified: 'Every other crate is unit- / behavioral only, constructing fixtures per-file.' At the pin two other crates share a harness module instead. crates/cobre-stochastic/tests/common/mod.rs is 261 lines and is declared by 8 of the crate's 9 depth-1 binaries (conformance.rs:9, forward_sampler.rs:15, forward_sampler_golden.rs:17, halton_integration.rs:26, lhs_integration.rs:26, reproducibility.rs:16, saa_golden_value.rs:15, sobol_integration.rs:26; par_a_historical_replay.rs is the exception). crates/cobre-io/tests/helpers/mod.rs is 204 lines and is declared by 6 of that crate's 12 binaries (integration.rs:10, invariance.rs:14, load_case_productivity_resolution.rs:9, load_case_scalar_parameters.rs:5, post_study_stages.rs:17, resolver_builder_index_alignment.rs:18). The measurement handle is the inventory's own binary-versus-file disagreement: cobre-stochastic is 9 binaries but 10 files and cobre-io is 12 binaries but 13 files, and in each crate the extra file is exactly this harness module (git ls-tree -r over the two tests/ trees returns crates/cobre-io/tests/helpers/mod.rs and crates/cobre-stochastic/tests/common/mod.rs as the only non-depth-1 .rs files besides cobre-sddp's five). The drift matters because the §5.2 target plan is written from this map and names only one migration source, 'cobre-sddp/tests/common/ collapses into cobre-sddp's test-support surface' (docs/design/testing-architecture.md:417-421): a collapse driven by that list leaves the other two harnesses unaccounted for. §2.2 is a current-state claim class (claim-classes.json row ta-2.2-other-crates-per-file-fixtures, class current-state, driftIsFinding true), so contradiction by the tree is prose-drift. Related adjudicate row recorded, not decided: ta-5.2-adoption-uniform (docs/design/testing-architecture.md:425-431), the Adoption paragraph that already records two uncarried bullets."
+      },
+      "yardstickRef": "ta-2.2",
+      "claimKind": "prose-drift",
+      "measurementDefinition": "file",
+      "measuredValue": {
+        "key": "figures.int-binaries.altDefinition.perCrate.cobre-stochastic",
+        "value": 10
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Re-home the map, not the tests: restate §2.2 so it names all three shared harness modules and says what distinguishes cobre-sddp's (it owns its fixtures) from the other two (they re-export a crate's test_support surface), then extend the §5.2 collapse source list to match. Prose and plan-text only; no test file moves under this candidate, so the test count and every assertion are untouched.",
+      "alignmentHint": "neutral",
+      "seedRef": null,
+      "dupOf": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:240; no reserved seam, stub crate or golden artifact is touched by a correction to a current-state map sentence",
+        "rule": "rule 6"
+      },
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    },
+    {
+      "title": "One shared-harness role carries two directory names and three compositions, and the differently-named cobre-io harness is invisible to a migration that greps for tests/common",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/tests/helpers/mod.rs",
+          "line": 2
+        },
+        {
+          "path": "crates/cobre-stochastic/tests/common/mod.rs",
+          "line": 6
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "line": 32
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "line": 25
+        },
+        {
+          "path": "docs/design/testing-architecture.md",
+          "line": 417
+        }
+      ],
+      "evidence": {
+        "command": "git ls-tree --name-only -r 077dbe2c crates/cobre-io/tests crates/cobre-stochastic/tests crates/cobre-sddp/tests | grep -E '/(common|helpers)/'; git show 077dbe2c:crates/cobre-io/tests/helpers/mod.rs | sed -n '1,13p'; git show 077dbe2c:crates/cobre-stochastic/tests/common/mod.rs | sed -n '6,20p'",
+        "output": "crates/cobre-io/tests/helpers/mod.rs\ncrates/cobre-sddp/tests/common/anticipated_structural_assertions.rs\ncrates/cobre-sddp/tests/common/builders.rs\ncrates/cobre-sddp/tests/common/mod.rs\ncrates/cobre-sddp/tests/common/parity_hash.rs\ncrates/cobre-sddp/tests/common/permute.rs\ncrates/cobre-stochastic/tests/common/mod.rs\n--- cobre-io/tests/helpers/mod.rs:2-12 ---\n#![allow(dead_code, unused_imports)]\npub use cobre_io::test_support::{\n    VALID_BUSES_JSON, VALID_CONFIG_JSON, VALID_HYDROS_JSON, VALID_INITIAL_CONDITIONS_JSON,\n    VALID_LINES_JSON, VALID_PENALTIES_JSON, VALID_STAGES_JSON, VALID_THERMALS_JSON,\n    make_minimal_case, write_file,\n};\n--- cobre-stochastic/tests/common/mod.rs:6-20 ---\n#![allow(dead_code, unused_imports)]\npub use cobre_core::test_support::{StageSpec, make_stage, norm_cdf, single_block};\npub use cobre_stochastic::test_support::{InflowModelSpec, make_inflow_model};",
+        "reading": "The three crates with a shared integration harness solve the same problem three ways. Naming: cobre-sddp and cobre-stochastic use tests/common/, cobre-io uses tests/helpers/ — the same role under two directory names, so the §5.2 collapse target 'cobre-sddp/tests/common/' (docs/design/testing-architecture.md:417-421) and any grep written from it sees neither of the other two. Composition: cobre-sddp's harness owns its fixtures across five files (mod.rs 320 lines declaring the submodules at :25-28, builders.rs 383, parity_hash.rs 417, permute.rs 204, anticipated_structural_assertions.rs 181 — 1,505 lines, including the StubComm Communicator impl at mod.rs:32), while cobre-io's (204 lines) and cobre-stochastic's (261 lines) are mostly re-export shims over a src/ test_support module plus two or three local case builders — cobre-io has therefore already done most of the §5.2 collapse while keeping a directory the plan does not name. All three need a crate-level #![allow(dead_code)] (cobre-sddp tests/common/mod.rs:6, cobre-stochastic tests/common/mod.rs:6, cobre-io tests/helpers/mod.rs:2) because a tests/ harness module is source-included per binary rather than linked once, which is the mechanism the two rationale comments state correctly. The measurement handle is cobre-io's binary-versus-file delta (12 depth-1 binaries, 13 recursive files); the extra file is tests/helpers/mod.rs. This is the tree state behind the §3.2 findings the yardstick already records (claim-classes.json rows ta-3.2.2-no-crate-standard at docs/design/testing-architecture.md:135-139 and ta-3.2.3-fixture-fragmentation at :140-145), a current-state class the tree agrees with, so the fact itself is the smell. Not raised here and cross-referenced instead: the mirror item 'Oracle test-harness duplication' covers the four fn close carriers inside cobre-sddp/tests, and TD-030 / TD-043 cover byte-identical per-file preludes; this candidate is about the harness directory's identity, not about duplicated bodies."
+      },
+      "yardstickRef": "ta-3.2",
+      "claimKind": "tree-fact",
+      "measurementDefinition": "file",
+      "measuredValue": {
+        "key": "figures.int-binaries.altDefinition.perCrate.cobre-io",
+        "value": 13
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pick one directory name for the role and re-home the odd one, so a single convention statement and a single grep reach every shared harness; record in the §5.2 plan which of the three compositions each crate is expected to end at, since two are already re-export shims and one owns its fixtures. Re-homing a harness module renames no test and changes no assertion, so the nextest count and every retained claim are unchanged.",
+      "alignmentHint": "neutral",
+      "seedRef": null,
+      "dupOf": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:240 and ARCHITECTURE.md § Reserved crates: the harness directories are consumed by 47 declaring binaries, so no reserved-not-dead surface is in question",
+        "rule": "rule 6"
+      },
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/test_support.rs, declared #[cfg(test)] mod test_support; at crates/cobre-sddp/src/lp/builder/mod.rs:54-55",
+      "why": "Examined as a possible second test-support home and found clean. The module is private, gated on plain #[cfg(test)] with no feature arm, 179 lines, and git grep for builder::test_support returns no user outside the directory, so it is a unit-test fixture living with the types it builds rather than a competing cross-crate surface. Widening its gate to the feature predicate would be the wrong fix.",
+      "sanctionedBy": "docs/design/testing-architecture.md:411-418 (§5.2, helpers live with the type they build)",
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    },
+    {
+      "subject": "The three #![allow(dead_code)] rationale comments on the shared harness modules (crates/cobre-sddp/tests/common/mod.rs:6, crates/cobre-stochastic/tests/common/mod.rs:6-9, crates/cobre-io/tests/helpers/mod.rs:2-5)",
+      "why": "Each states the one fact that does not live in the file: a tests/ harness module is source-included into every declaring binary rather than linked once, so an item unused by one binary is not dead code. Deleting the allow would produce per-binary warnings and deleting the comment would invite someone to remove the allow, so both are load-bearing.",
+      "sanctionedBy": null,
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    },
+    {
+      "subject": "The five reserved stub crates (cobre-mcp, cobre-tui, cobre-flow, cobre-uc, cobre-emt) and the facade crate cobre",
+      "why": "Each has no tests/ directory and no #[cfg(test)] module at the pin, and the inventory records declaresTestSupport false and consumesTestSupport false for all of them. That is reserved-not-dead, never a harness-topology gap, so the zero test surface is correct and no candidate is raised against it.",
+      "sanctionedBy": "ARCHITECTURE.md § Reserved crates; CLAUDE.md Hard Rules, 'Unwired config is reserved, not dead'",
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    },
+    {
+      "subject": "cobre-sddp's harness assets: the golden parity_hash_* roster in crates/cobre-sddp/tests/parity.rs, the mpi_wire.rs determinism gates with their power self-checks at crates/cobre-sddp/tests/mpi_wire.rs:576, :703 and :2003, and the dual crates/cobre-sddp/tests/fixtures/parity_baselines{,_clp} decks",
+      "why": "These are the substrate a future bit-for-bit engine-seam gate reuses, and the power self-checks are what stops a determinism gate from passing vacuously. The harness-topology lens touched all three while reading tests/common/ and raises nothing against them: their concentration in one crate is the intended shape, not fragmentation.",
+      "sanctionedBy": "docs/design/testing-architecture.md:72-76 (§2.2); attacker prompt rule 6",
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    },
+    {
+      "subject": "Cargo feature documentation on the four wide-gate declarers (crates/cobre-core/Cargo.toml:27-30, crates/cobre-io/Cargo.toml:26-33, crates/cobre-sddp/Cargo.toml:48-55, crates/cobre-stochastic/Cargo.toml:20-26)",
+      "why": "Every one of the four spells out the cfg predicate it gates on and states 'Must NOT be enabled in production builds', which is the convention statement §5.2 asks for and the reason the gate predicate asymmetry in cobre-solver is detectable at all. The documentation is right even where the activation path is not.",
+      "sanctionedBy": null,
+      "raisedBy": [
+        "sec-architecture"
+      ]
+    }
+  ],
+  "seedDispositions": [],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "sec-architecture: Should cobre-sddp and cobre-solver gain the self dev-dependency now, or is the command-line activation accepted until the §5.2 collapse lands — the adjudicate row ta-5.2-keep-feature-three-crates (docs/design/testing-architecture.md:398-399) reads either way and only the owner can pick.",
+    "sec-architecture: Should the §5.2 collapse source list be extended to crates/cobre-io/tests/helpers/ and crates/cobre-stochastic/tests/common/, which the §2.2 map does not name, or do those two shims stay as they are because they already re-export a src/ test_support surface (adjudicate row ta-5.2-adoption-uniform, docs/design/testing-architecture.md:425-431).",
+    "sec-architecture: Is the narrow #[cfg(feature = \"test-support\")] gate on HighsSolver::raw_handle (crates/cobre-solver/src/backends/highs/solver.rs:580) deliberate narrowing of a raw FFI handle away from the crate's own test builds, in which case cobre-solver is a sanctioned exception to the uniform predicate rather than an inconsistency.",
+    "sec-architecture: Which of the three destinations the mirror item 'Oracle test-harness duplication' should use for the tolerance helpers — cobre_sddp::test_support, one merged binary, or cobre-core's test-support surface per docs/design/testing-architecture.md:436-438 — since the harness-topology reading favours the crate whose fixtures they compare but the §5.2 target favours the shared home."
+  ],
+  "gate": {
+    "validator": "stations/test-corpus/validate-tb.py envelope <file> --worker <name> (shared tools/validate-envelope.py shape + the test-bloat profile + scope + seed ledger)",
+    "okWorkers": [
+      "sec-architecture"
+    ],
+    "mergedDuplicates": [],
+    "demotedAnchors": [
+      {
+        "worker": "sec-architecture",
+        "title": "The test-support surface has two activation regimes: cobre-core, cobre-io and cobre-stochastic pin the feature with a self dev-dependency while cobre-sddp and cobre-solver leave it to the command line",
+        "path": "crates/cobre-solver/src/lib.rs",
+        "line": 163,
+        "symbol": null,
+        "code": "out-of-scope-anchor"
+      }
+    ],
+    "rejections": []
+  }
+}

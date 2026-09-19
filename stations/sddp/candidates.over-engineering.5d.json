@@ -1,0 +1,219 @@
+{
+  "station": "sddp",
+  "subStation": "5d",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "cell": "sddp/5d",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "42 of 69 production-region `#[allow(...)]` openers in the 5d manifest carry no rationale, refuting the premise the census clearing rests on",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/geometry.rs",
+          "symbol": "resolve_fitting_bounds"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/grid.rs",
+          "symbol": "build_grid"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/secant.rs",
+          "symbol": "fit_gamma_s"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/aggregation.rs",
+          "symbol": "aggregate_simulation"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "extract_hydro_per_block"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/state.rs",
+          "symbol": "run_worker_scenarios"
+        }
+      ],
+      "evidence": {
+        "command": "python3 - <<'EOF'\nimport re,subprocess\nfiles=subprocess.run(['git','ls-tree','-r','--name-only','077dbe2c','crates/cobre-sddp/src/'],capture_output=True,text=True).stdout.split()\n# 5d manifest = the 41 non-test files of error.rs, lib.rs, hull/, lead_time/, production/, simulation/\nrat=re.compile(r'rationale|safety:|precision|deliberate|by design|reserved',re.I)\n# for each file: keep only the region before the first top-level #[cfg(test)];\n# an opener is 'rationale' if the contiguous comment/attr block above it matches rat,\n# 'other-comment' if that block or the same line carries any //, else 'bare'.\nEOF",
+        "output": "files 41 openers 69 rationale 15 other-comment 12 bare 42\nbare-by-file [('simulation/extraction.rs', 11), ('simulation/state.rs', 6), ('simulation/aggregation.rs', 5), ('production/fpha_fitting/geometry.rs', 4), ('production/fpha_fitting/grid.rs', 4), ('production/fpha_fitting/secant.rs', 4), ('simulation/pipeline.rs', 3), ('simulation/enumerated.rs', 2), ('production/fpha_fitting/rng.rs', 1), ('production/hydro_models/export.rs', 1), ('production/hydro_models/production.rs', 1)]\nbare-lints [('cast_possible_truncation', 30), ('cast_sign_loss', 6), ('cast_precision_loss', 6)]\n\n$ git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/geometry.rs | sed -n '155,164p'\n    #[allow(clippy::cast_sign_loss)]\n    let requested_volume_points = config.volume_discretization_points.unwrap_or(5) as usize;\n    #[allow(clippy::cast_sign_loss)]\n    let n_flow_points = config.turbine_discretization_points.unwrap_or(5) as usize;\n    #[allow(clippy::cast_sign_loss)]\n    let n_spillage_points = config.spillage_discretization_points.unwrap_or(5) as usize;\n    #[allow(clippy::cast_sign_loss)]\n    let max_planes = config.max_planes_per_hydro.unwrap_or(10) as usize;\n\n$ git show 077dbe2c:crates/cobre-io/src/extensions/production_models.rs | sed -n '171p'\n    pub volume_discretization_points: Option<i32>,\n\n$ git show 077dbe2c:docs/design/reserved-seams-and-deferred-debt.md | sed -n '1278,1284p'\n**Load-bearing.** Numeric-cast lints (`cast_possible_truncation`,\n`cast_precision_loss`, `cast_sign_loss`, `cast_possible_wrap`) and\nrefactor-decision lints (`too_many_arguments`, `too_many_lines`,\n`type_complexity`, `struct_field_names`, `implicit_hasher`,\n`needless_pass_by_value`, and similar) on production code, **each carrying a\n`// Rationale:` comment naming the non-obvious choice the lint would otherwise\nflag** — the majority of the census.",
+        "reading": "The mirror's census clearing rests on a stated premise: every numeric-cast allow on production code carries a `// Rationale:` naming the non-obvious choice. Over the 5d manifest that premise does not hold for 42 of 69 production-region openers, which carry no comment of any kind. All 42 are numeric-cast lints (cast_possible_truncation 30, cast_sign_loss 6, cast_precision_loss 6) spread over 11 files. This is not the settled \"this allow exists\" claim the do-not-touch entry clears, and it is disjoint from OD-009: zero of the 42 are `dead_code`, and OD-009's three anchors live under training/. The geometry.rs cluster shows why the missing clause is load-bearing rather than cosmetic: the four casts are sound only because `volume_discretization_points` and its three siblings are validated non-negative, and that fact lives in a different crate (cobre-io production_models.rs, typed `Option<i32>`), so a reader of geometry.rs alone cannot reconstruct it. Anchors name six enclosing declared fns; `enumerated_sim_stage_worker` also encloses two bare openers but is deliberately not anchored because PD-001 names that symbol and is refuted."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Sharpen, do not sweep. For each of the 42 bare openers either narrow the attribute to the expression it guards or add the single clause that records the fact living outside the file, which for the fpha_fitting cluster is the non-negativity validated on the cobre-io config fields. Never delete an allow that CI's zero-warning bar still needs. Under the comment-discipline Deletion Test the clause qualifies precisely because the justifying fact is cross-crate. The work is comment-and-attribute-only and must be byte-neutral: assert the parity goldens in tests/parity.rs through tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction, and move no golden. Blast radius is 11 files under production/fpha_fitting/, production/hydro_models/ and simulation/, with no signature or control-flow change. Touches no pinned contract in .claude/rules/sddp.md, so no section citation applies.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "Five `pub(crate)` items in production/ and simulation/ have zero consumers outside their defining file and nothing forces the wider visibility",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/tailrace.rs",
+          "symbol": "QuarticSegment"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/tailrace.rs",
+          "symbol": "TailraceSegments"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/fpha_fitting/tailrace.rs",
+          "symbol": "TailraceFamily"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/production.rs",
+          "symbol": "DEFAULT_REFERENCE_VOLUME_FRACTION"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/state.rs",
+          "symbol": "SimWorkerParams"
+        }
+      ],
+      "evidence": {
+        "command": "for s in QuarticSegment TailraceSegments TailraceFamily DEFAULT_REFERENCE_VOLUME_FRACTION SimWorkerParams; do echo \"== $s\"; git grep -n -w \"$s\" 077dbe2c -- 'crates/**/*.rs' | sed 's/^077dbe2c://'; done; git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/mod.rs | sed -n '66p'",
+        "output": "== QuarticSegment\ncrates/cobre-sddp/src/production/fpha_fitting/tailrace.rs (all 6 hits: the pub(crate) struct, its impl, and Vec<QuarticSegment> inside this file)\n== TailraceSegments\ncrates/cobre-sddp/src/production/fpha_fitting/tailrace.rs (all 5 hits inside this file)\n== TailraceFamily\ncrates/cobre-sddp/src/production/fpha_fitting/tailrace.rs (all 7 hits inside this file; TailraceFamilies is a distinct word and is exported)\n== DEFAULT_REFERENCE_VOLUME_FRACTION\ncrates/cobre-sddp/src/production/hydro_models/production.rs (2 hits: the pub(crate) const and its one use in resolve_reference_volume_hm3)\n== SimWorkerParams\ncrates/cobre-sddp/src/simulation/state.rs (3 hits: the pub(crate) struct, its construction, and the &SimWorkerParams<'_> parameter of the private fn run_worker_scenarios)\n\n$ git show 077dbe2c:crates/cobre-sddp/src/production/fpha_fitting/mod.rs | sed -n '66p'\npub(crate) use tailrace::{TailraceFamilies, build_tailrace_families_map};\n\n$ git show 077dbe2c:crates/cobre-sddp/src/production/hydro_models/production.rs | sed -n '655,660p'\n/// The sole owner of this literal.\npub(crate) const DEFAULT_REFERENCE_VOLUME_FRACTION: f64 = 0.65;",
+        "reading": "Five items are declared `pub(crate)` and have zero mentions outside their defining file, so the wider visibility publishes a crate-wide surface no crate-wide consumer wants. The counter-signal that would justify it is absent in each case: Rust's private_interfaces lint forces `pub(crate)` only when a type appears in a wider-visibility signature, and here `TailraceSegments.segments`, `TailraceFamilies.families` and every field of `SimWorkerParams` are private while `run_worker_scenarios` is a private fn, so nothing forces it. None carries a reserved-seam rationale or `#[allow(dead_code)]`, so none is in the mirror's reserved class. The intended crate surface is stated explicitly at fpha_fitting/mod.rs line 66, which re-exports only TailraceFamilies and build_tailrace_families_map. The const contradicts itself: its own doc calls it the sole owner of the literal while its visibility offers it to the whole crate, and it never appears in a signature."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Narrow each of the five to the visibility its single defining file actually needs, which is private for QuarticSegment, TailraceSegments, TailraceFamily, DEFAULT_REFERENCE_VOLUME_FRACTION and SimWorkerParams, keeping TailraceFamilies and build_tailrace_families_map at pub(crate) because mod.rs re-exports them. Compilation is the verifier: if private_interfaces fires on any of the five, that item is structurally forced and stays pub(crate) with the reason recorded. A visibility narrowing emits no code, but still assert byte-neutrality through the parity goldens in tests/parity.rs via tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2, and move no golden. Blast radius is three files. No pinned contract in .claude/rules/sddp.md is touched.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "`SimulationInputs::new` is a ten-parameter pass-through constructor whose only production caller already carries the suppression it duplicates",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/state.rs",
+          "symbol": "SimulationInputs"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/pipeline.rs",
+          "symbol": "simulate"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/simulation/state.rs | sed -n '52,118p'; git show 077dbe2c:crates/cobre-sddp/src/simulation/pipeline.rs | sed -n '1040,1085p'; git grep -n -w 'SimulationInputs' 077dbe2c -- 'crates/**/*.rs'",
+        "output": "$ sed -n '52,118p' simulation/state.rs\npub(crate) struct SimulationInputs<'a, S: SolverInterface + Send, C> {\n    pub workspaces: &'a mut [SolverWorkspace<S>],\n    pub ctx: &'a StageContext<'a>,\n    pub fcf: &'a FutureCostFunction,\n    pub training_ctx: &'a TrainingContext<'a>,\n    pub config: &'a SimulationConfig,\n    pub output: SimulationOutputSpec<'a>,\n    pub frozen_templates: Option<&'a [StageTemplate]>,\n    pub node_bases: &'a [Option<CapturedBasis>],\n    pub comm: &'a C,\n    pub traversal: &'a Traversal,\n}\n    /// Construct a `SimulationInputs` bundle from positional arguments.\n    // RATIONALE: a field-for-field bundle constructor; splitting would only\n    // relocate the parameter list, not reduce it — the struct already bundles\n    // what can be bundled.\n    #[allow(clippy::too_many_arguments)]\n    pub(crate) fn new(workspaces, ctx, fcf, training_ctx, config, output,\n                      frozen_templates, node_bases, comm, traversal) -> Self {\n        Self { workspaces, ctx, fcf, training_ctx, config, output,\n               frozen_templates, node_bases, comm, traversal }\n    }\n\n$ sed -n '1040,1085p' simulation/pipeline.rs\n// RATIONALE: simulate() is a thin argument-forwarding shim to\n// SimulationState::run; splitting would only relocate the parameter list, not\n// reduce it — SimulationInputs already bundles what can be bundled.\n#[allow(clippy::too_many_arguments)]\npub fn simulate<S, C: Communicator>(...ten params...) -> Result<SimulationRunResult, SimulationError> {\n    let mut state = SimulationState::new(training_ctx.horizon.num_stages());\n    state.set_profile(config.profile);\n    state.run(&mut SimulationInputs::new(workspaces, ctx, fcf, training_ctx, config,\n        output, frozen_templates, node_bases, comm, traversal))\n}\n\n$ git grep -n -w SimulationInputs 077dbe2c -- 'crates/**/*.rs'\nsimulation/state.rs (declaration, impl, and the &mut SimulationInputs param of run)\nsimulation/pipeline.rs:1084 (the single ::new call site)\nsimulation/pipeline/tests.rs:54  let mut inputs = SimulationInputs {\nsimulation/pipeline/tests.rs:92  (second struct-literal construction)",
+        "reading": "`SimulationInputs::new` takes ten positional parameters and forwards all ten unchanged into a struct literal, deciding nothing: no defaulting, no validation, no derived field. Every one of the ten fields is `pub`, so the struct literal is available to every caller, and the crate's own sibling tests already use it twice at simulation/pipeline/tests.rs lines 54 and 92 rather than calling `new`. There is exactly one production call site, inside `simulate`, which itself already carries the identical suppression. The constructor therefore exists only to require a second copy of `#[allow(clippy::too_many_arguments)]` and a near-duplicate rationale comment. The written rationale does not answer this finding: it defends against splitting the parameter list, whereas the alternative here is the struct literal the tests already use, which needs no parameter list at all. This is both named 5d shapes at once, a wrapper that forwards without deciding and a struct whose only inherent method is a constructor."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete `SimulationInputs::new` and have `simulate` build the value with the struct literal the sibling tests at simulation/pipeline/tests.rs already use, which removes the state.rs suppression and its duplicated rationale. The suppression on `simulate` itself stays, because its own ten parameters are the public signature and are not in scope here. No field visibility changes, since all ten fields are already pub. The change is call-shape only and must be byte-neutral: assert the parity goldens in tests/parity.rs through tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction, and move no golden. Blast radius is two files plus the two sibling test sites that already compile against the literal form. Touches no pinned contract in .claude/rules/sddp.md.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/production/fpha_fitting/mod.rs::LipschitzConfig consumption seam and the UpperBoundEvaluationConfig it reserves",
+      "why": "Reserved seam, not dead configuration: the vertex-based upper-bound-evaluation config is loaded, validated and schema-exported with no LP consumer yet, which the project's hard rule names as reserved. Examined and deliberately not raised as an over-engineering candidate.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md line 54 (reserved seam: upper-bound evaluation mode)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_export.rs::splice_reserved_state_block and ::reserve_boundary_inflow_lag_slots",
+      "why": "The policy writer's second-family reserved slot body is a sanctioned wire-format seam. Its unconsumed slots are reserved capacity in a one-way-door on-disk format, not speculative generality.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md line 871 (reserved slot body)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/conversion.rs (delivery_date field pass-through) and crates/cobre-sddp/src/simulation/extraction.rs (the matching simulation output row)",
+      "why": "The two 5d touchpoints of the anticipated post-study-commitment channel. The ticket's `delivery_date` anchor was renamed at the pin to reference_date / interval_start / interval_end on the codec side, and what survives in 5d is the simulation output row plus this conversion pass-through. A sanctioned reserved channel, emitted as a positive and never a candidate.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md line 871 (anticipated post-study-commitment channel)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::rescale_cut_records_for_load (the Legacy None cost-scale branch and LEGACY_COST_SCALE_FACTOR)",
+      "why": "A reserved backward-compatibility branch for policy files written before the cost scale was recorded. Reachable only for legacy checkpoints, so its single present branch is a format contract, not a one-consumer abstraction.",
+      "sanctionedBy": "register BACKLOG L2272 and mirror docs/design/reserved-seams-and-deferred-debt.md line 30"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/cut (the superseded cut-sync public methods)",
+      "why": "Settled disposition: examined and deliberately emitted as a positive rather than a redundant-surface candidate.",
+      "sanctionedBy": "CD-019 / mirror § Superseded cut-sync public methods"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/error.rs::SddpError and the 13 other enums declared across the 5d manifest",
+      "why": "Enum census over the manifest, run as the mandated probe: 14 enum declarations, zero with a single variant, smallest is two variants, SddpError itself carries 10. No enum in the manifest is a premature variant set of one, so the census yields no candidate.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/state.rs and crates/cobre-sddp/src/simulation/pipeline.rs (the 15 rationale-carrying `#[allow(...)]` openers of the manifest)",
+      "why": "The `#[allow(` census over the manifest found 69 production-region openers, of which 15 carry a written rationale and 12 carry another explanatory comment. Those 27 are the mirror's sanctioned Load-bearing class and are correctly out of scope; only the 42 comment-free openers are raised.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md § `#[allow(...)]` census (Load-bearing class)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/conversion.rs::IntoWriteRecord",
+      "why": "The only trait declared in the 5d manifest, and it earns itself: 13 implementors, 13 call sites through `with_node`, correctly module-private visibility, and a written orphan-rule rationale explaining why a local trait beats `From<(S, i32)>`. Not a one-consumer abstraction.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/state.rs::SimulationInputs (its `S: SolverInterface` and `C` type parameters)",
+      "why": "The genericity is the crate-wide solver-backend and communicator-backend seam that is instantiated more than once, not speculative generality. Only the constructor is raised; the generic parameters are correct and worth protecting.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/production/fpha_fitting/reduction.rs::reduce_planes_with",
+      "why": "A generic helper with two real present consumers, reduce_planes_angle and reduce_planes_distance, so the second consumer preceded the abstraction exactly as the layering brief requires.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/simulation/enumerated.rs::EnumeratedSimScratch and crates/cobre-sddp/src/simulation/extraction.rs::SimLookups",
+      "why": "Constructor-only impls that are the sanctioned pre-allocated scratch and lookup-context pattern of .claude/architecture-rules.md, not the pass-through-constructor smell: each computes derived state rather than forwarding arguments.",
+      "sanctionedBy": ".claude/architecture-rules.md § The Context Struct Pattern"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/hull/mod.rs and crates/cobre-sddp/src/hull/ffi.rs",
+      "why": "Earns its module: it is the crate's unsafe-isolation boundary for the hull FFI, owns an RAII PlaneBuffer Drop, and carries the canonical-sort determinism contract. Splitting or inlining it would spread unsafe across the crate.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md lines 743-751 (pre-cleared as overwhelmingly clean)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lead_time/mod.rs",
+      "why": "Earns its module: a substantial resolver with many consumers across the crate, not a thin wrapper.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md lines 743-751"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/generic_constraint_echo.rs",
+      "why": "Earns its module: it is the single chokepoint that keeps the CLI and Python echo outputs in parity, which the project's Python-parity hard rule requires be written once.",
+      "sanctionedBy": "mirror docs/design/reserved-seams-and-deferred-debt.md lines 743-751"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/fixed_delivery_echo.rs",
+      "why": "Earns its module on the same parity-chokepoint grounds as generic_constraint_echo.rs, and its two-function split is justified by a stated unit-test seam. Examined explicitly because, unlike its sibling, it is absent from the mirror's pre-cleared list.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lib.rs (the re-export surface)",
+      "why": "Examined and clean: every re-export shim carries a comment stating why it exists, and the crate-level allows carry written rationales. No pass-through layer in the re-export surface forwards without a stated reason.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "The do-not-touch entry for the sanctioned `#[allow(...)]` census clears an over-engineering claim that is only 'this allow exists', which my first candidate is not: it reports that 42 of 69 production-region openers in the 5d manifest carry no comment at all, which contradicts the mirror's stated Load-bearing premise that each such numeric-cast allow carries a `// Rationale:`. Is the missing-rationale subset in scope for the register as a recordable comment-discipline debt item, or does the owner consider the census clearing to cover the absent-rationale case too, in which case the mirror's premise sentence should be corrected instead?"
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 3,
+    "kept": 3,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

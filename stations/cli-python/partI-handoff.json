@@ -1,0 +1,713 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "generatedAt": "2026-09-18",
+  "artifactAlias": "partI-i5-queue.json (ticket text) == partI-handoff.json (station convention) — this file is the one artifact under both names",
+  "destination": "generalization alignment epic (E9) — the I.5 rows and the item-7 fragment are consumed there; every advances-* tag is provisional until the E06-8 gate",
+  "i5Source": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412) + the 2026-07-23 addendum on validate/report/summary",
+  "i5Queue": [
+    {
+      "ref": "I.5-1a",
+      "subClaim": "the run subcommand's help text is 'train an SDDP policy'",
+      "disposition": "retire",
+      "priorFigure": "\"train an SDDP policy\" (v0.12 snapshot)",
+      "baselineFigure": "clap doc string at main.rs:70: \"Load a case directory, train a policy, and run simulation.\" — main.rs carries zero occurrences of 'sddp' in any case",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n -B1 'Run(RunArgs)'; git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -ci sddp",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/main.rs",
+          "symbol": "Command"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/main.rs",
+          "line": 70,
+          "needle": "Load a case directory, train a policy, and run simulation."
+        }
+      ],
+      "note": "retired against the live doc string, which names no engine; the resolving command is recorded, the anchor is not silently re-pointed"
+    },
+    {
+      "ref": "I.5-1b",
+      "subClaim": "the whole lifecycle is the SDDP train → simulate two-phase shape gated on training_enabled and n_scenarios",
+      "disposition": "keep",
+      "priorFigure": "two-phase shape gated on training_enabled / n_scenarios",
+      "baselineFigure": "run/mod.rs:166 `if training_enabled {` and :224/227 `setup.simulation_config.n_scenarios > 0`",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/mod.rs | grep -n 'training_enabled\\|n_scenarios'",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute_inner"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "line": 166,
+          "needle": "if training_enabled {"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "lines": [
+            224,
+            227
+          ],
+          "needle": "n_scenarios > 0"
+        }
+      ],
+      "note": "holds unchanged"
+    },
+    {
+      "ref": "I.5-2",
+      "subClaim": "the run is typed on the concrete cobre_sddp::StudySetup; training is setup.train(...), simulation setup.simulate(...) — inherent methods, no trait indirection or dispatch enum",
+      "disposition": "keep",
+      "priorFigure": "typed on StudySetup; inherent train/simulate",
+      "baselineFigure": "training.rs:11 `use cobre_sddp::StudySetup;`, :88 `setup.train(`; simulation.rs:21 `use cobre_sddp::StudySetup;`, :98 `.simulate(`; both are inherent `impl StudySetup` methods at setup/orchestration.rs:41 / :229; Command has no engine variant",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | grep -n 'setup.train('; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | grep -n '.simulate('; git grep -n 'pub fn train\\|pub fn simulate' 077dbe2c -- crates/cobre-sddp/src/setup/orchestration.rs",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "StudySetup"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "train"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "simulate"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/training.rs",
+          "line": 88,
+          "needle": "setup.train("
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "line": 98,
+          "needle": ".simulate("
+        }
+      ],
+      "note": "the ticket's :88 / :98 hold at the pin"
+    },
+    {
+      "ref": "I.5-3",
+      "subClaim": "the CLI imports ~70 symbols from cobre_sddp",
+      "disposition": "sharpen",
+      "priorFigure": "~70 symbols (v0.12 estimate); ticket @a136840d: 95 refs / 11 files / 68 use lines",
+      "baselineFigure": "97 `cobre_sddp::` occurrences over 10 files, 70 `use cobre_sddp` lines, 88 distinct imported symbols (leaf names across every `use cobre_sddp::…;`, re-exports included)",
+      "command": "git grep -o 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l; git grep -l 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l; git grep -n '^use cobre_sddp' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "load_policy_for_simulation"
+        },
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "CliError"
+        }
+      ],
+      "spans": [],
+      "distinctSymbols": [
+        "AnticipatedCommitmentOutOfBounds",
+        "BasisShapeMismatch",
+        "BoundaryLoadRequest",
+        "BoundaryReconciliationReport",
+        "BoundaryStateRequirements",
+        "CheckpointParams",
+        "Communication",
+        "CutSelectionStrategy",
+        "DEFAULT_MAX_ITERATIONS",
+        "EstimationPath",
+        "EstimationReport",
+        "FullFcf",
+        "FutureCostFunction",
+        "HydroFitTimings",
+        "HydroModelSummary",
+        "HydroProductionProvenance",
+        "Infeasible",
+        "InflowNonNegativityMethod",
+        "InflowProvenance",
+        "Io",
+        "LpInfeasible",
+        "ModelProvenanceReport",
+        "NodeGraph",
+        "NodeId",
+        "NodeOpenings",
+        "NodePos",
+        "NodeRuntime",
+        "NodeSuccessor",
+        "OpeningSource",
+        "PolicyLoadProof",
+        "PolicyStageManifest",
+        "PrepPhase",
+        "PrepareHydroModelsResult",
+        "PrepareStochasticResult",
+        "ProvenanceSource",
+        "SOLVER_STATS_DELTA_SCALAR_FIELDS",
+        "SddpError",
+        "Simulation",
+        "SimulationEnumeratedRequest",
+        "SimulationError",
+        "SimulationWeighting",
+        "Solver",
+        "SolverError",
+        "SolverStatsDelta",
+        "StageIdx",
+        "Stochastic",
+        "StoppingMode",
+        "StoppingRule",
+        "StoppingRuleSet",
+        "StudyParams",
+        "StudySetup",
+        "TrainingResult",
+        "TypedVec",
+        "ValidatedBoundaryCuts",
+        "Validation",
+        "WireVersionMismatch",
+        "aggregate_simulation",
+        "build_basis_cache_from_checkpoint",
+        "build_deviation_summary",
+        "build_evaporation_model_rows",
+        "build_fixed_delivery_rows",
+        "build_generic_constraint_echo_rows",
+        "build_hydro_model_summary",
+        "build_provenance_report",
+        "build_season_manifest",
+        "build_stochastic_context_for_study",
+        "checkpoint_terminal_cost_scale_factor",
+        "delta_to_stats_row",
+        "export_stochastic_artifacts",
+        "inject_boundary_cuts",
+        "load_boundary_cuts",
+        "orchestration",
+        "pack_delta_scalars",
+        "pack_scenario_stats",
+        "prep_phase_metadata",
+        "prepare_hydro_models",
+        "prepare_hydro_models_from_artifacts",
+        "prepare_stochastic",
+        "reconcile_global_ok",
+        "rescale_checkpoint_cuts_for_load",
+        "resolve_boundary_state_requirements",
+        "solver_stats_log_to_rows",
+        "study_horizon_end",
+        "sum_phase_timing_ms",
+        "unpack_delta_scalars",
+        "unpack_scenario_stats",
+        "validate_policy_load",
+        "write_checkpoint"
+      ],
+      "note": "the estimate is replaced by three measured figures with commands; the file count dropped from the ticket's 11 to 10 because commands/report.rs (zero cobre_sddp refs) and commands/summary.rs were removed (797ba443); the ranking is in inventory.json → sddpCoupling.perFileRanking"
+    },
+    {
+      "ref": "I.5-4",
+      "subClaim": "config conversion goes through cobre_sddp::StudyParams::from_config",
+      "disposition": "sharpen",
+      "priorFigure": "the CLI calls StudyParams::from_config",
+      "baselineFigure": "the run path never calls StudyParams::from_config directly: setup.rs:112 `BroadcastConfig::from_config(&config)?` (inside load_case_and_config :78) → broadcast.rs:143 `pub(crate) fn from_config` → :144 `StudyParams::from_config(config)`; the validate path calls it directly at validate.rs:384 and reaches it again through StudySetup::new_with_boundary_requirements (validate.rs:234 → setup/mod.rs:371 → :378); the Python binding mirrors both (io.rs:254, run.rs:994)",
+      "command": "git grep -n 'from_config' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | grep -v tests",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "new_with_boundary_requirements"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "line": 112,
+          "needle": "BroadcastConfig::from_config(&config)?"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "line": 144,
+          "needle": "StudyParams::from_config(config)"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "line": 384,
+          "needle": "StudyParams::from_config(&config),"
+        }
+      ],
+      "note": "the item-7 fragment below carries this path for the alignment epic"
+    },
+    {
+      "ref": "I.5-5",
+      "subClaim": "the output tree is training/ + simulation/ + hydro_models/ with a cut-based policy checkpoint; the summary vocabulary is lower-bound/upper-bound/gap and hydro-model-fit sections",
+      "disposition": "sharpen",
+      "priorFigure": "training/ + simulation/ + hydro_models/; a `summary` subcommand rendering LB/UB/gap",
+      "baselineFigure": "the tree holds: `training` (cobre-io training_writer.rs), `simulation` (outputs.rs:200, cobre-io simulation_writer.rs), `hydro_models` (outputs.rs:93/105/117), plus `generic_constraints` (outputs.rs:132, new since v0.12) and the cut-based checkpoint (write_checkpoint at outputs.rs:67 into setup.policy_path :66); the `summary` SUBCOMMAND is gone (797ba443) — the LB/UB vocabulary survives in the run's own rendering (training.rs:204/205/206 final_lb/final_ub, progress.rs:323/324/474/475) and the hydro-model-fit section in src/summary.rs::print_hydro_model_summary (:29)",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n '\"hydro_models\"\\|\"generic_constraints\"\\|\"simulation\"\\|write_checkpoint('; git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | grep -n 'lower_bound: training_result\\|upper_bound: training_result'",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_hydro_model_summary"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "lines": [
+            93,
+            105,
+            117
+          ],
+          "needle": "\"hydro_models\""
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 132,
+          "needle": "\"generic_constraints\""
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 67,
+          "needle": "write_checkpoint("
+        }
+      ],
+      "note": "the tree vocabulary is unchanged (one directory added); the 'summary' half now refers to the run's inline rendering, not a subcommand"
+    },
+    {
+      "ref": "I.5-6",
+      "subClaim": "only schema and version are near-generic commands; init ships a single hydrothermal template",
+      "disposition": "sharpen",
+      "priorFigure": "seven subcommands (init, run, validate, report, summary, schema, version); init: one template",
+      "baselineFigure": "five variants (main.rs:67: Init, Run, Validate, Schema, Version); schema and version stay near-generic; init scaffolds from embedded templates (1 named: 1dtoy), all hydrothermal",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n -A 12 'enum Command'; git show 077dbe2c:crates/cobre-cli/src/templates.rs | grep -n 'name:'",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/main.rs",
+          "symbol": "Command"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/init.rs",
+          "symbol": "InitArgs"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/init.rs",
+          "line": 18,
+          "needle": "Scaffold a new case directory from an embedded template"
+        }
+      ],
+      "note": "the near-generic set is unchanged; the SDDP-shaped set shrank from three to one (validate) — see I.5-7"
+    },
+    {
+      "ref": "I.5-7",
+      "subClaim": "validate, report and summary are SDDP-shaped: validate runs the same StudyParams::from_config conversion, report/summary read the SDDP output tree",
+      "disposition": "sharpen",
+      "priorFigure": "three SDDP-shaped subcommands (2026-07-23 addendum); the ticket's premise: commands/report.rs has zero cobre_sddp references, so the claim is two-thirds true",
+      "baselineFigure": "report and summary no longer exist (797ba443 2026-09-16 feat: remove the report and summary subcommands and their Python and cobre-io mirrors); validate is SDDP-shaped end to end — StudyParams::from_config (validate.rs:384), PrepPhase::Config/Stochastic/HydroModels (:387/413/422), StudySetup::new_with_boundary_requirements (:234) and its module doc lists the four cobre_sddp phases (:17/20/22/24)",
+      "command": "git ls-tree --name-only 077dbe2c -- crates/cobre-cli/src/commands; git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'StudyParams::from_config\\|PrepPhase::\\|new_with_boundary_requirements'",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_boundary_check"
+        },
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "symbol": "PrepPhase"
+        }
+      ],
+      "spans": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "lines": [
+            17,
+            20,
+            22,
+            24
+          ],
+          "needle": "//! "
+        }
+      ],
+      "note": "the ticket's 'two-thirds true' sharpening (report.rs had zero cobre_sddp refs) is itself superseded: the seam must dispatch validate per engine; report/summary need nothing"
+    }
+  ],
+  "item7Fragment": {
+    "partIItem": 7,
+    "partIRef": "I.3-7",
+    "claim": "the config type is SDDP-shaped: Config.training + the StudyParams::from_config conversion; BroadcastConfig is a hand-maintained SDDP-parameter subset",
+    "sharpenedPath": [
+      "crates/cobre-cli/src/commands/run/setup.rs:112 BroadcastConfig::from_config(&config)? (run path, inside load_case_and_config :78)",
+      "crates/cobre-cli/src/commands/broadcast.rs:143 pub(crate) fn from_config",
+      "crates/cobre-cli/src/commands/broadcast.rs:144 StudyParams::from_config(config) — the SDDP call"
+    ],
+    "secondPath": [
+      "crates/cobre-cli/src/commands/validate.rs:384 StudyParams::from_config(&config) (direct)",
+      "crates/cobre-cli/src/commands/validate.rs:234 StudySetup::new_with_boundary_requirements → crates/cobre-sddp/src/setup/mod.rs:371 (def; delegated from new at :356) → :378"
+    ],
+    "sddpSideCaller": "crates/cobre-sddp/src/setup/mod.rs:378",
+    "sddpSideCallerNote": "exactly one non-test caller INSIDE cobre-sddp; across the workspace the non-test call sites are five (inventory.json → supersessions: 1 → 5 — broadcast.rs:144, validate.rs:384, cobre-python io.rs:254 and run.rs:994 are the four front-end sites)",
+    "nonTestCallSites": [
+      {
+        "file": "crates/cobre-cli/src/commands/broadcast.rs",
+        "line": 144
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/validate.rs",
+        "line": 384
+      },
+      {
+        "file": "crates/cobre-python/src/io.rs",
+        "line": 254
+      },
+      {
+        "file": "crates/cobre-python/src/run.rs",
+        "line": 994
+      },
+      {
+        "file": "crates/cobre-sddp/src/setup/mod.rs",
+        "line": 378
+      }
+    ],
+    "anchors": [
+      {
+        "path": "crates/cobre-cli/src/commands/broadcast.rs",
+        "symbol": "from_config"
+      },
+      {
+        "path": "crates/cobre-cli/src/commands/broadcast.rs",
+        "symbol": "BroadcastConfig"
+      },
+      {
+        "path": "crates/cobre-sddp/src/setup/params.rs",
+        "symbol": "from_config"
+      },
+      {
+        "path": "crates/cobre-sddp/src/setup/params.rs",
+        "symbol": "StudyParams"
+      },
+      {
+        "path": "crates/cobre-sddp/src/setup/mod.rs",
+        "symbol": "new_with_boundary_requirements"
+      }
+    ],
+    "alignment": "advances-0a",
+    "alignmentCitation": "plans/generalizing/beyond-sddp-generalization.md V.1 Phase 0 (the study/config schema + typed admission gate + per-engine solver-profile scoping); IV.4",
+    "forEpic": "generalization alignment (E9)",
+    "crossRef": "stations/sddp/partI-handoff.json → entries[partIRef=I.3-7] owns the params.rs half (CD-004, study-block admission-gate carrier); this fragment is the front-end half (who calls the conversion, and through which projection)",
+    "ticketDeviation": {
+      "setupRsLine": {
+        "ticket": 114,
+        "measured": 112
+      }
+    }
+  },
+  "entries": [
+    {
+      "partIRef": "I.5-1a",
+      "claim": "the run subcommand's help text is 'train an SDDP policy'",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/main.rs",
+        "symbol": "Command"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/main.rs",
+          "symbol": "Command"
+        }
+      ],
+      "disposition": "retire",
+      "survivingClaim": null,
+      "retiredAgainst": "clap doc string at main.rs:70: \"Load a case directory, train a policy, and run simulation.\" — main.rs carries zero occurrences of 'sddp' in any case",
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-1b",
+      "claim": "the whole lifecycle is the SDDP train → simulate two-phase shape gated on training_enabled and n_scenarios",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/run/mod.rs",
+        "symbol": "execute"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute_inner"
+        }
+      ],
+      "disposition": "keep",
+      "survivingClaim": "run/mod.rs:166 `if training_enabled {` and :224/227 `setup.simulation_config.n_scenarios > 0`",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-2",
+      "claim": "the run is typed on the concrete cobre_sddp::StudySetup; training is setup.train(...), simulation setup.simulate(...) — inherent methods, no trait indirection or dispatch enum",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/mod.rs",
+        "symbol": "StudySetup"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "StudySetup"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "train"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "simulate"
+        }
+      ],
+      "disposition": "keep",
+      "survivingClaim": "training.rs:11 `use cobre_sddp::StudySetup;`, :88 `setup.train(`; simulation.rs:21 `use cobre_sddp::StudySetup;`, :98 `.simulate(`; both are inherent `impl StudySetup` methods at setup/orchestration.rs:41 / :229; Command has no engine variant",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-3",
+      "claim": "the CLI imports ~70 symbols from cobre_sddp",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/run/policy.rs",
+        "symbol": "load_policy_for_simulation"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "load_policy_for_simulation"
+        },
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "CliError"
+        }
+      ],
+      "disposition": "sharpen",
+      "survivingClaim": "97 `cobre_sddp::` occurrences over 10 files, 70 `use cobre_sddp` lines, 88 distinct imported symbols (leaf names across every `use cobre_sddp::…;`, re-exports included)",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-4",
+      "claim": "config conversion goes through cobre_sddp::StudyParams::from_config",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/broadcast.rs",
+        "symbol": "from_config"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "new_with_boundary_requirements"
+        }
+      ],
+      "disposition": "sharpen",
+      "survivingClaim": "the run path never calls StudyParams::from_config directly: setup.rs:112 `BroadcastConfig::from_config(&config)?` (inside load_case_and_config :78) → broadcast.rs:143 `pub(crate) fn from_config` → :144 `StudyParams::from_config(config)`; the validate path calls it directly at validate.rs:384 and reaches it again through StudySetup::new_with_boundary_requirements (validate.rs:234 → setup/mod.rs:371 → :378); the Python binding mirrors both (io.rs:254, run.rs:994)",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-5",
+      "claim": "the output tree is training/ + simulation/ + hydro_models/ with a cut-based policy checkpoint; the summary vocabulary is lower-bound/upper-bound/gap and hydro-model-fit sections",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+        "symbol": "write_training_outputs"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_hydro_model_summary"
+        }
+      ],
+      "disposition": "sharpen",
+      "survivingClaim": "the tree holds: `training` (cobre-io training_writer.rs), `simulation` (outputs.rs:200, cobre-io simulation_writer.rs), `hydro_models` (outputs.rs:93/105/117), plus `generic_constraints` (outputs.rs:132, new since v0.12) and the cut-based checkpoint (write_checkpoint at outputs.rs:67 into setup.policy_path :66); the `summary` SUBCOMMAND is gone (797ba443) — the LB/UB vocabulary survives in the run's own rendering (training.rs:204/205/206 final_lb/final_ub, progress.rs:323/324/474/475) and the hydro-model-fit section in src/summary.rs::print_hydro_model_summary (:29)",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-6",
+      "claim": "only schema and version are near-generic commands; init ships a single hydrothermal template",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/main.rs",
+        "symbol": "Command"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/main.rs",
+          "symbol": "Command"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/init.rs",
+          "symbol": "InitArgs"
+        }
+      ],
+      "disposition": "sharpen",
+      "survivingClaim": "five variants (main.rs:67: Init, Run, Validate, Schema, Version); schema and version stay near-generic; init scaffolds from embedded templates (1 named: 1dtoy), all hydrothermal",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.5-7",
+      "claim": "validate, report and summary are SDDP-shaped: validate runs the same StudyParams::from_config conversion, report/summary read the SDDP output tree",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.5 (L384-412)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/validate.rs",
+        "symbol": "run_boundary_check"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_boundary_check"
+        },
+        {
+          "path": "crates/cobre-sddp/src/validate_phases.rs",
+          "symbol": "PrepPhase"
+        }
+      ],
+      "disposition": "sharpen",
+      "survivingClaim": "report and summary no longer exist (797ba443 2026-09-16 feat: remove the report and summary subcommands and their Python and cobre-io mirrors); validate is SDDP-shaped end to end — StudyParams::from_config (validate.rs:384), PrepPhase::Config/Stochastic/HydroModels (:387/413/422), StudySetup::new_with_boundary_requirements (:234) and its module doc lists the four cobre_sddp phases (:17/20/22/24)",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the Engine seam and dispatch in cobre-cli / cobre-python; the seam covers the full command surface); Part IV.4"
+      }
+    },
+    {
+      "partIRef": "I.3-7",
+      "claim": "the config type is SDDP-shaped: Config.training + the StudyParams::from_config conversion; BroadcastConfig is a hand-maintained SDDP-parameter subset",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.3 item 7 (L337-349)",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/broadcast.rs",
+        "symbol": "from_config"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "StudyParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "new_with_boundary_requirements"
+        }
+      ],
+      "disposition": "sharpen",
+      "survivingClaim": "the front ends reach the SDDP-shaped conversion through two paths: the run path via BroadcastConfig::from_config (the hand-maintained wire subset), the validate path directly and via StudySetup::new_with_boundary_requirements",
+      "retiredAgainst": null,
+      "proposedPhase": "0a",
+      "owningStation": "cli-python (front-end half — the sddp station's I.3-7 entry owns the params.rs half)",
+      "crossRef": "stations/sddp/partI-handoff.json → entries[partIRef=I.3-7] owns the params.rs half (CD-004, study-block admission-gate carrier); this fragment is the front-end half (who calls the conversion, and through which projection)",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "plans/generalizing/beyond-sddp-generalization.md V.1 Phase 0 (the study/config schema + typed admission gate + per-engine solver-profile scoping); IV.4"
+      }
+    }
+  ],
+  "counts": {
+    "i5Rows": 8,
+    "retired": 1,
+    "kept": 2,
+    "sharpened": 5
+  },
+  "needsHuman": [],
+  "note": "anchors are {path, symbol} declarations (the station's anchor rule) — the ticket's envelope shows `line: 0` slots; line evidence sits in spans[]"
+}

@@ -1,0 +1,2854 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "baselineSource": "plans/architecture-debt-audit/BACKLOG.md header line `Baseline: <sha40> (pinned <date>)`; the ticket's a136840d is the superseded scaffold pin — figures minted there are recorded under ticketFigureDeviations",
+  "generatedAt": "2026-09-18",
+  "crates": [
+    {
+      "name": "cobre-cli",
+      "srcRoot": "crates/cobre-cli/src",
+      "srcFiles": 18,
+      "lines": 9303,
+      "nonTestLines": 5490,
+      "inlineTestFns": 170
+    },
+    {
+      "name": "cobre-python",
+      "srcRoot": "crates/cobre-python/src",
+      "srcFiles": 11,
+      "lines": 7188,
+      "nonTestLines": 6267,
+      "inlineTestFns": 19,
+      "workspaceExcluded": {
+        "file": "Cargo.toml",
+        "lines": "21-23"
+      },
+      "crateType": {
+        "file": "crates/cobre-python/Cargo.toml",
+        "line": 17,
+        "value": "[\"cdylib\"]"
+      }
+    },
+    {
+      "name": "cobre",
+      "srcRoot": "crates/cobre/src",
+      "srcFiles": 1,
+      "lines": 2,
+      "nonTestLines": 2,
+      "inlineTestFns": 0,
+      "dependencies": [],
+      "dependenciesSection": false,
+      "libRs": [
+        "//! Umbrella crate for the Cobre power-system ecosystem; re-exports nothing yet.",
+        "//! Depend on the individual `cobre-*` crates directly."
+      ],
+      "crateDir": [
+        "Cargo.toml",
+        "README.md",
+        "src"
+      ]
+    }
+  ],
+  "totals": {
+    "files": 30,
+    "lines": 16493,
+    "nonTestLines": 11759
+  },
+  "files": [
+    {
+      "path": "crates/cobre-cli/src/banner.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 96,
+      "nonTestLines": 55,
+      "inlineTestLines": 41,
+      "inlineTestFns": 5,
+      "topSymbols": [
+        {
+          "name": "render_banner_string",
+          "kind": "fn",
+          "line": 22,
+          "visibility": "pub"
+        },
+        {
+          "name": "print_banner",
+          "kind": "fn",
+          "line": 47,
+          "visibility": "pub"
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 57,
+          "visibility": "private"
+        },
+        {
+          "name": "test_render_banner_colored_contains_ansi_escapes",
+          "kind": "fn",
+          "line": 63,
+          "visibility": "private"
+        },
+        {
+          "name": "test_render_banner_plain_no_ansi_escapes",
+          "kind": "fn",
+          "line": 70,
+          "visibility": "private"
+        },
+        {
+          "name": "test_render_banner_contains_version",
+          "kind": "fn",
+          "line": 76,
+          "visibility": "private"
+        },
+        {
+          "name": "test_render_banner_contains_unicode_busbars",
+          "kind": "fn",
+          "line": 86,
+          "visibility": "private"
+        },
+        {
+          "name": "test_print_banner_does_not_panic",
+          "kind": "fn",
+          "line": 93,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/broadcast.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 1088,
+      "nonTestLines": 461,
+      "inlineTestLines": 627,
+      "inlineTestFns": 19,
+      "topSymbols": [
+        {
+          "name": "BroadcastStoppingRule",
+          "kind": "enum",
+          "line": 27,
+          "visibility": "pub"
+        },
+        {
+          "name": "BroadcastStoppingMode",
+          "kind": "enum",
+          "line": 48,
+          "visibility": "pub"
+        },
+        {
+          "name": "BroadcastBackwardScheduler",
+          "kind": "enum",
+          "line": 57,
+          "visibility": "pub"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 62,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 63,
+          "visibility": "private"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 71,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 72,
+          "visibility": "private"
+        },
+        {
+          "name": "BroadcastConfig",
+          "kind": "struct",
+          "line": 87,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/init.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 376,
+      "nonTestLines": 203,
+      "inlineTestLines": 173,
+      "inlineTestFns": 8,
+      "topSymbols": [
+        {
+          "name": "InitArgs",
+          "kind": "struct",
+          "line": 23,
+          "visibility": "pub"
+        },
+        {
+          "name": "execute",
+          "kind": "fn",
+          "line": 54,
+          "visibility": "pub"
+        },
+        {
+          "name": "execute_scaffold",
+          "kind": "fn",
+          "line": 73,
+          "visibility": "private"
+        },
+        {
+          "name": "pin_schema_urls",
+          "kind": "fn",
+          "line": 158,
+          "visibility": "private"
+        },
+        {
+          "name": "print_summary",
+          "kind": "fn",
+          "line": 169,
+          "visibility": "private"
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 206,
+          "visibility": "private"
+        },
+        {
+          "name": "test_init_list_prints_template_names",
+          "kind": "fn",
+          "line": 212,
+          "visibility": "private"
+        },
+        {
+          "name": "test_init_list_execute_returns_ok",
+          "kind": "fn",
+          "line": 219,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/mod.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 10,
+      "nonTestLines": 10,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "broadcast",
+          "kind": "mod",
+          "line": 5,
+          "visibility": "pub"
+        },
+        {
+          "name": "init",
+          "kind": "mod",
+          "line": 6,
+          "visibility": "pub"
+        },
+        {
+          "name": "run",
+          "kind": "mod",
+          "line": 7,
+          "visibility": "pub"
+        },
+        {
+          "name": "schema",
+          "kind": "mod",
+          "line": 8,
+          "visibility": "pub"
+        },
+        {
+          "name": "validate",
+          "kind": "mod",
+          "line": 9,
+          "visibility": "pub"
+        },
+        {
+          "name": "version",
+          "kind": "mod",
+          "line": 10,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/run/mod.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 520,
+      "nonTestLines": 322,
+      "inlineTestLines": 198,
+      "inlineTestFns": 9,
+      "topSymbols": [
+        {
+          "name": "outputs",
+          "kind": "mod",
+          "line": 13,
+          "visibility": "private"
+        },
+        {
+          "name": "policy",
+          "kind": "mod",
+          "line": 14,
+          "visibility": "private"
+        },
+        {
+          "name": "setup",
+          "kind": "mod",
+          "line": 15,
+          "visibility": "private"
+        },
+        {
+          "name": "simulation",
+          "kind": "mod",
+          "line": 16,
+          "visibility": "private"
+        },
+        {
+          "name": "training",
+          "kind": "mod",
+          "line": 17,
+          "visibility": "private"
+        },
+        {
+          "name": "CommBackendArg",
+          "kind": "enum",
+          "line": 30,
+          "visibility": "pub"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 41,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 42,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 229,
+      "nonTestLines": 229,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "WriteTrainingArgs",
+          "kind": "struct",
+          "line": 44,
+          "visibility": "pub"
+        },
+        {
+          "name": "write_training_outputs",
+          "kind": "fn",
+          "line": 58,
+          "visibility": "pub"
+        },
+        {
+          "name": "WriteSimulationArgs",
+          "kind": "struct",
+          "line": 164,
+          "visibility": "pub"
+        },
+        {
+          "name": "write_simulation_outputs",
+          "kind": "fn",
+          "line": 178,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/run/policy.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 383,
+      "nonTestLines": 383,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "load_and_validate_checkpoint",
+          "kind": "fn",
+          "line": 54,
+          "visibility": "private"
+        },
+        {
+          "name": "load_checkpoint_into_setup",
+          "kind": "fn",
+          "line": 121,
+          "visibility": "private"
+        },
+        {
+          "name": "apply_training_policy",
+          "kind": "fn",
+          "line": 163,
+          "visibility": "pub"
+        },
+        {
+          "name": "load_policy_for_simulation",
+          "kind": "fn",
+          "line": 323,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/run/setup.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 669,
+      "nonTestLines": 600,
+      "inlineTestLines": 69,
+      "inlineTestFns": 1,
+      "topSymbols": [
+        {
+          "name": "resolve_thread_count",
+          "kind": "fn",
+          "line": 58,
+          "visibility": "pub"
+        },
+        {
+          "name": "LoadedCase",
+          "kind": "type",
+          "line": 68,
+          "visibility": "private"
+        },
+        {
+          "name": "load_case_and_config",
+          "kind": "fn",
+          "line": 78,
+          "visibility": "private"
+        },
+        {
+          "name": "LoadBroadcastResult",
+          "kind": "struct",
+          "line": 151,
+          "visibility": "pub"
+        },
+        {
+          "name": "setup_communicator",
+          "kind": "fn",
+          "line": 165,
+          "visibility": "pub"
+        },
+        {
+          "name": "broadcast_and_build_setup",
+          "kind": "fn",
+          "line": 246,
+          "visibility": "pub"
+        },
+        {
+          "name": "reconstruct_stochastic_context_non_root",
+          "kind": "fn",
+          "line": 396,
+          "visibility": "private"
+        },
+        {
+          "name": "build_study_setup",
+          "kind": "fn",
+          "line": 423,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 468,
+      "nonTestLines": 418,
+      "inlineTestLines": 50,
+      "inlineTestFns": 1,
+      "topSymbols": [
+        {
+          "name": "run_simulation_phase",
+          "kind": "fn",
+          "line": 41,
+          "visibility": "pub"
+        },
+        {
+          "name": "write_sim_outputs_on_root",
+          "kind": "fn",
+          "line": 220,
+          "visibility": "private"
+        },
+        {
+          "name": "print_sim_summary",
+          "kind": "fn",
+          "line": 253,
+          "visibility": "private"
+        },
+        {
+          "name": "merge_simulation_metadata",
+          "kind": "fn",
+          "line": 282,
+          "visibility": "private"
+        },
+        {
+          "name": "exchange_gather_plan",
+          "kind": "fn",
+          "line": 314,
+          "visibility": "private"
+        },
+        {
+          "name": "aggregate_simulation_paths",
+          "kind": "fn",
+          "line": 348,
+          "visibility": "private"
+        },
+        {
+          "name": "aggregate_simulation_solver_stats",
+          "kind": "fn",
+          "line": 383,
+          "visibility": "private"
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 420,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/run/training.rs",
+      "crate": "cobre-cli",
+      "substation": "S6a",
+      "lines": 294,
+      "nonTestLines": 294,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "TrainingPhaseResult",
+          "kind": "struct",
+          "line": 24,
+          "visibility": "pub"
+        },
+        {
+          "name": "GlobalTrainingStats",
+          "kind": "struct",
+          "line": 37,
+          "visibility": "private"
+        },
+        {
+          "name": "run_training_phase",
+          "kind": "fn",
+          "line": 59,
+          "visibility": "pub"
+        },
+        {
+          "name": "aggregate_solver_stats",
+          "kind": "fn",
+          "line": 262,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/schema.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 88,
+      "nonTestLines": 88,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "SchemaArgs",
+          "kind": "struct",
+          "line": 17,
+          "visibility": "pub"
+        },
+        {
+          "name": "SchemaCommand",
+          "kind": "enum",
+          "line": 25,
+          "visibility": "pub"
+        },
+        {
+          "name": "ExportArgs",
+          "kind": "struct",
+          "line": 33,
+          "visibility": "pub"
+        },
+        {
+          "name": "execute",
+          "kind": "fn",
+          "line": 50,
+          "visibility": "pub"
+        },
+        {
+          "name": "execute_export",
+          "kind": "fn",
+          "line": 56,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/validate.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 611,
+      "nonTestLines": 479,
+      "inlineTestLines": 132,
+      "inlineTestFns": 7,
+      "topSymbols": [
+        {
+          "name": "ValidateArgs",
+          "kind": "struct",
+          "line": 50,
+          "visibility": "pub"
+        },
+        {
+          "name": "ValidateBoundaryOutput",
+          "kind": "struct",
+          "line": 67,
+          "visibility": "private"
+        },
+        {
+          "name": "BoundaryOutcome",
+          "kind": "struct",
+          "line": 84,
+          "visibility": "private"
+        },
+        {
+          "name": "ValidateErrorOutput",
+          "kind": "struct",
+          "line": 95,
+          "visibility": "private"
+        },
+        {
+          "name": "ValidateBoundaryOutput",
+          "kind": "impl",
+          "line": 100,
+          "visibility": "private"
+        },
+        {
+          "name": "success",
+          "kind": "fn",
+          "line": 101,
+          "visibility": "private"
+        },
+        {
+          "name": "error",
+          "kind": "fn",
+          "line": 110,
+          "visibility": "private"
+        },
+        {
+          "name": "format_constraint_description",
+          "kind": "fn",
+          "line": 123,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/commands/version.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 39,
+      "nonTestLines": 39,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "execute",
+          "kind": "fn",
+          "line": 13,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/error.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 634,
+      "nonTestLines": 288,
+      "inlineTestLines": 346,
+      "inlineTestFns": 28,
+      "topSymbols": [
+        {
+          "name": "CliError",
+          "kind": "enum",
+          "line": 53,
+          "visibility": "pub"
+        },
+        {
+          "name": "CliError",
+          "kind": "impl",
+          "line": 93,
+          "visibility": "private"
+        },
+        {
+          "name": "exit_code",
+          "kind": "fn",
+          "line": 107,
+          "visibility": "pub"
+        },
+        {
+          "name": "validation_lines",
+          "kind": "fn",
+          "line": 116,
+          "visibility": "private"
+        },
+        {
+          "name": "format_error",
+          "kind": "fn",
+          "line": 140,
+          "visibility": "pub"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 181,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 182,
+          "visibility": "private"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 196,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/main.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 134,
+      "nonTestLines": 112,
+      "inlineTestLines": 22,
+      "inlineTestFns": 2,
+      "topSymbols": [
+        {
+          "name": "banner",
+          "kind": "mod",
+          "line": 10,
+          "visibility": "private"
+        },
+        {
+          "name": "commands",
+          "kind": "mod",
+          "line": 11,
+          "visibility": "private"
+        },
+        {
+          "name": "error",
+          "kind": "mod",
+          "line": 12,
+          "visibility": "private"
+        },
+        {
+          "name": "progress",
+          "kind": "mod",
+          "line": 13,
+          "visibility": "private"
+        },
+        {
+          "name": "summary",
+          "kind": "mod",
+          "line": 14,
+          "visibility": "private"
+        },
+        {
+          "name": "templates",
+          "kind": "mod",
+          "line": 15,
+          "visibility": "private"
+        },
+        {
+          "name": "ColorWhen",
+          "kind": "enum",
+          "line": 29,
+          "visibility": "pub"
+        },
+        {
+          "name": "resolve_color",
+          "kind": "fn",
+          "line": 39,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/progress.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 1140,
+      "nonTestLines": 532,
+      "inlineTestLines": 608,
+      "inlineTestFns": 22,
+      "topSymbols": [
+        {
+          "name": "TRAINING_TEMPLATE",
+          "kind": "const",
+          "line": 33,
+          "visibility": "private"
+        },
+        {
+          "name": "SIMULATION_TEMPLATE",
+          "kind": "const",
+          "line": 35,
+          "visibility": "private"
+        },
+        {
+          "name": "fmt_sci",
+          "kind": "fn",
+          "line": 39,
+          "visibility": "private"
+        },
+        {
+          "name": "fmt_hms",
+          "kind": "fn",
+          "line": 56,
+          "visibility": "private"
+        },
+        {
+          "name": "eta_millis",
+          "kind": "fn",
+          "line": 69,
+          "visibility": "private"
+        },
+        {
+          "name": "fmt_time_cell",
+          "kind": "fn",
+          "line": 84,
+          "visibility": "private"
+        },
+        {
+          "name": "fmt_avg_lp_time",
+          "kind": "fn",
+          "line": 95,
+          "visibility": "private"
+        },
+        {
+          "name": "RenderMode",
+          "kind": "enum",
+          "line": 111,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/summary.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 2302,
+      "nonTestLines": 824,
+      "inlineTestLines": 1478,
+      "inlineTestFns": 61,
+      "topSymbols": [
+        {
+          "name": "print_hydro_model_summary",
+          "kind": "fn",
+          "line": 29,
+          "visibility": "pub"
+        },
+        {
+          "name": "format_rank_list",
+          "kind": "fn",
+          "line": 54,
+          "visibility": "private"
+        },
+        {
+          "name": "print_execution_topology",
+          "kind": "fn",
+          "line": 109,
+          "visibility": "pub"
+        },
+        {
+          "name": "format_production_line",
+          "kind": "fn",
+          "line": 198,
+          "visibility": "private"
+        },
+        {
+          "name": "format_evaporation_line",
+          "kind": "fn",
+          "line": 215,
+          "visibility": "private"
+        },
+        {
+          "name": "format_hydro_model_summary_string",
+          "kind": "fn",
+          "line": 224,
+          "visibility": "pub"
+        },
+        {
+          "name": "print_setup_summary",
+          "kind": "fn",
+          "line": 239,
+          "visibility": "pub"
+        },
+        {
+          "name": "format_setup_summary_string",
+          "kind": "fn",
+          "line": 265,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-cli/src/templates.rs",
+      "crate": "cobre-cli",
+      "substation": "S6b",
+      "lines": 222,
+      "nonTestLines": 153,
+      "inlineTestLines": 69,
+      "inlineTestFns": 7,
+      "topSymbols": [
+        {
+          "name": "TemplateFile",
+          "kind": "struct",
+          "line": 29,
+          "visibility": "pub"
+        },
+        {
+          "name": "Template",
+          "kind": "struct",
+          "line": 37,
+          "visibility": "pub"
+        },
+        {
+          "name": "DTOY1_FILES",
+          "kind": "static",
+          "line": 43,
+          "visibility": "private"
+        },
+        {
+          "name": "DTOY1_TEMPLATE",
+          "kind": "static",
+          "line": 125,
+          "visibility": "private"
+        },
+        {
+          "name": "ALL_TEMPLATES",
+          "kind": "static",
+          "line": 131,
+          "visibility": "private"
+        },
+        {
+          "name": "available_templates",
+          "kind": "fn",
+          "line": 136,
+          "visibility": "pub"
+        },
+        {
+          "name": "find_template",
+          "kind": "fn",
+          "line": 150,
+          "visibility": "pub"
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 155,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/convert.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 106,
+      "nonTestLines": 106,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "py_to_json_value",
+          "kind": "fn",
+          "line": 19,
+          "visibility": "pub"
+        },
+        {
+          "name": "pydict_to_json_map",
+          "kind": "fn",
+          "line": 88,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/errors.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 472,
+      "nonTestLines": 357,
+      "inlineTestLines": 115,
+      "inlineTestFns": 3,
+      "topSymbols": [
+        {
+          "name": "LeafClass",
+          "kind": "struct",
+          "line": 42,
+          "visibility": "private"
+        },
+        {
+          "name": "BuiltinBase",
+          "kind": "enum",
+          "line": 55,
+          "visibility": "private"
+        },
+        {
+          "name": "LeafClass",
+          "kind": "impl",
+          "line": 61,
+          "visibility": "private"
+        },
+        {
+          "name": "fn",
+          "kind": "const",
+          "line": 62,
+          "visibility": "private"
+        },
+        {
+          "name": "get",
+          "kind": "fn",
+          "line": 72,
+          "visibility": "private"
+        },
+        {
+          "name": "build",
+          "kind": "fn",
+          "line": 78,
+          "visibility": "private"
+        },
+        {
+          "name": "VALIDATION_ERROR",
+          "kind": "static",
+          "line": 99,
+          "visibility": "private"
+        },
+        {
+          "name": "POLICY_INCOMPATIBLE_ERROR",
+          "kind": "static",
+          "line": 107,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/io.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 335,
+      "nonTestLines": 335,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "load_error_kind",
+          "kind": "fn",
+          "line": 50,
+          "visibility": "private"
+        },
+        {
+          "name": "load_validate_config",
+          "kind": "fn",
+          "line": 66,
+          "visibility": "private"
+        },
+        {
+          "name": "convert_load_error",
+          "kind": "fn",
+          "line": 82,
+          "visibility": "private"
+        },
+        {
+          "name": "build_warnings_list",
+          "kind": "fn",
+          "line": 93,
+          "visibility": "pub"
+        },
+        {
+          "name": "load_case",
+          "kind": "fn",
+          "line": 138,
+          "visibility": "pub"
+        },
+        {
+          "name": "validate",
+          "kind": "fn",
+          "line": 200,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/lib.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 170,
+      "nonTestLines": 170,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "convert",
+          "kind": "mod",
+          "line": 21,
+          "visibility": "private"
+        },
+        {
+          "name": "errors",
+          "kind": "mod",
+          "line": 22,
+          "visibility": "private"
+        },
+        {
+          "name": "io",
+          "kind": "mod",
+          "line": 23,
+          "visibility": "private"
+        },
+        {
+          "name": "model",
+          "kind": "mod",
+          "line": 24,
+          "visibility": "private"
+        },
+        {
+          "name": "policy",
+          "kind": "mod",
+          "line": 25,
+          "visibility": "private"
+        },
+        {
+          "name": "results",
+          "kind": "mod",
+          "line": 26,
+          "visibility": "private"
+        },
+        {
+          "name": "run",
+          "kind": "mod",
+          "line": 27,
+          "visibility": "private"
+        },
+        {
+          "name": "schema",
+          "kind": "mod",
+          "line": 28,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/model.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 526,
+      "nonTestLines": 526,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "PyBus",
+          "kind": "struct",
+          "line": 30,
+          "visibility": "pub"
+        },
+        {
+          "name": "PyBus",
+          "kind": "impl",
+          "line": 35,
+          "visibility": "private"
+        },
+        {
+          "name": "id",
+          "kind": "fn",
+          "line": 37,
+          "visibility": "private"
+        },
+        {
+          "name": "name",
+          "kind": "fn",
+          "line": 42,
+          "visibility": "private"
+        },
+        {
+          "name": "deficit_segments",
+          "kind": "fn",
+          "line": 51,
+          "visibility": "private"
+        },
+        {
+          "name": "excess_cost",
+          "kind": "fn",
+          "line": 69,
+          "visibility": "private"
+        },
+        {
+          "name": "__repr__",
+          "kind": "fn",
+          "line": 73,
+          "visibility": "private"
+        },
+        {
+          "name": "PyBus",
+          "kind": "impl",
+          "line": 78,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/policy.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 583,
+      "nonTestLines": 556,
+      "inlineTestLines": 27,
+      "inlineTestFns": 1,
+      "topSymbols": [
+        {
+          "name": "PyEntitySlot",
+          "kind": "struct",
+          "line": 30,
+          "visibility": "pub"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 43,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 44,
+          "visibility": "private"
+        },
+        {
+          "name": "PyCutRecord",
+          "kind": "struct",
+          "line": 74,
+          "visibility": "pub"
+        },
+        {
+          "name": "PyStageCutsPayload",
+          "kind": "struct",
+          "line": 91,
+          "visibility": "pub"
+        },
+        {
+          "name": "PyBasisRecord",
+          "kind": "struct",
+          "line": 118,
+          "visibility": "pub"
+        },
+        {
+          "name": "PyStageStatesPayload",
+          "kind": "struct",
+          "line": 128,
+          "visibility": "pub"
+        },
+        {
+          "name": "PyManifestNode",
+          "kind": "struct",
+          "line": 141,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/results.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 1612,
+      "nonTestLines": 1612,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "canonicalize_dir",
+          "kind": "fn",
+          "line": 28,
+          "visibility": "private"
+        },
+        {
+          "name": "json_value_to_py",
+          "kind": "fn",
+          "line": 38,
+          "visibility": "private"
+        },
+        {
+          "name": "read_json_file",
+          "kind": "fn",
+          "line": 86,
+          "visibility": "private"
+        },
+        {
+          "name": "open_parquet_file",
+          "kind": "fn",
+          "line": 99,
+          "visibility": "private"
+        },
+        {
+          "name": "load_results",
+          "kind": "fn",
+          "line": 147,
+          "visibility": "pub"
+        },
+        {
+          "name": "load_convergence",
+          "kind": "fn",
+          "line": 243,
+          "visibility": "pub"
+        },
+        {
+          "name": "load_convergence_arrow",
+          "kind": "fn",
+          "line": 373,
+          "visibility": "pub"
+        },
+        {
+          "name": "PAR_COEFFICIENT_COLUMNS",
+          "kind": "const",
+          "line": 418,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/run.rs",
+      "crate": "cobre-python",
+      "substation": "S6a",
+      "lines": 2498,
+      "nonTestLines": 1757,
+      "inlineTestLines": 741,
+      "inlineTestFns": 13,
+      "topSymbols": [
+        {
+          "name": "RunError",
+          "kind": "enum",
+          "line": 125,
+          "visibility": "pub"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 144,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 145,
+          "visibility": "private"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 150,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 151,
+          "visibility": "private"
+        },
+        {
+          "name": "PhaseError",
+          "kind": "enum",
+          "line": 166,
+          "visibility": "pub"
+        },
+        {
+          "name": "From",
+          "kind": "impl",
+          "line": 181,
+          "visibility": "private"
+        },
+        {
+          "name": "from",
+          "kind": "fn",
+          "line": 182,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/schema.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 97,
+      "nonTestLines": 59,
+      "inlineTestLines": 38,
+      "inlineTestFns": 2,
+      "topSymbols": [
+        {
+          "name": "export",
+          "kind": "fn",
+          "line": 35,
+          "visibility": "pub"
+        },
+        {
+          "name": "tests",
+          "kind": "mod",
+          "line": 61,
+          "visibility": "private"
+        },
+        {
+          "name": "test_export_writes_all_schemas_as_valid_json",
+          "kind": "fn",
+          "line": 65,
+          "visibility": "private"
+        },
+        {
+          "name": "test_export_creates_missing_directory",
+          "kind": "fn",
+          "line": 88,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/study.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 732,
+      "nonTestLines": 732,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "phase_error_to_pyerr",
+          "kind": "fn",
+          "line": 45,
+          "visibility": "private"
+        },
+        {
+          "name": "Study",
+          "kind": "struct",
+          "line": 66,
+          "visibility": "pub"
+        },
+        {
+          "name": "Policy",
+          "kind": "struct",
+          "line": 109,
+          "visibility": "pub"
+        },
+        {
+          "name": "Policy",
+          "kind": "impl",
+          "line": 128,
+          "visibility": "private"
+        },
+        {
+          "name": "iterations",
+          "kind": "fn",
+          "line": 131,
+          "visibility": "private"
+        },
+        {
+          "name": "final_lower_bound",
+          "kind": "fn",
+          "line": 137,
+          "visibility": "private"
+        },
+        {
+          "name": "final_upper_bound",
+          "kind": "fn",
+          "line": 143,
+          "visibility": "private"
+        },
+        {
+          "name": "evaluate",
+          "kind": "fn",
+          "line": 166,
+          "visibility": "private"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre-python/src/version.rs",
+      "crate": "cobre-python",
+      "substation": "S6c",
+      "lines": 57,
+      "nonTestLines": 57,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": [
+        {
+          "name": "version_info",
+          "kind": "fn",
+          "line": 31,
+          "visibility": "pub"
+        }
+      ]
+    },
+    {
+      "path": "crates/cobre/src/lib.rs",
+      "crate": "cobre",
+      "substation": "S6c",
+      "lines": 2,
+      "nonTestLines": 2,
+      "inlineTestLines": 0,
+      "inlineTestFns": 0,
+      "topSymbols": []
+    }
+  ],
+  "substationRollup": [
+    {
+      "id": "S6a",
+      "label": "writer/run boundary",
+      "files": 8,
+      "lines": 6149,
+      "nonTestLines": 4464,
+      "members": [
+        "crates/cobre-cli/src/commands/broadcast.rs",
+        "crates/cobre-cli/src/commands/run/mod.rs",
+        "crates/cobre-cli/src/commands/run/outputs.rs",
+        "crates/cobre-cli/src/commands/run/policy.rs",
+        "crates/cobre-cli/src/commands/run/setup.rs",
+        "crates/cobre-cli/src/commands/run/simulation.rs",
+        "crates/cobre-cli/src/commands/run/training.rs",
+        "crates/cobre-python/src/run.rs"
+      ]
+    },
+    {
+      "id": "S6b",
+      "label": "diagnostics + CLI shell",
+      "files": 11,
+      "lines": 5652,
+      "nonTestLines": 2783,
+      "members": [
+        "crates/cobre-cli/src/banner.rs",
+        "crates/cobre-cli/src/commands/init.rs",
+        "crates/cobre-cli/src/commands/mod.rs",
+        "crates/cobre-cli/src/commands/schema.rs",
+        "crates/cobre-cli/src/commands/validate.rs",
+        "crates/cobre-cli/src/commands/version.rs",
+        "crates/cobre-cli/src/error.rs",
+        "crates/cobre-cli/src/main.rs",
+        "crates/cobre-cli/src/progress.rs",
+        "crates/cobre-cli/src/summary.rs",
+        "crates/cobre-cli/src/templates.rs"
+      ]
+    },
+    {
+      "id": "S6c",
+      "label": "bindings + facade",
+      "files": 11,
+      "lines": 4692,
+      "nonTestLines": 4512,
+      "members": [
+        "crates/cobre-python/src/convert.rs",
+        "crates/cobre-python/src/errors.rs",
+        "crates/cobre-python/src/io.rs",
+        "crates/cobre-python/src/lib.rs",
+        "crates/cobre-python/src/model.rs",
+        "crates/cobre-python/src/policy.rs",
+        "crates/cobre-python/src/results.rs",
+        "crates/cobre-python/src/schema.rs",
+        "crates/cobre-python/src/study.rs",
+        "crates/cobre-python/src/version.rs",
+        "crates/cobre/src/lib.rs"
+      ]
+    }
+  ],
+  "substationRule": "S6a = crates/cobre-cli/src/commands/run/*.rs + commands/broadcast.rs (the wire types the run path broadcasts, home of BroadcastConfig) + crates/cobre-python/src/run.rs; S6b = every other crates/cobre-cli/src file (the remaining commands/*.rs and the top-level modules); S6c = every other crates/cobre-python/src file + the facade crates/cobre/src/lib.rs",
+  "coverage": {
+    "findCommand": "git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/src crates/cobre-python/src crates/cobre/src | grep '\\.rs$' | sort",
+    "findCount": 30,
+    "assignedCount": 30,
+    "unassigned": [],
+    "doubleAssigned": [],
+    "phantom": []
+  },
+  "commandSurface": {
+    "enum": {
+      "file": "crates/cobre-cli/src/main.rs",
+      "symbol": "Command",
+      "line": 67,
+      "variants": [
+        "Init",
+        "Run",
+        "Validate",
+        "Schema",
+        "Version"
+      ],
+      "count": 5
+    },
+    "dispatch": {
+      "file": "crates/cobre-cli/src/main.rs",
+      "line": 96,
+      "oneToOne": true
+    },
+    "subcommandModules": [
+      "broadcast.rs",
+      "init.rs",
+      "schema.rs",
+      "validate.rs",
+      "version.rs"
+    ],
+    "broadcastModule": {
+      "path": "crates/cobre-cli/src/commands/broadcast.rs",
+      "lines": 1088,
+      "declaredAt": {
+        "file": "crates/cobre-cli/src/commands/mod.rs",
+        "line": 5,
+        "text": "pub(crate) mod broadcast;"
+      },
+      "isSubcommand": false,
+      "note": "postcard wire-type module under commands/ that is not a Command variant; recorded as a placement question for the over-engineering lens, not pre-judged"
+    },
+    "removedSinceTicket": {
+      "subcommands": [
+        "report",
+        "summary"
+      ],
+      "commit": "797ba443 feat: remove the report and summary subcommands and their Python and cobre-io mirrors",
+      "note": "the ticket counts seven variants (Init, Run, Validate, Report, Summary, Schema, Version); at the pin `report` and `summary` no longer exist as subcommands or modules, and src/summary.rs is the summary MODULE the run path uses, not a subcommand"
+    },
+    "partI_I5_sharpening": {
+      "claim": "Part-I I.5 (plans/generalizing/beyond-sddp-generalization.md): `validate`, `report` and `summary` are SDDP-shaped",
+      "atBaseline": "only `validate` exists among the three; `report` and `summary` were removed together with their Python and cobre-io mirrors; src/summary.rs (a module) carries the pub use re-export below — the claim holds for validate.rs and the summary module only"
+    },
+    "commands": [
+      "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n -A 12 'enum Command'",
+      "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n 'match cli.command'",
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/src/commands",
+      "git show 077dbe2c:crates/cobre-cli/src/commands/mod.rs | grep -n 'mod broadcast'"
+    ]
+  },
+  "sddpCoupling": {
+    "scope": "crates/cobre-cli/src (the ranking the architecture lens uses); cobre-python figures added for context",
+    "occurrences": 97,
+    "filesWithOccurrences": 10,
+    "useLines": 70,
+    "perFileRanking": [
+      {
+        "file": "crates/cobre-cli/src/commands/run/policy.rs",
+        "occurrences": 20
+      },
+      {
+        "file": "crates/cobre-cli/src/error.rs",
+        "occurrences": 16
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/run/simulation.rs",
+        "occurrences": 15
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/run/outputs.rs",
+        "occurrences": 11
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/run/setup.rs",
+        "occurrences": 8
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/validate.rs",
+        "occurrences": 8
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/run/training.rs",
+        "occurrences": 6
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/broadcast.rs",
+        "occurrences": 5
+      },
+      {
+        "file": "crates/cobre-cli/src/commands/run/mod.rs",
+        "occurrences": 4
+      },
+      {
+        "file": "crates/cobre-cli/src/summary.rs",
+        "occurrences": 4
+      }
+    ],
+    "reExport": {
+      "file": "crates/cobre-cli/src/summary.rs",
+      "line": 23,
+      "items": [
+        "BoundaryReconciliationReport",
+        "HydroModelSummary",
+        "HydroProductionProvenance",
+        "InflowProvenance",
+        "ModelProvenanceReport",
+        "ProvenanceSource"
+      ],
+      "count": 6
+    },
+    "reportRs": {
+      "exists": false,
+      "note": "absent at the pin (removed with the report subcommand); the ticket's `zero cobre_sddp references in report.rs` sharpening is superseded by the module's removal"
+    },
+    "cobrePythonForContext": {
+      "occurrences": 50,
+      "perFile": [
+        {
+          "file": "crates/cobre-python/src/run.rs",
+          "occurrences": 42
+        },
+        {
+          "file": "crates/cobre-python/src/io.rs",
+          "occurrences": 3
+        },
+        {
+          "file": "crates/cobre-python/src/errors.rs",
+          "occurrences": 2
+        },
+        {
+          "file": "crates/cobre-python/src/study.rs",
+          "occurrences": 2
+        },
+        {
+          "file": "crates/cobre-python/src/policy.rs",
+          "occurrences": 1
+        }
+      ]
+    },
+    "commands": [
+      "git grep -o 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l",
+      "git grep -l 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l",
+      "git grep -n '^use cobre_sddp' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l",
+      "git grep -n 'pub use cobre_sddp' 077dbe2c -- crates/cobre-cli/src/summary.rs"
+    ]
+  },
+  "writerBoundary": {
+    "extractor": "one regex over both paths — `(?<![\\w:])((?:cobre_io::|cobre_sddp::orchestration::)?write_[a-z_0-9]+)\\s*\\(` — skipping comment and `use` lines so imports are never counted as calls; a name is local when it is one of the path's own orchestrators/helpers, external otherwise",
+    "localNames": {
+      "cli": [
+        "write_line",
+        "write_sim_outputs_on_root",
+        "write_simulation_outputs",
+        "write_training_outputs"
+      ],
+      "python": [
+        "write_evaporation_models_if_any",
+        "write_fixed_delivery_if_any",
+        "write_fpha_deviation_points_if_any",
+        "write_fpha_hyperplanes_if_any",
+        "write_generic_constraint_echo_if_any",
+        "write_training_artifacts"
+      ]
+    },
+    "cli": {
+      "root": "crates/cobre-cli/src/commands/run",
+      "externalNames": [
+        "write_checkpoint",
+        "write_evaporation_models",
+        "write_fixed_delivery",
+        "write_fpha_deviation_points",
+        "write_fpha_hyperplanes",
+        "write_generic_constraint_echo",
+        "write_hydro_model_summary",
+        "write_paths",
+        "write_provenance_report",
+        "write_row_selection_records",
+        "write_scaling_report",
+        "write_scenario",
+        "write_scenario_summary",
+        "write_simulation_results",
+        "write_simulation_solver_stats",
+        "write_solver_stats",
+        "write_training_results"
+      ],
+      "externalCount": 17,
+      "perFile": [
+        {
+          "file": "crates/cobre-cli/src/commands/run/mod.rs",
+          "externalNames": [],
+          "externalCount": 0,
+          "localNames": [
+            "write_line",
+            "write_training_outputs"
+          ]
+        },
+        {
+          "file": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "externalNames": [
+            "write_checkpoint",
+            "write_evaporation_models",
+            "write_fixed_delivery",
+            "write_fpha_deviation_points",
+            "write_fpha_hyperplanes",
+            "write_generic_constraint_echo",
+            "write_paths",
+            "write_row_selection_records",
+            "write_scenario_summary",
+            "write_simulation_results",
+            "write_simulation_solver_stats",
+            "write_solver_stats",
+            "write_training_results"
+          ],
+          "externalCount": 13,
+          "localNames": [
+            "write_line",
+            "write_simulation_outputs",
+            "write_training_outputs"
+          ]
+        },
+        {
+          "file": "crates/cobre-cli/src/commands/run/policy.rs",
+          "externalNames": [],
+          "externalCount": 0,
+          "localNames": [
+            "write_line"
+          ]
+        },
+        {
+          "file": "crates/cobre-cli/src/commands/run/setup.rs",
+          "externalNames": [
+            "write_hydro_model_summary",
+            "write_provenance_report",
+            "write_scaling_report"
+          ],
+          "externalCount": 3,
+          "localNames": [
+            "write_line"
+          ]
+        },
+        {
+          "file": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "externalNames": [
+            "write_scenario"
+          ],
+          "externalCount": 1,
+          "localNames": [
+            "write_sim_outputs_on_root",
+            "write_simulation_outputs"
+          ]
+        },
+        {
+          "file": "crates/cobre-cli/src/commands/run/training.rs",
+          "externalNames": [],
+          "externalCount": 0,
+          "localNames": []
+        }
+      ],
+      "localOrchestrators": [
+        {
+          "name": "write_training_outputs",
+          "file": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 58
+        },
+        {
+          "name": "write_simulation_outputs",
+          "file": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "line": 178
+        },
+        {
+          "name": "write_sim_outputs_on_root",
+          "file": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "line": 220
+        }
+      ]
+    },
+    "python": {
+      "file": "crates/cobre-python/src/run.rs",
+      "externalNames": [
+        "write_checkpoint",
+        "write_evaporation_models",
+        "write_fixed_delivery",
+        "write_fpha_deviation_points",
+        "write_fpha_hyperplanes",
+        "write_generic_constraint_echo",
+        "write_hydro_model_summary",
+        "write_paths",
+        "write_provenance_report",
+        "write_row_selection_records",
+        "write_scaling_report",
+        "write_scenario",
+        "write_scenario_summary",
+        "write_simulation_results",
+        "write_simulation_solver_stats",
+        "write_solver_stats",
+        "write_training_results"
+      ],
+      "externalCount": 17,
+      "localHelpers": [
+        {
+          "name": "write_training_artifacts",
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 532
+        },
+        {
+          "name": "write_fpha_hyperplanes_if_any",
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 594
+        },
+        {
+          "name": "write_evaporation_models_if_any",
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 614
+        },
+        {
+          "name": "write_generic_constraint_echo_if_any",
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 636
+        },
+        {
+          "name": "write_fixed_delivery_if_any",
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 658
+        },
+        {
+          "name": "write_fpha_deviation_points_if_any",
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 675
+        }
+      ],
+      "localHelpersSeen": [
+        "write_evaporation_models_if_any",
+        "write_fixed_delivery_if_any",
+        "write_fpha_deviation_points_if_any",
+        "write_fpha_hyperplanes_if_any",
+        "write_generic_constraint_echo_if_any",
+        "write_training_artifacts"
+      ],
+      "rawDistinctNames": 23
+    },
+    "cliOnly": [],
+    "pyOnly": [],
+    "identical": true,
+    "commands": [
+      "python3 - <<'PY' (the extractor above over `git show <pin>:<path>` blobs; see tests/test_station.py::writer_scan)",
+      "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -o 'write_[a-z_0-9]*(' | sort -u | wc -l"
+    ]
+  },
+  "parityEnforcement": {
+    "hardRule": {
+      "file": "CLAUDE.md",
+      "line": 42,
+      "text": "every output file the CLI writes must also be written by the Python bindings; when adding a new output, wire it in both"
+    },
+    "layer1_source": {
+      "command": "python3 scripts/ci/check_python_parity.py --max 0 --root .",
+      "runAt": "a temporary checkout of 077dbe2c",
+      "exit": 0,
+      "stdout": "OK: 0 parity mismatch(es) (max allowed: 0). 18 write functions in both paths.",
+      "sharedCount": 18,
+      "minSharedFloor": 18,
+      "scriptSeesCli": [
+        "SimulationParquetWriter",
+        "export_stochastic_artifacts",
+        "write_evaporation_models",
+        "write_fixed_delivery",
+        "write_fpha_deviation_points",
+        "write_fpha_hyperplanes",
+        "write_generic_constraint_echo",
+        "write_hydro_model_summary",
+        "write_paths",
+        "write_policy_checkpoint",
+        "write_provenance_report",
+        "write_row_selection_records",
+        "write_scaling_report",
+        "write_scenario_summary",
+        "write_simulation_results",
+        "write_simulation_solver_stats",
+        "write_solver_stats",
+        "write_training_results"
+      ],
+      "scriptSeesPython": [
+        "SimulationParquetWriter",
+        "export_stochastic_artifacts",
+        "write_evaporation_models",
+        "write_fixed_delivery",
+        "write_fpha_deviation_points",
+        "write_fpha_hyperplanes",
+        "write_generic_constraint_echo",
+        "write_hydro_model_summary",
+        "write_paths",
+        "write_policy_checkpoint",
+        "write_provenance_report",
+        "write_row_selection_records",
+        "write_scaling_report",
+        "write_scenario_summary",
+        "write_simulation_results",
+        "write_simulation_solver_stats",
+        "write_solver_stats",
+        "write_training_results"
+      ],
+      "normalise": {
+        "write_checkpoint": "write_policy_checkpoint",
+        "io_write_policy_checkpoint": "write_policy_checkpoint"
+      },
+      "coverageOfMeasuredWriters": {
+        "measuredExternalNames": 17,
+        "coveredByName": [
+          "write_evaporation_models",
+          "write_fixed_delivery",
+          "write_fpha_deviation_points",
+          "write_fpha_hyperplanes",
+          "write_generic_constraint_echo",
+          "write_hydro_model_summary",
+          "write_paths",
+          "write_policy_checkpoint",
+          "write_provenance_report",
+          "write_row_selection_records",
+          "write_scaling_report",
+          "write_scenario_summary",
+          "write_simulation_results",
+          "write_simulation_solver_stats",
+          "write_solver_stats",
+          "write_training_results"
+        ],
+        "coveredCount": 16,
+        "notCoveredByName": [
+          "write_scenario"
+        ],
+        "note": "write_scenario is the SimulationParquetWriter method the script tracks under the writer TYPE name (`\\w+Writer`); write_checkpoint is normalised to write_policy_checkpoint — every measured writer is enforced"
+      },
+      "mechanisms": {
+        "ticketPremise": "the parser skips every line starting with `use ` (where the eight bare cobre_io writers imported at outputs.rs enter the file) and the bare-name branch of WRITE_CALL_RE is a fixed twelve-name allowlist, hiding 13 of 17 writers",
+        "atBaseline": "superseded: `parse_imports` builds a local-name → canonical-name map from every `use cobre_io::` / `use cobre_sddp::orchestration::` statement (single-line, brace groups, nested paths, `as` aliases); `_extract_from_text` still skips `use ` lines for CALLS but resolves every bare `write_*(`, `export_*(` and `*Writer(`/`*Writer::` through that map — there is no allowlist; a `--min-shared` floor (default 18) catches a gate that stopped seeing call sites",
+        "sinceCommit": "fc81427a feat(python): align the cobre-python bindings with the CLI run path"
+      },
+      "bareImportsAtOutputsRs": [
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    "layer2_runtime_python": [
+      {
+        "file": "crates/cobre-python/tests/test_cli_python_file_set_parity.py",
+        "tests": 5,
+        "lines": 208,
+        "case": "examples/deterministic/d28-decomp-weekly-monthly",
+        "asserts": "set equality of relative output paths across both write paths"
+      },
+      {
+        "file": "crates/cobre-python/tests/test_cli_python_determinism_parity.py",
+        "tests": 6,
+        "lines": 469,
+        "case": "examples/1dtoy",
+        "asserts": "value-level equality of the whole output tree under two literal wall-clock masks (added since the ticket; the CD-025 register note names it)"
+      }
+    ],
+    "layer3_runtime_workspace": {
+      "file": "crates/cobre-cli/tests/python_parity_check.rs",
+      "tests": [
+        "python_parity_script_passes"
+      ],
+      "shellsScript": "check_python_parity.py --max 0 --root <repo>",
+      "directAssertion": "none at the pin — the ticket's `both sides call write_scenario_summary` assertion and its bare-import doc comment are absent; the binary only shells the script"
+    },
+    "ciReachability": {
+      "layer1_and_3": "`cargo test --workspace` runs crates/cobre-cli/tests/python_parity_check.rs (cobre-cli is a workspace member), and the script is also a workflow step of its own: .github/workflows/ci.yml:294 (`Check Python parity` — python3 scripts/ci/check_python_parity.py --max 0)",
+      "layer2": [
+        ".github/workflows/ci.yml:572",
+        ".github/workflows/release-python.yml:171"
+      ]
+    }
+  },
+  "testSurface": {
+    "cobreCli": {
+      "integrationBinaries": [
+        {
+          "path": "crates/cobre-cli/tests/cli_color.rs",
+          "testFns": 3,
+          "lines": 178
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_e2e_run_end_block.rs",
+          "testFns": 1,
+          "lines": 153
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run.rs",
+          "testFns": 12,
+          "lines": 350
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_anticipated.rs",
+          "testFns": 1,
+          "lines": 423
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_anticipated_k2.rs",
+          "testFns": 1,
+          "lines": 498
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_evaporation.rs",
+          "testFns": 1,
+          "lines": 113
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_run_generic_echo.rs",
+          "testFns": 2,
+          "lines": 127
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_schema.rs",
+          "testFns": 4,
+          "lines": 171
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_smoke.rs",
+          "testFns": 10,
+          "lines": 112
+        },
+        {
+          "path": "crates/cobre-cli/tests/cli_validate.rs",
+          "testFns": 22,
+          "lines": 812
+        },
+        {
+          "path": "crates/cobre-cli/tests/init.rs",
+          "testFns": 6,
+          "lines": 83
+        },
+        {
+          "path": "crates/cobre-cli/tests/output_metadata_active_backend.rs",
+          "testFns": 1,
+          "lines": 82
+        },
+        {
+          "path": "crates/cobre-cli/tests/python_parity_check.rs",
+          "testFns": 1,
+          "lines": 51
+        },
+        {
+          "path": "crates/cobre-cli/tests/setup_timings_metadata.rs",
+          "testFns": 1,
+          "lines": 91
+        }
+      ],
+      "binaryCount": 14,
+      "binaryTestFns": 66,
+      "binaryLines": 3244,
+      "inlineTestFnsPerFile": {
+        "summary.rs": 61,
+        "error.rs": 28,
+        "progress.rs": 22,
+        "commands/broadcast.rs": 19,
+        "commands/run/mod.rs": 9,
+        "commands/init.rs": 8,
+        "commands/validate.rs": 7,
+        "templates.rs": 7,
+        "banner.rs": 5,
+        "main.rs": 2,
+        "commands/run/setup.rs": 1,
+        "commands/run/simulation.rs": 1
+      },
+      "inlineTestFns": 170,
+      "totalTestFns": 236
+    },
+    "cobrePython": {
+      "pytestFiles": [
+        {
+          "path": "crates/cobre-python/tests/_cobre_cli.py",
+          "testFns": 0,
+          "lines": 58
+        },
+        {
+          "path": "crates/cobre-python/tests/conftest.py",
+          "testFns": 0,
+          "lines": 41
+        },
+        {
+          "path": "crates/cobre-python/tests/test_anticipated_lanes_output_parity.py",
+          "testFns": 2,
+          "lines": 246
+        },
+        {
+          "path": "crates/cobre-python/tests/test_anticipated_output_parity.py",
+          "testFns": 1,
+          "lines": 186
+        },
+        {
+          "path": "crates/cobre-python/tests/test_boundary_load.py",
+          "testFns": 3,
+          "lines": 141
+        },
+        {
+          "path": "crates/cobre-python/tests/test_callback.py",
+          "testFns": 3,
+          "lines": 178
+        },
+        {
+          "path": "crates/cobre-python/tests/test_chronological_storage_parity.py",
+          "testFns": 5,
+          "lines": 311
+        },
+        {
+          "path": "crates/cobre-python/tests/test_cli_python_determinism_parity.py",
+          "testFns": 6,
+          "lines": 469
+        },
+        {
+          "path": "crates/cobre-python/tests/test_cli_python_file_set_parity.py",
+          "testFns": 5,
+          "lines": 208
+        },
+        {
+          "path": "crates/cobre-python/tests/test_contract_output_parity.py",
+          "testFns": 4,
+          "lines": 321
+        },
+        {
+          "path": "crates/cobre-python/tests/test_convert.py",
+          "testFns": 11,
+          "lines": 145
+        },
+        {
+          "path": "crates/cobre-python/tests/test_d48_ic_seed_load.py",
+          "testFns": 3,
+          "lines": 59
+        },
+        {
+          "path": "crates/cobre-python/tests/test_enumerated_census_parity.py",
+          "testFns": 4,
+          "lines": 265
+        },
+        {
+          "path": "crates/cobre-python/tests/test_errors.py",
+          "testFns": 9,
+          "lines": 188
+        },
+        {
+          "path": "crates/cobre-python/tests/test_generic_constraint_echo_parity.py",
+          "testFns": 1,
+          "lines": 86
+        },
+        {
+          "path": "crates/cobre-python/tests/test_hydro_inflow_auto_parity.py",
+          "testFns": 1,
+          "lines": 78
+        },
+        {
+          "path": "crates/cobre-python/tests/test_import.py",
+          "testFns": 7,
+          "lines": 72
+        },
+        {
+          "path": "crates/cobre-python/tests/test_in_transit_output_parity.py",
+          "testFns": 3,
+          "lines": 209
+        },
+        {
+          "path": "crates/cobre-python/tests/test_inflow_annual_component_parity.py",
+          "testFns": 1,
+          "lines": 85
+        },
+        {
+          "path": "crates/cobre-python/tests/test_io.py",
+          "testFns": 7,
+          "lines": 103
+        },
+        {
+          "path": "crates/cobre-python/tests/test_model.py",
+          "testFns": 8,
+          "lines": 107
+        },
+        {
+          "path": "crates/cobre-python/tests/test_outputs.py",
+          "testFns": 9,
+          "lines": 252
+        },
+        {
+          "path": "crates/cobre-python/tests/test_parity_filling_sigma.py",
+          "testFns": 7,
+          "lines": 276
+        },
+        {
+          "path": "crates/cobre-python/tests/test_parity_hydros.py",
+          "testFns": 7,
+          "lines": 243
+        },
+        {
+          "path": "crates/cobre-python/tests/test_parity_scalar_parameters.py",
+          "testFns": 1,
+          "lines": 178
+        },
+        {
+          "path": "crates/cobre-python/tests/test_policy_load_validation.py",
+          "testFns": 2,
+          "lines": 130
+        },
+        {
+          "path": "crates/cobre-python/tests/test_pumping_output_parity.py",
+          "testFns": 3,
+          "lines": 187
+        },
+        {
+          "path": "crates/cobre-python/tests/test_readme.py",
+          "testFns": 2,
+          "lines": 68
+        },
+        {
+          "path": "crates/cobre-python/tests/test_results.py",
+          "testFns": 22,
+          "lines": 367
+        },
+        {
+          "path": "crates/cobre-python/tests/test_run.py",
+          "testFns": 13,
+          "lines": 224
+        },
+        {
+          "path": "crates/cobre-python/tests/test_schema.py",
+          "testFns": 4,
+          "lines": 57
+        },
+        {
+          "path": "crates/cobre-python/tests/test_solver_stats_parity.py",
+          "testFns": 6,
+          "lines": 233
+        },
+        {
+          "path": "crates/cobre-python/tests/test_study.py",
+          "testFns": 20,
+          "lines": 571
+        },
+        {
+          "path": "crates/cobre-python/tests/test_types.py",
+          "testFns": 1,
+          "lines": 16
+        },
+        {
+          "path": "crates/cobre-python/tests/test_validate.py",
+          "testFns": 17,
+          "lines": 354
+        },
+        {
+          "path": "crates/cobre-python/tests/test_version.py",
+          "testFns": 5,
+          "lines": 62
+        },
+        {
+          "path": "crates/cobre-python/tests/test_write_policy_checkpoint.py",
+          "testFns": 15,
+          "lines": 531
+        }
+      ],
+      "pytestFileCount": 37,
+      "pytestTestModules": 35,
+      "testFunctions": 218,
+      "lines": 7305,
+      "rustTestFnsPerFile": {
+        "run.rs": 13,
+        "errors.rs": 3,
+        "schema.rs": 2,
+        "policy.rs": 1
+      },
+      "rustTestFns": 19
+    },
+    "ciVisibility": {
+      "workspaceExcluded": {
+        "file": "Cargo.toml",
+        "lines": "21-23"
+      },
+      "crateType": {
+        "file": "crates/cobre-python/Cargo.toml",
+        "line": 17
+      },
+      "rustTestsStep": {
+        "file": ".github/workflows/ci.yml",
+        "stepNameLine": 562,
+        "commandLines": [
+          567
+        ],
+        "command": "cargo test --manifest-path crates/cobre-python/Cargo.toml --no-default-features --features highs",
+        "condition": "matrix.python-version == '3.12'"
+      },
+      "pytestSteps": [
+        ".github/workflows/ci.yml:572",
+        ".github/workflows/release-python.yml:171"
+      ],
+      "verdictAtBaseline": "the 19 Rust #[test] functions in crates/cobre-python/src ARE compiled and run in CI (the `Run Rust tests for the bindings crate` step); the ticket's premise `compiled and run by nothing in CI` is superseded",
+      "staleDocs": [
+        {
+          "file": "docs/design/reserved-seams-and-deferred-debt.md",
+          "line": 347,
+          "heading": "Python-binding Rust tests invisible to CI",
+          "note": "deferred-debt entry whose premise no longer holds at the pin — an E11 mirror write-back item, not a station finding"
+        },
+        {
+          "file": "docs/design/testing-architecture.md",
+          "line": 559,
+          "heading": "5.11 cobre-python parity",
+          "note": "still asks to wire the crate's Rust tests into CI"
+        }
+      ],
+      "localReproduction": "cargo test --manifest-path crates/cobre-python/Cargo.toml --no-default-features --features highs"
+    }
+  },
+  "priorAnchors": {
+    "write_training_outputs": {
+      "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+      "line": 58,
+      "register": 57,
+      "ticket": 58
+    },
+    "write_training_artifacts": {
+      "path": "crates/cobre-python/src/run.rs",
+      "line": 532,
+      "register": 478,
+      "ticket": 479
+    },
+    "if_any_helpers": {
+      "path": "crates/cobre-python/src/run.rs",
+      "lines": [
+        594,
+        614,
+        636,
+        658,
+        675
+      ],
+      "register": [
+        554,
+        574,
+        597
+      ],
+      "ticket": [
+        555,
+        575,
+        598,
+        621,
+        638
+      ]
+    },
+    "broadcast_and_build_setup": {
+      "path": "crates/cobre-cli/src/commands/run/setup.rs",
+      "line": 246,
+      "register": 262,
+      "ticket": 248
+    },
+    "policy_dir": {
+      "path": "crates/cobre-cli/src/commands/run/policy.rs",
+      "lines": [
+        172,
+        201,
+        334
+      ],
+      "register": [
+        151,
+        180,
+        273
+      ],
+      "ticket": [
+        167,
+        196,
+        316
+      ],
+      "enclosing": {
+        "load_policy_for_simulation": 323
+      }
+    },
+    "run_boundary_check": {
+      "path": "crates/cobre-cli/src/commands/validate.rs",
+      "line": 283,
+      "register": 255,
+      "ticket": 256
+    },
+    "PrepPhase": {
+      "path": "crates/cobre-sddp/src/validate_phases.rs",
+      "line": 33
+    },
+    "io_rs_boundary_references": [
+      39,
+      46,
+      167,
+      168,
+      169,
+      264,
+      269,
+      287,
+      305,
+      306,
+      311,
+      317,
+      322,
+      325
+    ]
+  },
+  "supersessions": [
+    {
+      "fact": "`StudyParams::from_config` non-test call sites",
+      "inherited": 1,
+      "inheritedFrom": "prior audit",
+      "baseline": 5,
+      "sites": [
+        {
+          "file": "crates/cobre-cli/src/commands/broadcast.rs",
+          "line": 144
+        },
+        {
+          "file": "crates/cobre-cli/src/commands/validate.rs",
+          "line": 384
+        },
+        {
+          "file": "crates/cobre-python/src/io.rs",
+          "line": 254
+        },
+        {
+          "file": "crates/cobre-python/src/run.rs",
+          "line": 994
+        },
+        {
+          "file": "crates/cobre-sddp/src/setup/mod.rs",
+          "line": 378
+        }
+      ],
+      "command": "git grep -n 'StudyParams::from_config' 077dbe2c -- 'crates/*/src/**/*.rs' | grep -v 'tests\\.rs'",
+      "note": "the params.rs hits sit inside its #[cfg(test)] module and are excluded"
+    },
+    {
+      "fact": "distinct `write_*(` names in cobre-python/src/run.rs",
+      "inherited": 26,
+      "inheritedFrom": "prior audit",
+      "baseline": 23,
+      "command": "git show 077dbe2c:crates/cobre-python/src/run.rs | grep -o 'write_[a-z_0-9]*(' | sort -u | wc -l"
+    },
+    {
+      "fact": "cobre-cli production (non-test) lines",
+      "inherited": {
+        "register 2026-08-22": 4522,
+        "ticket @a136840d": 5419
+      },
+      "inheritedFrom": "prior audit / ticket",
+      "baseline": 5490,
+      "command": "station_checks.classify_lines over every git-show blob of crates/cobre-cli/src/**/*.rs (brace+indent #[cfg(test)] subtraction)"
+    },
+    {
+      "fact": "Command enum variants",
+      "inherited": 7,
+      "inheritedFrom": "ticket / Part-I I.5",
+      "baseline": 5,
+      "command": "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n -A 12 'enum Command'",
+      "note": "report and summary removed by 797ba443 feat: remove the report and summary subcommands and their Python and cobre-io mirrors"
+    },
+    {
+      "fact": "parity gate shared writer names",
+      "inherited": 4,
+      "inheritedFrom": "ticket",
+      "baseline": 18,
+      "command": "python3 scripts/ci/check_python_parity.py --max 0 --root .",
+      "note": "import-resolving script since fc81427a; the two hiding mechanisms are closed"
+    },
+    {
+      "fact": "cobre-python Rust #[test] CI visibility",
+      "inherited": "compiled and run by nothing in CI (22 tests)",
+      "inheritedFrom": "ticket / mirror `Python-binding Rust tests invisible to CI`",
+      "baseline": "run by ci.yml `Run Rust tests for the bindings crate` (19 tests)",
+      "command": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'manifest-path crates/cobre-python'"
+    },
+    {
+      "fact": "cobre-python/src/io.rs boundary references (CD-029 parity half)",
+      "inherited": 0,
+      "inheritedFrom": "prior audit (CD-029 `grep-confirmed: no boundary references`)",
+      "baseline": 14,
+      "command": "git show 077dbe2c:crates/cobre-python/src/io.rs | grep -c boundary",
+      "note": "CD-029's Status bullet (2026-09-17) already records the parity half as FIXED"
+    }
+  ],
+  "commands": {
+    "census": [
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/src | grep '\\.rs$' | wc -l",
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre-python/src | grep '\\.rs$' | wc -l",
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre/src | grep '\\.rs$' | wc -l",
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre-cli/src | grep '\\.rs$' | while read f; do git show 077dbe2c:\"$f\"; done | wc -l",
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre-python/src | grep '\\.rs$' | while read f; do git show 077dbe2c:\"$f\"; done | wc -l",
+      "git ls-tree -r --name-only 077dbe2c -- crates/cobre/src | grep '\\.rs$' | while read f; do git show 077dbe2c:\"$f\"; done | wc -l"
+    ],
+    "nonTestRule": "tools/lib/station_checks.classify_lines — the scripts/loc-stats.sh PROD_ALL rule: every `#[cfg(test)]` item/module body is subtracted by brace+indent matching",
+    "topSymbols": "first eight declarations matching tools/check-anchors.py DECL (fn|struct|enum|trait|type|const|static|mod|impl); each carries its line and visibility",
+    "worktreeEqualsPin": "git diff --stat 077dbe2c HEAD -- crates scripts .github Cargo.toml CLAUDE.md (empty at generation time)"
+  },
+  "ticketFigureDeviations": {
+    "note": "Ticket figures were minted at the superseded pin a136840d; this inventory measures the register pin. The report and summary subcommands were removed in between (797ba443), the parity script became import-resolving (fc81427a) and the CI workflow gained a Rust-tests step for the bindings crate, so the command surface, the coupling ranking, the test surface and two of the ticket's stated findings premises moved.",
+    "changed": [
+      {
+        "figure": "crates.cobre-cli.srcFiles",
+        "ticket": 20,
+        "measured": 18
+      },
+      {
+        "figure": "crates.cobre-cli.lines",
+        "ticket": 10873,
+        "measured": 9303
+      },
+      {
+        "figure": "crates.cobre-cli.nonTestLines",
+        "ticket": 5419,
+        "measured": 5490
+      },
+      {
+        "figure": "crates.cobre-python.lines",
+        "ticket": 7335,
+        "measured": 7188
+      },
+      {
+        "figure": "crates.cobre-python.nonTestLines",
+        "ticket": 6243,
+        "measured": 6267
+      },
+      {
+        "figure": "total.files",
+        "ticket": 32,
+        "measured": 30
+      },
+      {
+        "figure": "total.lines",
+        "ticket": 18210,
+        "measured": 16493
+      },
+      {
+        "figure": "substationRollup.S6a.lines",
+        "ticket": 6188,
+        "measured": 6149
+      },
+      {
+        "figure": "substationRollup.S6b.files",
+        "ticket": 13,
+        "measured": 11
+      },
+      {
+        "figure": "substationRollup.S6b.lines",
+        "ticket": 7204,
+        "measured": 5652
+      },
+      {
+        "figure": "substationRollup.S6c.lines",
+        "ticket": 4818,
+        "measured": 4692
+      },
+      {
+        "figure": "commandSurface.variants",
+        "ticket": 7,
+        "measured": 5
+      },
+      {
+        "figure": "commandSurface.enumLine",
+        "ticket": 87,
+        "measured": 67
+      },
+      {
+        "figure": "commandSurface.dispatchLine",
+        "ticket": 123,
+        "measured": 96
+      },
+      {
+        "figure": "commandSurface.broadcastLines",
+        "ticket": 1063,
+        "measured": 1088
+      },
+      {
+        "figure": "sddpCoupling.occurrences",
+        "ticket": 95,
+        "measured": 97
+      },
+      {
+        "figure": "sddpCoupling.files",
+        "ticket": 11,
+        "measured": 10
+      },
+      {
+        "figure": "sddpCoupling.useLines",
+        "ticket": 68,
+        "measured": 70
+      },
+      {
+        "figure": "sddpCoupling.perFile.commands/run/policy.rs",
+        "ticket": 17,
+        "measured": 20
+      },
+      {
+        "figure": "sddpCoupling.perFile.commands/summary.rs",
+        "ticket": 1,
+        "measured": 0
+      },
+      {
+        "figure": "sddpCoupling.reExportLine",
+        "ticket": 19,
+        "measured": 23
+      },
+      {
+        "figure": "anchor.write_sim_outputs_on_root",
+        "ticket": 223,
+        "measured": 220
+      },
+      {
+        "figure": "anchor.write_training_artifacts",
+        "ticket": 479,
+        "measured": 532
+      },
+      {
+        "figure": "anchor.write_fpha_hyperplanes_if_any",
+        "ticket": 555,
+        "measured": 594
+      },
+      {
+        "figure": "anchor.write_evaporation_models_if_any",
+        "ticket": 575,
+        "measured": 614
+      },
+      {
+        "figure": "anchor.write_generic_constraint_echo_if_any",
+        "ticket": 598,
+        "measured": 636
+      },
+      {
+        "figure": "anchor.write_fixed_delivery_if_any",
+        "ticket": 621,
+        "measured": 658
+      },
+      {
+        "figure": "anchor.write_fpha_deviation_points_if_any",
+        "ticket": 638,
+        "measured": 675
+      },
+      {
+        "figure": "parityEnforcement.layer1.sharedCount",
+        "ticket": 4,
+        "measured": 18
+      },
+      {
+        "figure": "ci.pytestLine",
+        "ticket": 564,
+        "measured": 572
+      },
+      {
+        "figure": "testSurface.cobreCli.binaries",
+        "ticket": 16,
+        "measured": 14
+      },
+      {
+        "figure": "testSurface.cobreCli.binaryTestFns",
+        "ticket": 84,
+        "measured": 66
+      },
+      {
+        "figure": "testSurface.cobreCli.binaryLines",
+        "ticket": 4035,
+        "measured": 3244
+      },
+      {
+        "figure": "testSurface.cobreCli.inlineTestFns",
+        "ticket": 199,
+        "measured": 170
+      },
+      {
+        "figure": "testSurface.cobreCli.total",
+        "ticket": 283,
+        "measured": 236
+      },
+      {
+        "figure": "testSurface.cobreCli.inline.summary.rs",
+        "ticket": 60,
+        "measured": 61
+      },
+      {
+        "figure": "testSurface.cobreCli.inline.commands/summary.rs",
+        "ticket": 19,
+        "measured": 0
+      },
+      {
+        "figure": "testSurface.cobreCli.inline.commands/broadcast.rs",
+        "ticket": 18,
+        "measured": 19
+      },
+      {
+        "figure": "testSurface.cobrePython.pytestFiles",
+        "ticket": 32,
+        "measured": 37
+      },
+      {
+        "figure": "testSurface.cobrePython.testFunctions",
+        "ticket": 197,
+        "measured": 218
+      },
+      {
+        "figure": "testSurface.cobrePython.lines",
+        "ticket": 6512,
+        "measured": 7305
+      },
+      {
+        "figure": "testSurface.cobrePython.rust.results.rs",
+        "ticket": 5,
+        "measured": 0
+      },
+      {
+        "figure": "testSurface.cobrePython.rust.errors.rs",
+        "ticket": 2,
+        "measured": 3
+      },
+      {
+        "figure": "testSurface.cobrePython.rust.total",
+        "ticket": 22,
+        "measured": 19
+      },
+      {
+        "figure": "anchor.broadcast_and_build_setup",
+        "ticket": 248,
+        "measured": 246
+      },
+      {
+        "figure": "anchor.run_boundary_check",
+        "ticket": 256,
+        "measured": 283
+      },
+      {
+        "figure": "anchor.policy_dir",
+        "ticket": [
+          167,
+          196,
+          316
+        ],
+        "measured": [
+          172,
+          201,
+          334
+        ]
+      },
+      {
+        "figure": "supersession.fromConfig.crates/cobre-cli/src/commands/validate.rs",
+        "ticket": 364,
+        "measured": 384
+      },
+      {
+        "figure": "supersession.fromConfig.crates/cobre-python/src/io.rs",
+        "ticket": 261,
+        "measured": 254
+      },
+      {
+        "figure": "supersession.fromConfig.crates/cobre-python/src/run.rs",
+        "ticket": 959,
+        "measured": 994
+      }
+    ]
+  }
+}

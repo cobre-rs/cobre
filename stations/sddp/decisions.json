@@ -1,0 +1,2271 @@
+{
+  "station": "sddp",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "gateDate": "2026-09-18",
+  "decision": "ratified",
+  "sectionTitle": "STATION 5 — cobre-sddp (2026-09)",
+  "rounds": {
+    "R0": "prior dispositions, one question per group (retire / keep / sharpen)",
+    "R1": "Sev B (A-risk) batch",
+    "R2": "Sev B batch",
+    "R3": "Sev C batch",
+    "R4": "CD-024-successor conflicts hold, asked alone",
+    "R5": "CD-005 re-baseline, asked alone",
+    "R6": "43 needs-human items, one question each, four per call",
+    "R7": "handoff confirmation"
+  },
+  "counts": {
+    "presented": 66,
+    "priorPresented": 22,
+    "priorRatified": 22,
+    "priorRetired": 3,
+    "priorKept": 11,
+    "priorSharpened": 8,
+    "newPresented": 44,
+    "accepted": 44,
+    "amended": 0,
+    "downgraded": 0,
+    "rejected": 0,
+    "deferred": 0,
+    "overridden": 0,
+    "holdsClosedByAlternative": 1,
+    "rebaselineAccepted": 1,
+    "needsHumanAnswered": 43,
+    "perfRowsStruck": 0,
+    "tdRowsStruck": 0,
+    "informationalKept": 4
+  },
+  "decisions": [
+    {
+      "kind": "prior-disposition",
+      "id": "CD-001",
+      "registerId": "CD-001",
+      "wave": 4,
+      "presentedDisposition": "retire",
+      "round": "R0-retire",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "retire",
+      "resolvingCommit": "b051c410",
+      "reviewerSeverity": "A",
+      "houseSeverity": "A",
+      "newSeverity": "A",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all three retire with their closing commits and move to Cleared",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": true,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-003-construction-hop",
+      "registerId": "CD-003",
+      "wave": 4,
+      "presentedDisposition": "retire",
+      "round": "R0-retire",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "retire",
+      "resolvingCommit": "4075c4e8",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0a",
+      "rationale": "Ratify as presented (Recommended) — all three retire with their closing commits and move to Cleared",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": true,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-006",
+      "registerId": "CD-006",
+      "wave": 4,
+      "presentedDisposition": "retire",
+      "round": "R0-retire",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "retire",
+      "resolvingCommit": "3f4c3db3",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all three retire with their closing commits and move to Cleared",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": true,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-004",
+      "registerId": "CD-004",
+      "wave": 4,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B (A-risk)",
+      "houseSeverity": "B (A-risk)",
+      "newSeverity": "B (A-risk)",
+      "alignment": "advances-0a",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-005",
+      "registerId": "CD-005",
+      "wave": 4,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0a",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        "re-baseline accepted (R5): Accept with re-baseline (Recommended) — CD-005 stays accepted; the fix lands only behind a parity re-baseline that names all three bars, with the NCS fields moved as one unit",
+        "R6-nh-1: Remove it and edit the rules line — StudySetup::set_budget is deleted and dropped from the .claude/architecture-rules.md accessor list; folds into the CD-005 split ticket (no public knob is kept)"
+      ]
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-024-successor",
+      "registerId": "CD-024",
+      "wave": 4,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "conflicts",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        "hold closed by its alternative (R4): Take the alternative (Recommended) — die: the per-rank derivation stays; CD-024-successor rides CD-004's single Config projection; no broadcast seam, no id promoted; the hold closes as subsumed"
+      ]
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-015",
+      "registerId": "CD-015",
+      "wave": 6,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-022",
+      "registerId": "CD-022",
+      "wave": 6,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-018",
+      "registerId": "CD-018",
+      "wave": 6,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-035",
+      "registerId": "CD-035",
+      "wave": 6,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-034",
+      "registerId": "CD-034",
+      "wave": 6,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0b",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-023",
+      "registerId": "CD-023",
+      "wave": 6,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-021",
+      "registerId": "CD-021",
+      "wave": 7,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-007",
+      "registerId": "CD-007",
+      "wave": 7,
+      "presentedDisposition": "sharpen",
+      "round": "R0-sharpen",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "advances-0b",
+      "rationale": "Ratify as presented (Recommended) — all eight sharpen with both claims recorded; the three Wave-4 rows keep their Phase-0a restatement artifacts",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-012",
+      "registerId": "CD-012",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-014-remnant",
+      "registerId": "CD-014",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-016",
+      "registerId": "CD-016",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-028",
+      "registerId": "CD-028",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        "R6-nh-21: Module-doc correction only; no code hoist — claim_scatter.rs's module-doc consumer list is corrected to name simulation/enumerated.rs; the four-line worker-result fold stays inline at both sites; CD-028's skeleton claim stays open as calibrated"
+      ]
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-030",
+      "registerId": "CD-030",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-037",
+      "registerId": "CD-037",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-038",
+      "registerId": "CD-038",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "OD-009",
+      "registerId": "OD-009",
+      "wave": 7,
+      "presentedDisposition": "keep",
+      "round": "R0-keep",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "rationale": "Ratify as presented (Recommended) — all eleven stay live at their register severities with the surviving claims as written",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-084",
+      "candidateRef": "5b-architecture-00",
+      "round": "R1",
+      "decision": "accept",
+      "reviewerSeverity": "A",
+      "houseSeverity": "B (A-risk)",
+      "newSeverity": "B (A-risk)",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept both (Recommended) — both stay live at B (A-risk) with the calibrated fix-shapes; CD-084 keeps the downgrade note (reviewer: A)",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-38",
+          "choice": "Rejected at validation; latent, fix byte-neutral",
+          "rationale": "an anticipated plant with a fixed post-horizon window AND an in-study decision above it is not a valid deck (rejected at validation), so CD-084's raw-axis residue is latent; CD-084 stays B (A-risk) as calibrated and the one-site ring-axis correction lands byte-neutral against every golden"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-086",
+      "candidateRef": "5c-architecture-00",
+      "round": "R1",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B (A-risk)",
+      "newSeverity": "B (A-risk)",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept both (Recommended) — both stay live at B (A-risk) with the calibrated fix-shapes; CD-084 keeps the downgrade note (reviewer: A)",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-19",
+          "choice": "Road (a): reject the pairing at admission",
+          "rationale": "enumerated traversal + dynamic cut selection is NOT a supported configuration: it becomes a typed admission-gate rejection beside the existing enumerated preconditions in setup/mod.rs, never a silent degrade; no new collective"
+        },
+        {
+          "round": "R6-nh-20",
+          "choice": "In scope; severity stays B (A-risk)",
+          "rationale": "CutPool::enforce_budget's eviction-key reader is inside CD-086's scope; road (a) covers both readers; severity stays B (A-risk), the marker already carrying the bound hazard; no separate item"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-082",
+      "candidateRef": "5a-architecture-02",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0a",
+      "partIRef": "I.3-7",
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-2",
+          "choice": "Construction-time check, get stays infallible",
+          "rationale": "the fail-loud leg is enforced at the LP-build / admission-gate site riding the CD-004 single-projection carrier; ResolvedParameters::get keeps its infallible pub must_use signature"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-085",
+      "candidateRef": "5b-architecture-02",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0b",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-11",
+          "choice": "Bounded to seams/traits/crates; the accessor is fine",
+          "rationale": "conflicts trigger 4 does not reach a family-completing StateSpace accessor; CD-085 stays accepted at B, advances-0b, no hold; recorded on the E9 alignment queue"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-040",
+      "candidateRef": "5d-over-engineering-00",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-29",
+          "choice": "Correct the mirror sentence down to D4",
+          "rationale": "the mirror :1278-1284 sentence stops asserting an every-site Rationale on numeric-cast allows and states the comments.md D4 lint scope; no new obligation on the 42 cast_* openers; routed to E11's mirror write-back with NH4"
+        },
+        {
+          "round": "R6-nh-30",
+          "choice": "Re-file the residue against cobre-io at E11",
+          "rationale": "OD-040 stays accepted here as the record; the four cast_sign_loss sites are a missing cobre-io input-boundary validation and are re-filed against cobre-io at the reconciliation epic"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-036",
+      "candidateRef": "5a-performance-01",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-6",
+          "choice": "NodeGraph field, land with the accessor residue",
+          "rationale": "decision-tree rule 2: the cut-level decomposition becomes a NodeGraph field beside n_pools / pool_stage, reaching the backward drivers through TrainingContext; landed in the same change as the interior-cut-node accessor one-owner residue"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-038",
+      "candidateRef": "5b-performance-00",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-039",
+      "candidateRef": "5b-performance-01",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-15",
+          "choice": "Treat as a warm-start-chain change; clear all three bars in E10",
+          "rationale": "PD-039's hoist is measured by the perf sweep at 4t and lands only with the parity goldens, the rank-invariance harness and the opening_order_determinism gate green; nothing asserted at the gate"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-040",
+      "candidateRef": "5c-performance-00",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-22",
+          "choice": "Correct the sentence inside PD-040's fix",
+          "rationale": "the false 'no heap allocation' rustdoc at training/session/mod.rs:1026-1027 is made true in the same change that removes or documents run_cut_management's allocations; no extra id"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-041",
+      "candidateRef": "5c-performance-02",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-042",
+      "candidateRef": "5c-performance-03",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-23",
+          "choice": "Keep the over-inclusion; shared-block fix only",
+          "rationale": "the level-wide over-inclusion is a required correctness margin; PD-042 is exactly the byte-neutral one-block-per-level fix; narrowing each node's archive to its routed states is NOT licensed"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-044",
+      "candidateRef": "5c-performance-06",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-045",
+      "candidateRef": "5d-performance-00",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-32",
+          "choice": "StageContext, span-only",
+          "rationale": "PD-045's per-stage unscaled cache lives on StageContext as a load-balance-rows span (shared immutable per-stage data, the context-struct pattern); not per-worker scratch"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-047",
+      "candidateRef": "5d-performance-02",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t"
+      },
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-042",
+      "candidateRef": "5a-test-bloat-02",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-7",
+          "choice": "Uniform spread + one canary literal; no Default derive",
+          "rationale": "the fix stays a test-support constructor (..HydroPenalties::uniform(v) spread) with one full sixteen-field literal kept per crate as the compile-time canary; no Default derive in cobre-core"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-043",
+      "candidateRef": "5a-test-bloat-03",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-044",
+      "candidateRef": "5a-test-bloat-04",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-8",
+          "choice": "Per-binary hoist now; cross-binary lift is E08's call",
+          "rationale": "the in-file duplicates collapse at file scope in each binary; whether the shared class lifts into tests/common follows the E08 test-corpus convention decision"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-045",
+      "candidateRef": "5a-test-bloat-05",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-1",
+      "partIRef": "I.3-8",
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-9",
+          "choice": "Consolidate behind test-support; E07 fixes the workflow",
+          "rationale": "the shared state_layout_for lives in the test-support surface; invariance-shuffle.yml's missing --features test-support on the parity binary is handed to the build-ci station (E07) as a CI drift item"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-049",
+      "candidateRef": "5b-test-bloat-04",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-18",
+          "choice": "Spec-layer extension, with the collapse as its first step",
+          "rationale": "TD-049's ticket targets the O(1) Spec-layer extension to InflowModel, LoadModel and the four sizing structs, which owns the remaining fan-out; the nineteen-builder collapse lands as its first step"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-053",
+      "candidateRef": "5c-test-bloat-02",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-25",
+          "choice": "cobre-sddp test-support surface",
+          "rationale": "the genericity hard rule decides: Rank0Of2 names cobre-sddp's RankDistribution, so the StubComm / Rank0Of2 pair lives in cobre-sddp's test_support; a later StubComm move to a cobre-comm test-support feature is E08-2's call"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-054",
+      "candidateRef": "5c-test-bloat-03",
+      "round": "R2",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 19 stay live at Sev B as calibrated; the nine PD rows stay queued UNMEASURED to E10, the seven TD rows to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-26",
+          "choice": "cfg-gated declarative macro in test_support.rs",
+          "rationale": "one cfg-gated macro stamps the inert MockSolver body; the seven-to-one get_basis site and the two strict sites keep their own doubles"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-083",
+      "candidateRef": "5a-architecture-03",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-3",
+          "choice": "Remove, batched with the public-API break",
+          "rationale": "CutManagementConfig::warm_start_cuts is deleted in the same licensed public-API break as OD-037 / OD-038 (CD-019 batching precedent); the false doc line is corrected now"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-087",
+      "candidateRef": "5d-architecture-00",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "advances-0b",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-27",
+          "choice": "Retire the private half now; public half in the API-break batch",
+          "rationale": "the intra-crate aliases go now; pub use policy::orchestration is removed in the same licensed public-API break as OD-037 / OD-038 / CD-083, updating cobre-cli, cobre-python, the corpus and scripts/ci/check_python_parity.py then"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-088",
+      "candidateRef": "5d-architecture-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "advances-0a",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-28",
+          "choice": "Land with 0a's shared output orchestration",
+          "rationale": "CD-088 stays accepted at C, advances-0a; the write-payload conversion moves when Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection, not as an intra-engine move 0a would undo"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-036",
+      "candidateRef": "5a-over-engineering-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-037",
+      "candidateRef": "5b-over-engineering-00",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "advances-0b",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-12",
+          "choice": "Batch with the next licensed public-API break / 0b carve",
+          "rationale": "OD-037's Col/Row removal ships in the same licensed public-API break as OD-038 and CD-083 (CD-019 batching precedent); the defect is settled, only the scheduling is batched"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-038",
+      "candidateRef": "5b-over-engineering-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "advances-0b",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-13",
+          "choice": "Batch with the next licensed public-API break / 0b carve",
+          "rationale": "OD-038's FphaRowRange removal ships in the same licensed public-API break as OD-037 and CD-083; the false module doc is corrected now"
+        },
+        {
+          "round": "R6-nh-14",
+          "choice": "Joins OD-038",
+          "rationale": "one doc-correction step covers the FphaRowRange module doc and BlockGrid::advance_fpha_base's rustdoc (block_grid.rs:106-107); lands now, independent of the removal's batching"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-039",
+      "candidateRef": "5c-over-engineering-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-41",
+          "choice": "Route the two-comment correction to E07",
+          "rationale": "the reversed field docs on CutSelectionStrategy::Dynamic (k2 / nadic) are a rustdoc drift item for the build-ci/docs station; no id at this station; the config mapping is correct"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-041",
+      "candidateRef": "5d-over-engineering-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-31",
+          "choice": "Crate-wide pass over the 25 sites with a forcing check",
+          "rationale": "OD-041 widens to one crate-wide visibility pass over the 25 single-file pub(crate) items, each narrowed only where a per-site forcing check proves no other consumer; stays Sev C"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-042",
+      "candidateRef": "5d-over-engineering-02",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-035",
+      "candidateRef": "5a-performance-00",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-5",
+          "choice": "Symmetric fill only, no re-baseline",
+          "rationale": "PD-035's fix-shape narrows to the byte-exact half (mirrored distance matrix, hoisted per-start buffers); the tour-cost delta reformulation is dropped, no parity re-baseline; setup-time, stays Sev C, not queued"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-037",
+      "candidateRef": "5a-performance-02",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-043",
+      "candidateRef": "5c-performance-04",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-42",
+          "choice": "Keep the unconditional recount; PD-043 is the slot-table clear only",
+          "rationale": "enforce_basic_count_invariant's BASIC recount stays an unconditional release check; PD-043's fix-shape is the reconstructed-slots-only clear of the slot table; no debug_assert demotion"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-046",
+      "candidateRef": "5d-performance-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-048",
+      "candidateRef": "5d-performance-05",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "perfQueue": null,
+      "tdQueue": null,
+      "directions": [
+        {
+          "round": "R6-nh-34",
+          "choice": "Only own-data recomputations are carved out; PD-048 stands as narrowed",
+          "rationale": "rule-11 interpretation recorded: the setup-time per-plant carve-out covers recomputations sized by the plant's own data only; a per-plant rescan of a whole shared table is superlinear and stays a finding; PD-048 stands as narrowed at Sev C"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-041",
+      "candidateRef": "5a-test-bloat-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-046",
+      "candidateRef": "5a-test-bloat-06",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-10",
+          "choice": "Relocate and re-word the three doc comments",
+          "rationale": "the lag-shift oracle leaves stochastic/noise.rs and the three production doc comments (noise.rs:211, state_space.rs:443, cut_state_projection.rs:269) describe the kernel by behaviour instead of naming the test oracle; no behaviour change"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-047",
+      "candidateRef": "5b-test-bloat-02",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-16",
+          "choice": "One extracted tests.rs per module, matching the sibling convention",
+          "rationale": "TD-047's split follows the three extracted-tests siblings in lp/builder (commitment_reconcile / layout / template); recorded as CD-007's convention decision"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-048",
+      "candidateRef": "5b-test-bloat-03",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-17",
+          "choice": "Parameterize in place now; the fold is E08's grouping call",
+          "rationale": "build_classical_fixture collapses onto build_par_a_fixture inside the binary now; folding onto two_hydro_par_system follows the E08 section 5.1 grouping decision"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-050",
+      "candidateRef": "5b-test-bloat-07",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-051",
+      "candidateRef": "5c-test-bloat-00",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-24",
+          "choice": "Delete the redundant binary now",
+          "rationale": "the duplicate sync_cuts count-mismatch binary is deleted now (coverage-neutral, independent of the API break); the surviving copy retires with the superseded method"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-052",
+      "candidateRef": "5c-test-bloat-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-43",
+          "choice": "Delete; provenance lives in git history",
+          "rationale": "tests/test_mpi_allgatherv_nonuniform_workers.rs is deleted (coverage-neutral); the historical nonuniform-workers bug stays traceable through git history and the surviving handshake_rejects_nonuniform_workers unit test"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-055",
+      "candidateRef": "5d-test-bloat-01",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-35",
+          "choice": "Retire the checklist to prose",
+          "rationale": "hold_k1_byte_stability_probe.rs is retired; the audited k_max partition becomes a short prose note in the testing-architecture doc; no executable gate"
+        }
+      ]
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-056",
+      "candidateRef": "5d-test-bloat-04",
+      "round": "R3",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "Accept all (Recommended) — all 23 stay live at Sev C as calibrated (the reviewer-B rows keep their note); the nine TD rows stay queued to E08",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "perfQueue": null,
+      "tdQueue": {
+        "effect": "kept"
+      },
+      "directions": [
+        {
+          "round": "R6-nh-36",
+          "choice": "Final: keep the pair; destination per NH25",
+          "rationale": "testing-architecture section 5.8 is ratified for the StubComm / Rank0Of2 pair; the merge half stays dismissed; the destination is cobre-sddp's test_support (NH25), not cobre-comm"
+        },
+        {
+          "round": "R6-nh-37",
+          "choice": "Deliberate; state the why in one doc clause",
+          "rationale": "conformance.rs:40 LocalComm's no-copy collectives are semantics by design; its rustdoc gains the single clause explaining the divergence from tests/common StubComm; no behaviour change"
+        }
+      ]
+    }
+  ],
+  "holds": [
+    {
+      "kind": "conflicts-hold",
+      "id": "CD-024-successor",
+      "round": "R4",
+      "decision": "take-the-alternative",
+      "rationale": "Take the alternative (Recommended) — die: the per-rank derivation stays; CD-024-successor rides CD-004's single Config projection; no broadcast seam, no id promoted; the hold closes as subsumed",
+      "condition": "one-consumer seam kept alive against a single hypothetical consumer ('pull, don't push', Part V §V.0)",
+      "alternative": "die: keep the per-rank derivation; its inputs ride the single Config projection of CD-004, so the seam is subsumed rather than activated — no OD/CD id promoted for the broadcast variant",
+      "idPromoted": false
+    }
+  ],
+  "rebaseline": [
+    {
+      "kind": "rebaseline",
+      "id": "CD-005",
+      "round": "R5",
+      "decision": "accept-with-rebaseline",
+      "rationale": "Accept with re-baseline (Recommended) — CD-005 stays accepted; the fix lands only behind a parity re-baseline that names all three bars, with the NCS fields moved as one unit",
+      "rebaselineBar": [
+        "parity goldens (parity_hash_highs / parity_hash_clp)",
+        "rank-invariance harness (tests/common/permute.rs)",
+        "mpiexec -n 1/2 reproduction"
+      ],
+      "byteNeutralityNote": "re-baseline decision at the owner gate — the NCS split feeds hot-path StageContext borrows and the patch-identity contract"
+    }
+  ],
+  "needsHuman": [
+    {
+      "n": 1,
+      "round": "R6-nh-1",
+      "id": "CD-005",
+      "candidateRef": "5a-architecture-00",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call: `set_budget` is enumerated in the declared accessor surface at `.claude/architecture-rules.md:117`, so the disposition of a caller-free ungated mutator is either remove it and edit that rules line, or keep it as a deliberate public-library knob and route it through the same validation `StudyParams::from_config` applies - the station cannot pick without the owner.",
+      "answer": "Remove it and edit the rules line",
+      "recommended": true,
+      "recordedAs": "StudySetup::set_budget is deleted and dropped from the .claude/architecture-rules.md accessor list; folds into the CD-005 split ticket (no public knob is kept)"
+    },
+    {
+      "n": 2,
+      "round": "R6-nh-2",
+      "id": "CD-082",
+      "candidateRef": "5a-architecture-02",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Whether the fail-loud leg changes the public surface of ResolvedParameters::get (a fallible signature or a panic) or is instead enforced as a construction-time check at the LP-build site, leaving get infallible: get is pub and must_use, so the choice is an owner call on public API shape, not a correctness question.",
+      "answer": "Construction-time check, get stays infallible",
+      "recommended": true,
+      "recordedAs": "the fail-loud leg is enforced at the LP-build / admission-gate site riding the CD-004 single-projection carrier; ResolvedParameters::get keeps its infallible pub must_use signature"
+    },
+    {
+      "n": 3,
+      "round": "R6-nh-3",
+      "id": "CD-083",
+      "candidateRef": "5a-architecture-03",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner must choose between removing `CutManagementConfig::warm_start_cuts` (a breaking change to a re-exported public type) and giving it a real reader plus a reserved-seams entry; the verdict establishes the field is inert and its doc line false, not which of the two lands.",
+      "answer": "Remove, batched with the public-API break",
+      "recommended": true,
+      "recordedAs": "CutManagementConfig::warm_start_cuts is deleted in the same licensed public-API break as OD-037 / OD-038 (CD-019 batching precedent); the false doc line is corrected now"
+    },
+    {
+      "n": 4,
+      "round": "R6-nh-4",
+      "id": "—",
+      "candidateRef": "5a-over-engineering-00",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/over-engineering 5a"
+      ],
+      "question": "Owner call (prose, not code): reword the allow-census Load-bearing class at docs/design/reserved-seams-and-deferred-debt.md:1282-1288 and the scripts/README.md:36 one-liner so neither reads as an absolute every-site rationale claim, since D4 and the E4 gate never require one of a cast_* allow.",
+      "answer": "Reword both down to the D4 scope",
+      "recommended": true,
+      "recordedAs": "routed to E11's mirror write-back: the mirror :1282-1288 Load-bearing prose and scripts/README.md:36 stop claiming an every-site rationale and state the comments.md D4 lint scope instead; prose only"
+    },
+    {
+      "n": 5,
+      "round": "R6-nh-5",
+      "id": "PD-035",
+      "candidateRef": "5a-performance-00",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/performance 5a"
+      ],
+      "question": "Owner call: whether the goldens-moving delta reformulation of the 2-opt accept test is worth a parity re-baseline at all, given that the confirmed free win is only the symmetric matrix fill; if not, the perf sweep should carry the symmetric-fill item alone.",
+      "answer": "Symmetric fill only, no re-baseline",
+      "recommended": true,
+      "recordedAs": "PD-035's fix-shape narrows to the byte-exact half (mirrored distance matrix, hoisted per-start buffers); the tour-cost delta reformulation is dropped, no parity re-baseline; setup-time, stays Sev C, not queued"
+    },
+    {
+      "n": 6,
+      "round": "R6-nh-6",
+      "id": "PD-036",
+      "candidateRef": "5a-performance-01",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/performance 5a"
+      ],
+      "question": "Placement is an owner call the architecture rules do not disambiguate: a derived study-invariant consumed only by the backward drivers fits decision-tree rule 2 (a `NodeGraph` field beside `n_pools`/`pool_stage`, the candidate's shape) and rule 5 (a `BackwardPassState` scratch field) equally; the training owner should also decide whether this lands together with the register's open one-owner residue on the interior-cut-node accessor.",
+      "answer": "NodeGraph field, land with the accessor residue",
+      "recommended": true,
+      "recordedAs": "decision-tree rule 2: the cut-level decomposition becomes a NodeGraph field beside n_pools / pool_stage, reaching the backward drivers through TrainingContext; landed in the same change as the interior-cut-node accessor one-owner residue"
+    },
+    {
+      "n": 7,
+      "round": "R6-nh-7",
+      "id": "TD-042",
+      "candidateRef": "5a-test-bloat-02",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/test-bloat 5c"
+      ],
+      "question": "Whether the corpus should keep at least one literal that still spells all sixteen penalty fields as a canary: spreading `..HydroPenalties::uniform(v)` everywhere means a newly added penalty field silently defaults in every fixture instead of breaking the build, and while `uniform`'s rustdoc endorses the spread and builders.rs places its strictness on the make_<entity> literal, no artifact rules on the crate-wide loss of that compile-time signal.",
+      "answer": "Uniform spread + one canary literal; no Default derive",
+      "recommended": true,
+      "recordedAs": "the fix stays a test-support constructor (..HydroPenalties::uniform(v) spread) with one full sixteen-field literal kept per crate as the compile-time canary; no Default derive in cobre-core"
+    },
+    {
+      "n": 8,
+      "round": "R6-nh-8",
+      "id": "TD-044",
+      "candidateRef": "5a-test-bloat-04",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Scope call for the owner: the default_hydro_penalties body is one md5 across anticipated_core.rs and anticipated_scenarios.rs, and scenarios build_config at 2954 equals core build_config at 3831, so the owner must decide whether the hoist stays per-binary at file scope or lifts the shared class into tests/common (the test-corpus station owns the cross-binary convention).",
+      "answer": "Per-binary hoist now; cross-binary lift is E08's call",
+      "recommended": true,
+      "recordedAs": "the in-file duplicates collapse at file scope in each binary; whether the shared class lifts into tests/common follows the E08 test-corpus convention decision"
+    },
+    {
+      "n": 9,
+      "round": "R6-nh-9",
+      "id": "TD-045",
+      "candidateRef": "5a-test-bloat-05",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call outside this candidate: invariance-shuffle.yml builds cargo nextest -p cobre-sddp --test parity without the test-support feature, while parity.rs reaches cobre_sddp::test_support ungated at :894 and :1303, so either that workflow cannot build at the pin or the clones never protected a working default-feature configuration; deciding which fixes whether the consolidation must also gate these modules on the feature or the workflow gains it.",
+      "answer": "Consolidate behind test-support; E07 fixes the workflow",
+      "recommended": true,
+      "recordedAs": "the shared state_layout_for lives in the test-support surface; invariance-shuffle.yml's missing --features test-support on the parity binary is handed to the build-ci station (E07) as a CI drift item"
+    },
+    {
+      "n": 10,
+      "round": "R6-nh-10",
+      "id": "TD-046",
+      "candidateRef": "5a-test-bloat-06",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Scope call for this item: whether relocating the oracle should also re-word the three production doc comments that use `shift_lag_state` as the canonical lag-remap vocabulary (the bracketed reference at `noise.rs:211` plus the code spans at `lp/indexer/state_space.rs:443` and `lp/indexer/cut_state_projection.rs:269`), or leave them naming a test-module-private symbol.",
+      "answer": "Relocate and re-word the three doc comments",
+      "recommended": true,
+      "recordedAs": "the lag-shift oracle leaves stochastic/noise.rs and the three production doc comments (noise.rs:211, state_space.rs:443, cut_state_projection.rs:269) describe the kernel by behaviour instead of naming the test oracle; no behaviour change"
+    },
+    {
+      "n": 11,
+      "round": "R6-nh-11",
+      "id": "CD-085",
+      "candidateRef": "5b-architecture-02",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Alignment-epic owner call: whether conflicts trigger 4 (one-consumer abstraction) reaches a purpose-named single-consumer StateSpace accessor that completes an existing five-member family, or is bounded to seams, traits and crates as its text states.",
+      "answer": "Bounded to seams/traits/crates; the accessor is fine",
+      "recommended": true,
+      "recordedAs": "conflicts trigger 4 does not reach a family-completing StateSpace accessor; CD-085 stays accepted at B, advances-0b, no hold; recorded on the E9 alignment queue"
+    },
+    {
+      "n": 12,
+      "round": "R6-nh-12",
+      "id": "OD-037",
+      "candidateRef": "5b-over-engineering-00",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/over-engineering 5b"
+      ],
+      "question": "Scheduling only: whether the public-API removal of Col and Row ships as its own semver-major break or waits for the 0b cobre-model carve-out of lp/, as the CD-019 deferral precedent suggests — the defect itself is settled.",
+      "answer": "Batch with the next licensed public-API break / 0b carve",
+      "recommended": true,
+      "recordedAs": "OD-037's Col/Row removal ships in the same licensed public-API break as OD-038 and CD-083 (CD-019 batching precedent); the defect is settled, only the scheduling is batched"
+    },
+    {
+      "n": 13,
+      "round": "R6-nh-13",
+      "id": "OD-038",
+      "candidateRef": "5b-over-engineering-01",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call carried over from the attacker: deleting FphaRowRange is a public-API removal (reachable as cobre_sddp::indexer::FphaRowRange via lib.rs:69) with no in-repo consumer; decide whether it lands now as ordinary cleanup or is batched with the Phase 0b cobre-model carve-out that relocates lp/indexer anyway, per the CD-019 deferral precedent.",
+      "answer": "Batch with the next licensed public-API break / 0b carve",
+      "recommended": true,
+      "recordedAs": "OD-038's FphaRowRange removal ships in the same licensed public-API break as OD-037 and CD-083; the false module doc is corrected now"
+    },
+    {
+      "n": 14,
+      "round": "R6-nh-14",
+      "id": "OD-038",
+      "candidateRef": "5b-over-engineering-01",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Scope call: the fix as filed leaves the same per-plant framing live in BlockGrid::advance_fpha_base's rustdoc (block_grid.rs:106-107), so the reader hazard is only half retired; decide whether that sibling doc correction joins this item or gets its own.",
+      "answer": "Joins OD-038",
+      "recommended": true,
+      "recordedAs": "one doc-correction step covers the FphaRowRange module doc and BlockGrid::advance_fpha_base's rustdoc (block_grid.rs:106-107); lands now, independent of the removal's batching"
+    },
+    {
+      "n": 15,
+      "round": "R6-nh-15",
+      "id": "PD-039",
+      "candidateRef": "5b-performance-01",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/performance 5b"
+      ],
+      "question": "Owner call: whether removing a bit-identical repeat submission of already-in-force column bounds counts as a warm-start-chain change that must clear the parity goldens, the rank-invariance harness and the opening_order_determinism gate before the hoist lands, given that the CLP backend's set_row_bounds rustdoc asserts factorization/basis preservation across a bound patch but nothing in this repo pins that property for Clp_chgColumn*.",
+      "answer": "Treat as a warm-start-chain change; clear all three bars in E10",
+      "recommended": true,
+      "recordedAs": "PD-039's hoist is measured by the perf sweep at 4t and lands only with the parity goldens, the rank-invariance harness and the opening_order_determinism gate green; nothing asserted at the gate"
+    },
+    {
+      "n": 16,
+      "round": "R6-nh-16",
+      "id": "TD-047",
+      "candidateRef": "5b-test-bloat-02",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Target shape for the split is a convention call CD-007 owns: one extracted tests.rs matching commitment_reconcile/layout/template, or N subject-named files matching columns.rs's 12 inline modules. The unratified section 5.1 threshold cannot settle it.",
+      "answer": "One extracted tests.rs per module, matching the sibling convention",
+      "recommended": true,
+      "recordedAs": "TD-047's split follows the three extracted-tests siblings in lp/builder (commitment_reconcile / layout / template); recorded as CD-007's convention decision"
+    },
+    {
+      "n": 17,
+      "round": "R6-nh-17",
+      "id": "TD-048",
+      "candidateRef": "5b-test-bloat-03",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Whether this binary's classical arm should be parameterized in place or instead folded onto the existing two_hydro_par_system helper when template_integration and par_a_lag12_lp_coefficient are grouped under the testing-architecture section 5.1 layout - a test-corpus station call, since that homing layout is still a proposal at the pin.",
+      "answer": "Parameterize in place now; the fold is E08's grouping call",
+      "recommended": true,
+      "recordedAs": "build_classical_fixture collapses onto build_par_a_fixture inside the binary now; folding onto two_hydro_par_system follows the E08 section 5.1 grouping decision"
+    },
+    {
+      "n": 18,
+      "round": "R6-nh-18",
+      "id": "TD-049",
+      "candidateRef": "5b-test-bloat-04",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Scope call: whether the ticket is the family collapse as filed or the higher-leverage extension of the O(1) Spec layer to InflowModel, LoadModel and the four bounds/penalties sizing structs, which owns the 20-copy fan-out the collapse leaves at fifteen.",
+      "answer": "Spec-layer extension, with the collapse as its first step",
+      "recommended": true,
+      "recordedAs": "TD-049's ticket targets the O(1) Spec-layer extension to InflowModel, LoadModel and the four sizing structs, which owns the remaining fan-out; the nineteen-builder collapse lands as its first step"
+    },
+    {
+      "n": 19,
+      "round": "R6-nh-19",
+      "id": "CD-086",
+      "candidateRef": "5c-architecture-00",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/architecture 5c"
+      ],
+      "question": "Carried over from the attacker and still decisive: is enumerated traversal combined with dynamic cut selection a SUPPORTED configuration? Road (a) rejects the pairing beside the existing enumerated preconditions in `setup/mod.rs`; road (b) wires the binding contribution plus a per-stage metadata reduction into the enumerated driver. Both are byte-neutral on today's goldens, so only owner intent decides which road.",
+      "answer": "Road (a): reject the pairing at admission",
+      "recommended": true,
+      "recordedAs": "enumerated traversal + dynamic cut selection is NOT a supported configuration: it becomes a typed admission-gate rejection beside the existing enumerated preconditions in setup/mod.rs, never a silent degrade; no new collective"
+    },
+    {
+      "n": 20,
+      "round": "R6-nh-20",
+      "id": "CD-086",
+      "candidateRef": "5c-architecture-00",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Scope and severity call: `CutPool::enforce_budget`'s `(last_active_iter, active_count)` eviction key is a second production reader that degrades the same way under enumerated traversal, and unlike the DCS seed it changes which cuts are deactivated and therefore the bound. The owner must decide whether that reader belongs inside this item's scope and whether it lifts the severity above B; I did not mint a separate item for it.",
+      "answer": "In scope; severity stays B (A-risk)",
+      "recommended": true,
+      "recordedAs": "CutPool::enforce_budget's eviction-key reader is inside CD-086's scope; road (a) covers both readers; severity stays B (A-risk), the marker already carrying the bound hazard; no separate item"
+    },
+    {
+      "n": 21,
+      "round": "R6-nh-21",
+      "id": "CD-028",
+      "candidateRef": "5c-architecture-04",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call: whether the confirmed residue should produce any code change at all, or only the module-doc consumer-list correction -- the identical fragment is a four-line composition of stdlib collect plus an integer sum, and hoisting it behind a generic-over-E helper trades two transparent ? sites for one opaque one.",
+      "answer": "Module-doc correction only; no code hoist",
+      "recommended": true,
+      "recordedAs": "claim_scatter.rs's module-doc consumer list is corrected to name simulation/enumerated.rs; the four-line worker-result fold stays inline at both sites; CD-028's skeleton claim stays open as calibrated"
+    },
+    {
+      "n": 22,
+      "round": "R6-nh-22",
+      "id": "PD-040",
+      "candidateRef": "5c-performance-00",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call: whether the inaccurate rustdoc sentence at training/session/mod.rs:1026-1027 ('no heap allocation when the cut pools have not grown') gets its own doc-accuracy item — it is false because of run_cut_management's own per_stage / deactivations / record_by_pool allocations, independent of this candidate's mechanism claim, so it is stripped here rather than fixed by it.",
+      "answer": "Correct the sentence inside PD-040's fix",
+      "recommended": true,
+      "recordedAs": "the false 'no heap allocation' rustdoc at training/session/mod.rs:1026-1027 is made true in the same change that removes or documents run_cut_management's allocations; no extra id"
+    },
+    {
+      "n": 23,
+      "round": "R6-nh-23",
+      "id": "PD-042",
+      "candidateRef": "5c-performance-03",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/performance 5c"
+      ],
+      "question": "Owner call, needed only to scope the LARGER change and not the claim confirmed here: is the level-wide over-inclusion a required correctness margin, or is narrowing each node's archive to its own routed states licensed as a golden-moving change? Only that narrowing reduces the per-node value sweep; the shared-block fix confirmed above does not depend on the answer.",
+      "answer": "Keep the over-inclusion; shared-block fix only",
+      "recommended": true,
+      "recordedAs": "the level-wide over-inclusion is a required correctness margin; PD-042 is exactly the byte-neutral one-block-per-level fix; narrowing each node's archive to its routed states is NOT licensed"
+    },
+    {
+      "n": 24,
+      "round": "R6-nh-24",
+      "id": "TD-051",
+      "candidateRef": "5c-test-bloat-00",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Sequencing call for the cut-pool/training owner: delete the redundant binary now, or let it retire together with the superseded sync_cuts family at the next licensed public-API break, since all three copies of this assertion die with the method.",
+      "answer": "Delete the redundant binary now",
+      "recommended": true,
+      "recordedAs": "the duplicate sync_cuts count-mismatch binary is deleted now (coverage-neutral, independent of the API break); the surviving copy retires with the superseded method"
+    },
+    {
+      "n": 25,
+      "round": "R6-nh-25",
+      "id": "TD-053",
+      "candidateRef": "5c-test-bloat-02",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Destination owner call for the shared StubComm/Rank0Of2 pair: testing-architecture.md section 5.2 assigns them to cobre-comm, which has no test-support feature at the pin, while section 6 phase 3 collapses tests/common into cobre-sddp's test-support surface; and Rank0Of2's load-bearing forward_passes == 1 caveat names cobre-sddp's RankDistribution, which the infrastructure-genericity hard rule would keep out of cobre-comm.",
+      "answer": "cobre-sddp test-support surface",
+      "recommended": true,
+      "recordedAs": "the genericity hard rule decides: Rank0Of2 names cobre-sddp's RankDistribution, so the StubComm / Rank0Of2 pair lives in cobre-sddp's test_support; a later StubComm move to a cobre-comm test-support feature is E08-2's call"
+    },
+    {
+      "n": 26,
+      "round": "R6-nh-26",
+      "id": "TD-054",
+      "candidateRef": "5c-test-bloat-03",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call on the shape of the inert-only consolidation: a cfg-gated declarative macro in test_support.rs versus the candidate's field-configured shared struct, since a single struct cannot express the seven-to-one get_basis split and the two strict sites without adding modes no test reads.",
+      "answer": "cfg-gated declarative macro in test_support.rs",
+      "recommended": true,
+      "recordedAs": "one cfg-gated macro stamps the inert MockSolver body; the seven-to-one get_basis site and the two strict sites keep their own doubles"
+    },
+    {
+      "n": 27,
+      "round": "R6-nh-27",
+      "id": "CD-087",
+      "candidateRef": "5d-architecture-00",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Whether the public half of the alias block is also retired is an owner call: lib.rs:23-26 declares the pub mod namespaces non-semver-stable and the nested paths already resolve, but removing pub use policy::orchestration would touch cobre-cli, cobre-python, the integration corpus and the literal match in scripts/ci/check_python_parity.py.",
+      "answer": "Retire the private half now; public half in the API-break batch",
+      "recommended": true,
+      "recordedAs": "the intra-crate aliases go now; pub use policy::orchestration is removed in the same licensed public-API break as OD-037 / OD-038 / CD-083, updating cobre-cli, cobre-python, the corpus and scripts/ci/check_python_parity.py then"
+    },
+    {
+      "n": 28,
+      "round": "R6-nh-28",
+      "id": "CD-088",
+      "candidateRef": "5d-architecture-01",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/architecture 5d"
+      ],
+      "question": "Destination is an owner call and decides the hint: re-home inside the engine beside simulation/types.rs (a pure local cleanup, hint degrades to neutral) or leave it until Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection wholesale (target-layering-brief.md section 2, 0a bullet), which keeps advances-0a but makes the intra-engine move wasted work.",
+      "answer": "Land with 0a's shared output orchestration",
+      "recommended": true,
+      "recordedAs": "CD-088 stays accepted at C, advances-0a; the write-payload conversion moves when Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection, not as an intra-engine move 0a would undo"
+    },
+    {
+      "n": 29,
+      "round": "R6-nh-29",
+      "id": "OD-040",
+      "candidateRef": "5d-over-engineering-00",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/over-engineering 5d"
+      ],
+      "question": "Doc-owner call: the mirror sentence at reserved-seams-and-deferred-debt.md:1278-1284 asserts every numeric-cast allow on production code carries a `// Rationale:`, which comments.md D4 and the E4 gate's IN_SCOPE_LINTS both contradict; decide whether that sentence is corrected down to the D4 scope or D4 is widened to cover cast_* lints.",
+      "answer": "Correct the mirror sentence down to D4",
+      "recommended": true,
+      "recordedAs": "the mirror :1278-1284 sentence stops asserting an every-site Rationale on numeric-cast allows and states the comments.md D4 lint scope; no new obligation on the 42 cast_* openers; routed to E11's mirror write-back with NH4"
+    },
+    {
+      "n": 30,
+      "round": "R6-nh-30",
+      "id": "OD-040",
+      "candidateRef": "5d-over-engineering-00",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Routing call: the surviving residue is a missing input-boundary validation owned by cobre-io, not an over-engineering item in cobre-sddp; decide whether it stays on this station's over-engineering ledger or is re-filed against the owning crate.",
+      "answer": "Re-file the residue against cobre-io at E11",
+      "recommended": true,
+      "recordedAs": "OD-040 stays accepted here as the record; the four cast_sign_loss sites are a missing cobre-io input-boundary validation and are re-filed against cobre-io at the reconciliation epic"
+    },
+    {
+      "n": 31,
+      "round": "R6-nh-31",
+      "id": "OD-041",
+      "candidateRef": "5d-over-engineering-01",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Scope call: whether crate-internal single-file items should be narrowed to module-private at all, or whether pub(crate) is the ratified uniform internal marker for this workspace; if narrowing is wanted it should be one crate-wide pass over the 25 sites with a per-site forcing check, not this five-anchor slice.",
+      "answer": "Crate-wide pass over the 25 sites with a forcing check",
+      "recommended": true,
+      "recordedAs": "OD-041 widens to one crate-wide visibility pass over the 25 single-file pub(crate) items, each narrowed only where a per-site forcing check proves no other consumer; stays Sev C"
+    },
+    {
+      "n": 32,
+      "round": "R6-nh-32",
+      "id": "PD-045",
+      "candidateRef": "5d-performance-00",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/performance 5d"
+      ],
+      "question": "Owner picks where the per-stage cache lives (shared `StageContext` vs per-worker simulation scratch); the span-only residue shrinks the memory side of that trade from a full row vector to the load-balance rows.",
+      "answer": "StageContext, span-only",
+      "recommended": true,
+      "recordedAs": "PD-045's per-stage unscaled cache lives on StageContext as a load-balance-rows span (shared immutable per-stage data, the context-struct pattern); not per-worker scratch"
+    },
+    {
+      "n": 33,
+      "round": "R6-nh-33",
+      "id": "—",
+      "candidateRef": "5d-performance-03",
+      "from": "defender",
+      "alsoAskedBy": [
+        "attacker/performance 5d"
+      ],
+      "question": "Process call: the 4t sweep skips setup-time-only items, so the owner must say whether a setup-budget track exists to record the two conceded residues (per-plane grid rebuild in the secant; duplicate deviation walk under the opt-in flag) or whether they are dropped.",
+      "answer": "Informational note only; no track, no id",
+      "recommended": true,
+      "recordedAs": "the 5d-performance-03 dismissal stands; the two conceded setup-time FPHA-fitting residues (per-plane grid rebuild in the secant; duplicate deviation walk under the opt-in flag) are listed once as informational for E10; no setup-time track, no id, no queue row"
+    },
+    {
+      "n": 34,
+      "round": "R6-nh-34",
+      "id": "PD-048",
+      "candidateRef": "5d-performance-05",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Rule-11 scope call the owner may want to settle once for all similar candidates: does the setup-time per-plant carve-out cover a per-plant recomputation whose cost is sized by a whole shared table (superlinear in plant count), or only one sized by the plant's own data? I read it as the latter and narrowed accordingly.",
+      "answer": "Only own-data recomputations are carved out; PD-048 stands as narrowed",
+      "recommended": true,
+      "recordedAs": "rule-11 interpretation recorded: the setup-time per-plant carve-out covers recomputations sized by the plant's own data only; a per-plant rescan of a whole shared table is superlinear and stays a finding; PD-048 stands as narrowed at Sev C"
+    },
+    {
+      "n": 35,
+      "round": "R6-nh-35",
+      "id": "TD-055",
+      "candidateRef": "5d-test-bloat-01",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call on whether the audited k_max partition should survive in any executable form now that the shift-to-hold switchover has landed and there are zero k_max >= 2 tier-1 goldens: retire the checklist to prose, or re-home it as a script-backed gate that resolves each name against a nextest listing, since Rust cannot reflect over another integration binary's tests (the probe's own module doc, lines 25-28).",
+      "answer": "Retire the checklist to prose",
+      "recommended": true,
+      "recordedAs": "hold_k1_byte_stability_probe.rs is retired; the audited k_max partition becomes a short prose note in the testing-architecture doc; no executable gate"
+    },
+    {
+      "n": 36,
+      "round": "R6-nh-36",
+      "id": "TD-056",
+      "candidateRef": "5d-test-bloat-04",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call: whether testing-architecture.md section 5.8 (keep StubComm/Rank0Of2) plus the section 5.2 move into cobre-comm's test-support surface is the final disposition for the harness pair, or whether the test-corpus station's E08-2 needs-human item may still merge them - my dismissal of the merge half rests on section 5.8 being ratified.",
+      "answer": "Final: keep the pair; destination per NH25",
+      "recommended": true,
+      "recordedAs": "testing-architecture section 5.8 is ratified for the StubComm / Rank0Of2 pair; the merge half stays dismissed; the destination is cobre-sddp's test_support (NH25), not cobre-comm"
+    },
+    {
+      "n": 37,
+      "round": "R6-nh-37",
+      "id": "TD-056",
+      "candidateRef": "5d-test-bloat-04",
+      "from": "defender",
+      "alsoAskedBy": [],
+      "question": "Owner call: whether conformance.rs:40 LocalComm's no-copy collectives (Ok(()) without writing recv, unlike common::StubComm) are deliberate; I read the divergence as semantics-by-design, but no rustdoc states why.",
+      "answer": "Deliberate; state the why in one doc clause",
+      "recommended": true,
+      "recordedAs": "conformance.rs:40 LocalComm's no-copy collectives are semantics by design; its rustdoc gains the single clause explaining the divergence from tests/common StubComm; no behaviour change"
+    },
+    {
+      "n": 38,
+      "round": "R6-nh-38",
+      "id": "CD-084",
+      "candidateRef": "5b-architecture-00",
+      "from": "attacker/architecture 5b",
+      "alsoAskedBy": [],
+      "question": "Can a shipped deck declare an anticipated plant with a fixed post-horizon window AND a genuine in-study decision whose delivery target sits above that window? If yes, the Sev A raw-axis residue in columns.rs::fill_anticipated_columns is reachable in production and the fix moves a parity golden; if the combination is rejected upstream at validation, the defect is latent and the fix is byte-neutral against every existing golden. entries.rs carries the fixture (plant0_excised_window_g3_resolution) but a fixture does not establish deck reachability.",
+      "answer": "Rejected at validation; latent, fix byte-neutral",
+      "recommended": true,
+      "recordedAs": "an anticipated plant with a fixed post-horizon window AND an in-study decision above it is not a valid deck (rejected at validation), so CD-084's raw-axis residue is latent; CD-084 stays B (A-risk) as calibrated and the one-site ring-axis correction lands byte-neutral against every golden"
+    },
+    {
+      "n": 39,
+      "round": "R6-nh-39",
+      "id": "CD-074",
+      "candidateRef": "5b-architecture-01",
+      "from": "attacker/architecture 5b",
+      "alsoAskedBy": [],
+      "question": "Are the commitment drift tolerances COMMITMENT_DRIFT_REL = 1e-7 and COMMITMENT_DRIFT_ABS = 1e-5 in commitment_reconcile.rs chosen under the assumption that commitment-hold col_scale is exactly 1.0? The two mechanisms never cross-reference, so whether the tolerance budget already absorbs a non-unit scale factor or depends on the override is an owner fact, and it decides whether the candidate's fix is a cross-reference plus assertion or a re-derivation of the constants.",
+      "answer": "Chosen at col_scale 1.0; add the cross-reference + a scale assertion",
+      "recommended": true,
+      "recordedAs": "COMMITMENT_DRIFT_REL / COMMITMENT_DRIFT_ABS assume commitment-hold col_scale == 1.0; the coupling is documented in both modules and the unit scale asserted where the tolerances apply; no constant changes; rides E11's reconciliation (5b-architecture-01 stays dismissed)"
+    },
+    {
+      "n": 40,
+      "round": "R6-nh-40",
+      "id": "—",
+      "candidateRef": "5d-architecture-02",
+      "from": "attacker/architecture 5d",
+      "alsoAskedBy": [],
+      "question": "CLAUDE.md's Hard Rules enumerate the cobre-sddp unsafe_code = \"allow\" override as existing for the matrixmultiply dgemm call 'isolated in src/gemm.rs', but at this baseline hull/ is a second, unrelated unsafe island: git grep for 'unsafe ' over crates/cobre-sddp/src returns gemm.rs:93 plus hull/ffi.rs:27 and hull/mod.rs:82, :152, :192. The crate-wide Cargo.toml allow therefore bounds nothing, and a third island would need no gate. Owner call: amend the doc enumeration to name hull/, or move the allow to module granularity with #![forbid(unsafe_code)] at the crate root and an explicit exemption on gemm and hull::ffi. Raised here rather than as a candidate because hull/ itself is correctly fenced (see the positives entry) and the sanctioned #[allow] census excludes 'this allow exists' claims.",
+      "answer": "Module granularity: crate-root forbid + per-module allow",
+      "recommended": true,
+      "recordedAs": "cobre-sddp moves to #![forbid(unsafe_code)] at the crate root with #[allow(unsafe_code)] on gemm.rs and hull::ffi only, so a third island needs an explicit exemption; CLAUDE.md's hard-rule enumeration is amended to name both islands; informational at this station (no id), handed to E07/E11"
+    },
+    {
+      "n": 41,
+      "round": "R6-nh-41",
+      "id": "OD-039",
+      "candidateRef": "5c-over-engineering-01",
+      "from": "attacker/over-engineering 5c",
+      "alsoAskedBy": [],
+      "question": "Out-of-lens routing question, found while checking CutSelectionStrategy variant reachability and left as a candidate for no lens of mine: are the field doc comments on CutSelectionStrategy::Dynamic (cut/cut_selection.rs) deliberately the reverse of DcsParams, or is that drift the docs lens should own? The enum doc calls k2 'Maximum number of cuts added per lazy-solve round' and nadic 'Number of most-violated candidate cuts considered per round', while cut/dcs.rs:738-756 uses k2 as the seed-recency window and dcs.rs:335 uses nadic as the top-N truncation ('take = nadic.min(violated_count)'). The config mapping itself is correct - parse_cut_selection_config sends seed_window to k2 and max_added_per_round to nadic, matching cobre-io's own field docs - so only the two enum field comments disagree with the code. No behaviour is affected and I raise no candidate for it.",
+      "answer": "Route the two-comment correction to E07",
+      "recommended": true,
+      "recordedAs": "the reversed field docs on CutSelectionStrategy::Dynamic (k2 / nadic) are a rustdoc drift item for the build-ci/docs station; no id at this station; the config mapping is correct"
+    },
+    {
+      "n": 42,
+      "round": "R6-nh-42",
+      "id": "PD-043",
+      "candidateRef": "5c-performance-04",
+      "from": "attacker/performance 5c",
+      "alsoAskedBy": [],
+      "question": "Would the owner accept demoting the BASIC recount in enforce_basic_count_invariant to a debug assertion, with the release path trusting counts carried out of the two reconstruction entry points? The recount is currently the only unconditional runtime check that a reconstructed basis satisfies the HiGHS shape requirement before it reaches the solver.",
+      "answer": "Keep the unconditional recount; PD-043 is the slot-table clear only",
+      "recommended": true,
+      "recordedAs": "enforce_basic_count_invariant's BASIC recount stays an unconditional release check; PD-043's fix-shape is the reconstructed-slots-only clear of the slot table; no debug_assert demotion"
+    },
+    {
+      "n": 43,
+      "round": "R6-nh-43",
+      "id": "TD-052",
+      "candidateRef": "5c-test-bloat-01",
+      "from": "attacker/test-bloat 5c",
+      "alsoAskedBy": [],
+      "question": "Deleting test_mpi_allgatherv_nonuniform_workers.rs is coverage-neutral by the evidence, since its titular nonuniform-workers assertion moved to the handshake_rejects_nonuniform_workers unit test by its own module doc and its one remaining test duplicates the sibling's, and no CI workflow or script names the file. The open question is whether the owner wants the file NAME retained anyway as provenance for the historical nonuniform-workers bug, in which case the fix becomes the shared-stub consolidation instead of the deletion.",
+      "answer": "Delete; provenance lives in git history",
+      "recommended": true,
+      "recordedAs": "tests/test_mpi_allgatherv_nonuniform_workers.rs is deleted (coverage-neutral); the historical nonuniform-workers bug stays traceable through git history and the surviving handshake_rejects_nonuniform_workers unit test"
+    }
+  ],
+  "informational": [
+    {
+      "round": "R6-nh-33",
+      "note": "two setup-time FPHA-fitting residues (per-plane grid rebuild in the secant; duplicate deviation walk under the opt-in flag) — informational for E10, no track, no id"
+    },
+    {
+      "round": "R6-nh-40",
+      "note": "hull/ is a second unsafe island beside gemm.rs; move to crate-root forbid + per-module allow and amend CLAUDE.md — E07/E11, no id"
+    },
+    {
+      "round": "R6-nh-41",
+      "note": "CutSelectionStrategy::Dynamic k2 / nadic field docs reversed against dcs.rs — E07, no id"
+    },
+    {
+      "round": "R6-nh-9",
+      "note": "invariance-shuffle.yml builds the parity binary without the test-support feature — E07, no id"
+    }
+  ],
+  "noRoundFor": [
+    "16 defender dismissals (Cleared with citation)",
+    "10 dup-of folds onto prior ids",
+    "five reserved-seam filters (LipschitzConfig.mode / UpperBoundEvaluationConfig, per-family boundary coupling channels, Legacy cost-scale branch, #[allow] census Reserved-seam class, superseded cut-sync public methods)"
+  ],
+  "handoffsAfterGate": {
+    "E9": "alignment-queue.json written: 8 non-neutral rows (CD-082 advances-0a I.3-7, CD-088 advances-0a, CD-085 / CD-087 / OD-037 / OD-038 advances-0b, TD-045 advances-1 I.3-8, CD-034 advances-0b) plus the reused Wave-4 rows CD-004 / CD-005 / CD-003 hop (advances-0a); CD-024-successor hold CLOSED by its alternative (no id promoted); NH11 (trigger 4 bounded to seams/traits/crates), NH28 (CD-088 lands with 0a's output orchestration); lp-inventory.json (30 lp/ modules) and Part-I item I.3-7 released",
+    "E10": "perf-queue.json unchanged: 9 claim rows kept, all UNMEASURED 4t, plus the PD-004 existence row; directions attached: PD-036 NodeGraph field with the accessor residue, PD-039 warm-start-chain bars (parity goldens + rank-invariance + opening_order_determinism), PD-040 doc sentence corrected inside the fix, PD-042 over-inclusion kept (shared block only), PD-045 StageContext span; informational: two setup-time FPHA-fitting residues (NH33), no track",
+    "E08": "td-queue.json unchanged: 16 TD rows kept; directions: TD-042 uniform spread + one canary literal, TD-044 per-binary hoist, TD-045 behind test-support, TD-047 one extracted tests.rs per module, TD-048 parameterize in place, TD-049 Spec-layer extension, TD-051 delete the redundant binary now, TD-052 delete, TD-053 / TD-056 pair in cobre-sddp test_support (section 5.8 ratified), TD-054 cfg-gated macro, TD-055 prose",
+    "E07": "invariance-shuffle.yml builds the parity binary without --features test-support (NH9); CutSelectionStrategy::Dynamic k2 / nadic field docs reversed (NH41); CLAUDE.md unsafe enumeration + module-granularity forbid/allow on gemm.rs and hull::ffi (NH40)",
+    "E11": "mirror write-back: allow-census Load-bearing prose down to the D4 scope (NH4, NH29); OD-040 residue re-filed against cobre-io (NH30); COMMITMENT_DRIFT_* cross-reference + scale assertion (NH39); the Legacy cost-scale seam has no mirror entry at the pin; public-API removal batch = OD-037, OD-038, CD-083, CD-087 public half (CD-019 precedent)",
+    "E06": "the CD-004 wire twin (BroadcastConfig) is the cli-python station's half; CD-082's validate.rs reconcile_boundary context cited"
+  },
+  "handoffConfirmation": {
+    "decision": "confirm",
+    "rationale": "Confirm all three (Recommended) — measurements/lp-inventory.json (30 lp/ modules), the Part-I item I.3-7 cross-reference (+ I.3-8 via TD-045) and alignment-queue.json are released to E9 with the gate decisions applied"
+  },
+  "returned": true
+}

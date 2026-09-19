@@ -1,0 +1,114 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "targetStation": "perf-sweep (Epic 10)",
+  "layoutContract": "4t = single-process claims (--threads 4, P-cores 0,2,4,6); 2x2 = collective claims (mpiexec -n 2 x --threads 2); requires ∈ {none, enumerated, external-library} selects the deck. Every queued row here is a cobre-python READER claim: the exercising harness is a Python-side script over the CAL run's output tree / policy checkpoint, not the cobre run deck itself — the perf epic owns the protocol",
+  "namedTargets": {
+    "cobre-python bulk readers (results.rs / study.rs)": [
+      "PD-049",
+      "PD-050",
+      "PD-051"
+    ],
+    "S6a writer/run boundary": [
+      "(no queued row — every S6a performance candidate was dismissed cost-accepted-by-rule as once-per-run write / setup work or deliberate-and-documented)"
+    ],
+    "Sev-C reader items (section only, the owner gate may promote)": [
+      "PD-052",
+      "PD-053",
+      "PD-054",
+      "PD-055"
+    ]
+  },
+  "queue": [
+    {
+      "id": "PD-049",
+      "candidateRef": "S6c-performance-00",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::load_policy",
+      "anchor": "crates/cobre-python/src/results.rs::load_convergence",
+      "mechanism": "GIL held across a bulk parquet decode and across a FlatBuffers checkpoint read, so every other Python thread is blocked for the whole duration of work that touches no Python object",
+      "exercisingCallSites": [
+        "cobre-python results.rs · load_policy → cobre_io::read_policy_checkpoint (GIL held across the decode)",
+        "cobre-python study.rs · Study::load_policy (the detached sibling over the same checkpoint)"
+      ],
+      "severity": "B",
+      "claim": "Only load_policy survives: results.rs:1519 holds the GIL across cobre_io::read_policy_checkpoint, a decode phase that already returns fully owned Rust data (no lifetime, no Py type) and that the sibling Study::load_policy at study.rs:663 detaches for the same on-disk checkpoint, so the residue is that single call against the crate invariant at lib.rs:11-13. load_convergence is dropped: its decode is interleaved with the per-row PyDict projection that must hold the GIL, and load_convergence_arrow already provides a detached reader for the identical file.",
+      "byteNeutralFixShape": "No crate move: the fix stays in cobre-python (L4). Split each of the two readers into the two halves load_stochastic already separates, a detached decode that returns owned Rust rows and a GIL-held projection that builds the Python objects from them. For load_policy, read and decode the FlatBuffers checkpoint inside py.detach and construct the cut, basis and metadata dicts after reacquiring. Byte-neutrality bar: both symbols are read-only entry points that write no file, so the CLI-vs-Python golden crates/cobre-python/tests/test_cli_python_determinism_parity.py, the file-set parity test tests/test_cli_python_file_set_parity.py, the import-resolving gate scripts/ci/check_python_parity.py and the cobre validate --json single-object stdout contract are untouched by construction. The bar the change must meet instead is that the returned dicts keep identical keys, identical list order and bit-identical float values, which the existing results-reader pytest suite asserts.",
+      "byteNeutrality": "asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object",
+      "contractCited": null,
+      "measurabilityNote": "exercised by a Python-side harness over the CAL run's policy checkpoint (a second Python thread progressing during load_policy), not by the cobre run deck itself; the perf epic owns the protocol",
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido; Python-side reader harness over its outputs)"
+    },
+    {
+      "id": "PD-050",
+      "candidateRef": "S6c-performance-01",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::read_parquet_partition_into",
+      "anchor": "crates/cobre-python/src/results.rs::read_parquet_partition_into",
+      "mechanism": "per-element conversion: an Arrow data-type match plus a dynamic downcast repeated for every cell of every row instead of once per column per batch",
+      "exercisingCallSites": [
+        "cobre-python results.rs · load_simulation → read_parquet_partition_into (per-cell type match + downcast from the single call site at :993)"
+      ],
+      "severity": "B",
+      "claim": "Narrowed to the type-resolution step alone: the match on col.data_type() at results.rs:781 and the as_any().downcast_ref in its arms are invariant per column yet re-entered per cell from the single call site at :993, and can be resolved once per column per batch inside read_parquet_partition_into without touching any other caller. The title's sibling-symmetry half does not survive, because get_column_by_name at :759 is a compile-time hoist over the statically known convergence schema and is unusable for a dynamically discovered entity schema, which needs a per-column resolved enum instead. Nor does the claim reach the rest of the per-cell cost: the is_null test, the Python object per cell, the dict key from field.name() and the PyDict per row are required by the published list[dict] contract and are unchanged by the hoist.",
+      "byteNeutralFixShape": "Stays in cobre-python (L4). Resolve the typed array view once per column per batch before the row loop, the shape get_column_by_name already provides for the convergence reader, and let the row loop index the resolved views; the schema-generic case needs a per-column resolved enum rather than a per-cell match. Counter-signal recorded: load_simulation_arrow is the zero-copy bulk alternative for large results, so this candidate is about the cost of the dict reader that remains the documented default of load_simulation, not about deleting it. Byte-neutrality bar: this is a read path that writes no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched. The bar is that the per-row dicts keep the same keys in the same insertion order, the same None for nulls and bit-identical numeric values.",
+      "byteNeutrality": "asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object",
+      "contractCited": null,
+      "measurabilityNote": "exercised by cobre.results.load_simulation over the CAL run's simulation tree (Python-side harness)",
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido; Python-side reader harness over its outputs)"
+    },
+    {
+      "id": "PD-051",
+      "candidateRef": "S6c-performance-02",
+      "claimType": "single-process",
+      "layout": "4t",
+      "requires": "none",
+      "profiledSymbol": "crates/cobre-python/src/study.rs::cut_matrix",
+      "anchor": "crates/cobre-python/src/results.rs::reshape_f64",
+      "mechanism": "per-element Python object conversion for a numeric array: one PyFloat per f64 on the way in and one unbox per element inside numpy.asarray, plus an extra Vec copy at the opening_tree call site",
+      "exercisingCallSites": [
+        "cobre-python study.rs · Policy::cut_matrix (per-element PyFloat over active cuts × state dimension, per stage)"
+      ],
+      "severity": "B",
+      "claim": "Only Policy::cut_matrix (crates/cobre-python/src/study.rs:226-231) carries the per-element PyFloat materialisation on an array whose element count is not deck-bounded — active cuts times state dimension, paid per stage, with no buffer-based alternative — while the two reshape_f64 callers read deck-bounded parquet blocks and the extra opening_tree Vec copy is conceded as immaterial.",
+      "byteNeutralFixShape": "Stays in cobre-python (L4) and keeps numpy a soft, lazily imported dependency, which is the documented contract of these accessors. Hand numpy the bytes instead of a list: expose the flat f64 buffer as a Python bytes or memoryview object and build the array with numpy.frombuffer followed by reshape, so the transfer is one buffer copy rather than one Python object per element; the lazy import and its verbatim ImportError propagation stay as they are. Byte-neutrality bar: all three are read accessors that write no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched. The bar is bit-identical float64 values, the same dtype, the same C-contiguous row-major shape including the (0, dim) empty case cut_matrix comments on, and the same ImportError behaviour when numpy is absent.",
+      "byteNeutrality": "asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object",
+      "contractCited": "CLAUDE.md § Hard Rules — Never allocate on hot paths — pre-allocate workspaces, reuse buffers",
+      "measurabilityNote": "exercised by Policy.cut_matrix over the CAL run's policy (Python-side harness)",
+      "measured": null,
+      "status": "UNMEASURED",
+      "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido; Python-side reader harness over its outputs)"
+    }
+  ],
+  "gate": {
+    "gateDate": "2026-09-18",
+    "decision": "ratified",
+    "rowsKept": [
+      "PD-049",
+      "PD-050",
+      "PD-051"
+    ],
+    "rowsStruck": [],
+    "directions": {
+      "PD-050": {
+        "round": "R5-nh-14",
+        "choice": "Supported bulk reader; PD-050 proceeds, doc cross-links Arrow",
+        "rationale": "load_simulation stays a supported reader; PD-050's per-column typed-view hoist stays queued; its rustdoc gains a pointer to load_simulation_arrow for large trees"
+      },
+      "PD-052 (section-only)": {
+        "round": "R5-nh-16",
+        "choice": "Identity unspecified; the memo shape is acceptable",
+        "rationale": "element identity across reads is not part of the contract; PD-052's memo (or index-into-shared-Arc) shape is accepted as calibrated; the module doc states identity is unspecified"
+      }
+    },
+    "note": "every queued row stays UNMEASURED single-process 4t; the training-write overlap (NH13) and the rooted gather (NH11) stay out of the sweep"
+  }
+}

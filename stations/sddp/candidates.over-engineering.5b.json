@@ -1,0 +1,129 @@
+{
+  "station": "sddp",
+  "subStation": "5b",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "cell": "sddp/5b",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The generic Col and Row LP-index newtypes have zero consumers: the typed-address vocabulary their module doc describes is carried entirely by StateDim, CutSlot, BlockIdx, InCol and OutCol",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/index.rs",
+          "symbol": "Col"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/index.rs",
+          "symbol": "Row"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n -E '\\b(Col|Row)::new\\b' 077dbe2c -- crates/ ; git grep -n -E '\\b(Col|Row)::new\\b|:\\s*(Col|Row)\\b|->\\s*(Col|Row)\\b' 077dbe2c -- crates/ | grep -v 'lp/indexer/index.rs' ; git grep -n -w Col 077dbe2c -- crates/ | grep -v 'lp/indexer/index.rs' | grep -vE '//[!/]' ; for s in StateDim CutSlot BlockIdx InCol OutCol Col; do echo -n \"$s: \"; git grep -l -w \"$s\" 077dbe2c -- crates/cobre-sddp/src | grep -v 'lp/indexer/index.rs' | grep -cv 'lp/indexer/mod.rs'; done",
+        "output": "$ git grep -n -E '\\b(Col|Row)::new\\b' 077dbe2c -- crates/\n077dbe2c:crates/cobre-sddp/src/lp/indexer/index.rs:265:        assert_eq!(Col::new(42).get(), 42);\n077dbe2c:crates/cobre-sddp/src/lp/indexer/index.rs:286:        assert_eq!(Row::new(7).get(), 7);\n077dbe2c:crates/cobre-sddp/src/lp/indexer/index.rs:312:        assert_eq!(Col::new(3), Col::new(3));\n077dbe2c:crates/cobre-sddp/src/lp/indexer/index.rs:313:        assert_ne!(Col::new(3), Col::new(4));\n(4 hits, all inside index.rs's own #[cfg(test)] mod tests)\n\n$ (typed uses outside index.rs, repo-wide)\n077dbe2c:crates/cobre-io/src/config/simulation.rs:149:        assert_eq!(solver.price, Some(PriceStrategy::Row));\n077dbe2c:crates/cobre-io/src/config/training.rs:701:        assert_eq!(backward.price, Some(PriceStrategy::Row));\n077dbe2c:crates/cobre-sddp/src/solve/solver_phase.rs:506:        PriceStrategy::Row => 1,\n077dbe2c:crates/cobre-sddp/src/solve/solver_phase.rs:1285:                price: Some(PriceStrategy::Row),\n077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs:4123:                price: Some(cobre_io::config::PriceStrategy::Row),\n077dbe2c:crates/cobre-sddp/tests/mpi_wire.rs:482:            price: Some(PriceStrategy::Row),\n(every hit is the unrelated cobre_io::config::PriceStrategy::Row variant)\n\n$ (word Col outside index.rs, comments stripped)\n077dbe2c:crates/cobre-sddp/src/lp/indexer/mod.rs:119:pub use index::{BlockIdx, Boundary, Col, CutSlot, InCol, OutCol, Row, StateDim};\n\n$ (consumer-file count per newtype, excluding index.rs and the indexer/mod.rs re-export)\nStateDim: 8\nCutSlot: 5\nBlockIdx: 11\nInCol: 2\nOutCol: 3\nCol: 1   <- the single hit is two doc-comment prose words (\"Col capacity\") in lp/builder/patch.rs:101,127, not the type",
+        "reading": "Nothing in the repository constructs or names Col or Row as a type outside index.rs itself. The only non-declaration mention of Col in the crate is the re-export at lp/indexer/mod.rs:119; the only typed Row matches repo-wide are the unrelated cobre_io PriceStrategy::Row variant; the one remaining Col hit is prose inside a patch.rs doctest comment. Three tests in index.rs exist solely to give the two unused types a test: col_is_zero_cost_and_round_trips, row_is_zero_cost_and_round_trips and col_equality_is_value_based_not_identity. The five sibling newtypes declared in the same file are genuinely earned by 8, 5, 11, 2 and 3 consumer files respectively, so the finding is scoped to Col and Row alone. Neither carries #[allow(dead_code)] (both are pub and re-exported, so no lint fires to mark them reserved), neither appears in the mirror's Reserved-seam (Voice 4) class, and neither is on the prior-register roster, so this is not a sanctioned reserved seam. The module doc's own closing sentence concedes the seam these two were introduced for stays untyped: every type extracts its raw usize via get() for the solver-FFI seam, which stays usize-only per the infra-genericity rule.",
+        "line": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the Col and Row declarations and their two impl blocks from lp/indexer/index.rs, delete the three tests that exist only to exercise them (col_is_zero_cost_and_round_trips, row_is_zero_cost_and_round_trips, col_equality_is_value_based_not_identity), drop the two names from the pub use in lp/indexer/mod.rs, and rewrite the index.rs module-doc sentence so the typed vocabulary it introduces lists only the types that exist: StateDim, CutSlot, BlockIdx, the InCol/OutCol role split and Boundary. Byte-neutral by construction, because the census proves zero production call sites, so no LP column, row, coefficient or bound moves; still assert the parity goldens in tests/parity.rs through tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction, and move no golden. The blast radius is the public API: lib.rs re-exports the module (pub use lp::indexer), so both names are public items of cobre-sddp and the deletion is a public-API removal with no in-repo consumer; the natural batching is the next public-API break, which the 0b carve-out of cobre-model already forces on this very module.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "FphaRowRange is a zero-consumer public type whose module doc claims a production carrier that does not exist and whose row formula contradicts the live FPHA walker",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/layout.rs",
+          "symbol": "FphaRowRange"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs",
+          "symbol": "for_each_fpha_plane"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n '\\bFphaRowRange\\b' 077dbe2c -- crates/ ; git grep -c 'FphaRowRange' 077dbe2c -- crates/cobre-sddp/src/lp/builder/template.rs crates/cobre-sddp/src/lp/builder/layout.rs ; git grep -c 'EvaporationIndices' 077dbe2c -- crates/cobre-sddp/src ; git show 077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs | sed -n '1,9p;28,39p' ; git show 077dbe2c:crates/cobre-sddp/src/lp/builder/fpha_cursor.rs | sed -n '32,39p;54p'",
+        "output": "$ git grep -n '\\bFphaRowRange\\b' 077dbe2c -- crates/\n077dbe2c:crates/cobre-sddp/src/lp/builder/fpha_cursor.rs:39:/// row-sortedness assertion. Matches `FphaRowRange::start`.\n077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs:2://! [`FphaRowRange`].\n077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs:34:pub struct FphaRowRange {\n077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs:43:    use super::{EvaporationIndices, FphaRowRange};\n077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs:62:        let r = FphaRowRange {\n077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs:70:        assert!(debug_str.contains(\"FphaRowRange\"));\n077dbe2c:crates/cobre-sddp/src/lp/indexer/mod.rs:51://!   and [`FphaRowRange`] (locating one hydro's evaporation columns/row and FPHA\n077dbe2c:crates/cobre-sddp/src/lp/indexer/mod.rs:120:pub use layout::{EvaporationIndices, FphaRowRange};\n(8 hits total: the declaration, its own #[cfg(test)] smoke test at :43/:62/:70, two module-doc lines, the pub use, and one prose cross-reference)\n\n$ git grep -c 'FphaRowRange' 077dbe2c -- .../builder/template.rs .../builder/layout.rs\n(no output: zero hits in the file that declares StageGeometry and zero in the file that declares StageLayout)\n\n$ git grep -c 'EvaporationIndices' 077dbe2c -- crates/cobre-sddp/src\n077dbe2c:crates/cobre-sddp/src/lp/builder/layout.rs:4\n077dbe2c:crates/cobre-sddp/src/lp/builder/mod.rs:1\n077dbe2c:crates/cobre-sddp/src/lp/builder/template.rs:2\n077dbe2c:crates/cobre-sddp/src/lp/generic_constraints.rs:2\n077dbe2c:crates/cobre-sddp/src/lp/indexer/layout.rs:6\n077dbe2c:crates/cobre-sddp/src/simulation/extraction/tests.rs:3\n\n$ lp/indexer/layout.rs 1-9 and 28-39\n//! Per-stage geometry satellite types: [`EvaporationIndices`] and\n//! [`FphaRowRange`].\n//!\n//! Each locates a single hydro's evaporation columns/row or FPHA row block\n//! within one stage LP. They are produced by the per-stage\n//! [`StageLayout`](crate::lp_builder) and carried on its\n//! [`StageGeometry`](crate::lp_builder::StageGeometry) snapshot; ...\n/// Locates the block of FPHA hyperplane rows assigned to a single FPHA hydro\n/// within a stage LP. Rows for hydro `i` at block `k` and plane `p` are at:\n/// `start + k * planes_per_block + p`.\npub struct FphaRowRange {\n    pub start: usize,\n    pub planes_per_block: usize,\n}\n\n$ lp/builder/fpha_cursor.rs 32-39 and 54\n/// The row-block base advances once per CELL, not once per plant: each cell owns\n/// its own contiguous `n_blks * n_planes` row block. ... Matches `FphaRowRange::start`.\n    let mut fpha_block_start = layout.row_fpha_start();",
+        "reading": "All eight repo-wide mentions of FphaRowRange are the declaration, its own Debug/Clone smoke test, two module-doc lines, the re-export at lp/indexer/mod.rs:120 and one prose cross-reference. No code anywhere constructs or reads the type. Two separate claims in the doc are false. First, the carrier claim: the module doc says these satellite types are produced by StageLayout and carried on its StageGeometry snapshot, which holds for the sibling EvaporationIndices (four production consumer files: builder/layout.rs, builder/mod.rs, builder/template.rs, lp/generic_constraints.rs) but not for FphaRowRange, which does not appear at all in builder/template.rs where StageGeometry is declared or in builder/layout.rs where StageLayout is declared. Second, the addressing claim: the documented formula start + k * planes_per_block + p is per-plant, while the live walker for_each_fpha_plane seeds fpha_block_start from layout.row_fpha_start() and its own doc states that the row-block base advances once per CELL, not once per plant, with that nesting called load-bearing for CSC row-sortedness. A reader who addressed FPHA rows through the documented formula would compute wrong rows for any multi-cell hydro. The type carries no #[allow(dead_code)] and no Reserved-seam rationale, and it is absent from the mirror's Reserved-seam (Voice 4) class and from the prior-register roster, so it is not a sanctioned seam.",
+        "line": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the FphaRowRange declaration and the fpha_row_range_debug_clone_copy smoke test from lp/indexer/layout.rs, drop the name from the pub use in lp/indexer/mod.rs, narrow both module docs (the lp/indexer/layout.rs header and the satellite-types bullet in lp/indexer/mod.rs) to describe only EvaporationIndices, and repoint the sentence in lp/builder/fpha_cursor.rs that says it matches FphaRowRange::start at StageLayout::row_fpha_start, the value for_each_fpha_plane actually seeds its cursor from. Contract-first: the change touches no FPHA row emission, so neither the FPHA uses average storage section nor the Hydro-cell aggregation assumes one production map per cell section of .claude/rules/sddp.md is weakened; the cell-major nesting those sections rest on stays owned by for_each_fpha_plane, which is exactly why the dead type's per-plant formula must not survive as documentation of it. Byte-neutral by construction, since the type has zero construction sites and only prose changes accompany the deletion; assert the parity goldens in tests/parity.rs through tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction, and move no golden. Blast radius is the same public surface as the sibling finding, since lib.rs re-exports the indexer module.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "PRECONDITION check — the four reserved seams named in the do-not-raise briefing against the 5b manifest",
+      "why": "None of the four anchor inside lp/. LipschitzConfig.mode and UpperBoundEvaluationConfig live in cobre-io config/training.rs; splice_reserved_state_block and reserve_boundary_inflow_lag_slots live in policy/policy_export.rs; the anticipated post-study-commitment channel lives in cobre-io output/policy/codec.rs; the Legacy None cost-scale branch lives in policy/policy_load.rs::rescale_cut_records_for_load. Nothing in this envelope re-raises a reserved seam, and both candidates were separately checked for an in-code Reserved seam or #[allow(dead_code)] rationale and have neither.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md:54 and :871; register BACKLOG L2272 with the mirror entry owed by E11 (mirror :30 § Reserved-seam register)"
+    },
+    {
+      "subject": "Enum census over the 5b manifest — six enums, no one-variant enum",
+      "why": "git grep -n -E '^\\s*(pub |pub\\(crate\\) )?enum ' 077dbe2c -- crates/cobre-sddp/src/lp/ returns exactly six declarations, and reading each body gives the variant counts: builder/columns.rs::BlockSlackFamily 2 (OutflowBelow, OutflowAbove), builder/columns.rs::CellSlackFamily 2 (TurbineBelow, GenerationBelow), builder/commitment_reconcile.rs::Reconciliation 3 (InBounds, Relaxed, Violation), generic_constraints.rs::ElementKind 9 (Turbine, Spillage, Diversion, Thermal, LineFwd, LineRev, Excess, ContractImport, ContractExport), indexer/index.rs::Boundary 3 (Incoming, Interior(usize), Outgoing), indexer/state_space.rs::StateRegion 4 (Storage, Lag, Buckets, CommitmentHold). The prompt's stricter crate-wide regex reproduces at the pin: 38 declarations across 30 files. No one-variant enum exists in this manifest, so the census yields no candidate. The two 2-variant slack families are real dispatch, matched in two shared fill helpers each in builder/columns.rs and driven from two-element descriptor arrays, not a hand-rolled boolean.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "#[allow( census over the 5b manifest — 13 files, 68 openers, zero rationale-absent production attributes",
+      "why": "git grep -c -E '#!?\\[allow\\(' 077dbe2c -- crates/cobre-sddp/src/lp/ gives 68 openers across 13 files (columns.rs 13, entries.rs 20, layout.rs 9, layout/tests.rs 2, patch.rs 3, scaling.rs 8, template.rs 6, template/tests.rs 2, test_support.rs 1, generic_constraints.rs 1, generic_constraints/tests.rs 1, indexer/block_grid.rs 1, indexer/study_dimensions.rs 1). Of those, 27 are real attributes before the first #[cfg(test)] and every one carries a written rationale in an adjacent comment: entries.rs 2 numeric-cast allows for the i32 solver C API, layout.rs 9 (seven dead_code items naming the test-only reader plus a cast_sign_loss and a too_many_lines/similar_names refactor decision), scaling.rs 6, template.rs 6, generic_constraints.rs 1, indexer/block_grid.rs 1 unused_self, indexer/study_dimensions.rs 1 struct_excessive_bools, builder/test_support.rs 1 type_complexity. Rationale-absent count is zero, so the census yields no candidate. Two traps worth recording: three scaling.rs rationales sit on the line after the attribute rather than before it, and scaling.rs line 92 is prose inside a Voice-4 comment rather than an attribute, so a grep -B or a raw opener count over-reports.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § #[allow(...)] census (Load-bearing, Reserved-seam (Voice 4) and Symmetry-or-test-retention classes); OD-009 is the live owner-optional refinement of the third class and is not re-raised here"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/scaling.rs::apply_bucket_col_scale",
+      "why": "The one #[allow(dead_code)] on a production function in this manifest is an explicit Voice-4 reserved seam naming its future consumer: no production call site wires it in yet, and postprocess_templates activates it once the travel-time bucket LP fill gives bucket columns real row and column entries. Reserved, not dead — a positives entry, not a candidate.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § #[allow(...)] census, Reserved-seam (Voice 4) class"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/template.rs::StageGeometry fields filling_target and filled_min_storage_floor",
+      "why": "Both are #[allow(dead_code)] row ranges whose rationale names them as the per-stage row-shape carriers keeping StageGeometry a faithful mirror of the row shape, with filled_min_storage_floor mirroring the filling_target seam. This is the sanctioned Voice-4 class, and it is also the contrast that makes the FphaRowRange candidate a candidate: a genuine reserved seam here is marked and justified in code, whereas FphaRowRange carries no marker and instead asserts present consumption that does not exist.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § #[allow(...)] census, Reserved-seam (Voice 4) class, which names lp/builder/{layout,template}.rs as its examples"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/entity_index.rs — the ten entity newtypes",
+      "why": "HydroSys, HydroCell, ThermalSys, LineSys, FphaLocal, FphaCellLocal, EvapLocal, FillingTargetLocal, FloorLocal and AnticipatedLocal are ten repr(transparent) newtypes whose only methods are new and get, which is exactly the shape a speculative-generality sweep would flag. A per-type consumer census refutes it: every one has at least two production consumer files, the thinnest being FloorLocal and FillingTargetLocal at builder/columns.rs plus simulation/extraction.rs. The module doc also carries eight compile_fail doctests pinning the mismatch each type prevents and an explicit non-introduction paragraph stating that BusSys, NcsSys and ContractSys are deliberately NOT introduced because they would have no call site and ship as a dead type. That paragraph is the rule this lens would otherwise have to propose, already written down and honored.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/storage_boundary_grid.rs::StorageBoundaryGrid and crates/cobre-sddp/src/lp/indexer/block_grid.rs::BlockGrid",
+      "why": "This answers the wrapper-layers-that-forward-without-deciding question for the indexer/builder seam. Three one-line forwarders exist (GenericResolverGeom::block_grid, GenericResolverGeom::block_storage_col, StageGeometry::block_storage_col) and each does forward without deciding, but each is a method on the data owner that delegates to the single owner of the offset formula, and each doc names the divergent hand-rolled re-derivation the delegation prevents. StorageBoundaryGrid has three consumers (builder/layout.rs, builder/template.rs, lp/generic_constraints.rs) and BlockGrid is consumed across eleven files. Raising these would be a false positive; the delegation is the design.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "One-consumer sweep of the remaining indexer and builder seams in 5b",
+      "why": "Every other indirection in the manifest was consumer-counted and each has at least two, so the lens's one-consumer question yields nothing beyond the two candidates. indexer/range_cursor.rs::RangeCursor has two documented consumers (StageLayout's equipment chains and StateSpace's state-vector chain). indexer/cut_state_projection.rs is consumed across roughly twenty files. indexer/study_dimensions.rs::StudyDimensions has no methods but roughly twenty consumer files. indexer/hydro_cell.rs::HydroCellIndex has seven accessors and all seven have a production consumer, the thinnest being first_cell_of in builder/entries.rs and cell_of_bus in lp/generic_constraints.rs. builder/fpha_cursor.rs::for_each_fpha_plane has two named consumers, rows::fill_fpha_rows and entries::fill_fpha_entries, so the FphaVisit bundle is not a one-consumer abstraction. builder/delivery_ring.rs::DeliveryRing has three production consumers and its emit_shift_rows and emit_carry_rows are pinned as semantically distinct by a named regression test. builder/patch.rs::PatchBuffer's two counters are both read in production by training/stage_solve_prep.rs. builder/mod.rs::GenericConstraintRowEntry has no methods but six consumer files. indexer/anticipated_gate.rs::is_anticipated_decision_active is #[cfg(test)]-gated with a written rationale explaining that every production call site resolves its delivery stage through anticipated_resolution_for instead, which makes it sanctioned test retention rather than a dead indirection.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "Live dispositions whose anchors fall inside the 5b manifest",
+      "why": "CD-034 (builder/entries.rs::fill_operational_violation_entries), CD-038 (indexer/cut_state_projection.rs::dot_trial_state) and CD-007 (builder/entries.rs and builder/columns.rs inline test dominance) all anchor inside this manifest and were reached during the sweep. This lens produced no new evidence on any of them, so none is emitted: CD-034 and CD-038 stay with the architecture lens and CD-007 with the test-bloat lens. CD-074's anchors in builder/commitment_reconcile.rs were likewise reached and not re-derived; the Reconciliation enum's three variants are genuine dispatch and the flagged defect is the two-constant drift mechanism, which is not an over-engineering claim.",
+      "sanctionedBy": "prior-register.md live-disposition table (CD-034, CD-038, CD-007) and the CD-074 note"
+    }
+  ],
+  "_needsHuman": [
+    "Both candidates delete pub items that lib.rs re-exports through pub use lp::indexer, so each is a public-API removal even though neither has an in-repo consumer. CD-019 set the precedent of deferring superseded public API to the next public-API break. Should these two zero-consumer removals land now as ordinary cleanup, or be batched with the 0b cobre-model carve-out that relocates the indexer module anyway?"
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 2,
+    "kept": 2,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "station": "sddp",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "generatedAt": "2026-09-18",
+  "entries": [
+    {
+      "partIRef": "I.3-7",
+      "claim": "the config type is SDDP-shaped: cobre_io::Config.training carries forward_passes, stopping_rules, cut_selection, tree_seed; the real config→domain conversion is cobre_sddp::StudyParams::from_config, not a generic seam; the MPI-broadcastable BroadcastConfig is a hand-maintained SDDP-parameter subset",
+      "v012Anchor": "plans/generalizing/beyond-sddp-generalization.md I.3 item 7 (L337-349)",
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/params.rs",
+        "symbol": "from_config"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "StudyParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-io/src/config/mod.rs",
+          "symbol": "Config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/solver_phase.rs",
+          "symbol": "Phase"
+        }
+      ],
+      "changedSinceV012": "ConstructionConfig and into_construction_config deleted (4075c4e8); StudyParams::from_config now captures export_states (setup/params.rs :339, from config.exports.states); BroadcastConfig survives unchanged in crates/cobre-cli/src/commands/broadcast.rs (:87; its own from_config at :143 projects the same fields, export_states at :214); the Phase enum stayed in cobre-sddp (solve/solver_phase.rs) and cobre-solver stayed phase-agnostic, so the containment the item notes still holds at the pin",
+      "disposition": "sharpen",
+      "survivingClaim": "narrowed to the wire projection: Config → BroadcastConfig → StudyParams::from_config is still two hand-kept SDDP-shaped twins with no generic seam between the config layer and the engine",
+      "proposedPhase": "0a",
+      "owningStation": "sddp",
+      "crossRef": "CD-004 in stations/sddp/wave-dispositions.json (study-block admission-gate carrier)",
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (study/config schema + admission gate + per-engine solver-profile scoping); Part IV.4"
+      }
+    }
+  ],
+  "note": "exactly one entry: Part-I item 7 is the only Part-I claim anchored in cobre-sddp (item 8 was handed off by the solver-comm station; items 1-6 by core-io/stochastic)"
+}

@@ -1,0 +1,1739 @@
+{
+  "station": "sddp",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "generatedAt": "2026-09-18",
+  "source": "stations/sddp/prior-register.md roster + BACKLOG.md waves table (L1929 Wave 4, L1931 Wave 6, L1932 Wave 7) and entry blocks; every anchor re-resolved at the pin",
+  "dispositionVocabulary": [
+    "keep",
+    "retire",
+    "sharpen"
+  ],
+  "alignmentVocabulary": [
+    "advances-0a",
+    "advances-0b",
+    "advances-1",
+    "neutral",
+    "conflicts"
+  ],
+  "anchorRule": "baselineAnchor and anchors are {path, symbol} declarations resolved at the pin with the check-anchors DECL regex; priorAnchor keeps the register's own (line) anchors as provenance; a historical symbol with no declaration at the pin is listed under unresolvedHistoricalSymbols with the reason, never refreshed to a line",
+  "ownedCount": 22,
+  "byDisposition": {
+    "retire": [
+      "CD-001",
+      "CD-003-construction-hop",
+      "CD-006"
+    ],
+    "sharpen": [
+      "CD-004",
+      "CD-005",
+      "CD-007",
+      "CD-015",
+      "CD-021",
+      "CD-022",
+      "CD-023",
+      "CD-024-successor"
+    ],
+    "keep": [
+      "CD-012",
+      "CD-014-remnant",
+      "CD-016",
+      "CD-018",
+      "CD-028",
+      "CD-030",
+      "CD-034",
+      "CD-035",
+      "CD-037",
+      "CD-038",
+      "OD-009"
+    ]
+  },
+  "byWave": {
+    "4": [
+      "CD-001",
+      "CD-003-construction-hop",
+      "CD-004",
+      "CD-005",
+      "CD-006",
+      "CD-024-successor"
+    ],
+    "6": [
+      "CD-015",
+      "CD-018",
+      "CD-022",
+      "CD-023",
+      "CD-034",
+      "CD-035"
+    ],
+    "7": [
+      "CD-007",
+      "CD-012",
+      "CD-014-remnant",
+      "CD-016",
+      "CD-021",
+      "CD-028",
+      "CD-030",
+      "CD-037",
+      "CD-038",
+      "OD-009"
+    ]
+  },
+  "notOwned": [
+    {
+      "id": "CD-002",
+      "owningStation": "cobre-cli station (E06)",
+      "registerLine": 168,
+      "claim": "Positional 10-tuple straddling three concerns in `broadcast_and_build_setup` (cobre-cli run/setup.rs); output now a named `LoadBroadcastResult`, input tuple unchanged",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "LoadBroadcastResult"
+        }
+      ],
+      "note": "explicitly disowned here: its anchors live in cobre-cli; recorded so the disowning is auditable, never a disposition"
+    },
+    {
+      "id": "CD-009",
+      "owningStation": "cobre-cli station (E06)",
+      "registerLine": 312,
+      "claim": "`policy_dir` resolve + `!exists()` guard repeated 3× in cobre-cli run/policy.rs (WarmStart, Resume, simulation)",
+      "anchors": [],
+      "note": "explicitly disowned here: its anchors live in cobre-cli; recorded so the disowning is auditable, never a disposition"
+    },
+    {
+      "id": "CD-011",
+      "owningStation": "cobre-io station (E02, ratified) per the ticket",
+      "registerLine": 334,
+      "claim": "Two conventions for the borrowed/owned duality (`Owned*` vs `*Payload`/`*ReadResult`) plus the stale `PolicyStageManifest` name",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/policy/policy_load.rs",
+          "symbol": "PolicyStageManifest"
+        }
+      ],
+      "note": "explicitly disowned here: its anchors live in cobre-io; recorded so the disowning is auditable, never a disposition"
+    }
+  ],
+  "dispositions": [
+    {
+      "id": "CD-001",
+      "wave": 4,
+      "registerId": "CD-001",
+      "registerLine": 152,
+      "priorTitle": "CLI crate hand-rolled a mirror of the rank-0 stochastic pipeline (`rebuild_historical_library_non_root`)",
+      "priorSeverity": null,
+      "priorAnchor": {
+        "raw": [
+          "run/setup.rs:405",
+          "run/setup.rs:467"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/stochastic_pipeline.rs",
+        "symbol": "build_stochastic_context_for_study"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/stochastic_pipeline.rs",
+          "symbol": "build_stochastic_context_for_study"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "reconstruct_stochastic_context_non_root"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "rebuild_historical_library_non_root",
+          "why": "deleted — only doc mentions at setup/mod.rs:1027 and stochastic_pipeline.rs:1298"
+        }
+      ],
+      "spans": [],
+      "staleAnchorNote": null,
+      "disposition": "retire",
+      "resolvingCommit": "b051c410",
+      "supersededClaim": null,
+      "survivingClaim": null,
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1 (the target layering: the stochastic-context rebuild is L3 engine-internal work, owned by cobre-sddp)",
+        "argument": "closing the CLI's hand-mirrored rebuild moved no concept across a layer boundary; it advances no phase and conflicts with none",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "kind": "declaration-level absence",
+        "declarationGrep": "git grep -n 'fn rebuild_historical_library_non_root' 077dbe2c -- crates  → 0 hits",
+        "bareIdentifierGrep": "git grep -n 'rebuild_historical_library_non_root' 077dbe2c -- crates  → 3 hits, all doc comments",
+        "docCommentResidue": [
+          "crates/cobre-sddp/src/setup/mod.rs:1027:/// `rebuild_historical_library_non_root`) applies in lockstep so a",
+          "crates/cobre-sddp/src/setup/stochastic_pipeline.rs:1298:    /// fixture's AR(0) order to exactly 24. `rebuild_historical_library_non_root`",
+          "crates/cobre-sddp/src/setup/stochastic_pipeline.rs:1301:    /// (`rebuild_historical_library_non_root_widens_max_order_to_declared_depth`)"
+        ],
+        "docCommentResidueDisposition": "only doc-comment references remain (three `///` lines under setup/); stale documentation, a doc-drift note for the build-ci/docs station (E07) — a bare-identifier hit count above zero does not block or reverse this ruling",
+        "survivingSingleOwner": [
+          "crates/cobre-sddp/src/setup/stochastic_pipeline.rs:417:pub fn build_stochastic_context_for_study("
+        ],
+        "nonRootCaller": [
+          "crates/cobre-cli/src/commands/run/setup.rs:407:    build_stochastic_context_for_study("
+        ],
+        "closingCommit": "b051c410 2026-08-22 refactor(sddp,cli): own the non-root stochastic-context rebuild in cobre-sddp"
+      },
+      "notes": "Register trail: BACKLOG L2193 (Wave 3 continuation, Phase 4) Residue: cobre-cli `reconstruct_stochastic_context_non_root` (run/setup.rs:396) survives as the thin non-root caller of the single owner. Two DOC mentions of the deleted `rebuild_historical_library_non_root` remain (setup/mod.rs:1027, stochastic_pipeline.rs:1298/1301 in a test doc) — stale doc references, a doc-drift note for E07, not a re-open.",
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-003-construction-hop",
+      "wave": 4,
+      "registerId": "CD-003",
+      "registerLine": 176,
+      "priorTitle": "`BroadcastConfig` → `ConstructionConfig` ~22-field manual copy in `build_study_setup`; third parallel representation of run config",
+      "priorSeverity": null,
+      "priorAnchor": {
+        "raw": [
+          "run/setup.rs:583-626",
+          "run/setup.rs:628-759"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/params.rs",
+        "symbol": "from_config"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/config/mod.rs",
+          "symbol": "Config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "StudyParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "build_study_setup"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": null,
+      "disposition": "retire",
+      "resolvingCommit": "4075c4e8",
+      "supersededClaim": "the Broadcast→Construction hop: a 21-field ConstructionConfig literal assembled by into_construction_config from StudyParams, the third near-isomorphic carrier",
+      "survivingClaim": "Config → BroadcastConfig (cobre-cli commands/broadcast.rs) → StudyParams::from_config (setup/params.rs) is a two-carrier residue: the MPI arm still hand-projects Config into BroadcastConfig, then every rank runs StudyParams::from_config — this residue is CD-004's Wave-4 business, not a re-open of the hop",
+      "phase0aRestatement": {
+        "artifact": "rank-0-executes MPI shape",
+        "shape": "the CD-002/CD-003 residue (a positional load tuple plus a hand-projected wire config that every rank re-derives) is restated as the resolved D14 MPI semantics: rank 0 executes setup and — for a direct study — the whole study serially, non-roots skip setup and idle to a final barrier, ranks_participated records 1; the SDDP engine keeps its collective setup behind the same seam, so the wire carrier becomes the one projection CD-004 names rather than a per-rank re-derivation",
+        "guardrail": "the projection/stage types name no engine and no paradigm; the Engine enum stays at L4 (cobre-cli / cobre-python, IV.4); cobre-sddp gains no dependency on a sibling engine; no seam is stood up for a single hypothetical consumer (pull, don't push, V.0)",
+        "byteNeutralityBar": "parity goldens (crates/cobre-sddp/tests/parity.rs + tests/common/parity_hash.rs) + the rank-invariance harness (tests/common/permute.rs shuffle matrix) + mpiexec -n 1 / -n 2 reproduction; SDDP output bit-for-bit unchanged is the Phase-0a gate itself (V.1 Gate)",
+        "anchorOwner": "cli-python (the BroadcastConfig / broadcast_and_build_setup anchors are CD-002's, owned by E06); recorded here as the restated residue of the retired hop"
+      },
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (D14 MPI semantics: rank 0 executes, non-roots skip setup and idle to a final barrier; engine-tagged setup stages); Part IV.4 (engine-selection seam without a dependency cycle)",
+        "argument": "the residue's Phase-0a shape is one of V.1's named deliverables, so restating it is the deliverable rather than a local cleanup",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "kind": "declaration-level absence",
+        "typeGrep": "git grep -n 'ConstructionConfig\\|into_construction_config' 077dbe2c -- crates  → 0 hits (type, assembler and every mention gone)",
+        "closingCommit": "4075c4e8 2026-08-22 refactor(sddp): merge StudyParams and ConstructionConfig into one local projection",
+        "residueAnchors": [
+          "crates/cobre-cli/src/commands/broadcast.rs:87:pub(crate) struct BroadcastConfig {",
+          "crates/cobre-cli/src/commands/broadcast.rs:143:    pub(crate) fn from_config(config: &Config) -> Result<Self, CliError> {",
+          "crates/cobre-cli/src/commands/broadcast.rs:214:            export_states: config.exports.states,",
+          "crates/cobre-sddp/src/setup/params.rs:114:pub struct StudyParams {",
+          "crates/cobre-sddp/src/setup/params.rs:186:    pub fn from_config(config: &Config) -> Result<Self, SddpError> {",
+          "crates/cobre-sddp/src/setup/params.rs:339:            export_states: config.exports.states,"
+        ]
+      },
+      "notes": "Register id CD-003; only the Construction hop is retired here (4075c4e8). BACKLOG L2186 (Wave 3 continuation, Phase 3): `ConstructionConfig` + `into_construction_config` DELETED; `BroadcastConfig` wire projection UNTOUCHED (= Wave 4)",
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-006",
+      "wave": 4,
+      "registerId": "CD-006",
+      "registerLine": 227,
+      "priorTitle": "`NodeGraph` query surface scattered as free functions (`frontier_node`, `node_parent`, …) with exactly one method",
+      "priorSeverity": null,
+      "priorAnchor": {
+        "raw": [
+          "node_graph.rs:133",
+          "accessors.rs:53-84",
+          "node_graph.rs:230-395",
+          "accessors.rs:158",
+          "entries.rs:968",
+          "columns.rs:546"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+        "symbol": "frontier_node"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "NodeGraph"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "frontier_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "node_parent"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "backward_cut_levels"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "stage_frontier"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "max_successor_outcome_count"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "build_parent_map"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "assemble_outcome_weights"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": null,
+      "disposition": "retire",
+      "resolvingCommit": "3f4c3db3",
+      "supersededClaim": null,
+      "survivingClaim": null,
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1 (NodeGraph is the engine's traversal structure; free-fn → method is intra-L3)",
+        "argument": "a query-surface consolidation inside the engine; no layer, phase or seam involved",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "kind": "declaration-level presence",
+        "implMethods": {
+          "frontier_node": true,
+          "stage_frontier": true,
+          "node_parent": true,
+          "node_opening_range": true,
+          "node_pinned_scenario": true,
+          "any_stage_node": true,
+          "build_parent_map": true,
+          "max_successor_outcome_count": true,
+          "backward_cut_levels": true,
+          "pool_cut_stride": true,
+          "forward_solve_counts": true
+        },
+        "implBlocks": [
+          369,
+          748,
+          880,
+          1018,
+          1114,
+          1192
+        ],
+        "freeFnDefinitions": [],
+        "probe": "for f in frontier_node stage_frontier node_parent node_opening_range node_pinned_scenario any_stage_node build_parent_map max_successor_outcome_count backward_cut_levels pool_cut_stride forward_solve_counts; do git grep -q \"fn $f(&self\" 077dbe2c -- crates/cobre-sddp/src/setup/node_graph.rs; done; no `^pub(crate)? fn <name>` free definition remains",
+        "closingCommit": "3f4c3db3 2026-08-08 refactor(sddp,io): execute the low-risk architecture consolidations",
+        "provenanceNote": "the register recorded CD-006 RESOLVED (2026-08-18 reconciliation, BACKLOG L1185) without a closing sha; the ticket supplies 3f4c3db3 (2026-08-08, node_graph.rs rewritten in a 527-line hunk), an ancestor of the pin — recorded as resolvingCommit with this provenance"
+      },
+      "notes": "None for the query surface: six `impl NodeGraph` blocks (:369, :748, :880, :1018, :1114, :1192); methods node_pool_ids :375, max_successor_outcome_count :759, backward_cut_levels :774, pool_cut_stride :910, forward_solve_counts :1038, stage_frontier :1120, frontier_node :1133, any_stage_node :1149, node_parent :1198, node_opening_range :1217, node_pinned_scenario :1232, build_parent_map :1265. `assemble_outcome_weights` (:717) stays free by design (algorithm, not a query). The v0.14.2 'one-owner nit' (a `NodeGraph::interior_cut_nodes()` accessor) is the only related open item (see rosterDiscrepancy).",
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-004",
+      "wave": 4,
+      "registerId": "CD-004",
+      "registerLine": 192,
+      "priorTitle": "Two parallel Config → construction projections (in-process `StudyParams::from_config` vs the MPI `BroadcastConfig` hand-assembly) that must agree field-for-field or MPI diverges silently from local",
+      "priorSeverity": "B (A-risk)",
+      "priorAnchor": {
+        "raw": [
+          "params.rs:127",
+          "params.rs:297",
+          "broadcast.rs:84",
+          "run/setup.rs:583",
+          "params.rs:61-64",
+          "params.rs:129 (2026-08-22 refresh)",
+          "cobre-cli/.../commands/broadcast.rs:149 (2026-08-19 refresh)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/params.rs",
+        "symbol": "from_config"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "StudyParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "build_study_setup"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "into_construction_config",
+          "why": "deleted by 4075c4e8 — absence is the successor state, do not refresh"
+        }
+      ],
+      "spans": [],
+      "staleAnchorNote": "`into_construction_config` (params.rs:297) no longer exists — 4075c4e8 merged StudyParams+ConstructionConfig, so the MPI arm is now Config → BroadcastConfig (cobre-cli, broadcast.rs:87) → `StudyParams::from_config` on every rank (broadcast.rs:144). The remaining duplication is the two-carrier BroadcastConfig/StudyParams pair (postcard boundary), not the three-struct trio the entry text describes.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "three ~20-field near-isomorphic structs (StudyParams / ConstructionConfig / BroadcastConfig) and the params → ConstructionConfig hop — deleted by 4075c4e8",
+      "survivingClaim": "the wire projection is untouched: Config → BroadcastConfig (crates/cobre-cli/src/commands/broadcast.rs, from_config at :143) and Config → StudyParams (setup/params.rs from_config at :186) are still two hand-kept field-for-field twins (both project export_states from config.exports.states); one config knob still costs edits on both sides and a silent MPI-vs-local divergence is still the failure mode",
+      "phase0aRestatement": {
+        "artifact": "study-block admission-gate carrier",
+        "shape": "ONE postcard-serializable projection of Config, itself broadcast on the wire and consumed by both the in-process and the MPI path, replacing the StudyParams/BroadcastConfig twin. The serde tagged-enum breakage that owner-confirmed forced the split is handled once, at that projection's boundary. Per-engine section admissibility and per-engine solver-profile scoping are decided at the same gate, so a phase-keyed block naming a phase the chosen engine lacks is a rejection, not a silent ignore.",
+        "guardrail": "the projection/stage types name no engine and no paradigm; the Engine enum stays at L4 (cobre-cli / cobre-python, IV.4); cobre-sddp gains no dependency on a sibling engine; no seam is stood up for a single hypothetical consumer (pull, don't push, V.0)",
+        "byteNeutralityBar": "parity goldens (crates/cobre-sddp/tests/parity.rs + tests/common/parity_hash.rs) + the rank-invariance harness (tests/common/permute.rs shuffle matrix) + mpiexec -n 1 / -n 2 reproduction; SDDP output bit-for-bit unchanged is the Phase-0a gate itself (V.1 Gate)",
+        "anchorOwner": "sddp (the BroadcastConfig half is anchored in cli-python via CD-002)"
+      },
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (the study/config schema, the typed admission gate and per-engine solver-profile scoping land first and alone, byte-identical against the existing SDDP engine); Part IV.4 (the engine-selection seam without a dependency cycle)",
+        "argument": "the single wire projection IS the Phase-0a study-block carrier, so closing CD-004 is not a cleanup that happens to help — it is the deliverable",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "twins": [
+          "crates/cobre-cli/src/commands/broadcast.rs:87:pub(crate) struct BroadcastConfig {",
+          "crates/cobre-cli/src/commands/broadcast.rs:143:    pub(crate) fn from_config(config: &Config) -> Result<Self, CliError> {",
+          "crates/cobre-cli/src/commands/broadcast.rs:214:            export_states: config.exports.states,",
+          "crates/cobre-sddp/src/setup/params.rs:114:pub struct StudyParams {",
+          "crates/cobre-sddp/src/setup/params.rs:186:    pub fn from_config(config: &Config) -> Result<Self, SddpError> {",
+          "crates/cobre-sddp/src/setup/params.rs:339:            export_states: config.exports.states,"
+        ],
+        "hopDeleted": "0 hits for ConstructionConfig|into_construction_config at 077dbe2c"
+      },
+      "notes": "Layering statement: the projection type names no engine and no paradigm; the Engine enum stays at L4.",
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-005",
+      "wave": 4,
+      "registerId": "CD-005",
+      "registerLine": 206,
+      "priorTitle": "`StudySetup` god-struct: half-finished NCS sub-struct extraction plus role conflation of precomputed model state with resolved run-config (the setter wall in accessors.rs exists only because run-config lives in the data struct)",
+      "priorSeverity": "B",
+      "priorAnchor": {
+        "raw": [
+          "setup/mod.rs:125-284",
+          ":138-161",
+          ":699",
+          ":595-602",
+          ":643-647",
+          "accessors.rs:53-84",
+          "setup/mod.rs:135 (2026-08-19)",
+          "setup/mod.rs:131 (2026-08-22)",
+          "accessors.rs:56+"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/mod.rs",
+        "symbol": "StudySetup"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "StudySetup"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "from_broadcast_params"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "set_budget"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "set_risk_measures"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "set_scheduler"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "Line drift only; the sub-struct map the entry alludes to now lives in .claude/architecture-rules.md ('StudySetup Sub-Structs'). Field count last recorded 35 (2026-08-22) — not re-counted here.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "a local struct split: 'half-finished NCS sub-struct extraction' plus a field-count census (35 fields, 2026-08-22) framed as god-struct cleanup",
+      "survivingClaim": "StudySetup conflates precomputed model state (stage_data, stochastic, fcf, hydro_models, scenario_libraries, node_graph, the ncs_* patch vectors) with resolved run-config (loop_params, simulation_config, policy_path, …); the setter wall in setup/accessors.rs (set_start_iteration, set_warm_start_basis_cache, set_export_states, set_budget, set_risk_measures, set_scheduler, set_hardest_first_claim_order) exists only because run-config lives in the data struct",
+      "phase0aRestatement": {
+        "artifact": "engine-tagged setup stages",
+        "shape": "the StudySetup split into precomputed-model state versus resolved run params IS the seam that lets a non-SDDP engine skip stochastic reconstruction: setup stages become engine-tagged so an engine that does not consume the stochastic context never builds it, while the SDDP engine's stages stay byte-identical",
+        "guardrail": "the projection/stage types name no engine and no paradigm; the Engine enum stays at L4 (cobre-cli / cobre-python, IV.4); cobre-sddp gains no dependency on a sibling engine; no seam is stood up for a single hypothetical consumer (pull, don't push, V.0)",
+        "byteNeutralityBar": "parity goldens (crates/cobre-sddp/tests/parity.rs + tests/common/parity_hash.rs) + the rank-invariance harness (tests/common/permute.rs shuffle matrix) + mpiexec -n 1 / -n 2 reproduction; SDDP output bit-for-bit unchanged is the Phase-0a gate itself (V.1 Gate). NCS caveat: the ncs_stochastic_dense_col / ncs_stochastic_windows / ncs_max_gen / ncs_allow_curtailment fields feed hot-path StageContext borrows (workspace/context.rs ncs_col_starts, n_ncs) and carry the D15 patch-identity contract (.claude/rules/sddp.md § 'Lower-bound evaluation must patch NCS'; register L215/L563) — the split must move them as one unit or not at all",
+        "anchorOwner": "sddp"
+      },
+      "alignmentHint": {
+        "value": "advances-0a",
+        "citation": "Part V.1 Phase 0 (engine-tagged setup stages skipping stochastic reconstruction for engines that do not consume it); Part IV.4 (the seam refactors the StudySetup-typed run pipeline)",
+        "argument": "the model-state / run-params split is the named V.1 deliverable 'engine-tagged setup stages'; done byte-identically it advances 0a directly",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "setterWall": [
+          "crates/cobre-sddp/src/setup/accessors.rs:43:    pub fn set_start_iteration(&mut self, iteration: u64) {",
+          "crates/cobre-sddp/src/setup/accessors.rs:53:    pub fn set_warm_start_basis_cache(&mut self, cache: Vec<Option<CapturedBasis>>) {",
+          "crates/cobre-sddp/src/setup/accessors.rs:58:    pub fn set_export_states(&mut self, export: bool) {",
+          "crates/cobre-sddp/src/setup/accessors.rs:63:    pub fn set_budget(&mut self, budget: Option<u32>) {",
+          "crates/cobre-sddp/src/setup/accessors.rs:71:    pub fn set_risk_measures(&mut self, risk_measures: Vec<RiskMeasure>) {",
+          "crates/cobre-sddp/src/setup/accessors.rs:79:    pub fn set_scheduler(&mut self, scheduler: BackwardScheduler) {",
+          "crates/cobre-sddp/src/setup/accessors.rs:88:    pub fn set_hardest_first_claim_order(&mut self, enabled: bool) {"
+        ],
+        "ncsFields": [
+          "crates/cobre-sddp/src/setup/mod.rs:144:    pub(crate) ncs_entity_ids_per_stage: Vec<Vec<i32>>,",
+          "crates/cobre-sddp/src/setup/mod.rs:151:    pub(crate) ncs_stochastic_dense_col: Vec<usize>,",
+          "crates/cobre-sddp/src/setup/mod.rs:160:    pub(crate) ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)>,",
+          "crates/cobre-sddp/src/setup/mod.rs:162:    pub(crate) ncs_max_gen: Vec<f64>,",
+          "crates/cobre-sddp/src/setup/mod.rs:167:    pub(crate) ncs_allow_curtailment: Vec<bool>,"
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:water-travel-time-in-transit-bucket-topology-studysetup-transit_bucket_topology",
+          "corpus": "mirror (reserved seam, file-scoped to setup/mod.rs)",
+          "kind": "anchor-overlap",
+          "justification": "the reserved StudySetup.transit_bucket_topology seam shares setup/mod.rs; CD-005's model-state / run-params split carries that seam unchanged (reserved, not dead) and makes no claim about it"
+        }
+      ]
+    },
+    {
+      "id": "CD-024-successor",
+      "wave": 4,
+      "registerId": "CD-024",
+      "registerLine": 958,
+      "priorTitle": "The resolved-parameters broadcast seam CD-024 registered was deleted outright; its successor is the Wave-4 question whether rank 0 builds and broadcasts the resolved run config (`ResolvedParameters` is still built per-rank, 'never broadcast')",
+      "priorSeverity": "— (CD-024 itself RESOLVED 2026-08-18: broadcast pair deleted)",
+      "priorAnchor": {
+        "raw": [
+          "resolved_parameters.rs:477/529",
+          "setup/mod.rs:876"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/policy/resolved_parameters.rs",
+        "symbol": "build_resolved_parameters"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/policy/resolved_parameters.rs",
+          "symbol": "ResolvedParameters"
+        },
+        {
+          "path": "crates/cobre-sddp/src/policy/resolved_parameters.rs",
+          "symbol": "build_resolved_parameters"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/policy/resolved_parameters.rs",
+          "symbol": "serialize_resolved_parameters",
+          "why": "deleted (register L1187); `deserialize_resolved_parameters` and `RESOLVED_PARAMETERS_WIRE_VERSION` also resolve nowhere — the absence IS the recorded state"
+        }
+      ],
+      "spans": [
+        "mod.rs L970 (build_resolved_parameters call site)"
+      ],
+      "staleAnchorNote": "'successor' framing: the entry's own anchors (`serialize_/deserialize_resolved_parameters` at resolved_parameters.rs:477/529) were deleted as dead code; the live seam is the per-rank `build_resolved_parameters` derivation (`setup/mod.rs:970`) that a Wave-4 'rank-0 builds ResolvedRunConfig, broadcasts it' redesign would either activate (broadcast) or make permanent (per-rank). File is `policy/resolved_parameters.rs` at the baseline (re-exported as `crate::resolved_parameters`).",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "the resolved-parameters broadcast pair CD-024 registered (serialize_/deserialize_resolved_parameters, RESOLVED_PARAMETERS_WIRE_VERSION) — deleted as dead code; CD-024 itself RESOLVED 2026-08-18",
+      "survivingClaim": "ResolvedParameters is still built per rank (policy/resolved_parameters.rs build_resolved_parameters; setup/mod.rs 'Per-rank, never broadcast'); the successor question is whether a rank-0-built resolved run config is broadcast — the seam activates against the CD-004 projection or dies",
+      "phase0aRestatement": {
+        "artifact": "study-block admission-gate carrier",
+        "shape": "activate-or-die rider on CD-004: the per-rank ResolvedParameters derivation either rides the single Config projection (its inputs are already on the wire, so no second broadcast seam is needed) or becomes permanent as a per-rank derivation; a dedicated resolved-parameters broadcast seam is NOT proposed",
+        "guardrail": "the projection/stage types name no engine and no paradigm; the Engine enum stays at L4 (cobre-cli / cobre-python, IV.4); cobre-sddp gains no dependency on a sibling engine; no seam is stood up for a single hypothetical consumer (pull, don't push, V.0)",
+        "byteNeutralityBar": "parity goldens (crates/cobre-sddp/tests/parity.rs + tests/common/parity_hash.rs) + the rank-invariance harness (tests/common/permute.rs shuffle matrix) + mpiexec -n 1 / -n 2 reproduction; SDDP output bit-for-bit unchanged is the Phase-0a gate itself (V.1 Gate)",
+        "anchorOwner": "sddp"
+      },
+      "alignmentHint": {
+        "value": "conflicts",
+        "citation": "Part V.0 (pull, don't push — the second consumer precedes the abstraction); Part V.1 Phase 0; Part IV.4",
+        "argument": "kept alive as a broadcast seam it would be a one-consumer abstraction: no present consumer needs a resolved-parameters wire format once the CD-004 projection carries the inputs",
+        "guardrailBreach": "one-consumer abstraction (target-layering brief §3 trigger 4): a seam justified by a single hypothetical consumer",
+        "roadmapConsistentAlternative": "die: keep the per-rank derivation; its inputs ride the single Config projection of CD-004, so the seam is subsumed rather than activated — no OD/CD id promoted for the broadcast variant"
+      },
+      "evidence": {
+        "perRank": [
+          "crates/cobre-sddp/src/policy/resolved_parameters.rs:117:pub struct ResolvedParameters {",
+          "crates/cobre-sddp/src/policy/resolved_parameters.rs:253:pub fn build_resolved_parameters(",
+          "crates/cobre-sddp/src/setup/mod.rs:957:        // (the override still wins when present). Per-rank, never broadcast, so every"
+        ]
+      },
+      "notes": "Held for the owner gate as a conflicts hint per the ticket ('kept alive for one hypothetical consumer it is tagged conflicts under pull-don't-push rather than proposed'); an override would need a dated Owner-override line.",
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-015",
+      "wave": 6,
+      "registerId": "CD-015",
+      "registerLine": 537,
+      "priorTitle": "Inside `compute_one_backward_node`, by_node's post-dispatch aggregation is extracted (`by_node_finish`) while by_scenario's — the ORIGINAL scheduler — is inline (retrofitted-variant class instance #2)",
+      "priorSeverity": "B",
+      "priorAnchor": {
+        "raw": [
+          "backward_pass_state.rs:1624-1664",
+          "backward_pass_state.rs:1950-1991 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+        "symbol": "compute_one_backward_node"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "compute_one_backward_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_node.rs",
+          "symbol": "by_node_finish"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_scenario.rs",
+          "symbol": "process_by_scenario_backward"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "commit_by_scenario_cuts",
+          "why": "proposed extraction; does not exist yet (expected)"
+        }
+      ],
+      "spans": [],
+      "staleAnchorNote": "`by_node_finish` moved out of backward_pass_state.rs into the `training/backward/by_node.rs` directory module; the inline by_scenario span is a line range inside `compute_one_backward_node` — re-read at the baseline before quoting a span.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "extract a standalone commit_by_scenario_cuts to mirror by_node_finish (a symmetry fix on its own)",
+      "survivingClaim": "compute_one_backward_node (backward_pass_state.rs :1727) still inlines by_scenario's post-dispatch aggregation while by_node's is extracted (training/backward/by_node.rs by_node_finish :416); the asymmetry is real and is resolved by the SAME extraction as CD-022 — one convergent change, disposed together",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (the backward-pass decomposition is SDDP geometry that 'stays put' in the engine under the kernel carve)",
+        "argument": "an engine-internal extraction; it advances no phase and touches no seam",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "fns": [
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:721:    fn run_enumerated_backward<S, C: Communicator>(",
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:1727:fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(",
+          "crates/cobre-sddp/src/training/backward/by_node.rs:416:pub(crate) fn by_node_finish<S: SolverInterface>(",
+          "crates/cobre-sddp/src/training/backward/by_scenario.rs:398:pub(crate) fn process_by_scenario_backward<S: SolverInterface + Send>("
+        ],
+        "pairedWith": "CD-022"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-022",
+      "wave": 6,
+      "registerId": "CD-022",
+      "registerLine": 799,
+      "priorTitle": "Successor-outcome reification (~66 lines: successors loop → `build_delta_cut_row_batch_into` → `SuccessorEntry` → `SuccessorOutcomes`) is duplicated between the sampled path (`compute_one_backward_node`) and the enumerated path (`run_enumerated_backward`); converges with CD-014",
+      "priorSeverity": "B",
+      "priorAnchor": {
+        "raw": [
+          "compute_one_backward_node:1708-1777",
+          "run_enumerated_backward:768-834",
+          ":706-711"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+        "symbol": "run_enumerated_backward"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "compute_one_backward_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "run_enumerated_backward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/mod.rs",
+          "symbol": "SuccessorEntry"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/mod.rs",
+          "symbol": "SuccessorOutcomes"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/delta_cut_batch.rs",
+          "symbol": "build_delta_cut_row_batch_into"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "reify_successor_outcomes",
+          "why": "proposed shared helper; does not exist yet (expected)"
+        }
+      ],
+      "spans": [],
+      "staleAnchorNote": "`SuccessorEntry`/`SuccessorOutcomes` now live in `training/backward/mod.rs` and `build_delta_cut_row_batch_into` in `training/forward/delta_cut_batch.rs`; the two copies are line spans inside the two fns above.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "a ~66-line duplicated span framed as its own dedup",
+      "survivingClaim": "the successor-outcome reification (successors loop → build_delta_cut_row_batch_into in training/forward/delta_cut_batch.rs → SuccessorEntry → SuccessorOutcomes in training/backward/mod.rs) is still inlined twice — compute_one_backward_node (:1727) and run_enumerated_backward (:721); extracting it once de-god-fns compute_one_backward_node (CD-014-remnant) and absorbs CD-015",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (SDDP decomposition stays in the engine)",
+        "argument": "engine-internal; no phase served, no guardrail touched",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "fns": [
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:721:    fn run_enumerated_backward<S, C: Communicator>(",
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:1727:fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(",
+          "crates/cobre-sddp/src/training/backward/by_node.rs:416:pub(crate) fn by_node_finish<S: SolverInterface>(",
+          "crates/cobre-sddp/src/training/backward/by_scenario.rs:398:pub(crate) fn process_by_scenario_backward<S: SolverInterface + Send>("
+        ],
+        "pairedWith": "CD-015"
+      },
+      "notes": null,
+      "retiredOverlaps": [
+        {
+          "ref": "PD-004",
+          "corpus": "do-not-touch (backward_pass_state.rs:919-931 allocation span inside run_enumerated_backward, deferred pending a profile)",
+          "kind": "anchor-overlap",
+          "justification": "CD-022 is the duplicated successor-outcome reification shared by compute_one_backward_node and run_enumerated_backward, not the deferred per-run Vec/clone allocation PD-004 records; PD-004 stays do-not-touch and appears only in existenceChecks"
+        },
+        {
+          "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+          "corpus": "mirror (first performance pass; file-scoped mention of backward_pass_state.rs as 'not a regression')",
+          "kind": "anchor-overlap",
+          "justification": "an architecture duplication claim, not the hot-path allocation follow-ups the mirror section records"
+        }
+      ]
+    },
+    {
+      "id": "CD-018",
+      "wave": 6,
+      "registerId": "CD-018",
+      "registerLine": 634,
+      "priorTitle": "`CutSelectionStrategy` conflates two selection paradigms — periodic value-based (Level1/Lml1/Dominated share `select_for_stage`) and lazy-solve DCS (`Dynamic`), whose variant early-returns empty and whose real logic lives in `dcs.rs::lazy_solve_preloaded`",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "cut_selection.rs:144",
+          ":320-326",
+          "dcs.rs::lazy_solve_preloaded",
+          "cut_selection.rs:320 (2026-08-19)",
+          "cut_selection.rs:144 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+        "symbol": "CutSelectionStrategy"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+          "symbol": "CutSelectionStrategy"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+          "symbol": "select_for_stage"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/dcs.rs",
+          "symbol": "DcsParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/dcs.rs",
+          "symbol": "from_strategy"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/dcs.rs",
+          "symbol": "lazy_solve_preloaded"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [
+        "cut_selection.rs L308 (Dynamic early-return)",
+        "cut_selection.rs L492 (unreachable! for Dynamic)"
+      ],
+      "staleAnchorNote": "enum moved :144 → :132; the early-return moved :320 → :308.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "`CutSelectionStrategy` conflates two selection paradigms — periodic value-based (Level1/Lml1/Dominated share `select_for_stage`) and lazy-solve DCS (`Dynamic`), whose variant early-returns empty and whose real logic lives in `dcs.rs::lazy_solve_preloaded`",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (cut selection is SDDP geometry that stays in the engine)",
+        "argument": "reshaping the strategy enum is engine-internal",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "dynamicEarlyReturn": [
+          "crates/cobre-sddp/src/cut/cut_selection.rs:132:pub enum CutSelectionStrategy {",
+          "crates/cobre-sddp/src/cut/cut_selection.rs:308:        if let CutSelectionStrategy::Dynamic { .. } = self {",
+          "crates/cobre-sddp/src/cut/cut_selection.rs:492:        CutSelectionStrategy::Dynamic { .. } => {"
+        ],
+        "reading": "the Dynamic variant still early-returns out of select_for_stage (:308) and is unreachable! in the value sweep (:492) while nominally implementing the same interface"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-035",
+      "wave": 6,
+      "registerId": "CD-035",
+      "registerLine": 1471,
+      "priorTitle": "`write_opening_outcome`/`accumulate_opening_outcome` take a bare `&CutStateProjection` where two role-distinct projections are live (`child_cut_layout` vs the cut-generating parent's `succ_spec.cut_state`) — passing the wrong one compiles",
+      "priorSeverity": "B",
+      "priorAnchor": {
+        "raw": [
+          "outcome_aggregation.rs:20-30,101-122",
+          "backward_pass_state.rs:799",
+          ":854",
+          "training/backward/outcome_aggregation.rs:20 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs",
+        "symbol": "write_opening_outcome"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs",
+          "symbol": "accumulate_opening_outcome"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs",
+          "symbol": "write_opening_outcome"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+          "symbol": "CutStateProjection"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/mod.rs",
+          "symbol": "SuccessorSpec"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward/mod.rs",
+          "symbol": "CutGeneratingProjection",
+          "why": "proposed newtype; does not exist (expected)"
+        }
+      ],
+      "spans": [
+        "backward_pass_state.rs L799 (child_cut_layout binding)",
+        "backward_pass_state.rs L857 (succ_spec.cut_state read)"
+      ],
+      "staleAnchorNote": ":854 → :857; everything else holds.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "`write_opening_outcome`/`accumulate_opening_outcome` take a bare `&CutStateProjection` where two role-distinct projections are live (`child_cut_layout` vs the cut-generating parent's `succ_spec.cut_state`) — passing the wrong one compiles",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (cut projection is SDDP geometry; the role newtype is engine-internal)",
+        "argument": "a two-live-role newtype, not a one-consumer abstraction; advances no phase",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "bareParameters": [
+          "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:23:    cut_state: &CutStateProjection,",
+          "crates/cobre-sddp/src/training/backward/outcome_aggregation.rs:104:    cut_state: &CutStateProjection,"
+        ],
+        "reading": "both write_opening_outcome and accumulate_opening_outcome still take a bare &CutStateProjection at the two-role call site"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-034",
+      "wave": 6,
+      "registerId": "CD-034",
+      "registerLine": 1462,
+      "priorTitle": "The min/max outflow entry blocks in `fill_operational_violation_entries` are two hand-mirrored `for blk` loops while the sibling rows file emits the same row pair from a two-element descriptor",
+      "priorSeverity": "B",
+      "priorAnchor": {
+        "raw": [
+          "entries.rs:1499-1533",
+          "rows.rs:461-477",
+          "entries.rs:1473 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+        "symbol": "fill_operational_violation_entries"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "fill_operational_violation_entries"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/rows.rs",
+          "symbol": "fill_operational_violation_rows"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "entries.rs :1473 → :1487; the rows.rs :461-477 descriptor span is inside `fill_operational_violation_rows` (:443) — re-read before quoting.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "The min/max outflow entry blocks in `fill_operational_violation_entries` are two hand-mirrored `for blk` loops while the sibling rows file emits the same row pair from a two-element descriptor",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "advances-0b",
+        "citation": "Part IV.2 (plain equipment rows/entries are the method-neutral emission logic the cobre-model carve reuses; the descriptor-driven row pair in rows.rs is that shape); Part V.1 Phase 0b",
+        "argument": "a descriptor-array entry emitter is exactly the re-parameterizable emission logic the 0b kernel carve lifts, so the fix removes one hand-mirrored block from the carve's path",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "blocks": [
+          "crates/cobre-sddp/src/lp/builder/entries.rs:1487:pub(super) fn fill_operational_violation_entries(",
+          "crates/cobre-sddp/src/lp/builder/entries.rs:1499:                layout.slack.oper_violation.min_outflow_rows.start,",
+          "crates/cobre-sddp/src/lp/builder/entries.rs:1518:                layout.slack.oper_violation.max_outflow_rows.start,",
+          "crates/cobre-sddp/src/lp/builder/rows.rs:443:pub(super) fn fill_operational_violation_rows("
+        ],
+        "reading": "two hand-mirrored min/max outflow loops (:1499 / :1518) inside fill_operational_violation_entries (:1487) versus the two-element descriptor in fill_operational_violation_rows (rows.rs :443)"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-023",
+      "wave": 6,
+      "registerId": "CD-023",
+      "registerLine": 855,
+      "priorTitle": "`StageSolvePrep` (the single-owner solve-prep every solve site routes through) still lives under `training/` while `simulation/pipeline.rs` imports it — the sim→training inversion the f527e3f9 hoist set out to eliminate",
+      "priorSeverity": "C (B-risk: declared-undesirable inversion)",
+      "priorAnchor": {
+        "raw": [
+          "training/stage_solve_prep.rs",
+          "simulation/pipeline.rs:50",
+          "training/stage_solve_prep.rs:71 (2026-08-18/22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/stage_solve_prep.rs",
+        "symbol": "StageSolvePrep"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/stage_solve_prep.rs",
+          "symbol": "StageSolvePrep"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/stage_solve_prep.rs",
+          "symbol": "run"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/stage_solve.rs",
+          "symbol": "run_stage_solve"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/stage_solve.rs",
+          "symbol": "StageInputs"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [
+        "pipeline.rs L50 (training::stage_solve_prep import)"
+      ],
+      "staleAnchorNote": "Partially addressed and still open at 077dbe2c exactly as ROADMAP L106 says: `solve/` owns the solve ENTRY (`run_stage_solve`), the PREP is still `training/stage_solve_prep.rs:71` and `simulation/pipeline.rs:50` still imports it.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "'re-home StageSolvePrep out of training/' as an unstarted move",
+      "survivingClaim": "the carve-out is half done: the neutral solve/ module exists (mod.rs, partition.rs, solver_phase.rs, stage_solve.rs) and owns the solve ENTRY (run_stage_solve), but training/stage_solve_prep.rs and training/stage_solve_prep/tests.rs still live under training/ and simulation/pipeline.rs:50 still imports training::stage_solve_prep — the declared-undesirable simulation→training inversion survives; never retire on the strength of solve/ merely existing",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1 (intra-engine module layering; the inversion is inside L3)",
+        "argument": "finishing the carve-out moves nothing across a layer boundary",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "solveFiles": [
+          "mod.rs",
+          "partition.rs",
+          "solver_phase.rs",
+          "stage_solve.rs"
+        ],
+        "prepUnderTraining": [
+          "crates/cobre-sddp/src/training/stage_solve_prep.rs",
+          "crates/cobre-sddp/src/training/stage_solve_prep/tests.rs"
+        ],
+        "pipelineImport": [
+          "crates/cobre-sddp/src/simulation/pipeline.rs:50:    training::stage_solve_prep::{"
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:organizational-quality-follow-ups-low-priority",
+          "corpus": "mirror (records the prep-half inversion: solve/ owns the entry, StageSolvePrep still under training/, simulation imports training::stage_solve_prep)",
+          "kind": "anchor-overlap",
+          "justification": "the mirror row IS CD-023's own ID-free mirror (owner: training; trigger: the simulation-dispatch symmetry refactor); this record is its re-verification and narrowing, not a new finding"
+        }
+      ]
+    },
+    {
+      "id": "CD-021",
+      "wave": 7,
+      "registerId": "CD-021",
+      "registerLine": 722,
+      "priorTitle": "`workspace/workspace.rs` is a flat mega-file holding NINE per-worker arena structs, asymmetric with the crate's directory-module convention (`setup/`, `lp/builder/`, `training/session/`, `cut/`)",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "workspace.rs (1148 prod lines, flat)",
+          "workspace.rs:44 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+        "symbol": "SolverWorkspace"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "CapturedBasis"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "WorkspaceSizing"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "BackwardAccumulators"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "ByNodeScratch"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "ScratchBuffers"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "SolverWorkspace"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "WorkspacePool"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "BasisStore"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "BasisStoreSliceMut"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "The historical anchor named a flat `workspace.rs`; at 077dbe2c the tree has `workspace/{mod,context,workspace}.rs` (32 / 271 / 2671 lines; workspace.rs's first `#[cfg(test)]` at 1141 → ~1140 production lines). All nine structs still live in `workspace/workspace.rs`, so the finding holds against the directory module's one large member — record the directory module, never refresh to the flat path.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "'a flat workspace.rs mega-file asymmetric with the directory-module convention' — the organizational half is discharged: workspace/ is a directory module (mod.rs 32, context.rs 271, workspace.rs 2,671 lines)",
+      "survivingClaim": "all nine structs (CapturedBasis, WorkspaceSizing, BackwardAccumulators, ByNodeScratch, ScratchBuffers, SolverWorkspace, WorkspacePool, BasisStore, BasisStoreSliceMut) still share workspace/workspace.rs; the split-by-concern direction is preserved against the new path",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1 (per-worker arenas are L3 engine internals)",
+        "argument": "file organization inside the engine; no phase, no seam",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "files": {
+          "mod.rs": 32,
+          "context.rs": 271,
+          "workspace.rs": 2671
+        },
+        "structCensus": {
+          "CapturedBasis": true,
+          "WorkspaceSizing": true,
+          "BackwardAccumulators": true,
+          "ByNodeScratch": true,
+          "ScratchBuffers": true,
+          "SolverWorkspace": true,
+          "WorkspacePool": true,
+          "BasisStore": true,
+          "BasisStoreSliceMut": true
+        },
+        "structCount": 9
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-007",
+      "wave": 7,
+      "registerId": "CD-007",
+      "registerLine": 264,
+      "priorTitle": "Inline `#[cfg(test)]` modules dominate `lp/builder/{entries,columns}.rs` (~83–85% test) while sibling builder submodules use extracted `tests.rs` files — two conventions in one module dir; the inline giants are the sole reason these read as god-files",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "entries.rs ~7.7k / columns.rs ~7.1k test lines",
+          "template/tests.rs (4700)",
+          "layout/tests.rs (2979)",
+          "entries.rs 10,079 / columns.rs 9,026 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+        "symbol": "fill_load_balance_entries"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "fill_load_balance_entries"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "fill_ncs_load_balance_entries"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [
+        "entries.rs L1680 (first #[cfg(test)])",
+        "columns.rs L1305 (first #[cfg(test)])"
+      ],
+      "staleAnchorNote": "At 077dbe2c entries.rs is 10,093 lines (first cfg(test) at 1680) and columns.rs 9,319 (first cfg(test) at 1305) — both grew again; the ticket's 10,079 / 9,026 are the 2026-08-22 figures and are stale. Inventory step 3 must re-measure, not copy.",
+      "disposition": "sharpen",
+      "resolvingCommit": null,
+      "supersededClaim": "sizes as recorded 2026-08-22: entries.rs 10,079 and columns.rs 9,026 lines (the register already says GREW)",
+      "survivingClaim": "re-measured at the pin: entries.rs 10,093 lines (first #[cfg(test)] at L1680) and columns.rs 9,319 (L1305) — inline test modules dominate both while sibling builder submodules use extracted tests.rs (template/tests.rs 5,356, layout/tests.rs 3,565); two conventions in one module dir, and the inline giants are the sole reason these read as god-files",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "advances-0b",
+        "citation": "Part IV.2 (the 0b carve lifts the engine-neutral emission logic out of lp/builder; entries.rs and columns.rs are where that logic lives)",
+        "argument": "extracting the inline test giants makes the two files the carve must read a fifth of their size, so it demonstrably lowers the 0b cost",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "sizes": {
+          "entries.rs": 10093,
+          "columns.rs": 9319,
+          "template/tests.rs": 5356,
+          "layout/tests.rs": 3565
+        },
+        "firstCfgTest": {
+          "entries.rs": 1680,
+          "columns.rs": 1305
+        },
+        "inventoryCrossRef": "stations/sddp/inventory.json inlineTestOutliers (14 files tagged CD-007 evidence)"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-012",
+      "wave": 7,
+      "registerId": "CD-012",
+      "registerLine": 385,
+      "priorTitle": "`run_cut_management` (~250 lines, `too_many_lines`-allowed) inlines cut-selection + budget enforcement; its rationale defends against FREE-fn extraction, a category error since the natural refactor is `&mut self` methods",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "session/mod.rs:937",
+          ":944-1117",
+          ":1119-1153",
+          "session/mod.rs:1015 (2026-08-18)",
+          "session/mod.rs:1034-1286 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/session/mod.rs",
+        "symbol": "run_cut_management"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "run_cut_management"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "run_iteration"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "run_cut_selection",
+          "why": "proposed method; does not exist (expected)"
+        }
+      ],
+      "spans": [],
+      "staleAnchorNote": ":937 → :1015 → :1034 → :1035 across three refreshes; symbol stable.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "`run_cut_management` (~250 lines, `too_many_lines`-allowed) inlines cut-selection + budget enforcement; its rationale defends against FREE-fn extraction, a category error since the natural refactor is `&mut self` methods",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (cut management is SDDP geometry in the engine)",
+        "argument": "a method extraction inside the training session",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "span": "run_cut_management 1035-1287 (253 lines)"
+      },
+      "notes": null,
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+          "corpus": "mirror (first performance pass: the loop-invariant interior-node filter cached inside run_cut_management)",
+          "kind": "anchor-overlap",
+          "justification": "CD-012 is the god-fn / method-extraction claim on run_cut_management, not the executed cached-filter performance item the mirror records at the same function"
+        }
+      ]
+    },
+    {
+      "id": "CD-014-remnant",
+      "wave": 7,
+      "registerId": "CD-014",
+      "registerLine": 531,
+      "priorTitle": "`compute_one_backward_node` (~290 lines, biggest fn in the crate) — the god-fn residue that remains after the shared successor-reification extraction (CD-022) and the by_scenario commit extraction (CD-015) relieve it",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "backward_pass_state.rs:1399",
+          ":1438-1507",
+          ":1624-1664",
+          "backward_pass_state.rs:1727 (2026-08-18)",
+          ":1727-2015 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+        "symbol": "compute_one_backward_node"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "compute_one_backward_node"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "'remnant' is a waves-table framing, not a register entry of its own: the register entry is CD-014 (L531). Function length (~289 lines from :1727) must be re-measured at the baseline before citing.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "`compute_one_backward_node` (~290 lines, biggest fn in the crate) — the god-fn residue that remains after the shared successor-reification extraction (CD-022) and the by_scenario commit extraction (CD-015) relieve it",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (backward-pass decomposition stays in the engine)",
+        "argument": "god-fn residue inside the engine; relieved by the CD-015/CD-022 extraction",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "span": "compute_one_backward_node 1727-2015 (289 lines)",
+        "registerEntry": "CD-014 (L531); 'remnant' is the waves-table framing"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-016",
+      "wave": 7,
+      "registerId": "CD-016",
+      "registerLine": 542,
+      "priorTitle": "Both backward scheduler workers duplicate ~25 lines of per-worker `backward_accum` buffer pre-allocation (`process_stage_backward` vs `process_stage_backward_by_node`)",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "backward_pass_state.rs:1862-1892",
+          "by_node.rs:183-214",
+          "backward_pass_state.rs:2060-2111 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+        "symbol": "process_stage_backward"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "process_stage_backward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_node.rs",
+          "symbol": "process_stage_backward_by_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "BackwardAccumulators"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward/mod.rs",
+          "symbol": "prepare_shared_backward_buffers",
+          "why": "proposed helper; does not exist (expected)"
+        }
+      ],
+      "spans": [],
+      "staleAnchorNote": "`by_node.rs` is `training/backward/by_node.rs`; line drift only.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "Both backward scheduler workers duplicate ~25 lines of per-worker `backward_accum` buffer pre-allocation (`process_stage_backward` vs `process_stage_backward_by_node`)",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1 (per-worker buffer pre-allocation is L3-internal)",
+        "argument": "duplication inside the engine",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "fns": [
+          "crates/cobre-sddp/src/training/backward/by_node.rs:131:pub(crate) fn process_stage_backward_by_node<S: SolverInterface + Send>(",
+          "crates/cobre-sddp/src/training/backward_pass_state.rs:2023:pub(crate) fn process_stage_backward<S: SolverInterface + Send>("
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-028",
+      "wave": 7,
+      "registerId": "CD-028",
+      "registerLine": 1232,
+      "priorTitle": "Enumerated forward and enumerated simulation reimplement the mid-level claim/scatter orchestration skeleton independently (`run_sweep`/`enumerated_sim_stage_worker` vs `run_enumerated_forward`/`enumerated_stage_worker`); only the low-level primitives are shared",
+      "priorSeverity": "B",
+      "priorAnchor": {
+        "raw": [
+          "simulation/enumerated.rs run_sweep:292",
+          "enumerated_sim_stage_worker:161",
+          "training/forward/enumerated.rs run_enumerated_forward:531",
+          "enumerated_stage_worker:713"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+        "symbol": "run_enumerated_forward"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "run_sweep"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "enumerated_sim_stage_worker"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "run_enumerated_forward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "enumerated_stage_worker"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "line drift only (292→290, 161→158, 531→472).",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "Enumerated forward and enumerated simulation reimplement the mid-level claim/scatter orchestration skeleton independently (`run_sweep`/`enumerated_sim_stage_worker` vs `run_enumerated_forward`/`enumerated_stage_worker`); only the low-level primitives are shared",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1 (enumerated orchestration is L3-internal)",
+        "argument": "orchestration-skeleton duplication inside the engine",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "fns": [
+          "crates/cobre-sddp/src/simulation/enumerated.rs:124:fn mark_own_paths(",
+          "crates/cobre-sddp/src/simulation/enumerated.rs:158:fn enumerated_sim_stage_worker<S: SolverInterface + Send>(",
+          "crates/cobre-sddp/src/simulation/enumerated.rs:290:fn run_sweep<S: SolverInterface + Send>(",
+          "crates/cobre-sddp/src/training/forward/enumerated.rs:472:pub(crate) fn run_enumerated_forward<S>(",
+          "crates/cobre-sddp/src/training/forward/enumerated.rs:714:fn enumerated_stage_worker<S: SolverInterface + Send>("
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": [
+        {
+          "ref": "PD-001",
+          "corpus": "do-not-touch (simulation/enumerated.rs:259-272 per-node capture allocation, REFUTED as deliberate one-shot move-scatter)",
+          "kind": "anchor-overlap",
+          "justification": "CD-028 is the orchestration-skeleton duplication between enumerated forward and enumerated simulation, not the per-node capture allocation PD-001 refuted; PD-001 stays refuted and is not proposed as a fix"
+        },
+        {
+          "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+          "corpus": "mirror (first performance pass: 'enumerated-simulation per-node capture is NOT a fixable allocation', enumerated_sim_stage_worker)",
+          "kind": "anchor-overlap",
+          "justification": "same file, different claim: skeleton duplication versus the refuted allocation"
+        }
+      ]
+    },
+    {
+      "id": "CD-030",
+      "wave": 7,
+      "registerId": "CD-030",
+      "registerLine": 1261,
+      "priorTitle": "`mark_own_paths` (simulation/enumerated.rs) reimplements the ~10-line path-marking loop that is inlined in `training/forward/enumerated.rs`; folds with the CD-028 dedup",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "simulation/enumerated.rs:123-140",
+          "training/forward/enumerated.rs:502-513",
+          "simulation/enumerated.rs:123-139 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+        "symbol": "mark_own_paths"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "mark_own_paths"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "run_enumerated_forward"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "The training-side copy has no symbol — recorded via its enclosing fn; the :502-513 span predates the −103-line hoist and must be re-located.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "`mark_own_paths` (simulation/enumerated.rs) reimplements the ~10-line path-marking loop that is inlined in `training/forward/enumerated.rs`; folds with the CD-028 dedup",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1",
+        "argument": "folds with the CD-028 dedup; engine-internal",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "fns": [
+          "crates/cobre-sddp/src/simulation/enumerated.rs:124:fn mark_own_paths(",
+          "crates/cobre-sddp/src/simulation/enumerated.rs:158:fn enumerated_sim_stage_worker<S: SolverInterface + Send>(",
+          "crates/cobre-sddp/src/simulation/enumerated.rs:290:fn run_sweep<S: SolverInterface + Send>(",
+          "crates/cobre-sddp/src/training/forward/enumerated.rs:472:pub(crate) fn run_enumerated_forward<S>(",
+          "crates/cobre-sddp/src/training/forward/enumerated.rs:714:fn enumerated_stage_worker<S: SolverInterface + Send>("
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-037",
+      "wave": 7,
+      "registerId": "CD-037",
+      "registerLine": 1487,
+      "priorTitle": "The gap-rule rejecters each re-evaluate `rule_is_gap` + `training_enumerated`, and which rejection message a sampled-forwards study sees depends on call order inside `admission_gate` (documented as deliberate)",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "setup/mod.rs:2081-2088,2111-2116,2172-2182",
+          ":2092-2095",
+          "setup/mod.rs:2080 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/mod.rs",
+        "symbol": "admission_gate"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "admission_gate"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "reject_gap_under_effective_risk_aversion"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "reject_gap_under_sampled_selection"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "rule_is_gap"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": null,
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "The gap-rule rejecters each re-evaluate `rule_is_gap` + `training_enumerated`, and which rejection message a sampled-forwards study sees depends on call order inside `admission_gate` (documented as deliberate)",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1",
+        "argument": "SDDP stopping-rule validation inside setup; naming collision only — this `admission_gate` is the engine's gap-rule rejecter chain, not the Phase-0a study-block admission gate (V.1), which would sit above it",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "fns": [
+          "crates/cobre-sddp/src/setup/mod.rs:2089:fn admission_gate(",
+          "crates/cobre-sddp/src/setup/mod.rs:2114:fn reject_gap_under_effective_risk_aversion(",
+          "crates/cobre-sddp/src/setup/mod.rs:2148:fn reject_gap_under_nonuniform_risk(risk_measures: &[RiskMeasure]) -> Result<(), SddpError> {",
+          "crates/cobre-sddp/src/setup/mod.rs:2178:fn reject_gap_under_sampled_selection(",
+          "crates/cobre-sddp/src/setup/mod.rs:2200:fn rule_is_gap(rule: &StoppingRule) -> bool {"
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "CD-038",
+      "wave": 7,
+      "registerId": "CD-038",
+      "registerLine": 1493,
+      "priorTitle": "`CutStateProjection` exposes only the fused `dot_trial_state`; the cut-selection value sweep in `run_cut_management` open-codes the gather-only loop (via `global_state_index`) — loop-shape duplication, not a hazard",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "session/mod.rs:1113-1122",
+          "lp/indexer/cut_state_projection.rs:175 (2026-08-22)"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+        "symbol": "dot_trial_state"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+          "symbol": "dot_trial_state"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+          "symbol": "CutStateProjection"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+          "symbol": "gather_trial_state",
+          "why": "proposed sibling; does not exist (expected)"
+        }
+      ],
+      "spans": [
+        "mod.rs L1118 (open-coded gather (global_state_index))"
+      ],
+      "staleAnchorNote": null,
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "`CutStateProjection` exposes only the fused `dot_trial_state`; the cut-selection value sweep in `run_cut_management` open-codes the gather-only loop (via `global_state_index`) — loop-shape duplication, not a hazard",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.2 (cut projection is SDDP geometry that stays in the engine)",
+        "argument": "a gather-only sibling on the projection is engine-internal",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "sites": [
+          "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs:175:    pub(crate) fn dot_trial_state(&self, coefficients: &[f64], x_hat: &[f64]) -> f64 {",
+          "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs:421:    fn dot_trial_state_gathers_reduced_projection_not_positional() {",
+          "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs:454:    fn dot_trial_state_all_enabled_matches_positional_zip() {",
+          "crates/cobre-sddp/src/training/session/mod.rs:1118:                            global_states[base + proj.global_state_index(CutSlot::new(s)).get()],"
+        ]
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    },
+    {
+      "id": "OD-009",
+      "wave": 7,
+      "registerId": "OD-009",
+      "registerLine": 1853,
+      "priorTitle": "Production items ship as `#[allow(dead_code)]` 'for symmetry, exercised only by tests' (`RuntimeHandles.export_states`, `RankDistribution.my_rank`, `ExchangeBuffers::new`) — the sanctioned Symmetry-or-test-retention class; `#[cfg(test)]`-gating is the cleaner form",
+      "priorSeverity": "C",
+      "priorAnchor": {
+        "raw": [
+          "session/runtime.rs:11-18",
+          "session/mod.rs:263",
+          "rank_distribution.rs:9-22",
+          "state_exchange.rs:116-146"
+        ],
+        "note": "provenance only — the register's own line anchors, stale by construction (workspace/ directory module, solve/ carve-out, ConstructionConfig deletion); never copied into baselineAnchor"
+      },
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/session/runtime.rs",
+        "symbol": "RuntimeHandles"
+      },
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/session/runtime.rs",
+          "symbol": "RuntimeHandles"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/rank_distribution.rs",
+          "symbol": "RankDistribution"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/state_exchange.rs",
+          "symbol": "ExchangeBuffers"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/state_exchange.rs",
+          "symbol": "new"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/state_exchange.rs",
+          "symbol": "with_actual_counts"
+        }
+      ],
+      "unresolvedHistoricalSymbols": [],
+      "spans": [],
+      "staleAnchorNote": "`rank_distribution.rs` is `training/session/rank_distribution.rs` at the baseline.",
+      "disposition": "keep",
+      "resolvingCommit": null,
+      "supersededClaim": null,
+      "survivingClaim": "Production items ship as `#[allow(dead_code)]` 'for symmetry, exercised only by tests' (`RuntimeHandles.export_states`, `RankDistribution.my_rank`, `ExchangeBuffers::new`) — the sanctioned Symmetry-or-test-retention class; `#[cfg(test)]`-gating is the cleaner form — a policy refinement of the sanctioned Symmetry-or-test-retention #[allow] class (mirror `#[allow(...)]` census), not a violation",
+      "phase0aRestatement": null,
+      "alignmentHint": {
+        "value": "neutral",
+        "citation": "Part IV.1",
+        "argument": "lint-attribute policy; no layering content",
+        "guardrailBreach": null
+      },
+      "evidence": {
+        "allowSites": [
+          "crates/cobre-sddp/src/training/session/rank_distribution.rs:14:    #[allow(dead_code)]",
+          "crates/cobre-sddp/src/training/session/runtime.rs:16:    #[allow(dead_code)]",
+          "crates/cobre-sddp/src/training/state_exchange.rs:121:#[allow(dead_code)]"
+        ],
+        "censusClass": "Symmetry-or-test-retention (docs/design/reserved-seams-and-deferred-debt.md `### #[allow(...)] census`)"
+      },
+      "notes": null,
+      "retiredOverlaps": []
+    }
+  ],
+  "existenceChecks": [
+    {
+      "id": "PD-004",
+      "exists": true,
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+        "symbol": "run_enumerated_backward"
+      },
+      "evidence": [
+        "crates/cobre-sddp/src/training/backward_pass_state.rs:721:    fn run_enumerated_backward<S, C: Communicator>("
+      ],
+      "status": "do-not-touch: DEFERRED pending a profile (register L1316; do-not-touch list L1942)",
+      "queuedTo": "perf-sweep (E10-2 measures PD-004 on the enumerated deck; UNMEASURED until then)",
+      "disposition": null,
+      "note": "existence verdict only — the disposition enum is never applied to a do-not-touch item; no fix-shape, no severity, no id change",
+      "registerLine": 1316
+    }
+  ],
+  "probes": {
+    "anchorProbe": {
+      "title": "WAVE ANCHOR PROBE — sddp (2026-09, baseline)",
+      "renderRule": "one `**<register id> · probe · <envelope id>**` block per disposition + existence check, `- **Anchors:**` listing every {path, symbol} as `path::symbol`, `- **Baseline:**` the pin",
+      "command": "python3 plans/architecture-debt-audit/tools/check-anchors.py 'WAVE ANCHOR PROBE — sddp (2026-09, baseline)' --register <stub> --baseline 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+      "exit": 0,
+      "lastLine": "checked 84 anchors, 0 failing",
+      "anchorsRendered": 84
+    },
+    "reraiseProbe": {
+      "title": "WAVE RERAISE PROBE — sddp (2026-09, baseline)",
+      "renderRule": "the 19 live (keep/sharpen) dispositions only — a retire record raises nothing and the PD-004 existence check is not a finding — each with its surviving claim as the title line and its retiredOverlaps rendered as the checker's `Re-raise-of:` justification (register precedent: `<ref>, NOT a re-raise — <why>`)",
+      "command": "python3 plans/architecture-debt-audit/tools/check-reraise.py 'WAVE RERAISE PROBE — sddp (2026-09, baseline)' --register <stub> --baseline 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+      "exit": 0,
+      "lastLine": "checked 19 entries, 0 unjustified re-raise(s)"
+    }
+  },
+  "evidenceCommands": [
+    "git grep -n 'fn rebuild_historical_library_non_root' 077dbe2c -- crates   # CD-001 declaration check → 0",
+    "git grep -n 'rebuild_historical_library_non_root' 077dbe2c -- crates      # 3 doc-comment mentions only",
+    "git grep -n 'ConstructionConfig\\|into_construction_config' 077dbe2c -- crates   # CD-003 hop → 0",
+    "git grep -n '^impl NodeGraph' 077dbe2c -- crates/cobre-sddp/src/setup/node_graph.rs   # CD-006: 6 impl blocks",
+    "git ls-tree --name-only 077dbe2c crates/cobre-sddp/src/solve/ ; git ls-tree -r --name-only 077dbe2c crates/cobre-sddp/src/training/ | grep stage_solve_prep   # CD-023 trap",
+    "git show 077dbe2c:crates/cobre-sddp/src/workspace/workspace.rs | grep -cE '^(pub |pub\\(crate\\) )?struct '   # CD-021: 9",
+    "for f in entries.rs columns.rs; do git show 077dbe2c:crates/cobre-sddp/src/lp/builder/$f | wc -l; done   # CD-007 re-measure",
+    "git grep -n 'fn run_enumerated_backward\\b' 077dbe2c -- crates/cobre-sddp/src/training/backward_pass_state.rs   # PD-004 existence",
+    "git log -1 --format='%h %ad %s' --date=short b051c410 4075c4e8 3f4c3db3   # retire commits"
+  ],
+  "ticketDeviations": [
+    "CD-006's closing sha 3f4c3db3 comes from the ticket text; the register (BACKLOG L1185) records CD-006 RESOLVED without a sha — recorded with that provenance, verified as an ancestor of the pin touching node_graph.rs",
+    "the anchor-probe stub is rendered to a temp file and re-rendered by WaveReverifyTests rather than kept as an undeclared station file",
+    "22 = the ticket's 19 pending rows + the 3 retire rulings; the ROADMAP's '22 owned dispositions' reading is confirmed"
+  ]
+}

@@ -1,0 +1,2967 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "gateDate": "2026-09-18",
+  "decision": "ratified",
+  "sectionTitle": "★ STATION 6 — cobre-cli / cobre-python / facade (2026-09, baseline)",
+  "scaffoldHeading": "## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — cli-python",
+  "rounds": {
+    "R0a-wave5": {
+      "id": "R0a-wave5",
+      "kind": "prior-disposition",
+      "subject": "sharpen (4): CD-025, CD-029, CD-002, CD-009 — CD-025 destination cobre-io (L2) with the 'cobre-sddp or cobre-io' wording superseded; CD-029 fold into cobre-sddp PrepPhase (its cobre-io variant held, R4); CD-002 / CD-009 cobre-cli-local",
+      "options": [
+        "ratify-as-presented",
+        "re-dispose (name)",
+        "defer (name + trigger)",
+        "reject-to-Cleared (name)"
+      ],
+      "answer": "Ratify as presented (Recommended)"
+    },
+    "R0a-sev-CD-029": {
+      "id": "R0a-sev-CD-029",
+      "kind": "prior-severity",
+      "subject": "CD-029 severity — B kept by the calibration (two hand-mirrored copies of the reconciler); C only if the duplicated engine logic is local cleanup",
+      "options": [
+        "keep B",
+        "downgrade to C"
+      ],
+      "answer": "Keep B (Recommended)"
+    },
+    "R0a-sev-CD-002": {
+      "id": "R0a-sev-CD-002",
+      "kind": "prior-severity",
+      "subject": "CD-002 severity — calibration proposes B → C (register B; the register's own 2026-08-19 tiering lists it as a local cleanup; S-effort named input struct, no wire change)",
+      "options": [
+        "downgrade to C (proposed)",
+        "keep B"
+      ],
+      "answer": "Downgrade to C (Recommended)"
+    },
+    "R0b-i5": {
+      "id": "R0b-i5",
+      "kind": "prior-disposition",
+      "subject": "I.5 (8 rows: I.5-1a retire, I.5-1b keep, I.5-2 keep, I.5-3 sharpen, I.5-4 sharpen, I.5-5 sharpen, I.5-6 sharpen, I.5-7 sharpen) + the I.3-7 BroadcastConfig fragment; two sharpen corrections ratified here (I.5-4 from_config five callers; the BroadcastConfig + new_with_boundary_requirements path)",
+      "options": [
+        "ratify-as-presented",
+        "re-dispose (name)",
+        "defer (name + trigger)",
+        "reject-to-Cleared (name)"
+      ],
+      "answer": "Ratify as presented (Recommended)"
+    },
+    "R1-sevB": {
+      "id": "R1-sevB",
+      "kind": "severity-batch",
+      "subject": "Sev B (13): CD-089, CD-090, CD-091, CD-095, CD-096, PD-049, PD-050, PD-051, TD-057, TD-063, TD-064, TD-065, TD-066",
+      "options": [
+        "accept all",
+        "downgrade (name)",
+        "reject (name)",
+        "defer (name + trigger)"
+      ],
+      "answer": "Accept all (Recommended)"
+    },
+    "R2-sevC": {
+      "id": "R2-sevC",
+      "kind": "severity-batch",
+      "subject": "Sev C (27): CD-092, CD-093, CD-094, CD-097, CD-098, OD-043, OD-044, OD-045, OD-046, OD-047, OD-048, PD-052, PD-053, PD-054, PD-055, TD-058, TD-059, TD-060, TD-061, TD-062, TD-067, TD-068, TD-069, TD-070, TD-071, TD-072, TD-073",
+      "options": [
+        "accept all",
+        "downgrade (name)",
+        "reject (name)",
+        "defer (name + trigger)"
+      ],
+      "answer": "Accept all (Recommended)"
+    },
+    "R4-hold-CD-025-cobre-sddp-home": {
+      "id": "R4-hold-CD-025-cobre-sddp-home",
+      "kind": "conflicts-hold",
+      "subject": "CD-025 — cobre-sddp home (orchestration at L3) — Part IV.1 — L2 cobre-io owns shared output orchestration; an engine owning the front ends' output policy means the second engine (cobre-direct, V.1) would rout…",
+      "options": [
+        "take-the-alternative",
+        "override-with-rationale",
+        "reject",
+        "defer"
+      ],
+      "answer": "Take the cobre-io alternative (Recommended)"
+    },
+    "R4-hold-CD-025-cli-local-helper": {
+      "id": "R4-hold-CD-025-cli-local-helper",
+      "kind": "conflicts-hold",
+      "subject": "CD-025 — cobre-cli-local helper (keeps the double-mirror) — Part IV.1 — L2 cobre-io owns 'shared output orchestration'; forbidden at L2: 'an engine-specific output tree hard-wired in the CLI instead of orchestrated here…",
+      "options": [
+        "take-the-alternative",
+        "override-with-rationale",
+        "reject",
+        "defer"
+      ],
+      "answer": "Take the cobre-io alternative (Recommended)"
+    },
+    "R4-hold-CD-029-cobre-io-home": {
+      "id": "R4-hold-CD-029-cobre-io-home",
+      "kind": "conflicts-hold",
+      "subject": "CD-029 — cobre-io home for the boundary reconciliation — Part IV.1 — L2 forbids engine dispatch; the reconciliation is typed on cobre_sddp::StudySetup and calls cobre-sddp's policy loader, so an L2 home inverts the l…",
+      "options": [
+        "take-the-alternative",
+        "override-with-rationale",
+        "reject",
+        "defer"
+      ],
+      "answer": "Take the PrepPhase alternative (Recommended)"
+    },
+    "R4-hold-CD-029-two-front-end-copies": {
+      "id": "R4-hold-CD-029-two-front-end-copies",
+      "kind": "conflicts-hold",
+      "subject": "CD-029 — keep two front-end copies (cli-local fold into run_boundary_check, Python keeps reconcile_boundary_policy) — Part IV.1 / III.7 — the hand-mirrored call-site list is the duplication mechanism the roadmap names for outputs; the same shape on the validation path keeps tw…",
+      "options": [
+        "take-the-alternative",
+        "override-with-rationale",
+        "reject",
+        "defer"
+      ],
+      "answer": "Take the PrepPhase alternative (Recommended)"
+    },
+    "R5-nh-1": {
+      "id": "R5-nh-1",
+      "kind": "needs-human",
+      "subject": "#1 CD-089 / S6a-architecture-00 (confirmed); attacker/architecture S6a E01",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Keep per-front-end rendering (Recommended)"
+    },
+    "R5-nh-2": {
+      "id": "R5-nh-2",
+      "kind": "needs-human",
+      "subject": "#2 CD-025 / S6a-architecture-01 (confirmed); attacker/architecture S6a E02; S6a-architecture-02 (confirmed); S6a-architecture-05 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "cobre-sddp folds, L2 writes (Recommended)"
+    },
+    "R5-nh-3": {
+      "id": "R5-nh-3",
+      "kind": "needs-human",
+      "subject": "#3 — / S6a-architecture-04 (dismissed); attacker/architecture S6a E03",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Leave to CD-004 redesign (Recommended)"
+    },
+    "R5-nh-4": {
+      "id": "R5-nh-4",
+      "kind": "needs-human",
+      "subject": "#4 CD-029 / S6b-architecture-00 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Fourth prep_phase_metadata row (Recommended)"
+    },
+    "R5-nh-5": {
+      "id": "R5-nh-5",
+      "kind": "needs-human",
+      "subject": "#5 CD-091 / S6b-architecture-01 (confirmed); S6b-architecture-02 (confirmed); attacker/architecture S6b E06",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Retire it, CHANGELOG note (Recommended)"
+    },
+    "R5-nh-6": {
+      "id": "R5-nh-6",
+      "kind": "needs-human",
+      "subject": "#6 CD-091 / S6b-architecture-02 (confirmed); attacker/architecture S6b E07",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "cobre-io owns the kind map (Recommended)"
+    },
+    "R5-nh-7": {
+      "id": "R5-nh-7",
+      "kind": "needs-human",
+      "subject": "#7 CD-029 / S6b-architecture-03 (confirmed); attacker/performance S6b E21",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Hold; the fold absorbs it (Recommended)"
+    },
+    "R5-nh-8": {
+      "id": "R5-nh-8",
+      "kind": "needs-human",
+      "subject": "#8 CD-093 / S6b-architecture-04 (confirmed); attacker/architecture S6b E05; attacker/over-engineering S6b E15; attacker/test-bloat S6b E27",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "No [lib]; fix the examples (Recommended)"
+    },
+    "R5-nh-9": {
+      "id": "R5-nh-9",
+      "kind": "needs-human",
+      "subject": "#9 — / S6c-architecture-00 (dismissed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Covered in substance (Recommended)"
+    },
+    "R5-nh-10": {
+      "id": "R5-nh-10",
+      "kind": "needs-human",
+      "subject": "#10 — / S6c-architecture-06 (dismissed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Yes to both, E11 nit (Recommended)"
+    },
+    "R5-nh-11": {
+      "id": "R5-nh-11",
+      "kind": "needs-human",
+      "subject": "#11 — / S6a-performance-01 (dismissed); attacker/performance S6a E18",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Keep allgatherv (Recommended)"
+    },
+    "R5-nh-12": {
+      "id": "R5-nh-12",
+      "kind": "needs-human",
+      "subject": "#12 — / S6a-performance-05 (dismissed); S6a-performance-06 (dismissed); attacker/performance S6a E19",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Ratify; E11 records it (Recommended)"
+    },
+    "R5-nh-13": {
+      "id": "R5-nh-13",
+      "kind": "needs-human",
+      "subject": "#13 CD-025 / S6a-performance-07 (dismissed); attacker/performance S6a E20",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Keep the serial shape (Recommended)"
+    },
+    "R5-nh-14": {
+      "id": "R5-nh-14",
+      "kind": "needs-human",
+      "subject": "#14 PD-050 / S6c-performance-01 (confirmed); attacker/performance S6c E22",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Supported; PD-050 proceeds (Recommended)"
+    },
+    "R5-nh-15": {
+      "id": "R5-nh-15",
+      "kind": "needs-human",
+      "subject": "#15 — / S6c-performance-03 (dismissed); attacker/performance S6c E23",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Identity unspecified; no change (Recommended)"
+    },
+    "R5-nh-16": {
+      "id": "R5-nh-16",
+      "kind": "needs-human",
+      "subject": "#16 PD-052 / S6c-performance-04 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Unspecified; memo acceptable (Recommended)"
+    },
+    "R5-nh-17": {
+      "id": "R5-nh-17",
+      "kind": "needs-human",
+      "subject": "#17 OD-043 / S6a-over-engineering-00 (confirmed); attacker/over-engineering S6a E10",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Retire it (Recommended)"
+    },
+    "R5-nh-18": {
+      "id": "R5-nh-18",
+      "kind": "needs-human",
+      "subject": "#18 CD-025 / S6a-over-engineering-03 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Wait for CD-025's emit list (Recommended)"
+    },
+    "R5-nh-19": {
+      "id": "R5-nh-19",
+      "kind": "needs-human",
+      "subject": "#19 OD-045 / S6a-over-engineering-04 (confirmed); S6b-over-engineering-02 (confirmed); S6b-over-engineering-04 (dismissed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Correct the prose to D4 (Recommended)"
+    },
+    "R5-nh-20": {
+      "id": "R5-nh-20",
+      "kind": "needs-human",
+      "subject": "#20 CD-029 / S6b-over-engineering-00 (confirmed); attacker/over-engineering S6b E12",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Emit it + a --json reject test (Recommended)"
+    },
+    "R5-nh-21": {
+      "id": "R5-nh-21",
+      "kind": "needs-human",
+      "subject": "#21 OD-047 / S6c-over-engineering-00 (confirmed); attacker/over-engineering S6c E17",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Complete the three twins (Recommended)"
+    },
+    "R5-nh-22": {
+      "id": "R5-nh-22",
+      "kind": "needs-human",
+      "subject": "#22 TD-057 / S6a-test-bloat-00 (confirmed); S6a-test-bloat-01 (confirmed); attacker/test-bloat S6a E25",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Consolidate now (Recommended)"
+    },
+    "R5-nh-23": {
+      "id": "R5-nh-23",
+      "kind": "needs-human",
+      "subject": "#23 TD-057 / S6a-test-bloat-01 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "tests/common/ in cobre-cli (Recommended)"
+    },
+    "R5-nh-24": {
+      "id": "R5-nh-24",
+      "kind": "needs-human",
+      "subject": "#24 TD-058 / S6a-test-bloat-02 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Not policy; fixture sanctioned (Recommended)"
+    },
+    "R5-nh-25": {
+      "id": "R5-nh-25",
+      "kind": "needs-human",
+      "subject": "#25 TD-060 / S6a-test-bloat-04 (confirmed); S6a-test-bloat-05 (confirmed); attacker/test-bloat S6a E24",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Freezes comparisons, not files (Recommended)"
+    },
+    "R5-nh-26": {
+      "id": "R5-nh-26",
+      "kind": "needs-human",
+      "subject": "#26 TD-062 / S6a-test-bloat-06 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Front-end assertion, both sites (Recommended)"
+    },
+    "R5-nh-27": {
+      "id": "R5-nh-27",
+      "kind": "needs-human",
+      "subject": "#27 TD-067 / S6b-test-bloat-05 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "E08's call; default inline (Recommended)"
+    },
+    "R5-nh-28": {
+      "id": "R5-nh-28",
+      "kind": "needs-human",
+      "subject": "#28 TD-071 / S6c-test-bloat-00 (confirmed); attacker/test-bloat S6c E30",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Both in one change (Recommended)"
+    },
+    "R5-nh-29": {
+      "id": "R5-nh-29",
+      "kind": "needs-human",
+      "subject": "#29 TD-072 / S6c-test-bloat-02 (confirmed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Normalize onto __file__ paths (Recommended)"
+    },
+    "R5-nh-30": {
+      "id": "R5-nh-30",
+      "kind": "needs-human",
+      "subject": "#30 TD-073 / S6c-test-bloat-03 (confirmed); attacker/test-bloat S6c E29",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Confirm: first-class, already resolving (Recommended)"
+    },
+    "R5-nh-31": {
+      "id": "R5-nh-31",
+      "kind": "needs-human",
+      "subject": "#31 — / S6c-test-bloat-04 (dismissed)",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Yes: E11 corrects every trace (Recommended)"
+    },
+    "R5-nh-32": {
+      "id": "R5-nh-32",
+      "kind": "needs-human",
+      "subject": "#32 — / attacker/architecture S6c E08; attacker/over-engineering S6b E14; attacker/over-engineering S6c E16",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Keep; E11 adds row + listings (Recommended)"
+    },
+    "R5-nh-33": {
+      "id": "R5-nh-33",
+      "kind": "needs-human",
+      "subject": "#33 — / attacker/architecture S6c E09",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Dispatching constructor; no break (Recommended)"
+    },
+    "R5-nh-34": {
+      "id": "R5-nh-34",
+      "kind": "needs-human",
+      "subject": "#34 OD-043 / attacker/over-engineering S6a E11",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Defer OD-043 to CD-004 (Recommended)"
+    },
+    "R5-nh-35": {
+      "id": "R5-nh-35",
+      "kind": "needs-human",
+      "subject": "#35 TD-064 / attacker/over-engineering S6b E13",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Yes, one change with TD-064 (Recommended)"
+    },
+    "R5-nh-36": {
+      "id": "R5-nh-36",
+      "kind": "needs-human",
+      "subject": "#36 TD-059 / attacker/test-bloat S6a E26",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Retire; live derivation is authority (Recommended)"
+    },
+    "R5-nh-37": {
+      "id": "R5-nh-37",
+      "kind": "needs-human",
+      "subject": "#37 TD-065 / attacker/test-bloat S6b E28",
+      "options": [
+        "recommended",
+        "alternative(s)",
+        "defer",
+        "other"
+      ],
+      "answer": "Incidental; knobs with defaults (Recommended)"
+    },
+    "R6-handoffs": {
+      "id": "R6-handoffs",
+      "kind": "handoff-confirm",
+      "subject": "partI-handoff.json (8 I.5 rows + I.3-7 fragment) → E9 · perf-queue.json rows → E10 · td-queue.json rows → E08 · parity-script and workflow rows → build/CI/docs (E07) · doc corrections → E11",
+      "options": [
+        "confirm",
+        "amend (name)"
+      ],
+      "answer": "Confirm (Recommended)"
+    },
+    "R7-extras": {
+      "id": "R7-extras",
+      "kind": "record-shape",
+      "subject": "machine-readable record beyond gate.md: decisions.json + alignment-queue.json + the gate stamp on td-queue.json (the sddp gate's shape; undeclared on this ticket, so each is a justified extra)",
+      "options": [
+        "all three (sddp shape)",
+        "decisions.json only",
+        "none — gate.md is the record"
+      ],
+      "answer": "All three, sddp shape (Recommended)"
+    }
+  },
+  "counts": {
+    "presented": 53,
+    "priorPresented": 4,
+    "priorRatified": 4,
+    "priorRetired": 0,
+    "priorKept": 0,
+    "priorSharpened": 4,
+    "priorDowngraded": 1,
+    "i5Presented": 9,
+    "i5Ratified": 9,
+    "newPresented": 40,
+    "accepted": 39,
+    "amended": 0,
+    "downgraded": 0,
+    "rejected": 0,
+    "deferred": 1,
+    "overridden": 0,
+    "holdsPresented": 4,
+    "holdsClosedByAlternative": 4,
+    "needsHumanAnswered": 37,
+    "needsHumanPresented": 37,
+    "perfRowsStruck": 0,
+    "tdRowsStruck": 0
+  },
+  "decisions": [
+    {
+      "kind": "prior-disposition",
+      "id": "CD-025",
+      "registerId": "CD-025",
+      "wave": 5,
+      "registerLine": 917,
+      "presentedDisposition": "sharpen",
+      "round": "R0a-wave5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "severityDecision": null,
+      "alignment": "advances-0a",
+      "rationale": "All four stay sharpen with both claims recorded; CD-025's L2 destination and the superseded wording stand; CD-029's L3 fold is the record (its cobre-io variant is asked alone in R4).",
+      "fixShapeOwner": "cobre-io (L2)",
+      "supersededWording": "hoist the shared \"which outputs + guards\" helpers to a crate BOTH already depend on (cobre-sddp or cobre-io); the `_if_any` helpers prove the shape",
+      "enforcementLayers": [
+        "scripts/ci/check_python_parity.py",
+        "crates/cobre-python/tests/test_cli_python_file_set_parity.py",
+        "crates/cobre-cli/tests/python_parity_check.rs"
+      ],
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [
+        {
+          "round": "R5-nh-2",
+          "choice": "cobre-sddp home for the folds; writes + guards to L2",
+          "rationale": "the engine-typed folds (delta_to_stats_row / SolverStatsDelta, the five row folds, the CD-090 totals fold) live in cobre-sddp beside their input types; CD-025's L2 entry point owns only the writes and their guards; CD-090's cobre-sddp home is confirmed outside the writer boundary (not the held L3 writer case)"
+        },
+        {
+          "round": "R5-nh-13",
+          "choice": "Keep the serial shape",
+          "rationale": "the guarantee and the stderr ordering stand; the dismissal stands; no 2x2 perf row"
+        },
+        {
+          "round": "R5-nh-18",
+          "choice": "Wait for CD-025's shared emit list",
+          "rationale": "no interim pytest additions; the shared cobre-io call-site list removes the duplicated condition and the parity golden gates it there"
+        }
+      ]
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-029",
+      "registerId": "CD-029",
+      "wave": 5,
+      "registerLine": 1244,
+      "presentedDisposition": "sharpen",
+      "round": "R0a-wave5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "severityDecision": "R0a-sev-CD-029: Keep B (Recommended) — Duplicated engine logic across two front ends is a Sev-B hand-mirror on the CD-025 precedent; the register severity stands.",
+      "alignment": "advances-0a",
+      "rationale": "All four stay sharpen with both claims recorded; CD-025's L2 destination and the superseded wording stand; CD-029's L3 fold is the record (its cobre-io variant is asked alone in R4).",
+      "fixShapeOwner": "cobre-sddp PrepPhase (L3)",
+      "supersededWording": null,
+      "enforcementLayers": [],
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [
+        {
+          "round": "R5-nh-4",
+          "choice": "Fourth prep_phase_metadata row (engine-owned phase)",
+          "rationale": "the folded PrepPhase fourth phase supplies the kind/phase string through prep_phase_metadata; the binding literal is retired when the fold lands; both front ends read the same vocabulary"
+        },
+        {
+          "round": "R5-nh-7",
+          "choice": "Hold; CD-029's fold absorbs it",
+          "rationale": "no standalone patch; the call chain is touched once when the boundary check folds into PrepPhase and resolves the requirements as a phase input"
+        },
+        {
+          "round": "R5-nh-20",
+          "choice": "Yes: emit the object and add a --json reject test",
+          "rationale": "the boundary reject emits the documented single error object (phase string per the vocabulary answer above) and a new reject test in --json mode pins it; lands with CD-029's fold"
+        }
+      ]
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-002",
+      "registerId": "CD-002",
+      "wave": 4,
+      "registerLine": 168,
+      "presentedDisposition": "sharpen",
+      "round": "R0a-wave5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "severityDecision": "R0a-sev-CD-002: Downgrade to C (Recommended) — Recorded as C (reviewer: B); the register's Severity field is rewritten in place and the gate row keeps the reviewer rating.",
+      "alignment": "neutral",
+      "rationale": "All four stay sharpen with both claims recorded; CD-025's L2 destination and the superseded wording stand; CD-029's L3 fold is the record (its cobre-io variant is asked alone in R4).",
+      "fixShapeOwner": "cobre-cli-local",
+      "supersededWording": null,
+      "enforcementLayers": [],
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "prior-disposition",
+      "id": "CD-009",
+      "registerId": "CD-009",
+      "wave": 7,
+      "registerLine": 312,
+      "presentedDisposition": "sharpen",
+      "round": "R0a-wave5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "resolvingCommit": null,
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "severityDecision": null,
+      "alignment": "neutral",
+      "rationale": "All four stay sharpen with both claims recorded; CD-025's L2 destination and the superseded wording stand; CD-029's L3 fold is the record (its cobre-io variant is asked alone in R4).",
+      "fixShapeOwner": "cobre-cli-local",
+      "supersededWording": null,
+      "enforcementLayers": [],
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": []
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-1a",
+      "subClaim": "the run subcommand's help text is 'train an SDDP policy'",
+      "presentedDisposition": "retire",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "retire",
+      "oldFigure": "\"train an SDDP policy\" (v0.12 snapshot)",
+      "baselineFigure": "clap doc string at main.rs:70: \"Load a case directory, train a policy, and run simulation.\" — main.rs carries zero occurrences of 'sddp' in any case",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n -B1 'Run(RunArgs)'; git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -ci sddp",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-1b",
+      "subClaim": "the whole lifecycle is the SDDP train → simulate two-phase shape gated on training_enabled and n_scenarios",
+      "presentedDisposition": "keep",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "oldFigure": "two-phase shape gated on training_enabled / n_scenarios",
+      "baselineFigure": "run/mod.rs:166 `if training_enabled {` and :224/227 `setup.simulation_config.n_scenarios > 0`",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/mod.rs | grep -n 'training_enabled\\|n_scenarios'",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-2",
+      "subClaim": "the run is typed on the concrete cobre_sddp::StudySetup; training is setup.train(...), simulation setup.simulate(...) — inherent methods, no trait indirection or dispatch enum",
+      "presentedDisposition": "keep",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "keep",
+      "oldFigure": "typed on StudySetup; inherent train/simulate",
+      "baselineFigure": "training.rs:11 `use cobre_sddp::StudySetup;`, :88 `setup.train(`; simulation.rs:21 `use cobre_sddp::StudySetup;`, :98 `.simulate(`; both are inherent `impl StudySetup` methods at setup/orchestration.rs:41 / :229; Command has no engine variant",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | grep -n 'setup.train('; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | grep -n '.simulate('; git grep -n 'pub fn train\\|pub fn simulate' 077dbe2c -- crates/cobre-sddp/src/setup/orchestration.rs",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-3",
+      "subClaim": "the CLI imports ~70 symbols from cobre_sddp",
+      "presentedDisposition": "sharpen",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "oldFigure": "~70 symbols (v0.12 estimate); ticket @a136840d: 95 refs / 11 files / 68 use lines",
+      "baselineFigure": "97 `cobre_sddp::` occurrences over 10 files, 70 `use cobre_sddp` lines, 88 distinct imported symbols (leaf names across every `use cobre_sddp::…;`, re-exports included)",
+      "command": "git grep -o 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l; git grep -l 'cobre_sddp::' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l; git grep -n '^use cobre_sddp' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | wc -l",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-4",
+      "subClaim": "config conversion goes through cobre_sddp::StudyParams::from_config",
+      "presentedDisposition": "sharpen",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "oldFigure": "the CLI calls StudyParams::from_config",
+      "baselineFigure": "the run path never calls StudyParams::from_config directly: setup.rs:112 `BroadcastConfig::from_config(&config)?` (inside load_case_and_config :78) → broadcast.rs:143 `pub(crate) fn from_config` → :144 `StudyParams::from_config(config)`; the validate path calls it directly at validate.rs:384 and reaches it again through StudySetup::new_with_boundary_requirements (validate.rs:234 → setup/mod.rs:371 → :378); the Python binding mirrors both (io.rs:254, run.rs:994)",
+      "command": "git grep -n 'from_config' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' | grep -v tests",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-5",
+      "subClaim": "the output tree is training/ + simulation/ + hydro_models/ with a cut-based policy checkpoint; the summary vocabulary is lower-bound/upper-bound/gap and hydro-model-fit sections",
+      "presentedDisposition": "sharpen",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "oldFigure": "training/ + simulation/ + hydro_models/; a `summary` subcommand rendering LB/UB/gap",
+      "baselineFigure": "the tree holds: `training` (cobre-io training_writer.rs), `simulation` (outputs.rs:200, cobre-io simulation_writer.rs), `hydro_models` (outputs.rs:93/105/117), plus `generic_constraints` (outputs.rs:132, new since v0.12) and the cut-based checkpoint (write_checkpoint at outputs.rs:67 into setup.policy_path :66); the `summary` SUBCOMMAND is gone (797ba443) — the LB/UB vocabulary survives in the run's own rendering (training.rs:204/205/206 final_lb/final_ub, progress.rs:323/324/474/475) and the hydro-model-fit section in src/summary.rs::print_hydro_model_summary (:29)",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n '\"hydro_models\"\\|\"generic_constraints\"\\|\"simulation\"\\|write_checkpoint('; git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | grep -n 'lower_bound: training_result\\|upper_bound: training_result'",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-6",
+      "subClaim": "only schema and version are near-generic commands; init ships a single hydrothermal template",
+      "presentedDisposition": "sharpen",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "oldFigure": "seven subcommands (init, run, validate, report, summary, schema, version); init: one template",
+      "baselineFigure": "five variants (main.rs:67: Init, Run, Validate, Schema, Version); schema and version stay near-generic; init scaffolds from embedded templates (1 named: 1dtoy), all hydrothermal",
+      "command": "git show 077dbe2c:crates/cobre-cli/src/main.rs | grep -n -A 12 'enum Command'; git show 077dbe2c:crates/cobre-cli/src/templates.rs | grep -n 'name:'",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.5-7",
+      "subClaim": "validate, report and summary are SDDP-shaped: validate runs the same StudyParams::from_config conversion, report/summary read the SDDP output tree",
+      "presentedDisposition": "sharpen",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "oldFigure": "three SDDP-shaped subcommands (2026-07-23 addendum); the ticket's premise: commands/report.rs has zero cobre_sddp references, so the claim is two-thirds true",
+      "baselineFigure": "report and summary no longer exist (797ba443 2026-09-16 feat: remove the report and summary subcommands and their Python and cobre-io mirrors); validate is SDDP-shaped end to end — StudyParams::from_config (validate.rs:384), PrepPhase::Config/Stochastic/HydroModels (:387/413/422), StudySetup::new_with_boundary_requirements (:234) and its module doc lists the four cobre_sddp phases (:17/20/22/24)",
+      "command": "git ls-tree --name-only 077dbe2c -- crates/cobre-cli/src/commands; git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'StudyParams::from_config\\|PrepPhase::\\|new_with_boundary_requirements'",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "i5-subclaim",
+      "id": "I.3-7 fragment",
+      "subClaim": "the config type is SDDP-shaped: Config.training + the StudyParams::from_config conversion; BroadcastConfig is a hand-maintained SDDP-parameter subset",
+      "presentedDisposition": "sharpen",
+      "round": "R0b-i5",
+      "decision": "ratify-as-presented",
+      "ownerDisposition": "sharpen",
+      "oldFigure": "BroadcastConfig as a hand-maintained SDDP-parameter subset (Part-I I.3-7)",
+      "baselineFigure": "crates/cobre-cli/src/commands/run/setup.rs:112 BroadcastConfig::from_config(&config)? (run path, inside load_case_and_config :78) → crates/cobre-cli/src/commands/broadcast.rs:143 pub(crate) fn from_config → crates/cobre-cli/src/commands/broadcast.rs:144 StudyParams::from_config(config) — the SDDP call; second path crates/cobre-cli/src/commands/validate.rs:384 StudyParams::from_config(&config) (direct) → crates/cobre-cli/src/commands/validate.rs:234 StudySetup::new_with_boundary_requirements → crates/cobre-sddp/src/setup/mod.rs:371 (def; delegated from new at :356) → :378",
+      "command": "crates/cobre-sddp/src/setup/mod.rs:378",
+      "rationale": "All 8 rows and the I.3-7 fragment go to the alignment epic with these dispositions and commands; the two sharpen corrections the ticket names are ratified.",
+      "queue": "alignment",
+      "clearedMoved": false
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-089",
+      "candidateRef": "S6a-architecture-00",
+      "class": "CD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0a",
+      "partIRef": "I.5",
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [
+        {
+          "round": "R5-nh-1",
+          "choice": "Keep per-front-end presentation",
+          "rationale": "the shared owner returns the phase-plan value only; each front end keeps its own no-op rendering (stderr line / zeroed RunSummary); CD-089's surviving claim stays as calibrated; no API change"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-090",
+      "candidateRef": "S6a-architecture-05",
+      "class": "CD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": "I.5",
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-091",
+      "candidateRef": "S6b-architecture-01",
+      "class": "CD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0a",
+      "partIRef": "I.5",
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [
+        {
+          "round": "R5-nh-5",
+          "choice": "Retire it; one cobre-io vocabulary, noted in the CHANGELOG",
+          "rationale": "CaseValidationError is retired when CD-091's shared kind map lands; the change is called out in the CHANGELOG as a --json contract change; no alias kept"
+        },
+        {
+          "round": "R5-nh-6",
+          "choice": "cobre-io (L2) owns the kind map",
+          "rationale": "the L2 destination rule generalizes to shared front-end contract data owned by the type's crate: the LoadError → kind map lives in cobre-io beside LoadError; CD-091's fix shape stands"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-092",
+      "candidateRef": "S6b-architecture-02",
+      "class": "CD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "advances-0a",
+      "partIRef": "I.5",
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-093",
+      "candidateRef": "S6b-architecture-04",
+      "class": "CD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        {
+          "round": "R5-nh-8",
+          "choice": "No [lib]; make the seven examples honest at their fences",
+          "rationale": "CD-093's fix as filed: the three cobre:: imports are rewritten to the module-local form and the four cobre_cli:: examples are de-annotated or de-fenced; no published library surface"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-094",
+      "candidateRef": "S6b-architecture-05",
+      "class": "CD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": "I.5",
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-095",
+      "candidateRef": "S6c-architecture-01",
+      "class": "CD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-0a",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "alignment",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-096",
+      "candidateRef": "S6c-architecture-02",
+      "class": "CD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-097",
+      "candidateRef": "S6c-architecture-04",
+      "class": "CD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-098",
+      "candidateRef": "S6c-architecture-05",
+      "class": "CD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-043",
+      "candidateRef": "S6a-over-engineering-00",
+      "class": "OD",
+      "round": "R2-sevC",
+      "decision": "defer",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08. Re-disposed at R5-nh-34: Defer OD-043 to CD-004's projection work — the in-crate move is skipped; OD-043 is deferred with trigger CD-004's single Config projection, which relocates the mirror once",
+      "deferTrigger": "CD-004's single Config projection lands (sddp station, ratified 2026-09-18) and relocates the Config wire mirror once",
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        {
+          "round": "R5-nh-17",
+          "choice": "Retire it (mirror :683-697 precedent)",
+          "rationale": "BroadcastNodeGraph and its round-trip tests are deleted under the no-dead-code directive and recorded as removed so no audit resurrects it; OD-043's relocation drops those lines"
+        },
+        {
+          "round": "R5-nh-34",
+          "choice": "Defer OD-043 to CD-004's projection work",
+          "rationale": "the in-crate move is skipped; OD-043 is deferred with trigger CD-004's single Config projection, which relocates the mirror once"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-044",
+      "candidateRef": "S6a-over-engineering-01",
+      "class": "OD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-045",
+      "candidateRef": "S6a-over-engineering-04",
+      "class": "OD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        {
+          "round": "R5-nh-19",
+          "choice": "Correct the mirror prose down to D4 (E11)",
+          "rationale": "the same ruling as the sddp gate (NH29): the census clause states the comments.md D4 lint scope; the cast and needless_pass_by_value sites are not a rule gap; OD-045 / OD-046 stand as the duplicated-cast and by-value residues only"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-046",
+      "candidateRef": "S6b-over-engineering-02",
+      "class": "OD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-047",
+      "candidateRef": "S6c-over-engineering-00",
+      "class": "OD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        {
+          "round": "R5-nh-21",
+          "choice": "Complete the three twins",
+          "rationale": "OD-047 is a completion ticket: each twin exposes the field set its core entity carries, matching PyBus / PyLine / PyThermal / PyHydro; no mirror row needed once complete"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-048",
+      "candidateRef": "S6c-over-engineering-01",
+      "class": "OD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-049",
+      "candidateRef": "S6c-performance-00",
+      "class": "PD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "directions": [],
+      "enforcementLayers": [],
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t",
+        "status": "UNMEASURED"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-050",
+      "candidateRef": "S6c-performance-01",
+      "class": "PD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "directions": [
+        {
+          "round": "R5-nh-14",
+          "choice": "Supported bulk reader; PD-050 proceeds, doc cross-links Arrow",
+          "rationale": "load_simulation stays a supported reader; PD-050's per-column typed-view hoist stays queued; its rustdoc gains a pointer to load_simulation_arrow for large trees"
+        }
+      ],
+      "enforcementLayers": [],
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t",
+        "status": "UNMEASURED"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-051",
+      "candidateRef": "S6c-performance-02",
+      "class": "PD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "perf",
+      "directions": [],
+      "enforcementLayers": [],
+      "perfQueue": {
+        "effect": "kept",
+        "layout": "4t",
+        "status": "UNMEASURED"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-052",
+      "candidateRef": "S6c-performance-04",
+      "class": "PD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [
+        {
+          "round": "R5-nh-16",
+          "choice": "Identity unspecified; the memo shape is acceptable",
+          "rationale": "element identity across reads is not part of the contract; PD-052's memo (or index-into-shared-Arc) shape is accepted as calibrated; the module doc states identity is unspecified"
+        }
+      ],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-053",
+      "candidateRef": "S6c-performance-05",
+      "class": "PD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-054",
+      "candidateRef": "S6c-performance-06",
+      "class": "PD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "PD-055",
+      "candidateRef": "S6c-performance-07",
+      "class": "PD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "none",
+      "directions": [],
+      "enforcementLayers": []
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-057",
+      "candidateRef": "S6a-test-bloat-01",
+      "class": "TD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-22",
+          "choice": "Consolidate now under the standing rule",
+          "rationale": "TD-057 lands now: tests/common/ plus the fold of the single-#[test] binaries under the Cost-discipline contract; the Layer-1 migration later moves the consolidated shape once"
+        },
+        {
+          "round": "R5-nh-23",
+          "choice": "tests/common/ in cobre-cli (rule 14)",
+          "rationale": "the process-spawning CLI helpers (fn cobre(), write_file, the valid-case builder) live in crates/cobre-cli/tests/common/; they are not engine test-support"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-058",
+      "candidateRef": "S6a-test-bloat-02",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-24",
+          "choice": "Not standing policy; the shared fixture is sanctioned",
+          "rationale": "TD-058 stands: a module-scoped trained-policy fixture in conftest.py serves the five pure argument-validation tests; the two docstrings are rewritten"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-059",
+      "candidateRef": "S6a-test-bloat-03",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-36",
+          "choice": "Retire them; the live derivation is the authority",
+          "rationale": "TD-059 as filed: the pytest parity suite owns the 1dtoy agreement; the inline bindings test keeps only what it alone can assert"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-060",
+      "candidateRef": "S6a-test-bloat-04",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-25",
+          "choice": "It freezes the comparisons, not the files",
+          "rationale": "§5.11 exempts the parity suite from the binary migration only; assertion-preserving fixture hygiene is in scope; TD-060 / TD-061 / TD-062 stand as calibrated"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-061",
+      "candidateRef": "S6a-test-bloat-05",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-062",
+      "candidateRef": "S6a-test-bloat-06",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": "I.5",
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt, alignment",
+      "directions": [
+        {
+          "round": "R5-nh-26",
+          "choice": "Front-end assertion covering both call sites",
+          "rationale": "the assertion becomes a CLI-vs-Python parity assertion over the two delta_to_stats_row call sites; TD-062 is a move plus one new assertion"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-063",
+      "candidateRef": "S6b-test-bloat-00",
+      "class": "TD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-064",
+      "candidateRef": "S6b-test-bloat-01",
+      "class": "TD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-35",
+          "choice": "Yes, one change with TD-064",
+          "rationale": "the four cfg(test) twins are deleted, the print_* renderers build through private *_lines helpers and the 61 tests are repointed in one change"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-065",
+      "candidateRef": "S6b-test-bloat-02",
+      "class": "TD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-37",
+          "choice": "Incidental; keyword knobs with defaults",
+          "rationale": "TD-065's builder exposes the four knobs with defaults and each call site keeps today's values"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-066",
+      "candidateRef": "S6b-test-bloat-03",
+      "class": "TD",
+      "round": "R1-sevB",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 13 stay live at Sev B with the calibrated fix-shapes; the three PD rows stay queued UNMEASURED 4t; the TD rows go to E08; the alignment rows to E9.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-067",
+      "candidateRef": "S6b-test-bloat-05",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-27",
+          "choice": "E08's ratification call; default inline",
+          "rationale": "TD-067 collapses the fifteen spawn tests inline; whether the module is extracted follows E08's §5.1 threshold ratification (routed, not decided here)"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-068",
+      "candidateRef": "S6b-test-bloat-06",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-069",
+      "candidateRef": "S6b-test-bloat-07",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-070",
+      "candidateRef": "S6b-test-bloat-09",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-071",
+      "candidateRef": "S6c-test-bloat-00",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-28",
+          "choice": "Both in one change",
+          "rationale": "the two false rationales are corrected and convert.rs gains its own cfg(test) module on the errors.rs pattern; the seven pytest tests stay"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-072",
+      "candidateRef": "S6c-test-bloat-02",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-29",
+          "choice": "Normalize onto __file__-resolved paths",
+          "rationale": "TD-072 as filed: conftest.py owns the repo-root constant and the case-path helpers; the nine modules stop deriving parents[3] or cwd"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    },
+    {
+      "kind": "new-entry",
+      "id": "TD-073",
+      "candidateRef": "S6c-test-bloat-03",
+      "class": "TD",
+      "round": "R2-sevC",
+      "decision": "accept",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "partIRef": null,
+      "rationale": "All 27 stay live at Sev C as calibrated (the five reviewer-B rows keep their downgrade recorded); the four Sev-C PD rows stay section-only; the TD rows go to E08.",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "queue": "test-debt",
+      "directions": [
+        {
+          "round": "R5-nh-30",
+          "choice": "Confirm: pytest anchors stay first-class (already resolving)",
+          "rationale": "the E06-3 extension is the ruling; check-anchors.py resolves def / class names for .py paths; no further action"
+        }
+      ],
+      "enforcementLayers": [],
+      "tdQueue": {
+        "effect": "kept"
+      }
+    }
+  ],
+  "holds": [
+    {
+      "kind": "conflicts-hold",
+      "id": "CD-025/cobre-sddp-home",
+      "priorId": "CD-025",
+      "variant": "cobre-sddp home (orchestration at L3)",
+      "round": "R4-hold-CD-025-cobre-sddp-home",
+      "decision": "take-the-alternative",
+      "rationale": "Take the cobre-io alternative (Recommended) — The hold closes: no L3 home for output orchestration; CD-025's L2 entry point is the direction; no id promoted for the variant.",
+      "condition": "Part IV.1 — L2 cobre-io owns shared output orchestration; an engine owning the front ends' output policy means the second engine (cobre-direct, V.1) would route its outputs through a sibling engine — trigger 2 of the layering brief §3 (engine-to-engine dependency) — or duplicate the list again",
+      "alternative": "shared output-orchestration entry point in cobre-io (L2): ONE call-site list — which outputs, under which config/system guards — consumed by both the CLI and the Python bindings, taking the per-engine results value plus the config/system context it needs; CLI and Python both wire through it, the five `_if_any` helpers and the three CLI orchestrators collapse into it",
+      "idPromoted": false,
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-025-cobre-sddp-home): The hold closes: no L3 home for output orchestration; CD-025's L2 entry point is the direction; no id promoted for the variant."
+    },
+    {
+      "kind": "conflicts-hold",
+      "id": "CD-025/cli-local-helper",
+      "priorId": "CD-025",
+      "variant": "cobre-cli-local helper (keeps the double-mirror)",
+      "round": "R4-hold-CD-025-cli-local-helper",
+      "decision": "take-the-alternative",
+      "rationale": "Take the cobre-io alternative (Recommended) — The hold closes: no cli-local orchestration helper; the hand-mirror is removed by the L2 entry point; no id promoted.",
+      "condition": "Part IV.1 — L2 cobre-io owns 'shared output orchestration'; forbidden at L2: 'an engine-specific output tree hard-wired in the CLI instead of orchestrated here'; a helper in cobre-cli is unreachable from cobre-python, so the hand-mirror and the parity hard rule survive unchanged",
+      "alternative": "shared output-orchestration entry point in cobre-io (L2): ONE call-site list — which outputs, under which config/system guards — consumed by both the CLI and the Python bindings, taking the per-engine results value plus the config/system context it needs; CLI and Python both wire through it, the five `_if_any` helpers and the three CLI orchestrators collapse into it",
+      "idPromoted": false,
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-025-cli-local-helper): The hold closes: no cli-local orchestration helper; the hand-mirror is removed by the L2 entry point; no id promoted."
+    },
+    {
+      "kind": "conflicts-hold",
+      "id": "CD-029/cobre-io-home",
+      "priorId": "CD-029",
+      "variant": "cobre-io home for the boundary reconciliation",
+      "round": "R4-hold-CD-029-cobre-io-home",
+      "decision": "take-the-alternative",
+      "rationale": "Take the PrepPhase alternative (Recommended) — Confirms cobre-sddp PrepPhase (L3) as the fold destination; the cobre-io variant stays closed; the ticket's 'cobre-io owner for both' premise is recorded as superseded.",
+      "condition": "Part IV.1 — L2 forbids engine dispatch; the reconciliation is typed on cobre_sddp::StudySetup and calls cobre-sddp's policy loader, so an L2 home inverts the layering (cobre-io depending on an engine crate)",
+      "alternative": "fold the boundary check into PrepPhase in cobre-sddp (L3) as its fourth phase — ONE engine-owned reconcile function that both front ends call and that prep_phase_metadata classifies — and correct the prose to match the variant count; the two front-end copies collapse into that single owner",
+      "idPromoted": false,
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-029-cobre-io-home): Confirms cobre-sddp PrepPhase (L3) as the fold destination; the cobre-io variant stays closed; the ticket's 'cobre-io owner for both' premise is recorded as superseded."
+    },
+    {
+      "kind": "conflicts-hold",
+      "id": "CD-029/two-front-end-copies",
+      "priorId": "CD-029",
+      "variant": "keep two front-end copies (cli-local fold into run_boundary_check, Python keeps reconcile_boundary_policy)",
+      "round": "R4-hold-CD-029-two-front-end-copies",
+      "decision": "take-the-alternative",
+      "rationale": "Take the PrepPhase alternative (Recommended) — The hold closes: the two front-end copies collapse into the engine-owned phase; no cli-local fold; no id promoted.",
+      "condition": "Part IV.1 / III.7 — the hand-mirrored call-site list is the duplication mechanism the roadmap names for outputs; the same shape on the validation path keeps two owners of engine logic in L4",
+      "alternative": "fold the boundary check into PrepPhase in cobre-sddp (L3) as its fourth phase — ONE engine-owned reconcile function that both front ends call and that prep_phase_metadata classifies — and correct the prose to match the variant count; the two front-end copies collapse into that single owner",
+      "idPromoted": false,
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-029-two-front-end-copies): The hold closes: the two front-end copies collapse into the engine-owned phase; no cli-local fold; no id promoted."
+    }
+  ],
+  "needsHuman": [
+    {
+      "n": 1,
+      "round": "R5-nh-1",
+      "id": "CD-089",
+      "members": [
+        [
+          "defender",
+          "S6a-architecture-00",
+          0
+        ],
+        [
+          "attacker",
+          1
+        ]
+      ],
+      "memberLabels": [
+        "S6a-architecture-00 (confirmed)",
+        "attacker/architecture S6a E01"
+      ],
+      "question": "Under the single phase-plan owner (CD-089), do the no-op arm's two behaviours converge — the CLI writes 'Training disabled, simulation disabled' to stderr, the bindings return a zeroed RunSummary (converged false, iterations 0, lower_bound 0.0)? Both are public surface and neither writes a file, so the file-set parity test cannot decide it.",
+      "answer": "Keep per-front-end presentation",
+      "recommended": true,
+      "recordedAs": "the shared owner returns the phase-plan value only; each front end keeps its own no-op rendering (stderr line / zeroed RunSummary); CD-089's surviving claim stays as calibrated; no API change"
+    },
+    {
+      "n": 2,
+      "round": "R5-nh-2",
+      "id": "CD-025",
+      "members": [
+        [
+          "defender",
+          "S6a-architecture-01",
+          0
+        ],
+        [
+          "attacker",
+          2
+        ],
+        [
+          "defender",
+          "S6a-architecture-02",
+          0
+        ],
+        [
+          "defender",
+          "S6a-architecture-05",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6a-architecture-01 (confirmed)",
+        "attacker/architecture S6a E02",
+        "S6a-architecture-02 (confirmed)",
+        "S6a-architecture-05 (confirmed)"
+      ],
+      "question": "Where do the cobre-sddp-typed folds live once the writes move to cobre-io (CD-025)? delta_to_stats_row / SolverStatsDelta (outputs.rs:29, :35), the five training row folds (outputs.rs:32-38) and the solver-stats totals fold (CD-090) take engine-declared inputs, so an L2 home would make cobre-io depend on an engine crate. Confirm a cobre-sddp (L3) home for the folds beside their input types, with only the writes + guards moving to L2 (CD-090 sits outside the writer boundary).",
+      "answer": "cobre-sddp home for the folds; writes + guards to L2",
+      "recommended": true,
+      "recordedAs": "the engine-typed folds (delta_to_stats_row / SolverStatsDelta, the five row folds, the CD-090 totals fold) live in cobre-sddp beside their input types; CD-025's L2 entry point owns only the writes and their guards; CD-090's cobre-sddp home is confirmed outside the writer boundary (not the held L3 writer case)"
+    },
+    {
+      "n": 3,
+      "round": "R5-nh-3",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6a-architecture-04",
+          0
+        ],
+        [
+          "attacker",
+          3
+        ]
+      ],
+      "memberLabels": [
+        "S6a-architecture-04 (dismissed)",
+        "attacker/architecture S6a E03"
+      ],
+      "question": "StudySetup::from_broadcast_params (cobre-sddp's sole construction core, entered by both front ends) carries a transport-flavoured name. File a rename against the station that owns cobre-sddp's public API, or leave it to the setup-layer redesign the mirror :563 entry already triggers?",
+      "answer": "Leave it to the setup-layer redesign (CD-004)",
+      "recommended": true,
+      "recordedAs": "no rename item; the constructor is renamed when CD-004's single Config projection re-shapes the setup entry; informational for E9"
+    },
+    {
+      "n": 4,
+      "round": "R5-nh-4",
+      "id": "CD-029",
+      "members": [
+        [
+          "defender",
+          "S6b-architecture-00",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6b-architecture-00 (confirmed)"
+      ],
+      "question": "Which vocabulary supplies the boundary error object's user-visible `phase` string — the binding's literal BoundaryReconciliationError (cobre-python io.rs:305-328) or a fourth prep_phase_metadata row produced by the folded engine-owned phase? The second depends on CD-029's PrepPhase destination (R4).",
+      "answer": "Fourth prep_phase_metadata row (engine-owned phase)",
+      "recommended": true,
+      "recordedAs": "the folded PrepPhase fourth phase supplies the kind/phase string through prep_phase_metadata; the binding literal is retired when the fold lands; both front ends read the same vocabulary"
+    },
+    {
+      "n": 5,
+      "round": "R5-nh-5",
+      "id": "CD-091",
+      "members": [
+        [
+          "defender",
+          "S6b-architecture-01",
+          0
+        ],
+        [
+          "defender",
+          "S6b-architecture-02",
+          0
+        ],
+        [
+          "attacker",
+          6
+        ]
+      ],
+      "memberLabels": [
+        "S6b-architecture-01 (confirmed)",
+        "S6b-architecture-02 (confirmed)",
+        "attacker/architecture S6b E06"
+      ],
+      "question": "May the CLI's --json kind/phase string CaseValidationError (validate.rs:90, :361) be retired in favour of the cobre-io/Python vocabulary (ConstraintError etc.)? No test, script or binding matches on it, but it is a field in a documented machine-readable contract.",
+      "answer": "Retire it; one cobre-io vocabulary, noted in the CHANGELOG",
+      "recommended": true,
+      "recordedAs": "CaseValidationError is retired when CD-091's shared kind map lands; the change is called out in the CHANGELOG as a --json contract change; no alias kept"
+    },
+    {
+      "n": 6,
+      "round": "R5-nh-6",
+      "id": "CD-091",
+      "members": [
+        [
+          "defender",
+          "S6b-architecture-02",
+          1
+        ],
+        [
+          "attacker",
+          7
+        ]
+      ],
+      "memberLabels": [
+        "S6b-architecture-02 (confirmed)",
+        "attacker/architecture S6b E07"
+      ],
+      "question": "Where does the shared LoadError → stable-kind classification live? cobre-io (L2) owns LoadError and both front ends depend on it, but the station's L2 destination rule is written for output orchestration. Confirm that L2 also binds shared front-end contract data (an error-classification map), or name another owner.",
+      "answer": "cobre-io (L2) owns the kind map",
+      "recommended": true,
+      "recordedAs": "the L2 destination rule generalizes to shared front-end contract data owned by the type's crate: the LoadError → kind map lives in cobre-io beside LoadError; CD-091's fix shape stands"
+    },
+    {
+      "n": 7,
+      "round": "R5-nh-7",
+      "id": "CD-029",
+      "members": [
+        [
+          "defender",
+          "S6b-architecture-03",
+          0
+        ],
+        [
+          "attacker",
+          21
+        ]
+      ],
+      "memberLabels": [
+        "S6b-architecture-03 (confirmed)",
+        "attacker/performance S6b E21"
+      ],
+      "question": "Sequencing for the duplicate boundary-requirements resolve in validate.rs: patch it now as a cobre-cli-local parameter thread, or hold it and let CD-029's fold of the boundary check into PrepPhase absorb it (the requirements become a phase input resolved once)?",
+      "answer": "Hold; CD-029's fold absorbs it",
+      "recommended": true,
+      "recordedAs": "no standalone patch; the call chain is touched once when the boundary check folds into PrepPhase and resolves the requirements as a phase input"
+    },
+    {
+      "n": 8,
+      "round": "R5-nh-8",
+      "id": "CD-093",
+      "members": [
+        [
+          "defender",
+          "S6b-architecture-04",
+          0
+        ],
+        [
+          "attacker",
+          5
+        ],
+        [
+          "attacker",
+          15
+        ],
+        [
+          "attacker",
+          27
+        ]
+      ],
+      "memberLabels": [
+        "S6b-architecture-04 (confirmed)",
+        "attacker/architecture S6b E05",
+        "attacker/over-engineering S6b E15",
+        "attacker/test-bloat S6b E27"
+      ],
+      "question": "Should cobre-cli gain a [lib] target (plus a cargo test --doc step) so its seven doc examples compile, or should the examples stop presenting themselves as importable code? A library publishes the CLI's renderers, error enum and progress types as a maintained surface with no current consumer.",
+      "answer": "No [lib]; make the seven examples honest at their fences",
+      "recommended": true,
+      "recordedAs": "CD-093's fix as filed: the three cobre:: imports are rewritten to the module-local form and the four cobre_cli:: examples are de-annotated or de-fenced; no published library surface"
+    },
+    {
+      "n": 9,
+      "round": "R5-nh-9",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6c-architecture-00",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6c-architecture-00 (dismissed)"
+      ],
+      "question": "Coverage residue behind the dismissed S6c-architecture-00: study.rs:583-585 / :694-696 admit that whole-tree byte-identity is unasserted for the cobre.Study methods, while the whole-tree goldens reach the same native calls only through run_via_study. Does that warrant its own test-corpus coverage item, or is it covered in substance by the shared single execution path?",
+      "answer": "Covered in substance; no new item",
+      "recommended": true,
+      "recordedAs": "the single execution path (run_via_study) is the shared owner; no coverage item; informational note for E08"
+    },
+    {
+      "n": 10,
+      "round": "R5-nh-10",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6c-architecture-06",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6c-architecture-06 (dismissed)"
+      ],
+      "question": "Should the terminal fallback at cobre-python policy.rs:510 spell the exported cobre_sddp::LEGACY_COST_SCALE_FACTOR (no new dependency), and should write_policy_checkpoint's doc state the both-markers-absent case (the field doc at policy.rs:104-107 points at a doc that is silent on it)?",
+      "answer": "Yes to both, as an E11 reconciliation nit",
+      "recommended": true,
+      "recordedAs": "the literal is replaced by the exported constant and the doc gains the both-markers-absent clause; byte-neutral; no id, routed to E11"
+    },
+    {
+      "n": 11,
+      "round": "R5-nh-11",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6a-performance-01",
+          0
+        ],
+        [
+          "attacker",
+          18
+        ]
+      ],
+      "memberLabels": [
+        "S6a-performance-01 (dismissed)",
+        "attacker/performance S6a E18"
+      ],
+      "question": "Rooted gather at L0: closing the non-root replication in the two simulation gathers needs a gatherv the cobre-comm Communicator trait does not expose (traits.rs:64 has allgatherv, allreduce, broadcast, barrier). Admit the primitive (grows the L0 FFI surface across ferrompi, LocalBackend, the factory enum and the precondition table) or keep allgatherv and accept that non-root ranks rebuild a payload they discard?",
+      "answer": "Keep allgatherv; cost accepted",
+      "recommended": true,
+      "recordedAs": "no new L0 collective for two call sites in one CLI file; the dismissal stands; informational for the solver+comm owner"
+    },
+    {
+      "n": 12,
+      "round": "R5-nh-12",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6a-performance-05",
+          0
+        ],
+        [
+          "defender",
+          "S6a-performance-06",
+          0
+        ],
+        [
+          "attacker",
+          19
+        ]
+      ],
+      "memberLabels": [
+        "S6a-performance-05 (dismissed)",
+        "S6a-performance-06 (dismissed)",
+        "attacker/performance S6a E19"
+      ],
+      "question": "Is the shared-filesystem re-read on non-root ranks (case directory, hydro-model refit, and the per-rank policy-checkpoint read in simulation-only mode) a ratified deployment assumption? Two module docs state the behaviour (setup.rs:1-8, hydro_models/mod.rs:66-68) and no docs/design entry records it.",
+      "answer": "Ratify it; E11 records the assumption",
+      "recommended": true,
+      "recordedAs": "shared-filesystem visibility on every rank is a ratified deployment assumption; the E11 mirror write-back adds the docs/design entry and the module docs point at it; the per-rank reads stay"
+    },
+    {
+      "n": 13,
+      "round": "R5-nh-13",
+      "id": "CD-025",
+      "members": [
+        [
+          "defender",
+          "S6a-performance-07",
+          0
+        ],
+        [
+          "attacker",
+          20
+        ]
+      ],
+      "memberLabels": [
+        "S6a-performance-07 (dismissed)",
+        "attacker/performance S6a E20"
+      ],
+      "question": "Overlapping the rank-0 training-artefact write with rank 0 entering simulation trades the documented 'training outputs persist even if simulation fails' guarantee (mod.rs:172-173, contingent on completion because any rank's error reaches comm.abort) plus the stderr progress ordering. Accept that trade (the item re-enters the perf sweep at 2x2) or keep the serial shape?",
+      "answer": "Keep the serial shape",
+      "recommended": true,
+      "recordedAs": "the guarantee and the stderr ordering stand; the dismissal stands; no 2x2 perf row"
+    },
+    {
+      "n": 14,
+      "round": "R5-nh-14",
+      "id": "PD-050",
+      "members": [
+        [
+          "defender",
+          "S6c-performance-01",
+          0
+        ],
+        [
+          "attacker",
+          22
+        ]
+      ],
+      "memberLabels": [
+        "S6c-performance-01 (confirmed)",
+        "attacker/performance S6c E22"
+      ],
+      "question": "Is the dict-shaped cobre.results.load_simulation a supported bulk reader, or is load_simulation_arrow the intended path for large result trees? load_simulation's rustdoc (results.rs:1081-1126) never points at the Arrow reader; the answer decides whether PD-050's per-column hoist is worth doing.",
+      "answer": "Supported bulk reader; PD-050 proceeds, doc cross-links Arrow",
+      "recommended": true,
+      "recordedAs": "load_simulation stays a supported reader; PD-050's per-column typed-view hoist stays queued; its rustdoc gains a pointer to load_simulation_arrow for large trees"
+    },
+    {
+      "n": 15,
+      "round": "R5-nh-15",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6c-performance-03",
+          0
+        ],
+        [
+          "attacker",
+          23
+        ]
+      ],
+      "memberLabels": [
+        "S6c-performance-03 (dismissed)",
+        "attacker/performance S6c E23"
+      ],
+      "question": "Is object identity between result['training']['manifest'] and result['training']['metadata'] part of the published cobre.results contract? Binding one converted dict to both keys would alias them on mutation; the dismissal (setup-time double conversion) stands unless overridden.",
+      "answer": "Identity unspecified; dismissal stands",
+      "recommended": true,
+      "recordedAs": "identity is not part of the contract and nothing changes: the two conversions stay; no id"
+    },
+    {
+      "n": 16,
+      "round": "R5-nh-16",
+      "id": "PD-052",
+      "members": [
+        [
+          "defender",
+          "S6c-performance-04",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6c-performance-04 (confirmed)"
+      ],
+      "question": "Is per-read element identity part of the published cobre.model contract? Today system.buses[0] is system.buses[0] is False (every read builds new objects); PD-052's per-collection memo would make identity stable across reads. No test pins either.",
+      "answer": "Identity unspecified; the memo shape is acceptable",
+      "recommended": true,
+      "recordedAs": "element identity across reads is not part of the contract; PD-052's memo (or index-into-shared-Arc) shape is accepted as calibrated; the module doc states identity is unspecified"
+    },
+    {
+      "n": 17,
+      "round": "R5-nh-17",
+      "id": "OD-043",
+      "members": [
+        [
+          "defender",
+          "S6a-over-engineering-00",
+          0
+        ],
+        [
+          "attacker",
+          10
+        ]
+      ],
+      "memberLabels": [
+        "S6a-over-engineering-00 (confirmed)",
+        "attacker/over-engineering S6a E10"
+      ],
+      "question": "BroadcastNodeGraph (commands/broadcast.rs:256): keep as a documented reserved seam or retire? Its only references workspace-wide are its two From impls and ~110 lines of inline round-trip tests; the mirror's opposite precedent (docs/design/reserved-seams-and-deferred-debt.md:683-697) deleted an identically shaped zero-caller postcard pair under the no-dead-code directive.",
+      "answer": "Retire it (mirror :683-697 precedent)",
+      "recommended": true,
+      "recordedAs": "BroadcastNodeGraph and its round-trip tests are deleted under the no-dead-code directive and recorded as removed so no audit resurrects it; OD-043's relocation drops those lines"
+    },
+    {
+      "n": 18,
+      "round": "R5-nh-18",
+      "id": "CD-025",
+      "members": [
+        [
+          "defender",
+          "S6a-over-engineering-03",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6a-over-engineering-03 (confirmed)"
+      ],
+      "question": "Sequencing for the two uncovered emit conditions (evaporation_models, fpha_deviation_points — no enforcement layer asserts them): close them now with CLI-vs-Python pytest coverage on an evaporation case plus a deviation-points case, or wait for CD-025's shared cobre-io emit list to remove the duplicated condition and gate it there?",
+      "answer": "Wait for CD-025's shared emit list",
+      "recommended": true,
+      "recordedAs": "no interim pytest additions; the shared cobre-io call-site list removes the duplicated condition and the parity golden gates it there"
+    },
+    {
+      "n": 19,
+      "round": "R5-nh-19",
+      "id": "OD-045",
+      "members": [
+        [
+          "defender",
+          "S6a-over-engineering-04",
+          0
+        ],
+        [
+          "defender",
+          "S6b-over-engineering-02",
+          0
+        ],
+        [
+          "defender",
+          "S6b-over-engineering-04",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6a-over-engineering-04 (confirmed)",
+        "S6b-over-engineering-02 (confirmed)",
+        "S6b-over-engineering-04 (dismissed)"
+      ],
+      "question": "The mirror's allow census (docs/design/reserved-seams-and-deferred-debt.md:1272, :1324-1330) asserts every Load-bearing numeric-cast and needless_pass_by_value allow carries a // Rationale: comment, which comments.md D4's closed list does not require (twelve cast sites and three needless_pass_by_value sites in this station carry none). Correct the census prose down to D4, or extend D4 to those lints?",
+      "answer": "Correct the mirror prose down to D4 (E11)",
+      "recommended": true,
+      "recordedAs": "the same ruling as the sddp gate (NH29): the census clause states the comments.md D4 lint scope; the cast and needless_pass_by_value sites are not a rule gap; OD-045 / OD-046 stand as the duplicated-cast and by-value residues only"
+    },
+    {
+      "n": 20,
+      "round": "R5-nh-20",
+      "id": "CD-029",
+      "members": [
+        [
+          "defender",
+          "S6b-over-engineering-00",
+          0
+        ],
+        [
+          "attacker",
+          12
+        ]
+      ],
+      "memberLabels": [
+        "S6b-over-engineering-00 (confirmed)",
+        "attacker/over-engineering S6b E12"
+      ],
+      "question": "Should `cobre validate --json` emit an error object when boundary reconciliation (the fourth phase the module doc lists) fails? Today stdout is empty and stderr carries a hint the human path forbids; no test pins either shape, so adding the object extends the --json contract on an untested path.",
+      "answer": "Yes: emit the object and add a --json reject test",
+      "recommended": true,
+      "recordedAs": "the boundary reject emits the documented single error object (phase string per the vocabulary answer above) and a new reject test in --json mode pins it; lands with CD-029's fold"
+    },
+    {
+      "n": 21,
+      "round": "R5-nh-21",
+      "id": "OD-047",
+      "members": [
+        [
+          "defender",
+          "S6c-over-engineering-00",
+          0
+        ],
+        [
+          "attacker",
+          17
+        ]
+      ],
+      "memberLabels": [
+        "S6c-over-engineering-00 (confirmed)",
+        "attacker/over-engineering S6c E17"
+      ],
+      "question": "The three cobre.model stub twins (EnergyContract, PumpingStation, NonControllableSource) expose only id and name. Complete them to the house pattern the other four twins follow, or withdraw them and have the PySystem getters return untyped mappings until a caller needs typed objects?",
+      "answer": "Complete the three twins",
+      "recommended": true,
+      "recordedAs": "OD-047 is a completion ticket: each twin exposes the field set its core entity carries, matching PyBus / PyLine / PyThermal / PyHydro; no mirror row needed once complete"
+    },
+    {
+      "n": 22,
+      "round": "R5-nh-22",
+      "id": "TD-057",
+      "members": [
+        [
+          "defender",
+          "S6a-test-bloat-00",
+          0
+        ],
+        [
+          "defender",
+          "S6a-test-bloat-01",
+          0
+        ],
+        [
+          "attacker",
+          25
+        ]
+      ],
+      "memberLabels": [
+        "S6a-test-bloat-00 (confirmed)",
+        "S6a-test-bloat-01 (confirmed)",
+        "attacker/test-bloat S6a E25"
+      ],
+      "question": "Is the cobre-cli run-path binary consolidation (tests/common/ + folding the single-#[test] binaries, TD-057) sanctioned now under the standing Cost-discipline rule, or does it wait for the proposed §5.1 Layer-1 migration in docs/design/testing-architecture.md so the move is made once?",
+      "answer": "Consolidate now under the standing rule",
+      "recommended": true,
+      "recordedAs": "TD-057 lands now: tests/common/ plus the fold of the single-#[test] binaries under the Cost-discipline contract; the Layer-1 migration later moves the consolidated shape once"
+    },
+    {
+      "n": 23,
+      "round": "R5-nh-23",
+      "id": "TD-057",
+      "members": [
+        [
+          "defender",
+          "S6a-test-bloat-01",
+          1
+        ]
+      ],
+      "memberLabels": [
+        "S6a-test-bloat-01 (confirmed)"
+      ],
+      "question": "Helper home for the cobre-cli integration corpus: rule 14 names tests/common/ while testing-architecture §6 phase 3 proposes collapsing tests/common/ into cobre-sddp's test-support feature. Pick one so the helper home is not built twice.",
+      "answer": "tests/common/ in cobre-cli (rule 14)",
+      "recommended": true,
+      "recordedAs": "the process-spawning CLI helpers (fn cobre(), write_file, the valid-case builder) live in crates/cobre-cli/tests/common/; they are not engine test-support"
+    },
+    {
+      "n": 24,
+      "round": "R5-nh-24",
+      "id": "TD-058",
+      "members": [
+        [
+          "defender",
+          "S6a-test-bloat-02",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6a-test-bloat-02 (confirmed)"
+      ],
+      "question": "Is the per-test-isolation cost acceptance recorded in the two pytest module docstrings (test_study.py:12-14, test_run.py:9-11) standing policy for the pytest corpus? If it is, the shared read-only-Policy fixture (TD-058) is unwanted even for the five named tests.",
+      "answer": "Not standing policy; the shared fixture is sanctioned",
+      "recommended": true,
+      "recordedAs": "TD-058 stands: a module-scoped trained-policy fixture in conftest.py serves the five pure argument-validation tests; the two docstrings are rewritten"
+    },
+    {
+      "n": 25,
+      "round": "R5-nh-25",
+      "id": "TD-060",
+      "members": [
+        [
+          "defender",
+          "S6a-test-bloat-04",
+          0
+        ],
+        [
+          "defender",
+          "S6a-test-bloat-05",
+          0
+        ],
+        [
+          "attacker",
+          24
+        ]
+      ],
+      "memberLabels": [
+        "S6a-test-bloat-04 (confirmed)",
+        "S6a-test-bloat-05 (confirmed)",
+        "attacker/test-bloat S6a E24"
+      ],
+      "question": "Does testing-architecture §5.11's 'keep the pytest output-parity suite unchanged' freeze the eleven parity modules against fixture hygiene (harness hoisting, removing a strictly subsumed test), or only exempt them from the §5.1 Layer-1 binary migration? The answer decides whether TD-060 / TD-061 / TD-062 are actionable.",
+      "answer": "It freezes the comparisons, not the files",
+      "recommended": true,
+      "recordedAs": "§5.11 exempts the parity suite from the binary migration only; assertion-preserving fixture hygiene is in scope; TD-060 / TD-061 / TD-062 stand as calibrated"
+    },
+    {
+      "n": 26,
+      "round": "R5-nh-26",
+      "id": "TD-062",
+      "members": [
+        [
+          "defender",
+          "S6a-test-bloat-06",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6a-test-bloat-06 (confirmed)"
+      ],
+      "question": "The one unique stats-row assertion (the simulation shape) in run/mod.rs's misplaced test module: rehome it next to cobre-sddp's existing solver_stats_log_to_rows test, or reshape it into a front-end assertion covering both outputs.rs:197 and cobre-python run.rs:824 under the Python-parity hard rule?",
+      "answer": "Front-end assertion covering both call sites",
+      "recommended": true,
+      "recordedAs": "the assertion becomes a CLI-vs-Python parity assertion over the two delta_to_stats_row call sites; TD-062 is a move plus one new assertion"
+    },
+    {
+      "n": 27,
+      "round": "R5-nh-27",
+      "id": "TD-067",
+      "members": [
+        [
+          "defender",
+          "S6b-test-bloat-05",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6b-test-bloat-05 (confirmed)"
+      ],
+      "question": "The progress inline test module (22 fns, 608 lines) exceeds the unratified ~500 test-LOC inline homing threshold of testing-architecture §5.1 while staying under the ~40-fn threshold. Does TD-067's consolidation land inline or in an extracted src/progress/tests.rs sibling?",
+      "answer": "E08's ratification call; default inline",
+      "recommended": true,
+      "recordedAs": "TD-067 collapses the fifteen spawn tests inline; whether the module is extracted follows E08's §5.1 threshold ratification (routed, not decided here)"
+    },
+    {
+      "n": 28,
+      "round": "R5-nh-28",
+      "id": "TD-071",
+      "members": [
+        [
+          "defender",
+          "S6c-test-bloat-00",
+          0
+        ],
+        [
+          "attacker",
+          30
+        ]
+      ],
+      "memberLabels": [
+        "S6c-test-bloat-00 (confirmed)",
+        "attacker/test-bloat S6c E30"
+      ],
+      "question": "convert.rs:104-106 and test_convert.py:5-9 assert that a #[cfg(test)] module cannot link an interpreter, contradicted by errors.rs and the feature-off CI invocation. Land TD-071 as a rationale correction only, as an added cfg(test) module (keeping the seven pytest merge-landing assertions), or both in one change?",
+      "answer": "Both in one change",
+      "recommended": true,
+      "recordedAs": "the two false rationales are corrected and convert.rs gains its own cfg(test) module on the errors.rs pattern; the seven pytest tests stay"
+    },
+    {
+      "n": 29,
+      "round": "R5-nh-29",
+      "id": "TD-072",
+      "members": [
+        [
+          "defender",
+          "S6c-test-bloat-02",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6c-test-bloat-02 (confirmed)"
+      ],
+      "question": "Case-path convention for the pytest corpus: pyproject.toml:52 sets testpaths = [\"tests\"], which makes a bare pytest run from the crate directory a configured invocation the nine cwd-relative modules cannot resolve, while every docstring and ci.yml name the repo-root invocation. Normalize all nine onto a __file__-resolved case path, or pin the repo-root invocation as the sole supported one?",
+      "answer": "Normalize onto __file__-resolved paths",
+      "recommended": true,
+      "recordedAs": "TD-072 as filed: conftest.py owns the repo-root constant and the case-path helpers; the nine modules stop deriving parents[3] or cwd"
+    },
+    {
+      "n": 30,
+      "round": "R5-nh-30",
+      "id": "TD-073",
+      "members": [
+        [
+          "defender",
+          "S6c-test-bloat-03",
+          0
+        ],
+        [
+          "attacker",
+          29
+        ]
+      ],
+      "memberLabels": [
+        "S6c-test-bloat-03 (confirmed)",
+        "attacker/test-bloat S6c E29"
+      ],
+      "question": "Anchor vocabulary for pytest files: five of TD-073's six anchors are pytest def names. tools/check-anchors.py grew a def/class branch for .py paths at the E06-3 shared-tool extension (aa95a722), so these anchors already resolve. Confirm that the pytest anchors stay first-class anchors (not demoted to evidence).",
+      "answer": "Confirm: pytest anchors stay first-class (already resolving)",
+      "recommended": true,
+      "recordedAs": "the E06-3 extension is the ruling; check-anchors.py resolves def / class names for .py paths; no further action"
+    },
+    {
+      "n": 31,
+      "round": "R5-nh-31",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6c-test-bloat-04",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6c-test-bloat-04 (dismissed)"
+      ],
+      "question": "Confirm the E11 write-back's scope covers every design-doc trace of the superseded CI-invisibility premise: reserved-seams-and-deferred-debt.md:347, testing-architecture.md:17 and :101-102 (the unit-test half is false at the pin; the doctest half still holds because the lib target sets doc = false), and §5.11.",
+      "answer": "Yes: E11 corrects every trace",
+      "recommended": true,
+      "recordedAs": "the mirror :347 entry, testing-architecture.md :17 / :101-102 / §5.11 are all corrected to the measured state (ci.yml runs the crate's Rust tests; doctests still absent); no id"
+    },
+    {
+      "n": 32,
+      "round": "R5-nh-32",
+      "id": "—",
+      "members": [
+        [
+          "attacker",
+          8
+        ],
+        [
+          "attacker",
+          14
+        ],
+        [
+          "attacker",
+          16
+        ]
+      ],
+      "memberLabels": [
+        "attacker/architecture S6c E08",
+        "attacker/over-engineering S6b E14",
+        "attacker/over-engineering S6c E16"
+      ],
+      "question": "The facade crate crates/cobre (two doc lines, no [dependencies], keywords and categories with no publish = false): keep it as a documented reserved seam — adding the missing mirror row, listing it among CLAUDE.md's reserved stubs and noting the crates.io name reservation in ARCHITECTURE.md — or retire it from the workspace until the convenience re-export exists?",
+      "answer": "Keep as a reserved seam; E11 adds the row and the two listings",
+      "recommended": true,
+      "recordedAs": "the facade stays (crates.io name reservation, ARCHITECTURE.md:102-106); E11 adds the reserved-seam mirror row, lists cobre among CLAUDE.md's reserved stubs and notes the name reservation; the two `use cobre::` doc examples are rewritten under CD-093"
+    },
+    {
+      "n": 33,
+      "round": "R5-nh-33",
+      "id": "—",
+      "members": [
+        [
+          "attacker",
+          9
+        ]
+      ],
+      "memberLabels": [
+        "attacker/architecture S6c E09"
+      ],
+      "question": "Under the Phase-0a Engine seam, does cobre.Study become generic over the engine (its setup field moving behind the enum), or stay the SDDP study with a dispatching constructor above it? The choice decides whether cobre.Study is a Python API break and where the typed admission gate for an unsupported engine-plus-option combination lives.",
+      "answer": "Dispatching constructor above it; no Python API break (E9 default)",
+      "recommended": true,
+      "recordedAs": "cobre.Study stays the SDDP study; an engine-dispatching constructor sits above it and owns the admission gate; recorded as the default the alignment epic designs against"
+    },
+    {
+      "n": 34,
+      "round": "R5-nh-34",
+      "id": "OD-043",
+      "members": [
+        [
+          "attacker",
+          11
+        ]
+      ],
+      "memberLabels": [
+        "attacker/over-engineering S6a E11"
+      ],
+      "question": "Should the CLI's Config wire mirror move beside crates/cobre-io/src/broadcast.rs (which owns the identical externally-tagged mirror for ScalarParameter), instead of OD-043's minimal in-crate relocation? CD-004's ratified single Config projection shares this mirror, so the two should not be designed twice.",
+      "answer": "Defer OD-043 to CD-004's projection work",
+      "recommended": true,
+      "recordedAs": "the in-crate move is skipped; OD-043 is deferred with trigger CD-004's single Config projection, which relocates the mirror once",
+      "effect": {
+        "id": "OD-043",
+        "decision": "defer",
+        "trigger": "CD-004's single Config projection lands (sddp station, ratified 2026-09-18) and relocates the Config wire mirror once"
+      }
+    },
+    {
+      "n": 35,
+      "round": "R5-nh-35",
+      "id": "TD-064",
+      "members": [
+        [
+          "attacker",
+          13
+        ]
+      ],
+      "memberLabels": [
+        "attacker/over-engineering S6b E13"
+      ],
+      "question": "May the four #[cfg(test)] pub fn format_*_string renderers in summary.rs be deleted in favour of private *_lines helpers (TD-064's fix)? The 61 inline tests that call them are repointed in the same change, sequencing the over-engineering and test-bloat halves together.",
+      "answer": "Yes, one change with TD-064",
+      "recommended": true,
+      "recordedAs": "the four cfg(test) twins are deleted, the print_* renderers build through private *_lines helpers and the 61 tests are repointed in one change"
+    },
+    {
+      "n": 36,
+      "round": "R5-nh-36",
+      "id": "TD-059",
+      "members": [
+        [
+          "attacker",
+          26
+        ]
+      ],
+      "memberLabels": [
+        "attacker/test-bloat S6a E26"
+      ],
+      "question": "Should the hand-pinned 1dtoy numbers (bindings inline tests, cli_e2e_run_end_block.rs) be retired in favour of the live CLI/Python parity derivation (TD-059), or kept deliberately as an offline regression guard for environments with no built wheel?",
+      "answer": "Retire them; the live derivation is the authority",
+      "recommended": true,
+      "recordedAs": "TD-059 as filed: the pytest parity suite owns the 1dtoy agreement; the inline bindings test keeps only what it alone can assert"
+    },
+    {
+      "n": 37,
+      "round": "R5-nh-37",
+      "id": "TD-065",
+      "members": [
+        [
+          "attacker",
+          28
+        ]
+      ],
+      "memberLabels": [
+        "attacker/test-bloat S6b E28"
+      ],
+      "question": "The three copies of the cobre-cli valid-case fixture differ in forward passes, iteration limit, stage count and openings. Is the divergence deliberate per suite (the shared builder exposes named presets) or incidental (keyword knobs defaulting to the common case)?",
+      "answer": "Incidental; keyword knobs with defaults",
+      "recommended": true,
+      "recordedAs": "TD-065's builder exposes the four knobs with defaults and each call site keeps today's values"
+    }
+  ],
+  "informational": [
+    {
+      "round": "R5-nh-3",
+      "note": "Leave it to the setup-layer redesign (CD-004) — no rename item; the constructor is renamed when CD-004's single Config projection re-shapes the setup entry; informational for E9"
+    },
+    {
+      "round": "R5-nh-9",
+      "note": "Covered in substance; no new item — the single execution path (run_via_study) is the shared owner; no coverage item; informational note for E08"
+    },
+    {
+      "round": "R5-nh-10",
+      "note": "Yes to both, as an E11 reconciliation nit — the literal is replaced by the exported constant and the doc gains the both-markers-absent clause; byte-neutral; no id, routed to E11"
+    },
+    {
+      "round": "R5-nh-11",
+      "note": "Keep allgatherv; cost accepted — no new L0 collective for two call sites in one CLI file; the dismissal stands; informational for the solver+comm owner"
+    },
+    {
+      "round": "R5-nh-12",
+      "note": "Ratify it; E11 records the assumption — shared-filesystem visibility on every rank is a ratified deployment assumption; the E11 mirror write-back adds the docs/design entry and the module docs point at it; the per-rank reads stay"
+    },
+    {
+      "round": "R5-nh-15",
+      "note": "Identity unspecified; dismissal stands — identity is not part of the contract and nothing changes: the two conversions stay; no id"
+    },
+    {
+      "round": "R5-nh-31",
+      "note": "Yes: E11 corrects every trace — the mirror :347 entry, testing-architecture.md :17 / :101-102 / §5.11 are all corrected to the measured state (ci.yml runs the crate's Rust tests; doctests still absent); no id"
+    },
+    {
+      "round": "R5-nh-32",
+      "note": "Keep as a reserved seam; E11 adds the row and the two listings — the facade stays (crates.io name reservation, ARCHITECTURE.md:102-106); E11 adds the reserved-seam mirror row, lists cobre among CLAUDE.md's reserved stubs and notes the name reservation; the two `use cobre::` doc examples are rewritten under CD-093"
+    },
+    {
+      "round": "R5-nh-33",
+      "note": "Dispatching constructor above it; no Python API break (E9 default) — cobre.Study stays the SDDP study; an engine-dispatching constructor sits above it and owns the admission gate; recorded as the default the alignment epic designs against"
+    }
+  ],
+  "noRoundFor": [
+    "20 defender dismissals (Cleared with basis and citation)",
+    "7 dup-of folds",
+    "the sanctioned-seam filters"
+  ],
+  "handoffsAfterGate": {
+    "E9": {
+      "alignmentQueue": "alignment-queue.json",
+      "i5Released": true,
+      "rows": [
+        "CD-089",
+        "CD-090",
+        "CD-091",
+        "CD-092",
+        "CD-094",
+        "CD-095",
+        "TD-062",
+        "CD-025",
+        "CD-029",
+        "I.3-7 fragment"
+      ],
+      "needsHuman": [
+        "R5-nh-1",
+        "R5-nh-2",
+        "R5-nh-3",
+        "R5-nh-6",
+        "R5-nh-33"
+      ]
+    },
+    "E10": {
+      "perfQueue": "perf-queue.json",
+      "rowsKept": [
+        "PD-049",
+        "PD-050",
+        "PD-051"
+      ],
+      "rowsStruck": [],
+      "needsHuman": [
+        "R5-nh-11",
+        "R5-nh-13",
+        "R5-nh-14",
+        "R5-nh-16"
+      ]
+    },
+    "E08": {
+      "tdQueue": "td-queue.json",
+      "rowsKept": [
+        "TD-057",
+        "TD-058",
+        "TD-059",
+        "TD-060",
+        "TD-061",
+        "TD-062",
+        "TD-063",
+        "TD-064",
+        "TD-065",
+        "TD-066",
+        "TD-067",
+        "TD-068",
+        "TD-069",
+        "TD-070",
+        "TD-071",
+        "TD-072",
+        "TD-073"
+      ],
+      "rowsStruck": [],
+      "needsHuman": [
+        "R5-nh-9",
+        "R5-nh-22",
+        "R5-nh-23",
+        "R5-nh-24",
+        "R5-nh-25",
+        "R5-nh-26",
+        "R5-nh-27",
+        "R5-nh-28",
+        "R5-nh-29",
+        "R5-nh-30",
+        "R5-nh-35",
+        "R5-nh-36",
+        "R5-nh-37"
+      ]
+    },
+    "E07": {
+      "queue": "build-ci",
+      "needsHuman": [
+        "R5-nh-8"
+      ],
+      "note": "parity-script and workflow surface owned there; CI-invisibility premise superseded (SN-06)"
+    },
+    "E11": {
+      "needsHuman": [
+        "R5-nh-10",
+        "R5-nh-12",
+        "R5-nh-17",
+        "R5-nh-19",
+        "R5-nh-31",
+        "R5-nh-32"
+      ]
+    },
+    "sddp": {
+      "needsHuman": [
+        "R5-nh-2",
+        "R5-nh-3"
+      ]
+    }
+  },
+  "handoffConfirmation": {
+    "decision": "confirm",
+    "round": "R6-handoffs",
+    "rationale": "All five handoffs recorded as listed; the I.5 handoff is marked released."
+  },
+  "recordShape": {
+    "decision": "All three, sddp shape (Recommended)",
+    "extras": [
+      "decisions.json",
+      "alignment-queue.json",
+      "td-queue.json gate stamp"
+    ]
+  },
+  "returned": true,
+  "marker": "**Gate: RETURNED 2026-09-18** — baseline `077dbe2c`; accepted 39, amended 0, downgraded 0, rejected 0, deferred 1, overridden 0; 4 prior ids ratified (0 retire, 0 keep, 4 sharpen; CD-002 severity B → C); 9 I.5 rows ratified and released to E9; 4 holds closed by their alternatives; 37 needs-human answered; perf rows struck 0, TD rows struck 0."
+}

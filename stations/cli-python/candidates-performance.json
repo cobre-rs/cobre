@@ -1,0 +1,1251 @@
+{
+  "station": "cli-python",
+  "stationLabel": "cobre-cli+cobre-python+facade",
+  "subStation": "S6",
+  "cells": [
+    "performance.S6a",
+    "performance.S6b",
+    "performance.S6c"
+  ],
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "broadcast_value postcard-encodes and discards every payload on rank 0 even when the world has a single rank",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "broadcast_value"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "apply_training_policy"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/broadcast.rs | sed -n '410,460p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | sed -n '319,325p'; git show 077dbe2c:crates/cobre-comm/src/local.rs | sed -n '127,132p'",
+        "output": "pub(crate) fn broadcast_value<T, C>(value: Option<T>, comm: &C) -> Result<T, CliError>\n    let is_root = comm.rank() == 0;\n    let serialized: Vec<u8> = if is_root {\n        match value {\n            Some(ref v) => postcard::to_allocvec(v).map_err(|e| CliError::Internal {\n    ...\n    let mut bytes = if is_root { serialized } else { vec![0u8; len] };\n    comm.broadcast(&mut bytes, 0)\n    ...\n    if is_root {\n        value.ok_or_else(|| CliError::Internal {\n---\n    let system_result = broadcast_value(raw_system, &ctx.comm);\n    let bcast_config_result = broadcast_value(raw_bcast_config, &ctx.comm);\n    let scalar_parameters_result = broadcast_value(raw_scalar_parameters, &ctx.comm);\n    let tree_result = broadcast_value(raw_bcast_tree, &ctx.comm);\n---\n    fn broadcast<T: CommData>(&self, _buf: &mut [T], root: usize) -> Result<(), CommError> {\n        if root >= 1 {\n        Ok(())",
+        "reading": "broadcast_value has no comm.size() guard: the root arm always runs postcard::to_allocvec and allocates the byte vector, and the root branch at the end returns the original value, so the buffer is filled and dropped unused. cobre-comm LocalBackend::broadcast returns Ok without touching the buffer, so at world size 1 the encode is the entire cost and all of it is waste. Five call sites reach it on the run path: four in broadcast_and_build_setup (the whole System, the projected config, the scalar-parameter list, the opening tree) and one in apply_training_policy for the boundary cut records. A default single-process run therefore serialises the System and four more payloads and throws every buffer away."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give broadcast_value in cobre-cli a single-rank fast path: when comm.size() is 1, return the root value before serialising, leaving the multi-rank protocol untouched. The two error semantics must survive verbatim - a None on rank 0 still yields the same rank-0-signalled-failure error (the existing broadcast_value_returns_err_when_root_passes_none test pins it), and the length-prefix failure signal is untouched for size above 1. Byte-neutral by construction: the discarded buffer feeds no output file, because the root already returns the pre-serialisation value, so the whole-tree CLI-vs-Python golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py), the file-set parity test and the check_python_parity.py name gate are unaffected, and the validate --json single-object stdout contract never reaches this path. No crate moves: the helper stays in cobre-cli.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "reserved-seam pre-check is the over-engineering lens; this is a cost claim about executed code, not an unwired seam. The projection twin (BroadcastConfig) is CD-004 and is not touched."
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "setup: case load and broadcast",
+        "claimType": "single-process"
+      },
+      "mechanism": "postcard round-trip executed unconditionally per broadcast value - one full serialisation pass plus one heap buffer the size of the encoded payload, discarded on the root",
+      "profiledSymbol": "crates/cobre-cli/src/commands/broadcast.rs::broadcast_value",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "relatedTo": [
+        "CD-002",
+        "CD-009"
+      ],
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Both simulation gathers use allgatherv although only rank 0 consumes the gathered rows",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "aggregate_simulation_paths"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "aggregate_simulation_solver_stats"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "write_sim_outputs_on_root"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '348,420p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '204,214p'; git show 077dbe2c:crates/cobre-comm/src/traits.rs | grep -n 'fn allgatherv\\|fn allreduce\\|fn broadcast\\|fn barrier\\|fn rank\\|fn size'",
+        "output": "    let mut all_buf = vec![0i32; total];\n    comm.allgatherv(&local_buf, &mut all_buf, &recv_counts, &recv_displs)\n    Ok(all_buf\n        .chunks_exact(3)\n        .map(|c| SimulationPathRecord {\n---\n    let mut all_buf = vec![0.0_f64; total_floats];\n    comm.allgatherv(&local_buf, &mut all_buf, &recv_counts, &recv_displs)\n    let mut global_scenario_stats = unpack_scenario_stats(&all_buf);\n    global_scenario_stats.sort_by_key(|(id, _)| *id);\n---\n    if ctx.is_root {\n        write_sim_outputs_on_root(\n            ...\n            &global_scenario_stats,\n            &global_path_rows,\n---\n(cobre-comm trait surface)\n    fn allgatherv<T: CommData>(\n    fn allreduce<T: CommData>(\n    fn broadcast<T: CommData>(&self, buf: &mut [T], root: usize)\n    fn barrier(&self)\n    fn rank(&self)\n    fn size(&self)",
+        "reading": "Both helpers allgatherv and then rebuild the full global row set on every rank, while the only consumer of global_path_rows and global_scenario_stats sits inside if ctx.is_root. Each non-root rank therefore allocates the whole global buffer and reconstructs every record it discards. The L0 Communicator trait exposes allgatherv, allreduce, broadcast, barrier, rank and size and no rooted gather, so the rooted variant does not exist to be used. Neither helper short-circuits on world size 1 either: a single-process run still packs the rows into a Vec of i32, copies them through the local allgatherv and rebuilds every record before handing them to the writer."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Two independent parts, both byte-neutral. First, in cobre-comm (L0) add a rooted gatherv beside allgatherv and have both helpers send to rank 0 only, so non-roots stop allocating and rebuilding a payload they discard; the primitive is a paradigm-neutral MPI collective with two present consumers in this file, so it is not an engine concept pushed into L0 and not a one-consumer abstraction. Second, in cobre-cli skip the pack-and-rebuild round trip when comm.size() is 1 and hand the local rows straight to the writer. Output bytes cannot move: write_paths re-sorts by scenario id and stage id inside cobre-io and write_scenario_summary writes its rows verbatim in ascending scenario id, so no file depends on which ranks hold the gathered buffer and the rank-invariance contract for paths.parquet is preserved; the Python entry point is single-process and never reaches these helpers, so the parity goldens and the check_python_parity name gate are untouched.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "not an unwired seam: both helpers execute on every MPI run"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "2x2",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "simulation: post-simulate gather",
+        "claimType": "collective"
+      },
+      "mechanism": "all-to-all collective where the consumer is rooted - every non-root rank receives, allocates and rebuilds the global row set; plus a pack-copy-rebuild round trip with no single-rank short-circuit",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/simulation.rs::aggregate_simulation_paths",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "layout": "2x2",
+      "claimType": "collective",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The cobre-io path-row writer takes ownership, so both front ends clone the full simulation path-row set at the write call",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "run_simulation_phase"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "run_simulation_phase_py"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | sed -n '164,172p;210,213p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '144,145p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '760,767p'; git show 077dbe2c:crates/cobre-io/src/output/simulation_writer.rs | sed -n '1168,1172p'",
+        "output": "pub(super) struct WriteSimulationArgs<'a> {\n    pub(super) sim_path_rows: &'a [SimulationPathRecord],\n---\n    write_paths(args.output_dir, args.sim_path_rows.to_vec()).map_err(CliError::from)?;\n---\n    let local_path_rows: Vec<SimulationPathRecord> = sim_writer.path_rows().to_vec();\n---\n    write_paths(output_dir, sim_writer.path_rows().to_vec())\n    ...\n    let mut sim_out = sim_writer.finalize(sim_time_ms);\n---\npub fn write_paths(\n    output_dir: &Path,\n    mut rows: Vec<SimulationPathRecord>,\n) -> Result<(), OutputError> {\n    rows.sort_by_key(|r| (r.scenario_id, r.stage_id));",
+        "reading": "The cobre-io entry point takes rows by value and sorts them in place, while both front ends hold the rows behind a borrow: WriteSimulationArgs carries sim_path_rows as a slice, so the CLI clones the whole set at the write call, and the Python path clones sim_writer.path_rows() one statement before finalize consumes that same writer - a copy of a value about to be dropped. The set is the largest run-level row collection on the simulation path, three i32 per scenario and stage. On the MPI path the same rows are additionally materialised by the to_vec in run_simulation_phase and twice more inside the gather, so the write-call clone is the fourth and fifth copy."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "cobre-io (L2) owns the shared output-orchestration entry point and owns this signature: have write_paths accept a slice and sort an index (or expose a moving accessor on the simulation writer so the rows are handed over rather than copied), so neither front end clones at the write call. A cli-local helper or a cobre-sddp home for the writer boundary is conflicts under Part IV.1, which places shared output orchestration at L2 and forbids an engine-specific output tree hard-wired in the CLI. Byte-neutral: the canonical scenario-id and stage-id order stays fixed inside the writer, so paths.parquet is unchanged value-for-value in the whole-tree determinism golden and in the file-set parity test; the function keeps its cobre_io::write_paths name in both call paths, so the import-resolving parity gate still sees 18 shared writer names at its floor.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1 - shared output orchestration in cobre-io is a phase-0a item",
+      "partIRef": "I.5",
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587 is CD-025 itself, cited as the live disposition this sharpens",
+        "rule": "not an unwired seam: both writers run on every simulation"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "simulation: output write",
+        "claimType": "single-process"
+      },
+      "mechanism": "allocation per write call - a full copy of the path-row set forced by an owning signature the callers cannot satisfy without cloning",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/outputs.rs::write_simulation_outputs",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Both front ends allocate a per-scenario vector only to reorder two tuple fields before the scenario-summary write",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "run_simulation_phase_py"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | sed -n '214,222p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '793,801p'; git show 077dbe2c:crates/cobre-io/src/output/simulation_writer.rs | sed -n '1219,1223p'",
+        "output": "    let scenario_summary_rows: Vec<(u32, Option<f64>, f64)> = args\n        .sim_scenario_costs\n        .iter()\n        .map(|&(scenario_id, discounted_immediate_cost, probability)| {\n            (scenario_id, probability, discounted_immediate_cost)\n        })\n        .collect();\n    write_scenario_summary(args.output_dir, &scenario_summary_rows)\n---\n    let scenario_summary_rows: Vec<(u32, Option<f64>, f64)> = gathered_scenario_costs\n        .iter()\n        .map(|&(scenario_id, discounted_immediate_cost, probability)| {\n            (scenario_id, probability, discounted_immediate_cost)\n        })\n        .collect();\n    write_scenario_summary(output_dir, &scenario_summary_rows)\n---\npub fn write_scenario_summary(\n    output_dir: &Path,\n    rows: &[(u32, Option<f64>, f64)],\n) -> Result<(), OutputError> {",
+        "input_note": null,
+        "reading": "The producer hands back scenario id, cost, probability and the cobre-io writer wants scenario id, probability, cost. Neither front end can pass the gathered rows through, so both allocate a fresh vector sized by the scenario count and copy every row to swap two fields. The two blocks are character-for-character the same transformation in two crates - the hand-mirror duplicating an avoidable allocation, not just a writer name."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Align the tuple order at the cobre-io (L2) boundary - either let write_scenario_summary take the producer order, or give it a named row type both front ends construct once - so neither entry point reshapes. A cli-local adapter or a cobre-sddp home for the writer boundary is conflicts under Part IV.1. Byte-neutral: the Parquet column order is fixed by the writer schema and not by the tuple order, and the writer keeps writing rows verbatim in the canonical scenario-id order it documents, so scenario_summary.parquet is unchanged in the whole-tree determinism golden and the file-set parity test; the cobre_io::write_scenario_summary name is unchanged in both paths, so the parity gate floor holds.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1 - shared output orchestration in cobre-io is a phase-0a item",
+      "partIRef": "I.5",
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587 is CD-025 itself, cited as the live disposition this sharpens",
+        "rule": "not an unwired seam: both reshapes run on every simulation"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "simulation: output write",
+        "claimType": "single-process"
+      },
+      "mechanism": "allocation per write call - one vector per scenario count materialised solely to permute two tuple positions",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/outputs.rs::write_simulation_outputs",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Every per-scenario solver-stats delta is cloned, heap histogram included, only to drop one tuple field before packing",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "aggregate_simulation_solver_stats"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '396,404p'; git show 077dbe2c:crates/cobre-sddp/src/solver_stats.rs | sed -n '55,58p;424,424p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '770,775p'",
+        "output": "    let local_stats_stripped: Vec<(u32, SolverStatsDelta)> = local_stats\n        .iter()\n        .map(|(id, _opening, delta)| (*id, delta.clone()))\n        .collect();\n    let local_buf = pack_scenario_stats(&local_stats_stripped);\n---\n    pub retry_level_histogram: Vec<u64>,\n---\npub fn pack_scenario_stats(stats: &[(u32, SolverStatsDelta)]) -> Vec<f64> {\n---\n    let mut agg = SolverStatsDelta::default();\n    for (_, _, delta) in &sim_run_result.solver_stats {\n        SolverStatsDelta::accumulate_into(&mut agg, delta);",
+        "reading": "SolverStatsDelta carries retry_level_histogram as a Vec, so each delta.clone() is a heap allocation; the loop clones one per simulated scenario purely to shed the always-minus-one opening field that the wire format omits, and the clones are dropped immediately after pack_scenario_stats reads them. The cost exists only because the cobre-sddp packer takes a two-tuple slice. The Python path shows the borrowing shape for the same data: it folds the three-tuples through accumulate_into with no clone."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pack from the borrowed three-tuple slice. cobre-sddp already owns the wire format, so the shape is to let pack_scenario_stats take an iterator of scenario id and delta references (or add a borrowing sibling) and drop the stripped vector in cobre-cli; no crate moves and no layering change, because the packer stays with the format owner. Byte-neutral: the same f64 sequence goes on the wire in the same order, unpack and the sort by scenario id are untouched, and the rows reaching write_simulation_solver_stats are identical, so solver_stats.parquet is unchanged in both parity tests.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "not an unwired seam: the strip runs on every simulation"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "simulation: solver-stats aggregation",
+        "claimType": "single-process"
+      },
+      "mechanism": "allocation per scenario - one struct clone with a heap-allocated histogram vector per simulated scenario, to reshape a tuple",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/simulation.rs::aggregate_simulation_solver_stats",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Non-root ranks re-read the case directory and redo the hydro-model fit rank 0 already holds",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "reconstruct_stochastic_context_non_root"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | sed -n '1,8p;352,364p;396,402p'",
+        "output": "//! Case-load, communicator setup, broadcast, and pre-training phases for cobre run.\n//!\n//! Rank 0 loads from disk; System and config are broadcast to all ranks, which\n//! then build StudySetup from the shared data. Hydro model preprocessing is the\n//! exception: it is not broadcast. Rank 0 reuses the artifacts\n//! load_case_with_artifacts already parsed (prepare_hydro_models_from_artifacts);\n//! non-root ranks independently re-read the case directory from disk\n//! (prepare_hydro_models), relying on a shared filesystem instead.\n---\n    let hydro_models = if ctx.is_root {\n        root_hydro_models.ok_or_else(...)\n    } else {\n        prepare_hydro_models(&system, &args.case_dir, false).map_err(|e| CliError::Internal {\n---\nfn reconstruct_stochastic_context_non_root(\n    ...\n    build_stochastic_context_for_study(\n        system,\n        case_dir,",
+        "reading": "The module doc names the hydro-model preparation as the one input on this path that is not broadcast, and the non-root arm calls prepare_hydro_models against the case directory, so every rank above zero re-parses the deck and redoes the FPHA and evaporation fit whose result rank 0 already has in memory. The non-root stochastic rebuild reaches for the case directory as well, through build_stochastic_context_for_study. The cost scales with rank count on a shared filesystem: the parse is repeated once per rank and the fit is repeated once per rank."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Ship rank 0 artefacts instead of refitting: broadcast the prepared hydro-model result with the existing length-prefixed helper on the same collective sequence that already carries the System and the config, and drop the non-root prepare_hydro_models call; if the owner judges the payload too large to broadcast, the alternative is to keep the refit and record the memory-versus-filesystem trade-off in the module doc, which today states the behaviour with no rationale. Byte-neutral, and in fact a tightening: nothing reconciles the non-root fit against rank 0 today, so the current design already depends on the fit being bit-identical on every rank, and shipping rank 0 output makes that identity structural. Only rank 0 writes the hydro-model sidecars, so the output tree is untouched; the Python entry point is single-process and never takes the non-root arm, so both parity goldens and the check_python_parity name gate are unaffected. Ownership of the stochastic rebuild is settled (CD-001, retired) and is not reopened here - only its cost is claimed.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "no docs/design entry covers the shared-filesystem re-read: git grep -n -i 'shared filesystem' 077dbe2c -- docs/design returns nothing",
+        "rule": "checked the mirror and docs/design for a sanctioning entry before claiming the re-read as a cost"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "2x2",
+        "deck": "examples/deterministic/d06-fpha-variable-head",
+        "phase": "setup: hydro-model preparation on non-root ranks",
+        "claimType": "collective"
+      },
+      "mechanism": "redundant per-rank work - one case-directory parse and one hydro-model fit repeated on every non-root rank instead of one fit plus a broadcast",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/setup.rs::broadcast_and_build_setup",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "relatedTo": [
+        "CD-002"
+      ],
+      "layout": "2x2",
+      "claimType": "collective",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "In simulation-only mode every rank reads and rebuilds the whole policy checkpoint, while the sibling boundary-cut path in the same module broadcasts",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "load_policy_for_simulation"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/policy.rs",
+          "symbol": "apply_training_policy"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute_inner"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'load_policy_for_simulation' 077dbe2c -- crates/cobre-cli/src; git show 077dbe2c:crates/cobre-cli/src/commands/run/policy.rs | sed -n '310,314p;334,346p'; git show 077dbe2c:crates/cobre-io/src/output/policy/checkpoint.rs | sed -n '418,432p'",
+        "output": "077dbe2c:crates/cobre-cli/src/commands/run/mod.rs:228:        let training_result = load_policy_for_simulation(ctx, &system, &mut setup)?;\n---\n        // Collective: rank 0 sends the reconciled records, every rank receives\n        // and injects the same terminal pool.\n        let boundary_records = broadcast_value(boundary_records, &ctx.comm)?;\n---\n    let policy_dir = ctx.output_dir.join(&setup.policy_path);\n    if !policy_dir.exists() {\n    let (checkpoint, proof) = load_and_validate_checkpoint(ctx, &policy_dir, system, setup)?;\n---\npub fn read_policy_checkpoint(path: &Path) -> Result<PolicyCheckpoint, OutputError> {\n    let manifest_path = path.join(manifest.bin);\n    let cuts_dir = path.join(cuts);\n    let mut stage_cuts: Vec<StageCutsReadResult> = read_sorted_bin_files(&cuts_dir, ...)\n    let basis_dir = path.join(basis);\n    let mut stage_bases: Vec<OwnedPolicyBasisRecord> = read_sorted_bin_files(&basis_dir, ...)\n    let states_dir = path.join(states);",
+        "reading": "The call site in execute_inner carries no is_root guard, so every rank runs load_policy_for_simulation. That path reads the checkpoint through read_policy_checkpoint, which lists and reads the manifest plus one file per stage under cuts, basis and optionally states, then rescales the whole cut pool, validates the manifests, rebuilds the future-cost function and builds the basis cache - all repeated identically on every rank. The same module already demonstrates the alternative for the same class of payload: apply_training_policy reads the boundary cuts on rank 0 and ships them with broadcast_value under a comment saying rank 0 sends and every rank receives. So the file contains both patterns, and the larger payload is the one taking the per-rank filesystem path."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Follow the boundary-cut pattern in the same module: read the checkpoint on rank 0 and ship it with the existing length-prefixed broadcast helper - shipping the on-disk buffers and deserialising per rank keeps the loaded policy byte-identical by construction and avoids adding serde to the checkpoint types. The missing-directory and unreadable-checkpoint failures must stay in lockstep, which the length-zero failure signal and the reconcile-global-ok helper already provide, so a missing policy still aborts every rank with the same message rather than deadlocking the healthy ranks. cobre-cli keeps ownership; no crate moves. Byte-neutral: simulation-only outputs are written on rank 0 from the same reconstructed policy, so the output tree is unchanged in both parity tests, and the Python entry point is single-process and unaffected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "no docs/design entry covers the per-rank checkpoint read: git grep -n -i 'shared filesystem' 077dbe2c -- docs/design returns nothing",
+        "rule": "checked the mirror and docs/design for a sanctioning entry before claiming the per-rank read as a cost"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "2x2",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "simulation-only: policy load",
+        "claimType": "collective"
+      },
+      "mechanism": "redundant per-rank I/O and deserialisation - one directory listing plus one read per stage per family, then rescale, validate and rebuild, repeated on every rank instead of one read plus a broadcast",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/policy.rs::load_policy_for_simulation",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "relatedTo": [
+        "CD-009"
+      ],
+      "layout": "2x2",
+      "claimType": "collective",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The serial rank-0 training-output write chain sits on every rank's critical path with nothing overlapping it",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute_inner"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/simulation.rs",
+          "symbol": "run_simulation_phase"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/mod.rs | sed -n '172,175p;189,190p;223,226p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | sed -n '65,66p;80,81p;90,91p;105,106p;136,146p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | sed -n '113,117p'",
+        "output": "        // Write training outputs before simulation so they persist even if\n        // simulation fails.\n        if ctx.is_root {\n            write_training_outputs(&WriteTrainingArgs {\n        if setup.simulation_config.n_scenarios > 0 {\n            run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;\n---\n    write_checkpoint(\n    write_training_results(\n        write_fpha_hyperplanes(\n        write_evaporation_models(\n    cobre_io::write_fixed_delivery(args.output_dir, &fixed_rows)\n        write_solver_stats(args.output_dir, &rows)\n        write_row_selection_records(\n---\n    // Reconcile the per-rank simulation outcome BEFORE the first post-sim\n    // collective (merge_simulation_metadata allreduce): simulate() is\n    // collective-free, so a failure on a strict subset of ranks would otherwise\n    // strand every healthy rank in that allreduce",
+        "reading": "The write block is guarded by if ctx.is_root and there is no barrier between it and run_simulation_phase, so non-root ranks walk straight into the simulation phase. The file states that simulate() is collective-free, so the next rank-crossing point is the reconcile before merge_simulation_metadata: non-roots finish their scenarios and idle there while rank 0 is still writing, and rank 0 enters simulate later by the duration of the whole chain - checkpoint, training results, up to four conditional sidecars, fixed delivery, solver stats and row-selection records, each awaited in turn. Nothing overlaps it. The same crate shows the overlapping shape one phase later: the simulation phase spawns a drain thread that writes scenarios to Parquet while solving continues."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Move the write off the critical path rather than reordering it. The borrow structure blocks a naive spawn - write_training_outputs borrows the study setup immutably while run_simulation_phase takes it mutably - so the shape is to build the artefact payloads under the immutable borrow, hand the owned buffers to a writer thread, and join before the run returns, mirroring the drain-thread shape the simulation phase already uses. The deferred-write shape belongs with the shared output-orchestration entry point in cobre-io (L2), with the single-process Python path keeping its inline write as the degenerate case; a cli-local-only helper for the writer boundary is conflicts under Part IV.1. Two things must be stated with the fix: the overlapped checkpoint write competes for I/O bandwidth with the simulation drain writes, which is the trade-off the sweep measures, and the stderr progress lines would reorder - the byte-neutrality bar covers the output tree and the validate --json single-object stdout contract, not stderr. Output-tree bytes are unchanged because no file content depends on write order and the failure-path guarantee that training outputs persist before simulation runs is preserved by joining before any error return.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1 - shared output orchestration in cobre-io is a phase-0a item",
+      "partIRef": null,
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587 is CD-025 itself, cited as the live disposition this sharpens",
+        "rule": "not an unwired seam: the chain runs on every training run"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "2x2",
+        "deck": "examples/deterministic/d19-multi-hydro-par",
+        "phase": "training-to-simulation handoff on rank 0",
+        "claimType": "collective"
+      },
+      "mechanism": "serial writes on the critical path - a rank-0-only chain of awaited per-artefact writes between two collective phases, with no overlap against compute and non-roots idling at the next collective",
+      "profiledSymbol": "crates/cobre-cli/src/commands/run/outputs.rs::write_training_outputs",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "layout": "2x2",
+      "claimType": "collective",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "cobre validate resolves the boundary-state requirements twice per invocation, fully deserializing the boundary policy checkpoint on each resolve",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "reconcile_boundary"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -n 'resolve_boundary_state_requirements\\|fn reconcile_boundary\\|run_boundary_check(\\|fs::write' ; git show 077dbe2c:crates/cobre-sddp/src/policy/policy_load.rs | grep -n 'entry point resolves this once\\|^pub fn boundary_policy_required_lag_depth\\|^pub fn resolve_boundary_state_requirements\\|read_policy_checkpoint(boundary_path)'",
+        "output": "39:    resolve_boundary_state_requirements, study_horizon_end,\n219:fn reconcile_boundary(\n232:    let boundary_requirements = resolve_boundary_state_requirements(case_dir, config)?;\n283:fn run_boundary_check(\n401:    let boundary_requirements = resolve_boundary_state_requirements(&args.case_dir, &config)?;\n455:    let boundary_outcome = run_boundary_check(\n--- policy_load ---\n557:pub fn boundary_policy_required_lag_depth(boundary_path: &Path) -> Result<u32, SddpError> {\n558:    let checkpoint = read_policy_checkpoint(boundary_path).map_err(|e| {\n577:/// entry point resolves this once and threads the value onto the\n584:pub fn resolve_boundary_state_requirements(\n1040:    let checkpoint = read_policy_checkpoint(boundary_path).map_err(|e| {",
+        "reading": "Two non-test call sites of resolve_boundary_state_requirements in one file with identical arguments: execute resolves at :401 from (args.case_dir, config), then calls run_boundary_check at :455, whose only body statement is reconcile_boundary(case_dir, config, bp, system, stochastic, hydro_models) — and reconcile_boundary resolves the same pair again at :232. The value execute already holds is never threaded down; run_boundary_check's six parameters (case_dir, config, system, stochastic, hydro_models, stdout) carry no BoundaryStateRequirements. Each resolve is a full checkpoint read: resolve_boundary_state_requirements (policy_load.rs :584) delegates to boundary_policy_required_lag_depth (:557), whose first statement is read_policy_checkpoint (:558), and read_policy_checkpoint (crates/cobre-io/src/output/policy/checkpoint.rs, cited as context) reads manifest.bin and then read_sorted_bin_files over cuts/, basis/ and states/, deserializing every stage blob, before validate_checkpoint_dates. The duplicate is unconditionally redundant: the function is pure in (case_dir, config), and the same grep prints no fs::write / create_dir line in validate.rs at all, so nothing rewrites the checkpoint between :401 and :232. policy_load.rs :577 states the invariant this violates in its own words — 'entry point resolves this once and threads the value onto the config-projection carriers'. A third read of the same directory follows inside load_boundary_cuts (policy_load.rs :1040, cited as context, an L3 concern and not anchored here), so a boundary-policy validate deserializes the checkpoint three times where the stated design is once. NEW evidence relative to CD-029: the mirror entry at docs/design/reserved-seams-and-deferred-debt.md:753 and the register row both describe the PrepPhase doc/placement mismatch and the Python asymmetry, neither mentions a duplicated resolve or any checkpoint read count — this is a cost argument on the same row, and it is not an I.5 coupling claim (the cobre_sddp symbols are context, the claim is the CLI's own repeated call)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Thread the value execute already resolved at :401 into run_boundary_check and on into reconcile_boundary as one added parameter, and delete the second resolve; the minimal home is cobre-cli itself, since this is the CLI's own control flow and not output orchestration, so the L2 destination rule does not apply. Byte-neutral by construction: resolve_boundary_state_requirements is a pure function of (case_dir, config) and validate.rs performs no filesystem write between the two calls, so the threaded value is bit-identical to the one the second call would return, every downstream StudySetup::new_with_boundary_requirements and load_boundary_cuts argument is unchanged, and no rendered text moves. None of the four rule-8 gates is touched: the CLI-vs-Python determinism golden and the file-set parity test compare written output trees, which validate does not produce; check_python_parity.py matches writer names, which are untouched; and the cobre validate --json single-object stdout contract is preserved because emit_validate_json serializes the same ValidateBoundaryOutput. Sequencing is the open question: CD-029's approved direction folds the boundary check into cobre-sddp PrepPhase, which would make the requirements a phase input resolved once and subsume this fix, so if that fold is taken the duplicate disappears with it rather than being patched twice. Recommending the cobre-io (L2) home here would be wrong — rule 5 places the boundary reconciliation's fold destination in cobre-sddp PrepPhase, not in output orchestration.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": "CD-029",
+      "reRaiseOf": "CD-029",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:753 (the prep-phase deferred-debt entry) — it covers the PrepPhase doc/code mismatch and the unmirrored boundary check, not the duplicate resolve; no reserved seam covers a repeated checkpoint read",
+        "rule": "rule 7 (mirror + CLAUDE.md 'Unwired config is reserved, not dead' pre-check) is mandatory for the over-engineering lens; run here anyway because the anchors sit on a live disposition's symbol, and the mirror entry was read at the pin to confirm the cost claim is new"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "a boundary chain: examples/1dtoy trained once, its policy directory pointed at by config.policy.boundary of a second copy. No shipped deck sets config.policy.boundary at the pin; crates/cobre-cli/tests/cli_validate.rs builds this fixture shape via write_boundary_case and append_boundary_policy",
+        "phase": "cobre validate on a case whose config.policy.boundary is set — the boundary-reconciliation phase, before any solve",
+        "claimType": "single-process"
+      },
+      "mechanism": "Redundant full deserialization of the boundary policy checkpoint: one extra read_policy_checkpoint per cobre validate, covering manifest.bin plus every cuts/, basis/ and states/ blob. Cost scales with the boundary checkpoint's stage and cut count, not with the case being validated.",
+      "profiledSymbol": "crates/cobre-cli/src/commands/validate.rs::reconcile_boundary (the second resolve; the reachable cost sits in cobre_sddp::resolve_boundary_state_requirements -> boundary_policy_required_lag_depth -> cobre_io read_policy_checkpoint)",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The progress thread retains every received training event in a vector that the simulation caller discards",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "run_progress_thread"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "ProgressHandle"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/progress.rs | sed -n '155,172p'; git show 077dbe2c:crates/cobre-cli/src/commands/run/simulation.rs | grep -n 'run_progress_thread\\|handle.join'; git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | grep -n 'handle.join\\|build_training_output'",
+        "output": "pub fn run_progress_thread(\n    receiver: mpsc::Receiver<TrainingEvent>,\n    mode: RenderMode,\n    max_iterations: u64,\n    term_width: u16,\n) -> ProgressHandle {\n    let handle = thread::spawn(move || {\n        let mut renderer = ProgressRenderer::new(mode, max_iterations, term_width);\n        let mut events: Vec<TrainingEvent> = Vec::new();\n        for event in &receiver {\n            renderer.handle(&event);\n            events.push(event);\n        }\n        renderer.finish();\n        events\n    });\n    ProgressHandle { handle }\n}\n--- simulation.rs ---\n37:use crate::progress::run_progress_thread;\n66:        Some(run_progress_thread(\n108:        let _ = handle.join();\n--- training.rs ---\n107:        (Some(handle), _) => handle.join(),\n111:    let mut training_output = setup.build_training_output(&training_result, &events);",
+        "reading": "run_progress_thread pushes every received event into a Vec unconditionally, alongside rendering it, and returns that Vec through ProgressHandle::join. The two callers use the return value differently. The training path consumes it: training.rs :107 binds handle.join() to events and :111 passes &events to setup.build_training_output, so retention there is load-bearing. The simulation path does not: simulation.rs :66 starts the same thread and :108 drops the result with 'let _ = handle.join();'. Every event the simulation phase emits is therefore retained for the whole phase and then thrown away. The emission rate is one event per scenario: crates/cobre-sddp/src/simulation/state.rs :559 (cited as context) calls emit_sim_progress once per completed scenario inside the scenario loop, and emit_sim_progress (simulation/pipeline.rs :972) sends TrainingEvent::SimulationProgress whenever a sender exists — which is whenever the run is not quiet, per the 'if ctx.quiet' gate at simulation.rs :62. Both renderers already ignore ten of the fifteen TrainingEvent variants in a single empty match arm, so the vector is the only reason the events outlive rendering. Magnitude is honestly bounded by the scenario count and the enum's size; the claim is that the growth has no consumer on this path, not that it dominates a run."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Move the retention to the caller that reads it rather than making it a property of the shared thread. The training path already owns a collecting branch for its quiet mode (training.rs matches (None, Some(rx)) and collects from rx.try_iter()), so the shape is to let run_progress_thread render only and have the training path own its event vector, leaving the simulation path with a render-only handle and nothing to drop. Do not add a collect-or-not flag: that is config proliferation over a seam with two known callers and opposite needs. Byte-neutral by construction: the renderer still receives the identical event sequence in the identical order, so every stderr line and every bar update is unchanged, and the retained vector never reaches stdout or any output file. The four rule-8 gates are untouched — progress rendering goes to stderr and is not part of the output tree the CLI-vs-Python determinism golden or the file-set parity test compares, no writer name changes for check_python_parity.py, and cobre validate --json never starts a progress thread.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md at the pin, grepped for progress / TrainingEvent / telemetry / event sender — the only telemetry hits are the enumerated-run backward telemetry trigger at :279 and the always-zero telemetry field at :724, neither covering the retained event vector",
+        "rule": "rule 7 pre-check (mirror at the pin plus CLAUDE.md 'Unwired config is reserved, not dead') — run to rule out a reserved seam holding the retained events for a planned consumer; none exists, and the training path's real consumer is build_training_output"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/4ree (its configured simulation scenario count drives the retained event count; the sweep should also raise that count to see whether the growth is measurable at all)",
+        "phase": "simulation, non-quiet, with the progress thread running",
+        "claimType": "single-process"
+      },
+      "mechanism": "Unconditional allocation growth with no consumer: one retained TrainingEvent per emitted event, one SimulationProgress emitted per completed scenario, held for the whole simulation phase and freed only when the caller drops the joined vector.",
+      "profiledSymbol": "crates/cobre-cli/src/progress.rs::run_progress_thread",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "load_convergence and load_policy hold the GIL across their entire Rust-side decode, while three sibling readers in the same file release it with py.detach",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_convergence"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_policy"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | grep -n 'pub fn load_\\|py.detach\\|read_policy_checkpoint(\\|ParquetRecordBatchReaderBuilder::try_new'",
+        "output": "243:pub fn load_convergence(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> {\n250:    let builder = ParquetRecordBatchReaderBuilder::try_new(file)\n373:pub fn load_convergence_arrow(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> {\n378:    let ipc_bytes = py.detach(|| -> PyResult<Vec<u8>> {\n741:pub fn load_stochastic(py: Python<'_>, output_dir: PathBuf) -> PyResult<Stochastic> {\n747:    let (par_rows, opening_rows) = py.detach(|| -> PyResult<(ParRows, OpeningRows)> {\n1363:pub fn load_simulation_arrow(\n1382:        let ipc_bytes = py.detach(|| entity_type_ipc_bytes(&entity_dir))?;\n1395:            let ipc_bytes = py.detach(|| entity_type_ipc_bytes(&entity_dir))?;\n1503:pub fn load_policy(\n1519:    let checkpoint = cobre_io::read_policy_checkpoint(&policy_dir)",
+        "reading": "Five public readers open a bulk source. Three of them release the interpreter for the Rust-side work: load_convergence_arrow at :378, load_stochastic at :747 and load_simulation_arrow at :1382 and :1395. load_convergence builds its ParquetRecordBatchReaderBuilder at :250 and load_policy calls cobre_io::read_policy_checkpoint at :1519 with the GIL still held, and neither decode needs a Python object. load_stochastic is the in-file proof that the split is available: it detaches to decode into owned Rust rows (ParRows, OpeningRows) and only then builds Python values."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "No crate move: the fix stays in cobre-python (L4). Split each of the two readers into the two halves load_stochastic already separates, a detached decode that returns owned Rust rows and a GIL-held projection that builds the Python objects from them. For load_policy, read and decode the FlatBuffers checkpoint inside py.detach and construct the cut, basis and metadata dicts after reacquiring. Byte-neutrality bar: both symbols are read-only entry points that write no file, so the CLI-vs-Python golden crates/cobre-python/tests/test_cli_python_determinism_parity.py, the file-set parity test tests/test_cli_python_file_set_parity.py, the import-resolving gate scripts/ci/check_python_parity.py and the cobre validate --json single-object stdout contract are untouched by construction. The bar the change must meet instead is that the returned dicts keep identical keys, identical list order and bit-identical float values, which the existing results-reader pytest suite asserts.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "post-run result loading from Python (cobre.results.load_convergence and cobre.results.load_policy against a completed output tree)",
+        "claimType": "single-process"
+      },
+      "mechanism": "GIL held across a bulk parquet decode and across a FlatBuffers checkpoint read, so every other Python thread is blocked for the whole duration of work that touches no Python object",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::load_convergence",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "read_parquet_partition_into re-runs the Arrow data-type match and the array downcast once per cell, while the sibling load_convergence hoists the identical downcast to once per column per batch",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "read_parquet_partition_into"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "arrow_value_to_py"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '265,268p;781,786p;988,996p'",
+        "output": "        let col_iteration = get_column_by_name::<Int32Array>(&batch, \"iteration\")?;\n        let col_lower_bound = get_column_by_name::<Float64Array>(&batch, \"lower_bound\")?;\n        let col_upper_bound = get_column_by_name::<Float64Array>(&batch, \"upper_bound\")?;\n        let col_upper_bound_std = get_column_by_name::<Float64Array>(&batch, \"upper_bound_std\")?;\n    match col.data_type() {\n        DataType::Float64 => {\n            let arr = col\n                .as_any()\n                .downcast_ref::<Float64Array>()\n                .ok_or_else(|| PyOSError::new_err(\"Float64 column downcast failed\"))?;\n        for i in 0..n_rows {\n            let row = PyDict::new(py);\n            row.set_item(\"scenario_id\", scenario_id_val)?;\n            for (col_idx, field) in schema.fields().iter().enumerate() {\n                let col = batch.column(col_idx);\n                let val = arrow_value_to_py(py, col.as_ref(), i)?;\n                row.set_item(field.name(), val)?;\n            }\n            result_list.append(row)?;",
+        "reading": "load_convergence resolves its 14 typed columns once per batch at :265-:278 through get_column_by_name, then indexes them per row. read_parquet_partition_into does the opposite at :988-:996: for every row it loops the schema fields and calls arrow_value_to_py per cell, and arrow_value_to_py re-enters the col.data_type() match at :781 and re-runs as_any().downcast_ref::<T>() at :785 for that single value. The dispatch result is identical for every row of a column, so the work is per cell where the sibling reader already proves it can be per column."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Stays in cobre-python (L4). Resolve the typed array view once per column per batch before the row loop, the shape get_column_by_name already provides for the convergence reader, and let the row loop index the resolved views; the schema-generic case needs a per-column resolved enum rather than a per-cell match. Counter-signal recorded: load_simulation_arrow is the zero-copy bulk alternative for large results, so this candidate is about the cost of the dict reader that remains the documented default of load_simulation, not about deleting it. Byte-neutrality bar: this is a read path that writes no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched. The bar is that the per-row dicts keep the same keys in the same insertion order, the same None for nulls and bit-identical numeric values.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "post-run simulation result loading from Python (cobre.results.load_simulation over the per-entity scenario partitions)",
+        "claimType": "single-process"
+      },
+      "mechanism": "per-element conversion: an Arrow data-type match plus a dynamic downcast repeated for every cell of every row instead of once per column per batch",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::read_parquet_partition_into",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Bulk f64 arrays reach NumPy through a per-element Python list: reshape_f64 and Policy::cut_matrix materialise every coefficient as a Python float that numpy then re-parses",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "reshape_f64"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "opening_tree"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "cut_matrix"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '699,704p'; git show 077dbe2c:crates/cobre-python/src/study.rs | sed -n '226,231p'",
+        "output": "fn reshape_f64(py: Python<'_>, flat: Vec<f64>, shape: (usize, usize)) -> PyResult<Py<PyAny>> {\n    let numpy = py.import(\"numpy\")?;\n    let array = numpy.call_method1(\"asarray\", (flat,))?;\n    let reshaped = array.call_method1(\"reshape\", (shape,))?;\n    Ok(reshaped.unbind())\n}\n        let np = py.import(\"numpy\")?;\n        let intercepts_arr = np.call_method1(\"asarray\", (intercepts,))?;\n        // `dim` fixes the column count even when `n_cuts == 0`, giving shape `(0, dim)`.\n        let coeffs_1d = np.call_method1(\"asarray\", (coeffs_flat,))?;\n        let coeffs_arr = coeffs_1d.call_method1(\"reshape\", ((n_cuts, dim),))?;",
+        "reading": "Passing a Vec<f64> as a PyO3 call argument converts it to a Python list of PyFloat objects, one allocation per element, and numpy.asarray then walks that list and unboxes every element back into a float64 buffer. Three call sites feed whole arrays through this path: par_coefficients at :623 (n_rows times PAR_COEFFICIENT_COLUMNS values), opening_tree at :691 (n_openings times dim values, preceded by value_slice.to_vec(), so the data is copied twice before numpy sees it) and Policy::cut_matrix in study.rs, which flattens every active cut of a stage into coeffs_flat and hands both that and intercepts over the same list boundary."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Stays in cobre-python (L4) and keeps numpy a soft, lazily imported dependency, which is the documented contract of these accessors. Hand numpy the bytes instead of a list: expose the flat f64 buffer as a Python bytes or memoryview object and build the array with numpy.frombuffer followed by reshape, so the transfer is one buffer copy rather than one Python object per element; the lazy import and its verbatim ImportError propagation stay as they are. Byte-neutrality bar: all three are read accessors that write no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched. The bar is bit-identical float64 values, the same dtype, the same C-contiguous row-major shape including the (0, dim) empty case cut_matrix comments on, and the same ImportError behaviour when numpy is absent.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "post-run stochastic and policy introspection from Python (Stochastic.par_coefficients, Stochastic.opening_tree, Policy.cut_matrix)",
+        "claimType": "single-process"
+      },
+      "mechanism": "per-element Python object conversion for a numeric array: one PyFloat per f64 on the way in and one unbox per element inside numpy.asarray, plus an extra Vec copy at the opening_tree call site",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::reshape_f64",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "load_results converts the same training metadata JSON tree into Python twice, once for the manifest key and once for the metadata alias",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_results"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "json_value_to_py"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '116,117p;160p;184,185p'",
+        "output": "///         \"manifest\": { ... },           # alias for metadata (same contents)\n///         \"metadata\": { ... },           # contents of training/metadata.json\n    let metadata_val = read_json_file(&training_dir.join(\"metadata.json\"))?;\n    training_dict.set_item(\"manifest\", json_value_to_py(py, &metadata_val)?)?;\n    training_dict.set_item(\"metadata\", json_value_to_py(py, &metadata_val)?)?;",
+        "reading": "One serde_json tree is read at :160 and json_value_to_py is called on that same &metadata_val twice, at :184 and :185. json_value_to_py is the recursive converter that allocates a Python object for every node of the tree, so the whole training metadata document is rebuilt element by element a second time purely to populate an alias key the docstring at :116 already describes as the same contents."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Stays in cobre-python (L4). Convert the tree once and bind the resulting object to both keys. This changes object identity: result[\"training\"][\"manifest\"] is result[\"training\"][\"metadata\"] becomes True where today they are two equal-but-distinct dicts, and it makes the two views alias on mutation. That is the one behavioural difference and it must be stated in the accessor docstring and checked against the results pytest suite before the change lands; if the owner requires distinct objects, the alternative is to keep two conversions and record this as accepted cost. Byte-neutrality bar: load_results writes no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched; the bar is that the values under both keys stay equal to the on-disk metadata.json document, key for key.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "post-run result loading from Python (cobre.results.load_results against a completed training output tree)",
+        "claimType": "single-process"
+      },
+      "mechanism": "redundant materialisation: a recursive per-node JSON-to-Python conversion of one document run twice to fill two keys the API documents as the same contents",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::json_value_to_py",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The seven PySystem entity-list getters deep-clone the whole entity vector on every attribute access, in a file whose from_arc constructor already establishes the share-by-refcount idiom",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "buses"
+        },
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "from_arc"
+        },
+        {
+          "path": "crates/cobre-python/src/model.rs",
+          "symbol": "deficit_segments"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/model.rs | grep -n 'fn buses\\|fn lines\\|fn thermals\\|fn hydros\\|fn contracts\\|fn pumping_stations\\|fn non_controllable_sources\\|fn from_arc'; git show 077dbe2c:crates/cobre-python/src/model.rs | sed -n '406,413p'",
+        "output": "407:    fn buses(&self) -> Vec<PyBus> {\n417:    fn lines(&self) -> Vec<PyLine> {\n427:    fn thermals(&self) -> Vec<PyThermal> {\n437:    fn hydros(&self) -> Vec<PyHydro> {\n447:    fn contracts(&self) -> Vec<PyEnergyContract> {\n457:    fn pumping_stations(&self) -> Vec<PyPumpingStation> {\n467:    fn non_controllable_sources(&self) -> Vec<PyNonControllableSource> {\n523:    pub(crate) fn from_arc(inner: Arc<System>) -> Self {\n    #[getter]\n    fn buses(&self) -> Vec<PyBus> {\n        self.inner\n            .buses()\n            .iter()\n            .cloned()\n            .map(PyBus::from_rust)\n            .collect()",
+        "reading": "All seven entity collections are exposed as #[getter] properties with the identical body: iter().cloned() over the whole cobre-core entity vector, then a fresh wrapper per entity, then collect. Because they are properties, an idiomatic Python loop that reads system.buses inside the loop re-clones the entire vector on each iteration; nothing caches the wrapper list. PyBus::deficit_segments at :51 has the same per-access shape, rebuilding a Vec<Bound<PyDict>> each time it is read. The same file at :523 documents the alternative it already uses for the System itself, from_arc wrapping via a refcount bump rather than a full clone. The module doc sanctions cloning entity data into the wrappers because it is small and avoids lifetime complexity, which covers the cost of building a wrapper, not the cost of rebuilding every wrapper on every access."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Stays in cobre-python (L4). Two shapes, both compatible with the module doc: hold the shared Arc<System> plus an index inside each entity wrapper so a getter becomes a refcount bump and a length, the pattern from_arc already establishes for the System wrapper; or keep the owned wrappers and build the list once per PySystem, handing out the cached sequence on later accesses. The second is the smaller change and keeps the documented lifetime simplicity. Byte-neutrality bar: model.rs is a read-only introspection surface that writes no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched. The bar is that the getters keep returning a Python sequence in declaration order with identical per-entity attribute values, and that the Python-visible mutability of the returned list does not change.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "system introspection from Python (repeated reads of Study.system entity collections and of PyBus.deficit_segments)",
+        "claimType": "single-process"
+      },
+      "mechanism": "clone-per-access: a full deep clone of a cobre-core entity vector plus one wrapper allocation per entity on every property read, with no cached view",
+      "profiledSymbol": "crates/cobre-python/src/model.rs::buses",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "build_stage_cuts_data clones every cut coefficient vector of every stage even on the branch that needs no reservation, and does it under the GIL before the detached write",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/policy.rs",
+          "symbol": "build_stage_cuts_data"
+        },
+        {
+          "path": "crates/cobre-python/src/policy.rs",
+          "symbol": "StageCutsData"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/policy.rs | sed -n '374,381p;391,392p;411,415p;467,468p;473,473p'",
+        "output": "/// vector, either as supplied or widened by an inflow-lag reservation, plus the\n/// resulting `state_dimension`. Owning these lets the borrowed\n/// [`StageCutsPayload`]/[`PolicyCutRecord`] views reference the reserved\n/// coefficients (which the writer must own — the caller's `coefficients` are\n/// storage-only when a reservation runs).\nstruct StageCutsData {\n    manifest: Vec<EntitySlot>,\n    coefficients: Vec<Vec<f64>>,\n    let coefficients: Vec<Vec<f64>> = sc.cuts.iter().map(|c| c.coefficients.clone()).collect();\n    match reserve_depth {\n        None => Ok(StageCutsData {\n            manifest,\n            coefficients,\n            state_dimension: sc.state_dimension,\n        }),\n        .map(|sc| build_stage_cuts_data(sc, reserve_depth))\n        .collect::<PyResult<_>>()?;\n    py.detach(|| {",
+        "reading": "Line :391 clones every cut's coefficient vector for every stage unconditionally, before the match on reserve_depth. Only the Some(depth) arm consumes those clones, by handing them to reserve_boundary_inflow_lag_slots; the None arm at :411 passes them straight through unchanged. The struct doc at :376-:377 states the ownership requirement exactly that narrowly, the caller's coefficients are storage-only when a reservation runs, and the consumer proves it: PolicyCutRecord takes coefficients as a borrowed view zipped over &data.coefficients, so on the None path the records could borrow the PyCutRecord storage directly. The clones are also built at :467 before the py.detach at :473, so the duplication of the whole cut pool happens with the interpreter still held."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Stays in cobre-python (L4). Make the owned coefficient buffer conditional on the reservation, for example a borrowed-or-owned representation whose borrowed arm points at the PyCutRecord storage that already outlives the call and whose owned arm holds the widened vectors the reservation produces; the borrowed views that PolicyCutRecord and StageCutsPayload build then read from whichever arm is present. Independently, move the stage_data construction inside the existing py.detach block, since nothing in it touches a Python object once the payloads have been read. Byte-neutrality bar: this is on the policy write path, so the fix must leave the FlatBuffers checkpoint bytes identical, which means the same coefficients in the same cut order and slot order with the same state_dimension per stage; it is verified by the CLI-vs-Python golden crates/cobre-python/tests/test_cli_python_determinism_parity.py over the whole examples/1dtoy tree and by tests/test_cli_python_file_set_parity.py, with scripts/ci/check_python_parity.py unaffected because no writer name changes. The reservation rejection path reject_unreserved_lag_coefficients must keep raising on exactly the same inputs.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "policy checkpoint write from Python (cobre.policy write path over a trained cut pool)",
+        "claimType": "single-process"
+      },
+      "mechanism": "redundant materialisation of the full cut pool: one Vec<f64> clone per cut per stage on a branch whose consumer only borrows, executed under the GIL before the detached write",
+      "profiledSymbol": "crates/cobre-python/src/policy.rs::build_stage_cuts_data",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "Stochastic::opening_tree scans every opening row of every stage to locate one stage's block, although the reader already rejects unsorted rows and the code comments that the block is contiguous",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "opening_tree"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "is_opening_order_sorted"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '569,572p;645,655p;663,664p'",
+        "output": "    if !is_opening_order_sorted(&rows) {\n        return Err(PyOSError::new_err(\n            \"noise_openings.parquet rows are not sorted by ... cannot reshape the opening tree\",\n        let mut start = None;\n        let mut end = 0usize;\n        for (i, &s) in rows.stage_id.iter().enumerate() {\n            if s == stage_i32 {\n                if start.is_none() {\n                    start = Some(i);\n                }\n                end = i + 1;\n            }\n        }\n        // Rows are sorted, so the matching rows form a contiguous block; dim and\n        // n_openings derive from the maxima within it.\n",
+        "reading": "read_opening_rows enforces the sort invariant at :569 through is_opening_order_sorted and fails the load when it does not hold, and the comment at :663 states the consequence the code relies on, that the matching rows form a contiguous block. The lookup at :647 nevertheless walks the entire stage_id column for every call, never breaking after the block ends, so a caller iterating stages performs a full pass per stage over rows of all stages. The invariant that would make this a bounded lookup is already asserted at read time."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Stays in cobre-python (L4). Locate the block with the sort invariant the reader already enforces, by partition point on the first and last index of the stage rather than a full scan, or by computing the per-stage offsets once when the rows are read and storing them on the handle. Both preserve the existing IndexError for an absent stage and its stage_range_message text. Byte-neutrality bar: opening_tree is a read accessor that writes no file, so the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py, scripts/ci/check_python_parity.py and the cobre validate --json contract are untouched. The bar is that the returned array keeps the same shape, the same row-major element order and bit-identical values, and that the ragged-tree and overflow error messages stay exactly as they are.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "post-run stochastic introspection from Python (Stochastic.opening_tree called once per stage over the loaded opening rows)",
+        "claimType": "single-process"
+      },
+      "mechanism": "redundant full pass per call: a linear scan of all opening rows to find one stage's contiguous block, repeated for every stage, despite a sort invariant enforced at read time",
+      "profiledSymbol": "crates/cobre-python/src/results.rs::opening_tree",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "cobre.io.validate and cobre.io.load_case hold the GIL across the whole case load, stochastic preparation and hydro-model preparation, while Study in the same crate detaches at all four of its heavy entry points",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "validate"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "load_case"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/io.rs | grep -n 'pub fn validate\\|pub fn load_case\\|validate_case_with_artifacts(\\|prepare_stochastic(\\|prepare_hydro_models_from_artifacts(\\|detach'; git show 077dbe2c:crates/cobre-python/src/study.rs | grep -n 'detach'",
+        "output": "138:pub fn load_case(path: PathBuf) -> PyResult<PySystem> {\n200:pub fn validate(\n236:    let (loaded, report) = match validate_case_with_artifacts(&path) {\n281:    let prepared = match prepare_stochastic(\n297:        match prepare_hydro_models_from_artifacts(&prepared.system, &artifacts, false, None) {\n503:        py.detach(|| Self::new_native(&case_dir, output_dir, threads, overrides))\n626:        match py.detach(|| self.train_native(on_iteration)) {\n663:        py.detach(|| self.load_policy_native(output_dir))\n724:            .detach(|| self.simulate_native(policy, output_dir))",
+        "reading": "The grep over io.rs returns no detach match at all, so the full eleven-phase pipeline runs with the interpreter held: the six-layer load at :236, the stochastic preparation at :281 and the hydro-model preparation at :297. study.rs shows the same crate doing the opposite for the same class of work at four sites, :503, :626, :663 and :724, and its construction path detaches around exactly the load-and-prepare sequence validate repeats. The dict-building is the only part of validate that needs the interpreter, and the override map is already converted to a serde map before the pipeline starts, so nothing between the two ends touches a Python object. This is not the validate phase-mirror duplication, which is the S6b and CD-029 question; it is a Python-only mechanism with no CLI counterpart."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Stays in cobre-python (L4). Convert the overrides as today, then run the phase pipeline inside py.detach and return a plain Rust outcome value that carries either the first failure with its kind and message or the warning list, and build the result dict from that outcome after reacquiring; the return_error macro becomes an early return of the failure variant instead of a direct dict write. Phase 9 stays where it is: running prepare_stochastic during validation is the deliberate parity contract with cobre validate and is recorded as a positive, not something this fix touches. Byte-neutrality bar: validate writes no file, and the CLI side is not changed, so the cobre validate --json single-object stdout contract is untouched, as are the CLI-vs-Python golden test_cli_python_determinism_parity.py, tests/test_cli_python_file_set_parity.py and scripts/ci/check_python_parity.py. The bar is that the returned dict keeps the same keys, the same valid flag, the same short-circuit semantics so that the first failing phase is still the one reported and later phases still do not run, and the same kind and message strings including the prep_phase_metadata file labels.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 binds the over-engineering lens; this is a performance candidate about a cost mechanism, not about an unwired seam"
+      },
+      "measured": false,
+      "unmeasured": {
+        "tag": "UNMEASURED",
+        "reason": "station tickets do not time claims; queued to the cross-cutting sweep"
+      },
+      "measurementRequest": {
+        "layout": "4t",
+        "deck": "examples/1dtoy",
+        "phase": "case validation and case loading from Python (cobre.io.validate phases 1-11 and cobre.io.load_case)",
+        "claimType": "single-process"
+      },
+      "mechanism": "GIL held across a bulk read and a compute pipeline: the six-layer case load, PAR estimation and hydro-model preparation all run with the interpreter held, blocking every other Python thread for work that touches no Python object",
+      "profiledSymbol": "crates/cobre-python/src/io.rs::validate",
+      "queuedTo": "perf-sweep",
+      "dupOf": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "layout": "4t",
+      "claimType": "single-process",
+      "status": "UNMEASURED"
+    }
+  ],
+  "dupOf": [],
+  "positives": [
+    {
+      "subject": "crates/cobre-cli/src/commands/run/setup.rs::resolve_thread_count and the one-time rayon global pool in setup_communicator",
+      "why": "Lens target 2 examined and clean. The thread count is resolved exactly once (git grep for resolve_thread_count at the pin returns one non-test call site, setup.rs:184), the rayon global pool is built once beside it, the effective count is validated against zero and stored as RunContext.n_threads, and every consumer reads ctx.n_threads (training.rs, simulation.rs, the metadata builders, the summary printer). Nothing re-derives the count and no second pool is constructed; the fallback to current_num_threads on a failed build_global warns instead of silently diverging.",
+      "sanctionedBy": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-python/src/run.rs::run_in_scoped_pool",
+      "why": "The bindings deliberately build a fresh scoped pool per call instead of a process-global one, with the reason stated in the doc comment: a global pool can only be configured once per process, so two sequential run invocations with different thread counts would otherwise silently share the first one. Pool construction failure is an explicit error rather than an implicit fallback. Worth protecting - the per-call pool is a correctness property of a long-lived interpreter, not overhead to remove.",
+      "sanctionedBy": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/broadcast.rs::broadcast_value length prefix",
+      "why": "The two collectives per value are deliberate, not redundant: a broadcast length of zero is the rank-0 failure signal that lets every rank return an error in lockstep instead of deadlocking. Merging the four setup broadcasts into one payload to save collectives would remove that signal and, per CD-002 guidance, a second carrier or tuple redesign on this function is out of bounds - so it is explicitly not recommended here.",
+      "sanctionedBy": "CD-002 (live, sharpen-only) and the function doc comment",
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/simulation.rs drain thread in run_simulation_phase",
+      "why": "Per-scenario Parquet writing runs on a drain thread fed by a bounded channel, so writing overlaps solving instead of collecting rows for a rank-0 gather - the in-file comment records that the gather alternative overflows i32 on large cases. The same shape exists on the Python path. This is the overlap pattern the training-output write chain lacks, and it is the reason that claim has a concrete target shape.",
+      "sanctionedBy": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/simulation.rs::merge_simulation_metadata and the pre-collective outcome reconcile",
+      "why": "Wall clock is reduced with Max, not Sum, because it is the slowest rank's time, and the per-rank outcome is reconciled before the first post-simulate collective so a failure on a strict subset of ranks cannot strand healthy ranks in the allreduce. Both are correct and load-bearing; neither is a cost to remove.",
+      "sanctionedBy": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "cobre-io writers reached from outputs.rs (write_paths, write_scenario_summary, write_solver_stats)",
+      "why": "The per-write create_dir_all named as a lens target is not a smell: it is one idempotent metadata call per output file, and it is not duplicated inside the atomic write - ensure_parent_dir is called by write_batch_atomic only, not by write_parquet_atomic, so the writers that create the directory themselves do it once. Removing it would make each writer depend on a caller-created tree for no measurable gain.",
+      "sanctionedBy": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/setup.rs::reconstruct_stochastic_context_non_root",
+      "why": "Ownership of the non-root stochastic rebuild is settled and correct: the rebuild routes through cobre-sddp build_stochastic_context_for_study, the same derivation the rank-0 prepare path uses, so it cannot drift across the crate boundary - which is what makes the MPI reproducibility requirement in the comment hold. Only the filesystem cost of the case-directory argument is raised, and as a cost claim, not as a re-raise of the ownership question.",
+      "sanctionedBy": "CD-001, retired at the cobre-sddp station gate (commits b051c410 / 4075c4e8)",
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/training.rs::aggregate_solver_stats",
+      "why": "The training-side stats fold is a single pass over the convergence log that filters foreign ranks in the same pass and accumulates in place with no per-entry clone - the shape the simulation-side aggregation should adopt.",
+      "sanctionedBy": null,
+      "cell": "performance.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs::create_bar and crates/cobre-cli/src/progress.rs::BarRenderer",
+      "why": "Answers the lens question directly: the bar is not redrawn per event. create_bar builds its draw target with ProgressDrawTarget::term_like_with_hz(Box::new(MpiTerm{inner, width}), 8), so indicatif rate-limits every redraw regardless of event arrival rate. Both bars are created at most once, through training_bar.get_or_insert_with and simulation_bar.get_or_insert_with, and BarRenderer::handle does one set_position plus one set_message per IterationSummary or SimulationProgress. The two Term::stderr().write_line calls sit in the TrainingFinished and SimulationFinished arms, once per run each. Ten of the fifteen TrainingEvent variants land in a single empty match arm, so the per-iteration telemetry events cost nothing to render. Correct and worth protecting.",
+      "sanctionedBy": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs::LineRenderer",
+      "why": "One Term::write_line per rendered event with no throttle, and that is the contract rather than a smell. RenderMode::auto selects RenderMode::Log when Term::stderr().is_term() is false, and the Log variant's own doc says ANSI cursor escapes cannot be interpreted live in pipes, files or mpirun aggregators and would appear as duplicated output otherwise. Throttling or coalescing those lines would change the rendered stderr text, which is exactly what the byte-neutrality bar forbids a fix from doing. The cost is bounded at one line per training iteration and one per simulation scenario, with fmt_sci, fmt_time_cell and fmt_avg_lp_time allocating only within that line.",
+      "sanctionedBy": "rule 8 byte-neutrality bar — for the shell the rendered stderr text is the contract the CLI tests pin",
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/validate.rs::execute running prepare_stochastic",
+      "why": "The expensive step is deliberate and must stay. The call site carries its own justification — the most expensive step (PAR estimation, opening trees); validate runs it anyway so an exit-0 guarantees full parity with run — and the module doc states the same exit-0 contract. Removing or short-circuiting PAR estimation would weaken that guarantee, so the cost is the feature. This is recorded as a positive exactly as the lens block requires; the separate candidate above concerns a duplicate boundary resolve, which is avoidable without touching this contract.",
+      "sanctionedBy": "crates/cobre-cli/src/commands/validate.rs module doc — the exit-0 validation contract",
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/validate.rs case-bundle and config parsing",
+      "why": "Examined for a repeated parse and it is not there. validate_case_with_artifacts returns the pre-parsed CaseArtifacts that the hydro-models phase reuses (the call site says so: avoiding a second disk read, and the later call passes &artifacts to reuse the already-parsed bundle). cobre_io::CaseArtifacts, at crates/cobre-io/src/lib.rs (cited as context), holds eight fields and no Config, and 'git grep -n parse_config( 077dbe2c -- crates/cobre-io/src | grep -v tests' shows the only non-doc declaration is parse_config itself, so the case loader never parses config.json. The single cobre_io::parse_config call in execute is the only parse of that file.",
+      "sanctionedBy": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/summary.rs",
+      "why": "Non-test lines are one-shot formatting. Every print_ and format_ function runs once per phase, and the only loops outside the inline test module are the host walk in print_execution_topology and the segment walk in format_rank_list, both bounded by the run's host and rank counts and executed once. The per-hydro line loop the lens asked about does not exist: HydroModelSummary is an aggregate of counts, not a per-entity collection, so there is nothing to iterate. Nothing here sits on a per-iteration or per-scenario path.",
+      "sanctionedBy": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/error.rs::format_error and the From impls",
+      "why": "The formatting path runs once, at the end of the process. format_error writes one to three lines immediately before std::process::exit, and each From impl allocates one String for one fatal error. No loop, no repetition, no per-iteration call site.",
+      "sanctionedBy": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/templates.rs and crates/cobre-cli/src/commands/init.rs::execute_scaffold",
+      "why": "The byte copies the lens asked about are compile-time, not runtime. The module doc states that all file bytes are embedded via include_bytes! so the registry is allocation-free; the template list is a static slice and find_template is a linear scan over ALL_TEMPLATES's single entry. execute_scaffold does one create_dir_all on the parent plus one fs::write per embedded file, and pin_schema_urls allocates one String per JSON file through str::replace. Bounded one-shot scaffold work whose cost is the files the user asked to be written.",
+      "sanctionedBy": "crates/cobre-cli/src/templates.rs module doc — all file bytes are embedded at compile time, the registry is allocation-free",
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/main.rs, crates/cobre-cli/src/banner.rs, crates/cobre-cli/src/commands/schema.rs, crates/cobre-cli/src/commands/version.rs, crates/cobre-cli/src/commands/mod.rs",
+      "why": "Startup and the remaining diagnostics subcommands do nothing repeatedly. main runs one Cli::parse, one resolve_color, one tracing_subscriber fmt try_init whose EnvFilter defaults to warn, then a five-arm dispatch. print_banner renders one String and writes four lines once per run. schema export does one create_dir_all plus one serialize-and-write per generated schema, which is the command's entire purpose. version prints a fixed set of lines and returns. commands/mod.rs is a six-line module list. Examined and clean.",
+      "sanctionedBy": null,
+      "cell": "performance.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-python/src/study.rs::Study — the four heavy entry points and the callback drain",
+      "why": "Every expensive pymethod releases the interpreter around the Rust work: __new__ at :503, train at :626, load_policy at :663 and simulate at :724. The on_iteration callback is drained on a dedicated thread that reacquires the GIL only at training-iteration boundaries and never inside the solver loop, and the config_overrides dict is converted to a serde map before the detach so no Python object is needed afterwards. This is the pattern the results.rs and io.rs candidates above ask the rest of the crate to match, and it is worth protecting as the reference shape.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/convert.rs::pydict_to_json_map and ::py_to_json_value",
+      "why": "Examined and clean for this lens. The map is pre-sized with Map::with_capacity(dict.len()), the conversion is a single pass with no intermediate string round-trip, and the module doc states the ordering contract this lens cares about: the override map is converted under the GIL before the solver lifecycle releases it with py.detach. The PyBool check before PyInt is a correctness ordering, not a cost.",
+      "sanctionedBy": "crates/cobre-python/src/convert.rs module doc at the baseline",
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/io.rs::validate — phase 9 prepare_stochastic",
+      "why": "Running the most expensive preparation step during validation is a deliberate parity contract with cobre validate, so that a clean validate means the run will not fail in that phase. The cost is the contract, not a smell, and no mechanism removes it without weakening the guarantee. The candidate raised above is about the GIL being held during that phase, which is orthogonal and leaves the phase and its position in the pipeline untouched.",
+      "sanctionedBy": "attacker-prompt.md § Lens: performance target 5 (the validate contract), mirrored by the phase list in the io.rs::validate doc",
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/results.rs::load_convergence_arrow, ::load_stochastic, ::load_simulation_arrow",
+      "why": "The three readers that already do it right: each wraps its Rust-side decode in py.detach and, for the two arrow readers, hands Python an Arrow IPC byte stream that pyarrow opens without a per-cell conversion. load_simulation_arrow is the zero-copy bulk alternative to the dict reader and is the reason the per-cell candidate above is scoped to the dict path rather than raised as a missing capability.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/results.rs::get_column_by_name as used by load_convergence",
+      "why": "The correct Arrow access shape in this crate: the 14 typed column views are resolved once per record batch and then indexed per row, so the dynamic downcast is paid per column rather than per cell. It is the in-file model the read_parquet_partition_into candidate points at, and it should stay as it is.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/policy.rs — the detached checkpoint write with borrowed record views",
+      "why": "The write itself runs inside py.detach, and the records handed to the writer are borrowing views (PolicyCutRecord and StageCutsPayload hold references into the payload storage) rather than copies, so the bulk of the cut pool crosses to the writer without duplication. Only the unconditional coefficient clone that precedes the detach is raised above; the surrounding structure is correct and is what makes that fix small.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/errors.rs::LeafClass",
+      "why": "Examined and clean for this lens. Each dual-base exception type is built once per interpreter through PyOnceLock::get_or_try_init and cached for the interpreter lifetime, so raising costs a cached type lookup plus one message format rather than a type construction. Error-path string formatting is off any hot path by definition.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/schema.rs::export and crates/cobre-python/src/version.rs::version_info",
+      "why": "Examined and clean for this lens. Both are one-shot calls with no per-element conversion, no clone-per-access and no repeated pass: export generates the schema set once and writes each file once, and version_info sets six dict entries from constants and two solver accessors.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre/src/lib.rs (the facade crate, two doc lines)",
+      "why": "Nothing to profile: the crate is two doc lines that re-export nothing, so it contributes no code to any path. Examined and clean for this lens; its existence as a reserved seam is the over-engineering lens's question, not this one.",
+      "sanctionedBy": "ARCHITECTURE.md at the pin declares the umbrella crate an empty skeleton reserved for a future single-dependency re-export",
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/lib.rs — the module registration surface",
+      "why": "Examined and clean for this lens. Registration builds the sub-modules and binds the functions and classes once at import time; there is no per-call work and no lazily rebuilt state on any data path.",
+      "sanctionedBy": null,
+      "cell": "performance.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "cleanVerdicts": [],
+  "_needsHuman": [
+    {
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "question": "Rooted gather at L0: the two simulation gathers need a gatherv the cobre-comm Communicator trait does not expose (it has allgatherv, allreduce, broadcast, barrier, rank, size). Adding it grows the L0 surface for two present consumers, both in this file. Is that acceptable, or should the CLI keep allgatherv and accept that every non-root rank allocates and rebuilds a payload it discards?"
+    },
+    {
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "question": "Is the shared-filesystem re-read on non-root ranks a ratified deployment assumption? The setup.rs module doc states the behaviour with no rationale and no docs/design entry covers it, so replacing the per-rank hydro-model refit (and the per-rank policy-checkpoint read in simulation-only mode) with a rank-0 read plus a broadcast is a trade between collective payload size and filesystem load that only the owner can settle."
+    },
+    {
+      "cell": "performance.S6a",
+      "subSurface": "S6a",
+      "question": "Deferring the rank-0 training-artefact write so it overlaps rank 0 entering the simulation phase changes the stderr progress ordering (Writing training outputs appears interleaved with simulation progress) and makes the checkpoint write compete for I/O bandwidth with the simulation drain writes. Is the stderr ordering free to change, given the byte-neutrality bar covers the output tree and the validate --json stdout contract only?"
+    },
+    {
+      "cell": "performance.S6b",
+      "subSurface": "S6b",
+      "question": "Sequencing for the duplicate boundary resolve in validate.rs: patch it now as a cli-local parameter thread, or hold it and let CD-029's approved fold of the boundary check into cobre-sddp PrepPhase subsume it? The fold would make the requirements a phase input resolved once, so taking both in order means touching the same call chain twice. Rule 5 already holds the fold destination itself as a needs-human for the gate, so the cost argument should be decided with it rather than ahead of it."
+    },
+    {
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "question": "Is the dict-shaped cobre.results.load_simulation still a supported bulk reader, or is load_simulation_arrow now the intended path for large result trees? The answer decides whether the per-cell Arrow dispatch in read_parquet_partition_into is worth fixing or whether the dict reader should instead be documented as a small-result convenience, and it is a user-facing API posture question the station cannot settle."
+    },
+    {
+      "cell": "performance.S6c",
+      "subSurface": "S6c",
+      "question": "May load_results bind one converted object to both the manifest and metadata keys of the training dict, making them the same Python object and aliasing on mutation, or must they stay two equal-but-distinct dicts? Collapsing the double conversion is only byte-neutral in values, not in object identity, so the owner decides whether identity is part of the published contract."
+    }
+  ],
+  "coverage": {
+    "S6a": "candidates",
+    "S6b": "candidates",
+    "S6c": "candidates"
+  },
+  "gate": {
+    "S6a": {
+      "cell": "performance.S6a",
+      "wave": 1,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 8,
+      "candidates": 8,
+      "dupOf": [],
+      "positives": 8,
+      "needsHuman": 3,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6b": {
+      "cell": "performance.S6b",
+      "wave": 1,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 2,
+      "candidates": 2,
+      "dupOf": [],
+      "positives": 8,
+      "needsHuman": 1,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6c": {
+      "cell": "performance.S6c",
+      "wave": 1,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 8,
+      "candidates": 8,
+      "dupOf": [],
+      "positives": 10,
+      "needsHuman": 2,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    }
+  },
+  "timingRuns": "none — every candidate is queued UNMEASURED to the cross-cutting sweep; no timing command was executed by this ticket"
+}

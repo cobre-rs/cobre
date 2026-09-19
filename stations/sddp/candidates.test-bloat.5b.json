@@ -1,0 +1,335 @@
+{
+  "station": "sddp",
+  "subStation": "5b",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "test-bloat",
+  "cell": "sddp/5b",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "Both unit-test homing conventions are declared back to back inside one file: lp/builder/layout.rs carries `mod tests;` and an inline `collapse_stage_level_tests` block on adjacent lines",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/layout.rs",
+          "symbol": "collapse_stage_level_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/layout.rs",
+          "symbol": "resolve_affine_of_two_term_remainder_sums_constant_and_terms"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/commitment_reconcile/tests.rs",
+          "symbol": "commitment_inside_bounds_needs_no_patch"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/layout.rs | sed -n '1960,1970p'",
+        "output": "L1961 `#[cfg(test)]` / L1962 `mod tests;` / L1964 `#[cfg(test)]` / L1965 `mod collapse_stage_level_tests {` / L1966 `use super::*;` ... inline block runs to L2090 (EOF), last test fn `resolve_affine_of_two_term_remainder_sums_constant_and_terms`",
+        "reading": "CD-007 recorded the asymmetry at directory granularity (`lp/builder/` mixes extracted `tests.rs` siblings with inline giants). It is finer than that: layout.rs declares BOTH conventions on adjacent lines. The sibling `layout/tests.rs` holds 3565 lines / 54 test fns; the inline `collapse_stage_level_tests` block that sits directly under its declaration holds 129 lines / 7 test fns. A test author editing layout.rs has two live homes in the same file with no rule distinguishing them, and no `#[cfg(test)] mod` comment states one."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Move the seven `collapse_stage_level_tests` fns into the already-existing sibling `layout/tests.rs` as a nested `mod collapse_stage_level` inside it, leaving layout.rs with exactly one `#[cfg(test)] mod tests;` declaration. Byte-neutral by construction: no non-test line of layout.rs changes, so the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and the mpiexec -n 1 versus -n 2 reproduction all see an identical library. Moves no golden.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": "CD-007",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The extracted-versus-inline choice is inverted against the yardstick threshold and reaches beyond lp/builder into lp/indexer: the directory's smallest test body is extracted while its largest four stay inline",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+          "symbol": "lp_column_map_matches_resolver_with_lags_and_anticipated"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/patch.rs",
+          "symbol": "state_col_patch_count_returns_n_times_one_plus_l"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
+          "symbol": "filling_phase_gating_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "pumping_water_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/commitment_reconcile/tests.rs",
+          "symbol": "commitment_exactly_at_cap_needs_no_patch"
+        }
+      ],
+      "evidence": {
+        "command": "for f in $(git ls-tree -r --name-only 077dbe2c crates/cobre-sddp/src/lp); do git show 077dbe2c:$f | awk -v f=$f '/#\\[cfg\\(test\\)\\]/&&!s{s=NR} /^\\s*fn [a-z_]/&&s{n++} END{if(s)printf \"%s total=%d first_cfg_test=%d test_fns=%d\\n\", f, NR, s, n}'; done",
+        "output": "EXTRACTED siblings: commitment_reconcile/tests.rs 250 lines / 12 fns; generic_constraints/tests.rs 2951 / 58; layout/tests.rs 3565 / 54; template/tests.rs 5356 / 53. INLINE bodies: layout.rs 129 / 7; delivery_ring.rs 267 / 10; scaling.rs 496 / 10; patch.rs 748 / 33; indexer/state_space.rs 1093 / 44; columns.rs 8015 / 72; entries.rs 8414 / 99.",
+        "reading": "docs/design/testing-architecture.md section 5.1 sets the homing rule at roughly 500 test-LOC or roughly 40 test fns and calls it a lint, not a judgement call. Measured against it the directory does the opposite of the rule in both directions. The 250-line / 12-fn commitment_reconcile body, far below the threshold, is extracted; the 8414-line / 99-fn entries.rs body, roughly 17 times the LOC threshold, is inline. Four files sit above the threshold and are inline: patch.rs (748 LOC), indexer/state_space.rs (1093 LOC and 44 fns, over BOTH thresholds), columns.rs, entries.rs. CD-007 named only entries.rs and columns.rs under lp/builder/; state_space.rs and patch.rs are new instances, and state_space.rs puts the same asymmetry in a second directory, lp/indexer/, that CD-007 never reached. The directory-module mechanism the fix needs is already used four times in the same tree, so nothing has to be invented."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Apply the section 5.1 threshold as a mechanical lint over crates/cobre-sddp/src/lp and convert the four over-threshold files to the directory-module form already used by commitment_reconcile, layout, template and generic_constraints: entries.rs becomes entries/ with one sibling file per existing inline `mod NAME_tests` block, columns.rs likewise, patch.rs and indexer/state_space.rs each get a single `tests.rs` sibling. Leave delivery_ring.rs, scaling.rs and the layout.rs inline block below the threshold alone once candidate one folds the latter in. Every move is a verbatim relocation of an already-delimited `mod` block plus a `use super::super::` path adjustment, so no non-test line changes and the library is byte-identical: the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and the mpiexec -n 1 versus -n 2 reproduction are untouched. Moves no golden. Not a new fixture crate and not a coverage change: the same test fns run, per section 7's non-goal.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": "CD-007",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "entries.rs's `pumping_water_tests` has become the crate's catch-all test dump: 6576 lines and 77 test fns under a name that describes one entry family",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "pumping_water_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "csc_byte_identical_under_permuted_declaration_order"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "zero_cost_tests"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/entries.rs | grep -n '^mod '; git show 077dbe2c:crates/cobre-sddp/src/lp/builder/entries.rs | sed -n '3518,10093p' | grep -oP '^\\s{4}fn \\K\\w+'",
+        "output": "Four top-level inline modules: assemble_csc_tests L1682-1726 (45 lines, 2 fns); parameter_resolution_tests L1727-2248 (522, 3); zero_cost_tests L2249-3517 (1269, 17); pumping_water_tests L3518-10093 (6576, 77). Sampled fn names inside pumping_water_tests: fixture_hydro, fixture_bus, fixture_thermal, fixture_line, station, station_full, build_sorted_csc, coeff_at, split_plant_fixture, min_floor_fixture, contract_import_enters_bus_row_with_plus_one, csc_byte_identical_under_permuted_declaration_order, test_fpha_cell_generation_is_credited_to_its_own_bus, fill_transit_bucket_definition_entries_matches_pre_migration_formula_across_ragged_plants, k1_chronological_with_travel_time_is_byte_identical_to_parallel, sigma_fill_row_columns_coefficients_and_rhs_at_last_filling_stage, b6b_generic_constraint_resolves_pumping_columns_in_lp, lp_builder_never_references_dual_extraction.",
+        "reading": "pumping_water_tests is a single brace block with no nested submodules holding 65 percent of entries.rs and 78 percent of the file's 99 test fns. Its contents span at least eight subjects that have nothing to do with pumping water entries: contract import and export rows, split-plant cell water balance, FPHA per-bus generation crediting, transit-bucket definition rows, chronological travel time, filling-phase sigma_fill rows, generic-constraint column resolution, and the CSC declaration-order byte-identity gate. It also holds the module's local fixture constructors (fixture_hydro, fixture_bus, fixture_thermal, fixture_line, station, build_sorted_csc, coeff_at). The name no longer predicts the contents, so it is the default landing zone for any new entries.rs test and keeps accreting; the three sibling modules stay small because the catch-all absorbs everything."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "When candidate two converts entries.rs to a directory module, do not carry pumping_water_tests across as one file. Split it along the subject boundaries its own fn names already mark, one sibling file per subject (contracts, split-plant cells, FPHA crediting, transit buckets, chronological water, filling-phase rows, generic constraints, declaration-order determinism), and lift the shared fixture constructors it declares into a single sibling shared by them. Each resulting file gets a name that predicts its contents so a new test has one obvious home. The determinism gate csc_byte_identical_under_permuted_declaration_order moves verbatim and stays a gate. Pure test relocation: no non-test line of entries.rs changes, the library stays byte-identical, and the parity goldens, the rank-invariance harness and the mpiexec -n 1 versus -n 2 reproduction are unaffected. Moves no golden.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": "CD-007",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "tests/par_a_lag12_lp_coefficient.rs's `build_classical_fixture` is a 243-line clone of `build_par_a_fixture` whose entire semantic delta is one field set to None",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs",
+          "symbol": "build_classical_fixture"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs",
+          "symbol": "build_par_a_fixture"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs",
+          "symbol": "classical_par_has_no_lag_11_column"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/tests/par_a_lag12_lp_coefficient.rs > /tmp/par.rs; sed -n '101,346p' /tmp/par.rs > /tmp/p1; sed -n '347,589p' /tmp/par.rs > /tmp/p2; diff /tmp/p1 /tmp/p2 | grep -c '^[<>]'",
+        "output": "29 differing lines across both sides of a 246-line versus 243-line pair. The differences are: the fn name; the six-line `let annual_component = AnnualComponent { coefficient: PSI, mean_m3s: 1000.0, std_m3s: SIGMA_A };` binding; two occurrences of `annual: Some(annual_component.clone())` becoming `annual: None`; two `.expect(...)` message strings; two blank lines. The doc comment on the second reads `Build the same system shape as [build_par_a_fixture] but with annual: None on every model.`",
+        "reading": "Roughly 230 of 243 lines are byte-identical between the two fixture builders, and the file's own doc comment declares the duplication. The only behavioural difference is whether the two inflow models carry an AnnualComponent. Both builders already draw their entities from tests/common/builders.rs via make_bus, make_hydro and make_stage, so the duplication is not a missing shared builder; it is a copy taken instead of adding one parameter. The cost is paid on every edit: any change to the shared 230 lines, for instance a new Stage or InflowModel field, has to be made twice in one file or the two fixtures silently diverge, and the sole consumer of the clone is one test, classical_par_has_no_lag_11_column."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Collapse the pair into one private builder taking the annual component as a parameter, for example an `Option<AnnualComponent>` argument, with the two existing names kept as two-line wrappers that pass Some(...) and None so the three test bodies and their assertion messages are untouched. This is test-binary-local: it changes no library code, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and the mpiexec -n 1 versus -n 2 reproduction are all unaffected, and the three tests in this binary assert the same LP coefficients as before. Moves no golden. Keep the builders in this binary rather than promoting them to tests/common, since no other binary consumes the PAR-A lag-12 shape.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "tests/template_integration.rs grows nineteen whole-system fixture builders in copy-paste-then-parameterize families, two of which are roughly 85 percent textually identical to their sibling",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "symbol": "build_hydro_one_ant_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "symbol": "one_hydro_one_ant_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "symbol": "two_anticipated_thermal_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "symbol": "one_anticipated_thermal_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "symbol": "one_bus_system_n_blks_with_generic"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/tests/template_integration.rs > /tmp/ti.rs; awk '/^fn [a-z_]/{n=$0;sub(/^fn /,\"\",n);sub(/\\(.*/,\"\",n);s=NR} /^}$/{if(s){print n, NR-s+1; s=0}}' /tmp/ti.rs; diff <(sed -n RANGE1 /tmp/ti.rs) <(sed -n RANGE2 /tmp/ti.rs) | grep -c '^[<>]'",
+        "output": "Nineteen builders returning a whole cobre_core::System, sizes in lines: one_bus_system 121, one_hydro_system 185, fpha_system_with_turbined_cost 226, two_bus_system_with_stochastic_load 218, one_fpha_hydro_system 195, four_hydro_mixed_system 293, evap_hydro_system_with_violation_cost 204, multi_segment_system 103, one_hydro_system_with_withdrawal 227, one_bus_system_n_blks 117, one_bus_system_n_blks_with_generic 123, one_bus_one_thermal_system 136, one_hydro_active_violations 221, two_hydro_par_system 211, one_anticipated_thermal_system 144, two_thermal_one_anticipated_system 154, two_anticipated_thermal_system 155, one_hydro_one_ant_system 207, build_hydro_one_ant_system 228. Pair diffs: one_hydro_one_ant_system versus build_hydro_one_ant_system 59 differing lines over 207 plus 228; one_anticipated_thermal_system versus two_anticipated_thermal_system 45 over 144 plus 155; one_bus_system versus one_bus_system_n_blks 80 over 121 plus 117.",
+        "reading": "These nineteen builders are about 3400 of the file's 4421 lines, so the parent of the eleven #[path] submodules is roughly three quarters fixture scaffolding. They are not duplicating tests/common/builders.rs: every one of them calls make_bus, make_hydro, make_stage or make_thermal (two to six calls each) and constructs zero Stage, Hydro, Bus or Thermal literals, so the shared builder layer is being used as intended. The duplication is one level up, between siblings. The build_hydro_one_ant_system body is the one_hydro_one_ant_system body with `lead_stages` and `annual_discount_rate` promoted to parameters, two blocks instead of one, and AR(0) instead of AR(1); roughly 176 of its 207 shared lines are identical. The one_anticipated_thermal_system versus two_anticipated_thermal_system pair is roughly 122 of 144 identical. Each pair was created by copying a builder and parameterizing the one value the new test needed, rather than adding the parameter to the existing builder, so every future field addition to Stage or InflowModel must be applied across the whole family."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Collapse each family into one parameterized builder in the parent module and keep the existing names as thin wrappers so the eleven submodules that reach these through `use super::*` need no edits. The three families the diffs identify are the anticipated-hydro pair, the anticipated-thermal trio and the one-bus trio; parameterize on the values the copies already differ by, namely lead stages, discount rate, block count and the optional generic constraint. Do this inside tests/template_integration.rs rather than moving the builders to tests/common/builders.rs, since only this binary consumes whole-system shapes at this granularity and common/builders.rs owns the per-entity layer below them. No library code changes, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs and the mpiexec -n 1 versus -n 2 reproduction are unaffected; the wrappers must reproduce their current field values exactly so every assertion in the eleven submodules keeps its present expected numbers. Moves no golden.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "template_integration/generic_constraints.rs silently shadows the parent's `one_hydro_system` builder with a same-named local of a different signature, under `use super::*`",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/template_integration/generic_constraints.rs",
+          "symbol": "one_hydro_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "symbol": "one_hydro_system"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration/generic_constraints.rs",
+          "symbol": "generic_constraint_two_hydros_sum_csc_entries"
+        }
+      ],
+      "evidence": {
+        "command": "awk '/^fn [a-z_]/{n=$0;sub(/^fn /,\"\",n);sub(/\\(.*/,\"\",n);print n}' /tmp/ti.rs | sort -u > /tmp/parent; for f in deficit_and_withdrawal evaporation fpha_model fpha_structure generic_constraints penalty shape split_plant_bounds stochastic_load turbined_cost violations_par_anticipated; do git show 077dbe2c:crates/cobre-sddp/tests/template_integration/$f.rs | awk '/^fn [a-z_]/{n=$0;sub(/^fn /,\"\",n);sub(/\\(.*/,\"\",n);print n}' | sort -u | comm -12 /tmp/parent - | sed \"s/^/$f.rs SHADOWS /\"; done",
+        "output": "generic_constraints.rs SHADOWS one_hydro_system (the only collision across all eleven submodules). Parent signature at template_integration.rs L251: `fn one_hydro_system(n_stages: usize, lag_order: usize) -> cobre_core::System`. Local at generic_constraints.rs L1433-1588 (156 lines): `fn one_hydro_system(n_blks: usize, block_mode: cobre_core::BlockMode, constraint: Option<cobre_core::GenericConstraint>, bounds: cobre_core::ResolvedGenericConstraintBounds) -> cobre_core::System`. generic_constraints.rs opens with `use super::*;` at L3 and mentions one_hydro_system six times.",
+        "reading": "An explicit item declaration shadows a glob import in Rust, so the six call sites inside generic_constraints.rs bind to the 156-line local while every other submodule's one_hydro_system calls bind to the parent's. Two different builders, two different signatures, one name, in files that share a glob import. A reader of generic_constraints.rs cannot tell which builder a call reaches without knowing the shadowing rule and checking both files, and a maintainer who adds a parameter or changes a default on the parent's one_hydro_system will silently not affect this submodule while appearing to cover all eleven. This is the only such collision, so it is an isolated defect rather than an accepted convention."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Rename the local builder in generic_constraints.rs to state what it builds, for example one_hydro_generic_constraint_system, and update its six call sites; alternatively promote it to the parent module under that distinct name if a second submodule ever needs the same shape. Prefer the rename over deleting either builder, since the two construct genuinely different systems and neither is redundant. Test-binary-local and test-name-preserving: no library code and no test fn names change, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs and the mpiexec -n 1 versus -n 2 reproduction are unaffected, and the declaration-order gate declaration_order_permutation_is_invariant_in_lp keeps asserting on the same system. Moves no golden.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "Three separate Stage fixture surfaces with divergent defaults serve one crate, and the builder-module one is `#[cfg(test)]`-only so no integration binary can reach it",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/test_support.rs",
+          "symbol": "two_block_stage"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/test_support.rs",
+          "symbol": "three_block_stage"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/mod.rs",
+          "symbol": "test_support"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/builders.rs",
+          "symbol": "make_stage"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/builders.rs",
+          "symbol": "StageSpec"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/mod.rs | sed -n '43,72p'; git show 077dbe2c:crates/cobre-sddp/src/lib.rs | sed -n '46,47p'; git show 077dbe2c:crates/cobre-sddp/src/test_support.rs | sed -n '409,433p'; git show 077dbe2c:crates/cobre-sddp/tests/common/builders.rs | sed -n '52,78p'",
+        "output": "lp/builder/mod.rs L54-55: `#[cfg(test)]` then `mod test_support;` — no feature arm, unlike the sibling re-exports on L63, L66 and L71 which all use `#[cfg(any(test, feature = \"test-support\"))]`. lib.rs L46-47 gates the crate-level surface `#[cfg(any(test, feature = \"test-support\"))] pub mod test_support;`. Three Stage constructors with different defaults: builder/test_support.rs two_block_stage and three_block_stage give season_id Some(0), state_config storage false, dates 2024-01-01 to 2024-02-01, BLOCK_HOURS [200.0, 300.0, 244.0]; crate::test_support geometry_stage gives index 0, id 0, NaiveDate::default(), every block 744.0, storage false; tests/common/builders.rs StageSpec::default gives season_id None, storage TRUE, one 744.0 block, dates 2024-01-01 to 2024-02-01.",
+        "reading": "The crate has three fixture surfaces for the same cobre_core::Stage and the reachability graph between them is disjoint in one direction. crate::test_support is feature-gated so tests/ reaches it (tests/lp_builder.rs imports cobre_sddp::test_support::make_unit_group). lp/builder/test_support.rs is `#[cfg(test)]` only, so its stage and penalty fixtures are reachable from unit tests inside the crate and from nowhere else, even though the file next to it exports build_stage_templates_resolving_layout, DeliveryRing, ResolvedTables, StageLayout and TemplateBuildCtx to integration binaries under the test-support feature. tests/common/builders.rs is reachable only from tests/. The defaults then disagree on fields that change the LP: storage true versus false changes the state dimension, and season_id Some(0) versus None changes seasonal parameter resolution, so picking the wrong surface silently changes the problem under test. docs/design/testing-architecture.md section 5.2 sets tests/common/ as the single source of fixture builders and already lists its non-collapse into the crate's test-support surface as not yet done; three surfaces with contradictory defaults is that gap measured."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Widen the lp/builder/test_support.rs gate from `#[cfg(test)]` to the crate's existing `#[cfg(any(test, feature = \"test-support\"))]` convention, already used three lines below it in the same file, and re-export its stage and penalty fixtures so the integration side can consume them instead of re-deriving stage shapes. Then reconcile the defaults: pick one Stage constructor per convention and make the others delegate to it, so storage and season_id have a single stated default and every divergence is an explicit argument at the call site rather than a hidden per-surface default. Consolidate into tests/common and the existing test-support feature, never a new fixture crate. Sequence it as a widening followed by delegation so no fixture's produced Stage changes value in the same step: every existing caller must keep receiving the field values it receives today, which keeps the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs and the mpiexec -n 1 versus -n 2 reproduction byte-neutral. Moves no golden. If reconciling a default would change a produced Stage, that call site takes an explicit argument instead.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The four-line `case_dir` helper is declared twice inside tests/lp_builder.rs alone, and tests/common/ hosts a third copy it does not export",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/lp_builder.rs",
+          "symbol": "case_dir"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/parity_hash.rs",
+          "symbol": "case_dir"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "symbol": "build_setup_for_case"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/tests/lp_builder.rs | sed -n '65,70p;573,578p'; git grep -c 'fn case_dir' 077dbe2c -- crates/cobre-sddp/tests",
+        "output": "lp_builder.rs L65 in mod extraction_nonuniform_block_bases and L573 in mod policy_entity_manifest are the same four lines, differing only in the parameter name (suffix versus name): `Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../examples/deterministic\").join(...)`. Counts across the tests corpus: lp_builder.rs 2, deterministic.rs 2, anticipated_scenarios.rs 1, basis_trajectory_probe.rs 1, common/parity_hash.rs 1, filling_commissioning.rs 1, parity.rs 1.",
+        "reading": "tests/common/mod.rs is the fixture root and every one of its case helpers takes a case directory as `&Path` (boundary_requirements, build_setup_for_case, fresh_setup_with), yet it exports no way to name one, so each consumer re-derives the examples/deterministic path itself. tests/common/parity_hash.rs, inside the shared directory, holds its own private copy rather than a shared one. The clearest instance is entirely within one file in scope: lp_builder.rs declares the identical helper twice, once per inline module, because the two modules do not share a scope. The path is a repository layout fact, so the duplication is also a hard-coded relative path repeated at every copy."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Export one case-directory helper from tests/common/mod.rs next to the case helpers that already take that path as an argument, and have lp_builder.rs's two inline modules and common/parity_hash.rs call it instead of declaring their own. Keep it in tests/common rather than creating a fixture crate. The wider corpus-level spread across the other binaries belongs to the test-corpus station; the two in-file copies here are the part anchored in this sub-station. Pure test-harness change resolving to the same directory, so the parity goldens under tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs and the mpiexec -n 1 versus -n 2 reproduction all read the same cases and stay byte-neutral. Moves no golden.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/tests/template_integration.rs already implements the one-integration-binary-per-domain consolidation with #[path] submodules",
+      "why": "L4400-4421 declare eleven #[path = \"template_integration/...\"] submodules, and every one of the eleven members opens with `use super::*;` so the parent owns the fixtures once. This is exactly the mechanism docs/design/testing-architecture.md section 5.1 prescribes for collapsing per-topic test binaries: 8617 lines of member tests link as one binary instead of eleven. It is the shape the lp/builder inline giants should be converted to, not a target for reduction.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.1"
+    },
+    {
+      "subject": "The declaration-order and byte-identity gates inside the sweep are informational, never bloat",
+      "why": "entries.rs::csc_byte_identical_under_permuted_declaration_order, tests/template_integration/generic_constraints.rs::declaration_order_permutation_is_invariant_in_lp and its assert_lp_byte_identical helper, and entries.rs::k1_chronological_with_travel_time_is_byte_identical_to_parallel encode the declaration-order-invariance half of the determinism contract. Their size and their duplicated permutation scaffolding are the cost of the contract. Every fix shape above relocates them verbatim and none is proposed for merging or removal.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "The slow-tests gate in tests/lp_builder.rs is a tier switch, not duplication",
+      "why": "The five D33 and D34 non-uniform-block tests carry #[cfg_attr(not(feature = \"slow-tests\"), ignore = \"slow: run with --features slow-tests\")], which is the tiering mechanism docs/design/testing-architecture.md section 5.3 asks for: the expensive train-and-simulate cases stay in the corpus but off the default run. No candidate above touches the gate.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.3"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/test_support.rs mirrors production layout resolution instead of hand-rolling a fixture layout",
+      "why": "state_layout_for and state_layout_with_resolution reproduce resolve_state_layout's state dimensions and PAR-derived lag counts, and ctx_anticipated_and_mask_inputs routes through the same resolve_anticipated_commitments_core and build_transit_bucket_topology entry points production uses, so a builder unit test's TemplateBuildCtx cannot drift from what setup builds. This is the single-owner fixture pattern the three-surface finding asks the other two surfaces to adopt, and it is why the fix there is a gate widening rather than a rewrite.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "commitment_reconcile.rs plus commitment_reconcile/tests.rs is the clean reference instance of the extracted-sibling convention",
+      "why": "A 245-line implementation file whose only test declaration is `mod tests;` on its last line, with a 250-line sibling holding twelve named contract tests. Three more pairs in the same directory (layout, template, generic_constraints) follow it. The homing fix needs no new mechanism, only consistent application of this one.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 8,
+    "kept": 8,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

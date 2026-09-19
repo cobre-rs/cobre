@@ -1,0 +1,219 @@
+{
+  "station": "sddp",
+  "subStation": "5a",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "cell": "sddp/5a",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The run-parameter half of StudySetup uses two incompatible conventions (named projections vs raw config types), so train_inner re-inflates TrainingConfig field-by-field out of the god-struct",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "StudySetup"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "train_inner"
+        },
+        {
+          "path": "crates/cobre-sddp/src/config.rs",
+          "symbol": "TrainingConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "set_budget"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/setup/mod.rs | sed -n '228,256p'; git show 077dbe2c:crates/cobre-sddp/src/setup/orchestration.rs | sed -n '122,145p'; git show 077dbe2c:crates/cobre-sddp/src/setup/accessors.rs | sed -n '58,92p'; git grep -n 'set_budget' 077dbe2c -- crates",
+        "output": "setup/mod.rs:\n    pub loop_params: LoopParams,\n    /// Simulation pipeline parameters, stored directly as [`crate::simulation::SimulationConfig`].\n    pub simulation_config: SimulationConfig,\n    /// Two-stage cut management pipeline configuration.\n    pub(crate) cut_management: CutManagementConfig,\n    /// Pure-data event flags (output-side).\n    pub(crate) events: EventParams,\n\nsetup/orchestration.rs (train_inner):\n        let training_config = TrainingConfig {\n            loop_config: LoopConfig {\n                forward_passes: self.loop_params.forward_passes,\n                training_enumerated: self.loop_params.training_enumerated,\n                max_iterations: self.loop_params.max_iterations,\n                start_iteration: self.loop_params.start_iteration,\n                n_fwd_threads: n_threads,\n                max_blocks: self.loop_params.max_blocks,\n                stopping_rules: self.loop_params.stopping_rules.clone(),\n            },\n            cut_management: CutManagementConfig {\n                cut_selection: self.cut_management.cut_selection.clone(),\n                budget: self.cut_management.budget,\n                cut_activity_tolerance: self.cut_management.cut_activity_tolerance,\n                warm_start_cuts: 0,\n                risk_measures: self.cut_management.risk_measures.clone(),\n            },\n            events: EventConfig { event_sender, checkpoint_interval: None, shutdown_flag: shutdown_flag.map(Arc::clone), export_states: self.events.export_states },\n        };\n\nsetup/accessors.rs:\n    pub fn set_export_states(&mut self, export: bool) { self.events.export_states = export; }\n    /// Set the active-cut budget cap per stage.\n    pub fn set_budget(&mut self, budget: Option<u32>) { self.cut_management.budget = budget; }\n    #[cfg(any(test, feature = \"test-support\"))]\n    pub fn set_risk_measures(&mut self, risk_measures: Vec<RiskMeasure>) { self.cut_management.risk_measures = risk_measures; }\n    #[cfg(any(test, feature = \"test-support\"))]\n    pub fn set_scheduler(&mut self, scheduler: BackwardScheduler) { self.backward_scheduler = scheduler; }\n    #[cfg(any(test, feature = \"test-support\"))]\n    pub fn set_hardest_first_claim_order(&mut self, enabled: bool) { self.hardest_first_claim_order = enabled; }\n\ngit grep set_budget -- crates:\n077dbe2c:crates/cobre-sddp/src/setup/accessors.rs:63:    pub fn set_budget(&mut self, budget: Option<u32>) {",
+        "reading": "The model-state vs run-parameter boundary is not one boundary but four inconsistent ones. Of the four sibling run-config groups on StudySetup, two are named projections of their config type (loop_params: LoopParams off LoopConfig, events: EventParams off EventConfig, each with a doc naming the excluded runtime fields) and two store the config type itself (cut_management: CutManagementConfig, simulation_config: SimulationConfig, whose doc says 'stored directly'). Because the projection is missing on the cut-management side, train_inner must rebuild a whole TrainingConfig by hand: 7 self.loop_params.* reads, 4 self.cut_management.* reads, 1 self.events.* read, and it copies CutManagementConfig into a fresh instance of its OWN type while resetting warm_start_cuts to 0 -- a projection performed by a struct literal instead of by a type. The setter wall then mutates those scattered copies rather than one carrier: set_export_states writes self.events.export_states, set_budget writes self.cut_management.budget. set_budget has exactly one occurrence anywhere under crates -- its own declaration -- yet unlike the three sibling setters that also exist only for tests it carries no #[cfg(any(test, feature = \"test-support\"))] gate, so the ungated public surface and the gated one disagree about the same wall."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Name the split as a symbol set, not a paragraph. RUN-PARAMETER side (moves behind one engine-tagged run-params carrier, one projection convention for all four groups): StudySetup::loop_params, StudySetup::cut_management, StudySetup::events, StudySetup::simulation_config, StudySetup::simulation_enumerated, StudySetup::policy_path, StudySetup::inflow_method, StudySetup::backward_scheduler, StudySetup::backward_profile, StudySetup::forward_profile, StudySetup::hardest_first_claim_order, plus the setters that mutate them (set_export_states, set_budget, set_start_iteration, set_risk_measures, set_scheduler, set_hardest_first_claim_order). MODEL-STATE side stays where it is: StudySetup::energy_conversion, StudySetup::resolved_parameters, StudySetup::transit_bucket_topology, StudySetup::horizon, and the five NCS fields ncs_entity_ids_per_stage / ncs_stochastic_dense_col / ncs_stochastic_windows / ncs_max_gen / ncs_allow_curtailment, which move as ONE block and are never split, because .claude/rules/sddp.md section 'Lower-bound evaluation must patch NCS' pins their patch identity to the set as a whole. POLICY-STATE side: StudySetup::replace_fcf, StudySetup::warm_start_basis_cache, StudySetup::boundary_requirements. First step is convention-only and behaviour-free: give CutManagementConfig and SimulationConfig the same named projections LoopParams and EventParams already have, so train_inner inflates a TrainingConfig from params instead of copying a config type into a fresh instance of itself, and leave warm_start_cuts out of the projection entirely (see the sibling candidate on that field). Do not weaken any pinned contract: the NCS block and the risk-measure vector keep their current per-stage lengths and ordering. Byte-neutrality bar: crates/cobre-sddp/tests/parity.rs and tests/common/parity_hash.rs goldens unchanged, the rank-invariance harness tests/common/permute.rs unchanged, and mpiexec -n 1 against -n 2 reproduces bit-for-bit.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": null,
+      "reRaiseOf": "CD-005",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:water-travel-time-in-transit-bucket-topology-studysetup-transit_bucket_topology",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "The MPI wire config is not a superset-projection of StudyParams: one field is computed on params then dropped and re-read from Config, and two run-mode fields exist only on the wire",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "StudyParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "from_config"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/broadcast.rs | sed -n '199,224p'; git show 077dbe2c:crates/cobre-sddp/src/setup/params.rs | sed -n '105,180p'",
+        "output": "broadcast.rs, BroadcastConfig::from_config tail (params is StudyParams::from_config(config)?):\n        Ok(Self {\n            seed: params.seed,\n            forward_passes: params.forward_passes,\n            training_enumerated: params.training_enumerated,\n            stopping_rules,\n            stopping_mode,\n            n_scenarios: params.n_scenarios,\n            simulation_enumerated: params.simulation_enumerated,\n            io_channel_capacity: u32::try_from(params.io_channel_capacity).unwrap_or(64),\n            policy_path: params.policy_path,\n            inflow_method: params.inflow_method,\n            cut_selection: params.cut_selection.clone(),\n            cut_activity_tolerance: params.cut_activity_tolerance,\n            training_enabled: config.training.enabled,\n            policy_mode: config.policy.mode,\n            export_states: config.exports.states,\n            budget: params.budget,\n            training_source,\n            simulation_source,\n            training_solver_backward: params.training_solver_backward,\n            training_solver_forward: params.training_solver_forward,\n            simulation_solver: params.simulation_solver,\n            backward_scheduler: params.backward_scheduler.into(),\n            cost_scale_factor: params.cost_scale_factor,\n            boundary: params.boundary,\n        })\n\nparams.rs, StudyParams field list (20 fields): seed, forward_passes, training_enumerated, stopping_rule_set, n_scenarios, simulation_enumerated, io_channel_capacity, policy_path, inflow_method, cut_selection, cut_activity_tolerance, budget, training_solver_backward, training_solver_forward, simulation_solver, backward_scheduler, cost_scale_factor, boundary, export_states, scalar_parameters. No training_enabled and no policy_mode field exists.",
+        "reading": "BroadcastConfig::from_config already calls StudyParams::from_config, so the two structs are not independent readers of Config -- which makes the residue exactly enumerable, and it is not the shape the mirror's stated justifications cover. Three classes: (1) pure field-by-field copies off params (20 of the 26 initializers), which are pure carrier duplication; (2) exactly ONE true duplicate read -- export_states, which StudyParams::from_config already resolved from config.exports.states and stored on params, and which BroadcastConfig then discards and re-reads from config; (3) exactly TWO wire-only run-mode fields -- training_enabled from config.training.enabled and policy_mode from config.policy.mode -- for which StudyParams has no counterpart at all among its 20 fields. Class (3) is the structural consequence: the wire struct is NOT a superset-projection of the local one, because the run-mode facts the non-root ranks need to decide what to execute live only on the wire type, while scalar_parameters and stopping_rule_set live only on the local type. The single-Config-projection destination is therefore not reachable by deleting one struct -- the two projections have a symmetric difference in both directions, and today nothing keeps class (2) in step if config.exports.states is ever derived rather than copied."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Two separable steps, and the first is behaviour-free. Step 1: delete the class-(2) duplicate by initialising export_states from params.export_states instead of config.exports.states, so every field that StudyParams already resolved is copied from the carrier and Config is read exactly once per fact. Step 2 is the structural half and is what the roadmap needs: state the symmetric difference explicitly rather than leaving it implicit. training_enabled and policy_mode are run-MODE facts (which phases execute, how the policy is consumed) that non-root ranks need and that StudyParams does not carry; scalar_parameters and stopping_rule_set are facts StudyParams carries that do not cross the wire in BroadcastConfig. Give the run-mode pair a home on the local carrier so the wire type becomes a projection of it plus the postcard-only substitutions (stopping-rule flattening, the source-path pair, the io_channel_capacity narrowing), and record those substitutions as the only permitted divergence. Do not fold scalar_parameters into BroadcastConfig as part of this: it already rides its own out-of-band broadcast_value with a cobre_io::BroadcastScalarParameter mirror, and merging the two wire paths is a separate decision. Byte-neutrality bar: crates/cobre-sddp/tests/parity.rs and tests/common/parity_hash.rs goldens unchanged, tests/common/permute.rs rank-invariance unchanged, and mpiexec -n 1 against -n 2 reproduces bit-for-bit -- step 2 changes what crosses the wire, so the -n 2 leg is the load-bearing one.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.3-7",
+      "reRaiseOf": "CD-004",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig",
+          "rejected": "anchor outside the station: crates/cobre-cli/src/commands/broadcast.rs"
+        }
+      ]
+    },
+    {
+      "title": "scalar_parameters is a caller-patched placeholder rather than a constructor input, so both validate paths build stage templates against an empty parameter table and silently resolve every parameterized coefficient to 0.0",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/params.rs",
+          "symbol": "StudyParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/mod.rs",
+          "symbol": "new_with_boundary_requirements"
+        },
+        {
+          "path": "crates/cobre-sddp/src/policy/resolved_parameters.rs",
+          "symbol": "ResolvedParameters"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/setup/params.rs | sed -n '174,177p;335,341p'; git show 077dbe2c:crates/cobre-sddp/src/setup/mod.rs | sed -n '342,397p'; git show 077dbe2c:crates/cobre-sddp/src/policy/resolved_parameters.rs | grep -n -A8 'pub fn get'; git grep -n 'new_with_boundary_requirements\\|StudySetup::new(' 077dbe2c -- crates",
+        "output": "params.rs field + from_config:\n    /// Loaded `constraints/generic_parameters.json` entries; empty out of\n    /// [`Self::from_config`] (they are loaded from disk artifacts, not `Config`)\n    /// and patched by each setup caller before `from_broadcast_params`.\n    pub scalar_parameters: Vec<ScalarParameter>,\n            // Loaded from disk artifacts, not Config; each setup caller patches it.\n            scalar_parameters: Vec::new(),\n\nsetup/mod.rs new_with_boundary_requirements:\n        let mut params = StudyParams::from_config(config)?;\n        params.boundary = boundary;\n        Self::from_broadcast_params(system, &params, stochastic, hydro_models)\n\nresolved_parameters.rs:\n    pub fn get(&self, id: EntityId, stage_idx: usize, block_idx: usize) -> f64 {\n        let Ok(pos) = self.id_to_slot.binary_search_by_key(&id.0, |(k, _)| *k) else {\n            debug_assert!(false, \"ResolvedParameters miss: unknown id={id:?} ...\");\n            return 0.0;\n        };\n\nnon-test constructor call sites:\n077dbe2c:crates/cobre-cli/src/commands/validate.rs:234:    let setup = StudySetup::new_with_boundary_requirements(\n077dbe2c:crates/cobre-python/src/io.rs:306:        let setup = match StudySetup::new_with_boundary_requirements(\n077dbe2c:crates/cobre-sddp/examples/dhat_baseline.rs:128:        StudySetup::new(&system, &config, stochastic, hydro_models)\n077dbe2c:crates/cobre-sddp/examples/probe_k_disaggregated.rs:130:    let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models)",
+        "reading": "The scalar-parameter table is a two-phase init with no type-level enforcement of phase 2. from_config writes Vec::new() and its own comment delegates the patch to 'each setup caller'; new_with_boundary_requirements patches params.boundary and NOTHING else before delegating to from_broadcast_params, and new delegates straight to it. So the only two constructors that take (system, config, stochastic, hydro_models) build the whole StudySetup -- including stage templates -- against an EMPTY table. The consequence is not a panic: ResolvedParameters::get returns 0.0 on a miss behind a debug_assert!, which is compiled out in release, and lp/builder/layout.rs::resolve_affine folds those misses into constants (acc + coef * resolved.get(..)). The two non-test callers of new_with_boundary_requirements are exactly the two validate paths -- cobre-cli validate.rs:234 and cobre-python io.rs:306 -- so in a release build `cobre validate` silently zeroes every @-referenced coefficient and affine bound and still reports valid, while the run paths (cobre-cli run/setup.rs and cobre-python run.rs:996) do patch the table before from_broadcast_params. The comment at validate.rs:234 claims the call is there so validate 'mirrors the run path', which is precisely what the empty table breaks. cobre-io's generic-constraint parser already rejects an unknown @name, so the ids reaching get are valid ids against an empty table -- a class the debug_assert message ('unknown id') does not describe."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Make the table a constructor input instead of a post-construction patch, so the empty case is unrepresentable rather than merely undesirable. Either take the loaded Vec<ScalarParameter> as a parameter of new / new_with_boundary_requirements and drop the field's placeholder role in from_config, or split the type so a StudySetup can only be built from a params value whose scalar table has been supplied (an unpatched value is not accepted by from_broadcast_params). Independently of which, ResolvedParameters::get must stop returning 0.0 on a miss in release: a miss is a build-time defect, not a datum, so it belongs as a construction-time error at the LP-build site rather than a silent sentinel behind a debug_assert -- this is the fail-loud shape already on the open follow-up list. Fixing get alone is not sufficient and fixing the constructors alone is not sufficient: the first without the second turns a silent-wrong validate into an abort, the second without the first leaves the sentinel live for any future caller. Also correct the claim at validate.rs:234 that the call mirrors the run path, or make it true. Byte-neutrality bar: the run paths already patch the table, so crates/cobre-sddp/tests/parity.rs and tests/common/parity_hash.rs goldens must be unchanged and tests/common/permute.rs rank-invariance must be unchanged; validate output on a deck WITH generic parameters is expected to change, and that change is the point, so it needs a new regression case rather than a golden refresh.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.3-7",
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "reconcile_boundary",
+          "rejected": "anchor outside the station: crates/cobre-cli/src/commands/validate.rs"
+        }
+      ],
+      "relatedTo": [
+        {
+          "id": "CD-004",
+          "sharedSymbols": [
+            "StudyParams"
+          ],
+          "titleJaccard": 0.02
+        },
+        {
+          "id": "CD-024-successor",
+          "sharedSymbols": [
+            "ResolvedParameters"
+          ],
+          "titleJaccard": 0.02
+        }
+      ]
+    },
+    {
+      "title": "CutManagementConfig::warm_start_cuts is a public field with a capacity contract in its doc, hard-coded to 0 at both production construction sites and read by no production consumer",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/config.rs",
+          "symbol": "CutManagementConfig"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "train_inner"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/config.rs | sed -n '136,165p'; git show 077dbe2c:crates/cobre-sddp/src/cut/fcf.rs | sed -n '490,500p'; git grep -n 'warm_start_cuts' 077dbe2c -- crates/cobre-sddp/src",
+        "output": "config.rs:\n    /// Cuts pre-loaded from a warm-start policy; contributes to cut-pool capacity.\n    pub warm_start_cuts: u32,\n    ... impl Default { warm_start_cuts: 0, }\n\ncut/fcf.rs:\n/// One pool's capacity: `warm_start_count + max_iterations * visit_bound` ...\nfn pool_capacity(warm_start_count: u32, max_iterations: u64, visit_bound: u64) -> usize {\n    (u64::from(warm_start_count) + max_iterations * visit_bound) as usize\n}\n\ngit grep warm_start_cuts -- crates/cobre-sddp/src (production lines only):\n  config.rs:148  pub warm_start_cuts: u32,          (declaration)\n  config.rs:160  warm_start_cuts: 0,                (Default impl)\n  setup/mod.rs:789   warm_start_cuts: 0,            (production literal)\n  setup/orchestration.rs:136  warm_start_cuts: 0,   (production literal)\n  policy/orchestration.rs:322 warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),   (cobre_io ProducerBlock manifest field, a DIFFERENT symbol)\n  cut/fcf.rs:421 pub fn total_warm_start_cuts(&self)  (counts pool records, does not read the config field)\n  training/training_output.rs:331 total_loaded: fcf.total_warm_start_cuts() as u64,\nEvery other occurrence under crates/cobre-sddp/src is a test literal or a test name (config.rs:291-329, cut/*.rs test names, training/**/tests.rs, training/session/mod.rs:1911 which sits inside the #[cfg(test)] mod tests that opens at line 1508, test_support.rs:825).",
+        "reading": "The field states a contract its own crate does not honour. Both production construction sites write the literal 0 -- setup/mod.rs:789 and setup/orchestration.rs:136 -- and no production line anywhere under crates/cobre-sddp/src READS cut_management.warm_start_cuts; the only reads are the assertion in config.rs:304 and the test literals. The real owner of the quantity the doc describes is pool_capacity's warm_start_count parameter in cut/fcf.rs, which is per-pool, and the manifest side is per-pool too: policy/orchestration.rs:322 derives the single scalar it writes as the MAX over warm_start_counts, and cobre-io records.rs documents warm_start_counts as superseding the scalar 'for per-pool accuracy'. So a study-wide u32 is the wrong shape for the fact as well as an unread one. This is not covered by the reserved-config rule: that rule scopes to cobre-io config sections that are loaded, validated and schema-exported, and this is an internal engine struct field with no schema surface. It survives only because the struct is pub, so the external test literals keep it compiling."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete CutManagementConfig::warm_start_cuts and let cut-pool capacity keep its single owner, the per-pool warm_start_count argument of cut/fcf.rs::pool_capacity. This is a breaking change to a pub struct, so it lands with the projection step of the sibling CD-005 candidate rather than alone: the new CutManagement params projection simply omits the field, which removes the two production literals and the struct-literal reset inside train_inner at the same time. The many test literals that set it are mechanical deletions with no assertion depending on the value, except config.rs's own accessibility test, which goes away with the field. If instead the owner wants the field kept as a reserved seam, it needs the opposite treatment: give it a real reader and reshape it per-pool to match warm_start_counts, and record it in docs/design/reserved-seams-and-deferred-debt.md so a later sweep does not re-raise it -- an unread scalar whose doc asserts a capacity contribution it does not make is the one state that should not persist. Byte-neutrality bar: the value is 0 at both production sites today, so crates/cobre-sddp/tests/parity.rs and tests/common/parity_hash.rs goldens and the tests/common/permute.rs rank-invariance harness must be bit-identical, and mpiexec -n 1 against -n 2 must reproduce.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/cut/fcf.rs",
+          "symbol": "pool_capacity",
+          "rejected": "anchor outside the 5a manifest: crates/cobre-sddp/src/cut/fcf.rs (5c)"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::validate_policy_load and PolicyLoadProof",
+      "why": "Lens question 4 asked whether the policy round-trip contract is stated once or restated per file. It is stated once and then enforced by TYPE, which is stronger than either option: validate_policy_load is the only way to obtain a PolicyLoadProof<K>, the proof is sealed to the two kinds FullFcf and BoundaryInjection, and the proof is what FutureCostFunction::new_with_warm_start, ::from_deserialized and inject_boundary_cuts accept. A caller cannot reach the cut pool with unvalidated records, and a restatement elsewhere cannot drift away from the contract because the proof is unforgeable. Worth protecting as the shape any future engine-tagged load path should copy.",
+      "sanctionedBy": ".claude/rules/sddp.md section 'Policy-load compatibility validation is mandatory'"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::checkpoint_terminal_cost_scale_factor",
+      "why": "Examined and clean, not a finding. Reading only the terminal pool's cost_scale_factor and applying it to every pool looks like a missing homogeneity check, but the pinned contract explicitly specifies the terminal pool's own value as the FullFcf source scale, and per-pool heterogeneity is unproducible: policy_export.rs::build_stage_cuts_payloads writes the study's single resolved cost_scale_factor into every StageCutsPayload. The None case is a clean-break reject with a named error, not a silent default. Any fix-shape that added a per-pool homogeneity gate here would weaken the pinned contract, so it is not proposed.",
+      "sanctionedBy": ".claude/rules/sddp.md section 'Policy-load compatibility validation is mandatory'"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::rescale_cut_records_for_load legacy branch and LEGACY_COST_SCALE_FACTOR",
+      "why": "Reserved seam, cited not raised, per the lens instruction. The None source-scale branch and the 1e6 legacy constant exist to keep pre-self-describing checkpoints loadable, and the equality fast path makes the still-default case a bit-exact no-op rather than a multiply by 1.0. Not dead and not to be swept.",
+      "sanctionedBy": "attacker-prompt.md lens question 4 (reserved seam) and docs/design/reserved-seams-and-deferred-debt.md"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/bucket_topology.rs::build_transit_bucket_topology",
+      "why": "Examined for the CD-074 shape and clean. There is a single derivation site, the resulting TransitBucketTopology is threaded into production rather than re-derived per call, and the only call site that passes different arguments sits inside the test-support wrapper build_stage_templates_resolving_layout, so there is no production divergence. The #[allow(dead_code)] on the StudySetup field marks a reserved seam, not an orphan.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/reconcile.rs::build_reconciliation_report, classify_op and FamilyTally",
+      "why": "Result of the lens question 5 class sweep, reported as a positive because no new instance was found. Every variant of cobre_io::StateFamily -- HydroStorage, HydroInflowLag, AnticipatedThermalState, HydroTransitBucket -- has an explicit per-family tally and an explicit slot resolution path here (resolve_storage, resolve_inflow_lag, resolve_by_interval_overlap, resolve_by_identity), and none of the families owned by this sub-station reconciles a pinned state against a bounded column through an equality row or a hard-coded drift constant, which is the CD-074 shape. Storage and inflow-lag slots resolve by slot identity and by interval overlap, not by a tolerance. The CD-074 class therefore does not generalize off the anticipated-commitment family within this sub-station's scope.",
+      "sanctionedBy": ".claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows'"
+    }
+  ],
+  "_needsHuman": [],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 4,
+    "kept": 4,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

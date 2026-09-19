@@ -1,0 +1,231 @@
+{
+  "station": "sddp",
+  "subStation": "5d",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "cell": "sddp/5d",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "A crate-root flat alias namespace shadows the directory-module tree, so the same file reaches the same cluster by two different paths and an import states nothing about which cluster it crosses into",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lib.rs",
+          "symbol": "lp"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lib.rs",
+          "symbol": "production"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lib.rs",
+          "symbol": "workspace"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lib.rs",
+          "symbol": "solve"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/pipeline.rs",
+          "symbol": "solve_simulation_stage"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "run_enumerated_simulation"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/extraction.rs",
+          "symbol": "extract_stage_result"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/production.rs",
+          "symbol": "resolve_production_models_from_artifacts"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/hydro_models/mod.rs",
+          "symbol": "prepare_hydro_models"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lib.rs | sed -n '52,99p' ; for f in simulation/enumerated.rs simulation/state.rs simulation/pipeline.rs; do git show 077dbe2c:crates/cobre-sddp/src/$f | grep -n -E '^\\s*(context|stage_solve|dcs|indexer|lp_builder|noise|energy_conversion)::|^\\s*(workspace|solve|lp|stochastic|cut|production)(::|\\{)'; done ; git grep -c -E '^\\s{4}(context|stage_solve|indexer|lp_builder|hydro_models|cut_selection|resolved_parameters|risk_measure|stopping_rule|energy_conversion|training_session|dcs|noise|fpha_fitting|generic_constraints|policy_export|trajectory|visited_states|basis_reconstruct|inflow_method)::' 077dbe2c -- crates/cobre-sddp/src | awk -F: '{s+=$NF; n++} END{print n\" files\", s\" braced-use lines\"}'",
+        "output": "lib.rs declares 32 crate-root aliases over the cluster tree, among them 'pub use workspace::context;', 'pub use solve::solver_phase;', 'pub(crate) use solve::stage_solve;', 'pub use lp::builder as lp_builder;', 'pub use lp::indexer;', 'pub(crate) use production::fpha_fitting;', 'pub use production::{energy_conversion, hydro_models};', 'pub(crate) use stochastic::{noise, stochastic_summary};', 'pub use cut::{basis_reconstruct, cut_selection, cut_sync, dcs};'. In simulation/enumerated.rs ONE use crate::{...} tree carries 'context::{StageContext, TrainingContext}' at line 27 and 'workspace::SolverWorkspace' at line 43. simulation/state.rs carries 'context::{...}' at 36 and 'workspace::{CapturedBasis, SolverWorkspace}' at 52, plus 'crate::solver_phase::Phase::Simulation' at 18 against 'solve::partition' at 50. simulation/pipeline.rs carries 'context::{...}' at 34, 'dcs::{...}' at 35, 'indexer::{...}' at 36 and 'workspace::{...}' at 53, and above the tree five separate 'use crate::stage_solve::' lines plus 'use crate::energy_conversion::', 'use crate::indexer::', 'use crate::lp_builder::' and three 'use crate::noise::' lines. The alias count sweep returns '33 files 109 braced-use lines'; the per-alias internal reference counts include indexer 71, hydro_models 48, lp_builder 26, cut_selection 25, resolved_parameters 22, and five aliases at zero internal uses (cut_sync, orchestration, backward_pass_state, rank_reconcile, state_exchange).",
+        "reading": "The crate has two path namespaces for the same modules and internal code standardizes on the flat one, so a cluster boundary the directory tree was created to express is invisible at the import site. The sharpest form is one file reaching one cluster twice by different names: simulation/enumerated.rs names workspace::context as 'context' at line 27 and workspace::workspace as 'workspace' at line 43 in the SAME use tree, and simulation/state.rs does the same for solve, naming solve::solver_phase as 'solver_phase' at line 18 and solve::partition by its real path at line 50. Nothing in the file records that 'crate::energy_conversion' is production/, that 'crate::indexer' and 'crate::lp_builder' are lp/, that 'crate::noise' is stochastic/, or that 'crate::stage_solve' is solve/. The cost has already propagated into a cluster's own contract: production/hydro_models/mod.rs states 'Every public symbol is re-exported here so both the curated flat surface in lib.rs and the cobre_sddp::hydro_models::Symbol module path resolve to the same item', and the leak reaches inside the cluster too, since production/hydro_models/production.rs:32 and types.rs:27 import their own sibling as 'crate::energy_conversion' rather than by a within-cluster path. Five aliases have zero internal uses, so the layer is not even uniformly load-bearing. This is not the sanctioned #[allow] census and not a mirror-registered seam: git grep over docs/design/reserved-seams-and-deferred-debt.md for shim, re-export, flat, alias and crate-root returns no matching entry."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Separate the two roles the alias layer currently conflates. Keep the curated public re-export surface in lib.rs, which is what downstream and the published API depend on, and retire the crate-root module aliases as an INTERNAL import path, rewriting internal call sites to name the owning cluster, so an import reads production::energy_conversion, lp::indexer, lp::builder, stochastic::noise, solve::stage_solve and workspace::context. Delete outright the five aliases with zero internal uses. Do the lp aliases first and in isolation, because lp::builder and lp::indexer carry the largest internal reference counts and are exactly the surface the cobre-model carve-out has to move, so every remaining crate::lp_builder or crate::indexer import is a site that carve-out must touch blind. Byte-neutrality bar: import-path-only change with no item moved, so cargo fmt --all --check plus the parity goldens in crates/cobre-sddp/tests/parity.rs and the rank-invariance harness in tests/common/permute.rs are sufficient; no .claude/rules/sddp.md contract is touched.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The simulation-result to cobre-io write-payload conversion is homed in the production-modeling cluster, whose module doc had to be amended to describe it",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/production/conversion.rs",
+          "symbol": "IntoWriteRecord"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/conversion.rs",
+          "symbol": "with_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/production/mod.rs",
+          "symbol": "conversion"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/types.rs",
+          "symbol": "SimulationStageResult"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/production/mod.rs ; git show 077dbe2c:crates/cobre-sddp/src/production/conversion.rs | grep -n -E '^use |^impl |^trait |^fn |crate::' ; git grep -n -E 'production::conversion|conversion::' 077dbe2c -- crates/cobre-sddp/src crates/cobre-cli/src crates/cobre-python/src",
+        "output": "production/mod.rs doc: 'Production-modeling cluster ... groups the preprocessing that turns reservoir geometry and plant data into the per-(hydro, stage) production representations the LP consumes — FPHA hyperplane fitting, resolved production/evaporation models, energy-conversion scalars, and the simulation write-payload conversions.' conversion.rs module doc: 'Field-for-field conversions from Simulation*Result to write-payload types.' Its only non-test imports are 'use cobre_io::output::simulation_writer::{...}' at line 3 and 'use crate::simulation::types::{...}' at line 12; the sole crate::setup::NodeId import at line 11 is #[cfg(test)]. It declares 13 'impl IntoWriteRecord for Simulation*Result' blocks, 'trait IntoWriteRecord' at 298, 'fn with_node' at 304, and the two public conversions 'impl From<SimulationStageResult> for StageWritePayload' and 'impl From<SimulationScenarioResult> for ScenarioWritePayload'. The production::conversion grep returns zero hits naming the module path anywhere in cobre-sddp, cobre-cli or cobre-python; every other hit is energy_conversion.",
+        "reading": "The file has no production-modeling content and no reference to any sibling in its own cluster: it reads simulation/types.rs and writes cobre_io::output::simulation_writer, nothing else. Because its entire surface is trait impls, callers reach it by type inference and no call site ever names production::conversion, so its home is invisible and therefore arbitrary. The evidence that the placement is wrong is written in production/mod.rs itself: the cluster doc states a single coherent purpose, reservoir geometry and plant data into per-(hydro, stage) production representations, then appends 'and the simulation write-payload conversions' because one member does not fit the sentence. This is the engine-side half of the output write path, which is the surface Phase 0a moves into shared orchestration in cobre-io, and locating it under production/ hides it from that carve-out. Checked and absent from the prior corpus: the register mentions production/conversion.rs only at prior-register.md:173 as the surviving location of the anticipated delivery_date field, a reserved-seam note, not a placement claim, and the mirror has no IntoWriteRecord or production/conversion entry."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Re-home the file beside the types it converts, as a simulation-owned write-payload projection module, so the production cluster doc states one purpose again and the cluster boundary is not carrying an unrelated member; the private IntoWriteRecord trait and with_node helper move with it unchanged. Governing contract: .claude/rules/sddp.md section Terminal boundary FCF is booked in the reported total cost governs the cost fields these records carry, so the move must stay field-for-field with no re-derivation of any cost component, and the Python-parity hard rule means the CLI and cobre-python write paths must continue to reach the same conversion. Byte-neutrality bar: a pure move of trait impls with no signature change, verified by the parity goldens in crates/cobre-sddp/tests/parity.rs with tests/common/parity_hash.rs, which hash the written simulation output. Defer the decision on whether the destination is the engine or the Phase 0a cobre-io output orchestration to the owner, since one target makes the other move redundant.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/lead_time/mod.rs (resolve_spread, resolve_point, arrival_window, PointResolution)",
+      "why": "The lagged-delivery family is ONE skeleton, not two. Both entry points, the spreadable travel-time quantity via resolve_spread and the point anticipated commitment via resolve_point, share a single overlap engine built on cobre_core::window_period_overlaps and a single arrival_window definition, and the ring accessors ring_depth, ring_index and physical_target live once on PointResolution. The module doc states the consequence: overlapping ONE shared uniform arrival density against nested calendar partitions makes the aggregation identity hold by construction rather than by convention. This is exactly the shared-skeleton shape the water-travel-time contract requires, and it is the counter-example to candidate one in the same manifest.",
+      "sanctionedBy": ".claude/rules/sddp.md section Water travel time (the water in-transit bucket ring and the anticipated-thermal ring are one lagged-delivery ring construct; differences live at each ring's own call site, never a second skeleton implementation)"
+    },
+    {
+      "subject": "State families reachable from crates/cobre-sddp/src/simulation and crates/cobre-sddp/src/production (CD-074 class sweep answer for 5d)",
+      "why": "No state family in the 5d manifest owns a drift reconciliation, and none pins state itself. git grep for drift_margin over crates/cobre-sddp/src returns only lp/builder/commitment_reconcile.rs and its sibling tests, so the CD-074 specimen stays entirely in 5b; git grep for set_col_bounds over simulation/ and production/ returns 2 hits, both in simulation/pipeline/tests.rs, and zero in non-test code. Simulation consumes state rather than coupling it: reset_scenario_state re-seeds each family from its declared seed at the scenario boundary, storage from initial_state, the inflow lags through sampler.apply_initial_state, and the lag and downstream accumulators from lag_accum_seed and lag_weight_seed or zeroed, and advance_simulation_node only walks the node graph. Drift handling therefore already belongs to one seam and 5d gives it no second home.",
+      "sanctionedBy": ".claude/rules/sddp.md section State pinning uses column bounds, not equality rows"
+    },
+    {
+      "subject": "The anticipated post-study commitment channel surviving in simulation output rows (crates/cobre-sddp/src/simulation/extraction.rs::extract_anticipated_lanes and crates/cobre-sddp/src/production/conversion.rs impl IntoWriteRecord for SimulationAnticipatedLaneResult)",
+      "why": "Reserved seam, cited not raised. The anticipated lane extraction and its write-record conversion are the surviving surface of the post-study commitment channel, and the delivery_date field on the emitted row is the pre-rename spelling: at this baseline no anticipated slot carries delivery_date, the policy anchor having been replaced by reference_date, interval_start and interval_end, and the field survives only in the simulation output rows. Candidate three re-homes the conversion file without touching the seam's fields or the row layout.",
+      "sanctionedBy": "prior-register.md:173 reserved-seam note plus the mirror docs/design/reserved-seams-and-deferred-debt.md"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/hull (convex_hull_3d, Hyperplane3d, PlaneBuffer, the private ffi submodule)",
+      "why": "Examined and clean. The unsafe FFI surface is fenced correctly at module granularity even though the crate-level lint is permissive: every unsafe extern C declaration is confined to the private hull/ffi.rs submodule, convex_hull_3d is the single safe entry point and the only safe caller of it, PlaneBuffer owns RAII release of the shim-allocated buffer through Drop, non-finite coordinates are rejected in Rust before the FFI call so the canonical total order never observes a NaN, and the wrapper owns the canonical sort-in and sort-out that makes the output a deterministic function of the SET of input points. That last property is the determinism contract the C shim deliberately does not hold, and the wrapper doc says so.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/test_support.rs and its declaration in lib.rs",
+      "why": "Examined and clean. The 3652-line test-support builder module is gated behind #[cfg(any(test, feature = \"test-support\"))] in lib.rs, so it is not in the default build or the default public surface, yet remains reachable by plain cargo test and by downstream integration-test crates through the test-support feature. It constructs crate-internal StateSpace, StageGeometry and StudyDimensions types, which is why it must live in src/ rather than tests/, and it drives the production StageLayout constructors rather than hand-building a parallel geometry.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "CLAUDE.md's Hard Rules enumerate the cobre-sddp unsafe_code = \"allow\" override as existing for the matrixmultiply dgemm call 'isolated in src/gemm.rs', but at this baseline hull/ is a second, unrelated unsafe island: git grep for 'unsafe ' over crates/cobre-sddp/src returns gemm.rs:93 plus hull/ffi.rs:27 and hull/mod.rs:82, :152, :192. The crate-wide Cargo.toml allow therefore bounds nothing, and a third island would need no gate. Owner call: amend the doc enumeration to name hull/, or move the allow to module granularity with #![forbid(unsafe_code)] at the crate root and an explicit exemption on gemm and hull::ffi. Raised here rather than as a candidate because hull/ itself is correctly fenced (see the positives entry) and the sanctioned #[allow] census excludes 'this allow exists' claims.",
+    "Candidate three's destination: re-home the simulation write-payload conversion inside the engine beside simulation/types.rs, or leave it where it is until Phase 0a's shared output orchestration in cobre-io absorbs the engine-to-io projection wholesale? The intra-engine move is cheap and reversible, but it is wasted work if the 0a seam takes the whole file, and only the owner knows whether 0a's output orchestration is scheduled close enough to wait for."
+  ],
+  "dropped": [
+    {
+      "title": "Enumerated forward and enumerated simulation are a twice-declared sweep skeleton: three parallel scratch/visit/params types plus three parallel loops, two of them extracted on the simulation side and inlined on the training side",
+      "action": "merged",
+      "reason": "same enumerated-sweep duplication as architecture.5c 'CD-028 sharpened: the shared claim-and-scatter owner already exists and its module doc declares a boundary narrower than the duplication, so what remains twice-declared between the enumerated forward and the enumerated simulation is the path marking and the worker-result fold that sit outside any stated boundary -- the fix is extending an owner with two consumers, not minting a new one'; anchors folded into that candidate (owner: architecture.5c)",
+      "candidate": {
+        "title": "Enumerated forward and enumerated simulation are a twice-declared sweep skeleton: three parallel scratch/visit/params types plus three parallel loops, two of them extracted on the simulation side and inlined on the training side",
+        "anchors": [
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "run_sweep"
+          },
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "enumerated_sim_stage_worker"
+          },
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "mark_own_paths"
+          },
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "re_expand"
+          },
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "EnumeratedSimScratch"
+          },
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "SimNodeVisit"
+          },
+          {
+            "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+            "symbol": "EnumeratedSimParams"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+            "symbol": "run_enumerated_forward"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+            "symbol": "enumerated_stage_worker"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+            "symbol": "EnumeratedForwardScratch"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+            "symbol": "NodeVisit"
+          },
+          {
+            "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+            "symbol": "EnumeratedParams"
+          }
+        ],
+        "evidence": {
+          "command": "git grep -n -E '^(pub\\(crate\\) )?(struct|fn) (SimNodeVisit|EnumeratedSimScratch|EnumeratedSimParams|mark_own_paths|enumerated_sim_stage_worker|run_sweep|re_expand|NodeVisit|EnumeratedForwardScratch|EnumeratedParams|enumerated_stage_worker|run_enumerated_forward)' 077dbe2c -- crates/cobre-sddp/src/simulation/enumerated.rs crates/cobre-sddp/src/training/forward/enumerated.rs ; git grep -n 'simulation analog of|node-native fork' 077dbe2c -- crates/cobre-sddp/src/simulation/enumerated.rs ; git grep -n 'pub struct EnumeratedForwardScratch|fn re_expand' 077dbe2c -- crates/cobre-sddp/src/training/forward/enumerated.rs crates/cobre-sddp/src/simulation/enumerated.rs",
+          "output": "simulation/enumerated.rs:52:struct SimNodeVisit / :68:struct EnumeratedSimScratch / :109:struct EnumeratedSimParams<'p> / :124:fn mark_own_paths / :158:fn enumerated_sim_stage_worker / :290:fn run_sweep / :367:fn re_expand ; training/forward/enumerated.rs:63:struct NodeVisit / :92:pub struct EnumeratedForwardScratch / :181:pub(crate) struct EnumeratedParams<'a> / :472:pub(crate) fn run_enumerated_forward / :714:fn enumerated_stage_worker ; simulation/enumerated.rs:1://! ... a node-native fork of the / :46:/// ... the simulation analog of the forward's / :108:/// simulation analog of `training::forward::enumerated::EnumeratedParams` ; the 'fn re_expand' grep returns ONE hit, simulation/enumerated.rs:367 — training/forward/enumerated.rs has no re_expand declaration and no 're-expansion' token",
+          "reading": "New beyond CD-028's two-fn-pair claim and CD-030's one-loop claim. The duplication is a TYPE skeleton as well as an orchestration skeleton: three struct pairs stand in one-to-one correspondence (SimNodeVisit/NodeVisit, EnumeratedSimScratch/EnumeratedForwardScratch, EnumeratedSimParams/EnumeratedParams) and the simulation copies self-declare the correspondence in their own doc comments at lines 46 and 108 plus the module doc at line 1. And the loop asymmetry is two-sided, not one: TWO of the three phases are named functions on the simulation side and inline spans on the training side — mark_own_paths (CD-030's subject) and re_expand, which the 'fn re_expand' grep shows exists nowhere in training/forward/enumerated.rs. So the sweep has three phases (own-set marking, the stage-synchronous ClaimCursor/canonical_scatter claim loop, the per-path walk_path re-expansion) and the two sides disagree on the extraction boundary for two of them. Any dedup must therefore agree on three seams, not merge two functions."
+        },
+        "proposedSeverity": "B",
+        "fixShape": "Extract the three sweep phases as a shared node-native sweep skeleton parameterised over the per-node visit payload and the per-node solve callback, so own-set marking, the ClaimCursor claim loop with canonical_scatter, and the per-path walk_path re-expansion are declared once; keep the two genuinely divergent behaviours at the call sites rather than in the skeleton, namely the training side copying captures to keep worker buffers alive and swapping them into BasisStore by m_rep versus the simulation side moving each capture into the arena, and the training side folding the terminal slice. Governing contracts: .claude/rules/sddp.md section Terminal boundary FCF is booked in the reported total cost governs the forward side of the merge and section A stored basis warm-starts only at its own node governs the basis swap, so neither may become skeleton-generic. Byte-neutrality bar: the parity goldens in crates/cobre-sddp/tests/parity.rs with tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and an mpiexec -n 1 versus -n 2 reproduction, since the claim/scatter order is the declaration-order-invariance carrier.",
+        "alignmentHint": "neutral",
+        "alignmentCitation": null,
+        "partIRef": null,
+        "reRaiseOf": "CD-028",
+        "claimType": null,
+        "layout": null,
+        "mechanism": null,
+        "profiledSymbol": null,
+        "queuedTo": null,
+        "retiredOverlaps": [
+          {
+            "ref": "PD-001",
+            "kind": "anchor-overlap",
+            "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+          },
+          {
+            "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+            "kind": "anchor-overlap",
+            "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+          }
+        ]
+      }
+    }
+  ],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 3,
+    "kept": 2,
+    "dropped": 1,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

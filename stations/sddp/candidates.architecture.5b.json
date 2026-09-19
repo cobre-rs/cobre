@@ -1,0 +1,240 @@
+{
+  "station": "sddp",
+  "subStation": "5b",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "cell": "sddp/5b",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "fill_anticipated_columns re-opens the latched commitment slot at the RAW delivery-axis residue that its two sibling residue owners' own rustdoc calls the forbidden, wrong-but-compiling alternative",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
+          "symbol": "fill_anticipated_columns"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
+          "symbol": "fill_anticipated_state_out_def_entries"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/layout.rs",
+          "symbol": "build_anticipated_slot_row_pos"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/columns.rs | sed -n '604,624p'; git show 077dbe2c:crates/cobre-sddp/src/lp/builder/entries.rs | sed -n '155,169p'; git show 077dbe2c:crates/cobre-sddp/src/lp/builder/layout.rs | sed -n '694,724p'",
+        "output": "columns.rs (fill_anticipated_columns): let point = anticipated_resolution_for(layout.state, AnticipatedLocal::new(local_idx), n_stages); let Some(delivery_stage) = point.genuine_decisions_at(stage_idx).next() else { continue; }; ... let slot = delivery_stage % layout.k_max; let state_out_col = ring.out_col(slot, local_idx);  ||  entries.rs (fill_anticipated_state_out_def_entries), same `point`, same `genuine_decisions_at`, same debug_assert: let r = point.ring_index(delivery_stage); debug_assert!(r.is_some(), \"...inside the excised fixed post-horizon window - never a ring member...\"); let slot = r.unwrap_or(delivery_stage) % layout.k_max; ring.emit_deposit(slot, local_idx, row, col_decision, col_entries);  and its rustdoc: \"`slot` is the RING-AXIS residue of the decision's own delivery target ([`PointResolution::ring_index`] owns the delivery-axis -> ring-axis map), never a distance-derived boundary. `delivery_stage % k_max` - keying directly off the raw delivery axis - is the forbidden alternative: it collides the first post-study deposit with the last in-study seed's slot whenever a plant declares a fixed post-horizon window.\"  ||  layout.rs (build_anticipated_slot_row_pos) walks the ring axis: for depth in 0..k_max { let r = stage_idx + depth + 1; let slot = r % k_max; for (plant, point) in points.iter().enumerate() { let m = point.physical_target(r); ... let is_deposit = point.decider.get(m).copied().flatten() == Some(stage_idx); let is_interior = !is_deposit && point.is_ready_at(m, stage_idx); if is_interior { row_pos[slot * n_anticipated + plant] = Some(n_reachable); n_reachable += 1; } } }  and its rustdoc: \"Walking the RAW delivery axis instead (a shared `m = stage_idx + depth + 1` read directly, pre-migration) is the wrong-but-compiling alternative once any plant's fixed post-horizon window excises part of the ring: `m mod k_max` is injective only over a contiguous run, which the excised window breaks.\"",
+        "reading": "Three modules own the anticipated deposit-slot residue and only two agree. entries.rs::fill_anticipated_state_out_def_entries and layout.rs::build_anticipated_slot_row_pos both key off the RING axis (`point.ring_index(delivery_stage)` and the `r = stage_idx + depth + 1` ring walk); columns.rs::fill_anticipated_columns keys off the RAW delivery axis (`delivery_stage % layout.k_max`) eleven lines after the identical `point` is already in scope, i.e. the conversion it needs is available and unused. The two agreeing owners each name the raw form in their own rustdoc as the forbidden / wrong-but-compiling alternative, and both name the same precondition: a plant declaring a fixed post-horizon window, which excises part of the ring so the two axes stop agreeing. The consequence is not cosmetic. build_anticipated_slot_row_pos deliberately leaves a plant's OWN deposit slot masked (`is_interior = !is_deposit && ...`), and fill_anticipated_slot_columns then freezes every masked slot to [0, 0] via DeliveryRing::freeze_masked_columns, so the latched column depends on fill_anticipated_columns to re-open it. Under the in-tree fixture plant0_excised_window_g3_resolution (entries.rs, k_max = 4, g = 3, ring_index(7) == Some(4)) the deposit row lands on slot 4 % 4 == 0 while the column re-open lands on 7 % 4 == 3: the deposited column stays frozen at [0, 0] and an unrelated slot is opened. That forces the carried commitment to zero, or makes the stage LP infeasible once min_generation_mw > 0. entries.rs carries a regression test for exactly this axis choice (anticipated_deposit_targets_the_ring_axis_residue_across_an_excised_window, asserting slot 0 and NOT slot 3); columns.rs has no excised-window test, which is why the divergence compiles and ships."
+      },
+      "proposedSeverity": "A",
+      "fixShape": "Give the anticipated ring ONE residue owner in the fpha_cursor.rs style: hoist the delivery-axis to ring-axis conversion (point.ring_index(delivery_stage) with the same excised-window debug_assert entries.rs already carries) into a single walker in lp/builder that the row fill, the column fill and build_anticipated_slot_row_pos all drive off, so a one-sided edit that lands the deposit row and the re-opened column on different slots cannot compile; the change touches only which state column receives (-INF, +INF) rather than [0, 0] and so must cite .claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows' (the re-open is a column-bound write, not a new equality row, and incoming pinning stays with fill_col_state_patches through state_to_lp_incoming_column); byte-neutrality bar is that no deck without a fixed post-horizon window changes a single column bound (ring_index is the identity on a contiguous ring, so parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction are all bit-identical), and the only decks whose bytes move are the excised-window decks the current code renders wrong - a moved golden that must be regenerated with the defect named in the commit message.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "Pin-round-trip exactness for the four state families is handled by three unrelated per-family mechanisms in three modules, and the commitment family's two mechanisms never cross-reference each other",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/scaling.rs",
+          "symbol": "apply_commitment_hold_col_scale_unscale"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/scaling.rs",
+          "symbol": "apply_bucket_col_scale"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs",
+          "symbol": "fill_bound_relaxations"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/patch.rs",
+          "symbol": "fill_col_state_patches"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/scaling.rs | sed -n '90,140p'; git show 077dbe2c:crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs | sed -n '1,60p'; git grep -n 'apply_commitment_hold_col_scale_unscale\\|apply_bucket_col_scale\\|drift_margin' 077dbe2c -- crates/cobre-sddp/src",
+        "output": "scaling.rs::apply_commitment_hold_col_scale_unscale forces col_scale[c] = 1.0 for c in commit_out.chain(commit_in), documented: \"Every hold slot round-trips through a pin-then-read - the in-study ring's deposit/fishing coupling, the post-horizon lane's stage-to-stage carry - that is exact only at `col_scale = 1.0`; any other factor can drift a commitment sitting exactly at its delivery-stage generation cap a sub-ULP outside the bound.\"  ||  scaling.rs::apply_bucket_col_scale overrides BOTH bucket blocks with the downstream plant's storage factor and is annotated \"Voice 4: no production call site wires this in yet - `postprocess_templates` activates it once the travel-time bucket LP fill gives bucket columns real row/column entries. The `#[allow(dead_code)]` refires once that reader lands.\" plus #[allow(dead_code)]  ||  commitment_reconcile.rs carries COMMITMENT_DRIFT_REL = 1e-7, COMMITMENT_DRIFT_ABS = 1e-5, drift_margin, enum Reconciliation, reconcile_commitment, BoundRelaxations, fill_bound_relaxations  ||  neither scaling.rs symbol names commitment_reconcile.rs and neither commitment_reconcile.rs constant names col_scale or apply_commitment_hold_col_scale_unscale; storage and inflow-lag columns receive no col_scale override at all.",
+        "reading": "New evidence sharpening CD-074, not a re-derivation of it: CD-074 is the single-family tolerance reconciler; what the class sweep shows is the SHAPE around it. Pinning WRITE is already unified (patch.rs::fill_col_state_patches is the sole owner for all four families and resolves every column through StateSpace::state_to_lp_incoming_column) and LAYOUT is already unified (REGION_ORDER's exhaustive dispatch). Exactness of the pin-then-read round trip is not: the commitment family gets a scaling override (col_scale forced to 1.0) AND a solve-time tolerance reconciler (drift_margin, 1e-7 / 1e-5) in two different modules that never mention each other, buckets get a third, dormant mechanism (apply_bucket_col_scale, #[allow(dead_code)], no production call site), and storage and inflow lags get nothing. The coupling is load-bearing and unstated: the reconciler's two hard-coded tolerances are only meaningful under unit column scaling, which is exactly what the scaling override supplies, so an edit that relaxes or removes the override silently changes the drift the reconciler must absorb. That is a bounded fix with a named blast radius, whereas promoting the three mechanisms into one shared drift seam would be a one-consumer abstraction (target-layering-brief.md conflicts trigger 4): the sweep's answer to whether drift handling belongs in ONE seam is no, because three of the four families provably need none - see the four positives entries."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Do not build a shared drift seam - three of four families need none, so it would be a one-consumer abstraction. Instead make the commitment family's exactness contract single-sourced: state the col_scale = 1.0 precondition once (the reconciler owns it, since it owns the tolerances) and reduce the scaling.rs override's prose to a pointer at that owner, so a future edit to either side reads the other; pin the coupling with a test asserting the commitment-hold col_scale entries are exactly 1.0 after the full render, naming the reconciler as the consumer that depends on it. Touches pinning, so it cites .claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows': the pin stays a set_col_bounds write owned by patch.rs::fill_col_state_patches through state_to_lp_incoming_column and no equality row is introduced. Byte-neutrality bar: comment relocation plus one added assertion changes no rendered LP byte, so parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction are unchanged by construction; leave apply_bucket_col_scale dormant, it is a documented reserved seam and not part of this fix.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "CD-074",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "Commitment hold is the only state family with no typed InCol/OutCol resolver, so four production sites recompose its column by hand as a bare usize - across two different index axes",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+          "symbol": "commitment_hold_in_study_offset"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+          "symbol": "bucket_incoming_col"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/delivery_ring.rs",
+          "symbol": "out_col"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/indexer/state_space.rs | sed -n '565,640p'; git grep -n 'commit_out\\.start\\|commit_in\\.start' 077dbe2c -- crates/cobre-sddp/src | grep -v tests; git show 077dbe2c:crates/cobre-sddp/src/lp/builder/delivery_ring.rs | grep -n 'pub.*fn \\(out_col\\|in_col\\|slot_target\\)'",
+        "output": "state_space.rs typed resolvers: storage_incoming_col(h) -> InCol, storage_outgoing_col(h) -> OutCol, lag_incoming_col(lag, h) -> InCol, bucket_incoming_col(b) -> InCol, bucket_outgoing_col(b) -> OutCol - each routing through state_to_lp_incoming_column / state_to_lp_column. The commitment family's only accessor is `pub(crate) fn commitment_hold_in_study_offset(&self, plant: usize, m: usize) -> usize` (line 571), a bare offset with no resolver sibling.  ||  Non-test production sites recomposing the column by hand: commitment_reconcile.rs:193 `let commit_out_start = pins.state_layout.commit_out.start;` then :208 `.commitment_hold_in_study_offset(local, pins.stage_idx)`; simulation/extraction.rs:268 `let col = spec.state.commit_in.start + slot_offset;`; simulation/extraction.rs:316 `state.commit_out.start + state.commitment_hold_in_study_offset(local, m)`; setup/mod.rs:2651 and :2667 `let off = layout.commit_out.start + layout.commitment_hold_in_study_offset(local_idx, slot);` then `state[off] = history.value_mw;`.  ||  delivery_ring.rs addressing API: `pub fn out_col(&self, slot: usize, lane: usize) -> usize`, `pub fn in_col(&self, slot: usize, lane: usize) -> usize`, `pub(crate) fn slot_target(&self, lane: usize, lag: usize) -> usize`.  ||  state_dim_commitment_hold_range() = [N*(1+L)+B, N*(1+L)+B+A*k_max), numerically equal to the commit_out LP-column start in the StateSpace column diagram.",
+        "reading": "Every other state family carries a typed resolver returning InCol or OutCol, and entity_index.rs pins six cross-family swaps with compile_fail doctests, so the crate's stated discipline is that a resolved column is a newtype and not a usize. The commitment-hold family is the exception, and the exception has a concrete cost visible at the call sites. First, setup/mod.rs:2651 indexes a STATE VECTOR with `commit_out.start + commitment_hold_in_study_offset(..)` while simulation/extraction.rs:316 uses the identical expression as an LP COLUMN; both are correct today only because the outgoing state region maps to LP columns by identity, so the two axes coincide numerically - nothing in the types records which axis a given `off` belongs to, and the coincidence is what makes a mis-axis edit compile. Second, simulation/extraction.rs:268 builds an INCOMING commitment column arithmetically (`commit_in.start + slot_offset`) instead of routing through state_to_lp_incoming_column, which is the resolver the pinning contract names as the single owner of incoming-column resolution, and which the sibling families' bucket_incoming_col / storage_incoming_col / lag_incoming_col all use. Third, the ring's own addressing API inverts operand order between out_col(slot, lane) and slot_target(lane, lag) with identical bare usize parameters, so an in-range transposition silently addresses another lane's slot; the debug asserts catch only out-of-range arguments. This is the same swap class entity_index.rs already decided was worth a compile_fail doctest for the entity families."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Add the missing typed resolvers next to their siblings in state_space.rs - a commitment_hold_incoming_col returning InCol and a commitment_hold_outgoing_col returning OutCol, both routing through state_to_lp_incoming_column / state_to_lp_column exactly as bucket_incoming_col and storage_incoming_col already do - then convert the LP-column call sites (commitment_reconcile.rs, simulation/extraction.rs both sides) to them, leaving setup/mod.rs on an explicitly state-dimension-named accessor so the two axes stop sharing one expression; keep commitment_hold_in_study_offset as the shared slot arithmetic both resolvers call. Cites .claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows' because the incoming resolver is precisely what that section requires every pin and dual read to resolve through, and no equality row is added. Byte-neutrality bar: each new resolver returns the same integer the arithmetic it replaces already produced, proven by an equivalence test asserting resolver equals hand-computed offset over every plant and slot, so parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction are bit-identical with no golden moved. Optionally give DeliveryRing lane and slot newtypes so out_col and slot_target cannot be called with transposed operands, a types-only change with the same neutrality argument.",
+      "alignmentHint": "advances-0b",
+      "alignmentCitation": "Part IV.2",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "transit_buckets_in is the only incoming state family whose template bounds are never written, inheriting them from buffer initialization while storage_in and commit_in write theirs explicitly",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
+          "symbol": "fill_transit_bucket_columns"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
+          "symbol": "fill_anticipated_state_columns"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
+          "symbol": "fill_stage_columns"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/builder/columns.rs | sed -n '25,60p;100,185p'",
+        "output": "fill_stage_columns initializes col_lower = vec![0.0_f64; layout.num_cols] and col_upper = vec![f64::INFINITY; layout.num_cols], then dispatches fill_storage_columns, fill_transit_bucket_columns, fill_anticipated_slot_columns, fill_ar_lag_columns, fill_anticipated_state_columns, fill_theta_column.  ||  storage: `let storage_in_col = layout.col_storage_in_start() + h_idx; bufs.col_lower[storage_in_col] = f64::NEG_INFINITY; bufs.col_upper[storage_in_col] = f64::INFINITY;`  ||  commit_in: fill_anticipated_state_columns writes `for col in layout.state.commit_in.clone() { bufs.col_lower[col] = f64::NEG_INFINITY; bufs.col_upper[col] = f64::INFINITY; }`  ||  buckets: fill_transit_bucket_columns touches only transit_buckets_out (`let col_base = state.transit_buckets_out.start + range.start; ... ring.freeze_masked_columns(&layout.rows.transit_bucket_row_pos[range], col_base, (0.0, f64::INFINITY), bufs);`) and its rustdoc says only \"Incoming buckets stay open, pinned every solve by `fill_col_state_patches`\" - no write to state.transit_buckets_in appears anywhere in the file.",
+        "reading": "Three of the four incoming state blocks get an explicit template bound and the fourth gets none. storage_in and commit_in are written to (-INF, +INF) by name; the incoming bucket block is never addressed by any fill, so its template bounds are whatever fill_stage_columns' vec! initialization left, namely [0.0, +INF). This is not a live defect - patch.rs::fill_col_state_patches pins both bounds of every incoming column every solve, and a bucket volume is non-negative anyway - which is why it is a C and not higher. It is still an asymmetry with a cost: the invariant that the incoming template bound is irrelevant because it is always overwritten is stated in prose in one family's rustdoc and enforced nowhere, and a reader comparing the three fills cannot tell whether the omission is deliberate or an oversight. The state_col_patch_count formula in patch.rs (hydro_count * (1 + max_par_order) + n_buckets + n_anticipated * k_max) is what actually guarantees the overwrite covers the bucket block, and neither file points at the other."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Make the fourth family symmetric with its three siblings by writing the incoming bucket template bounds explicitly, or state the shared invariant once at fill_stage_columns - every incoming state column's template bound is inert because fill_col_state_patches pins both sides every solve - and have all four fills defer to it instead of one family documenting it locally; the honest version pins the invariant with a test asserting state_col_patch_count covers every column in storage_in, inflow lag incoming, transit_buckets_in and commit_in. Cites .claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows' because the invariant being stated is exactly that section's contract. Byte-neutrality bar: writing (0.0, +INF) explicitly reproduces the initialization value bit-for-bit, and any pinned column is overwritten before the first solve, so parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction are unchanged and no golden moves.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "A production gate predicate takes an unused _state: &StateSpace parameter justified by uniformity with a sibling that is #[cfg(test)]-gated",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs",
+          "symbol": "is_anticipated_decision_active_for_delivery"
+        },
+        {
+          "path": "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs",
+          "symbol": "is_anticipated_decision_active"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs | sed -n '40,100p'; git grep -n 'is_anticipated_decision_active_for_delivery' 077dbe2c -- crates/cobre-sddp/src | grep -v tests",
+        "output": "Line 51 `#[cfg(test)]` immediately precedes line 54 `pub(crate) fn is_anticipated_decision_active(`; line 90 `pub(crate) fn is_anticipated_decision_active_for_delivery(` takes line 91 `_state: &StateSpace,` and never reads it, justified by the module doc as \"Each function takes `state: &StateSpace` for uniformity with its siblings\".  ||  Production call sites threading the unused argument: lp/builder/columns.rs:621, lp/builder/layout.rs:779, simulation/extraction.rs:225.",
+        "reading": "The uniformity the parameter buys is with exactly one sibling, and that sibling is compiled only under #[cfg(test)]. In a release build the family has a single member and the parameter is pure ceremony: three production call sites fetch and thread a reference that is discarded, and the leading underscore is what keeps the unused-variable lint quiet rather than a signal that the argument is reserved. The unrelated sibling anticipated_resolution_for in the same module does read state, so the module is not uniformly state-taking either. Low impact and local, but it is a real false signal - a reader reasonably infers the predicate depends on the state layout, which is what makes a future edit route new layout-dependent logic through it."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Drop the unused parameter from is_anticipated_decision_active_for_delivery and from its three production call sites, and delete the uniformity sentence from the module doc since the only sibling it aligns with is test-only; if the argument is genuinely reserved for a named future reader, say which reader and gate it the way the crate already gates other reserved seams rather than leaving an underscore-prefixed placeholder. Byte-neutrality bar: a signature change with no branch change cannot alter a rendered LP byte, so parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 reproduction are bit-identical and no golden moves.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/patch.rs::fill_col_state_patches",
+      "why": "The single owner of incoming-state pinning for all four state families, resolving every column through StateSpace::state_to_lp_incoming_column and pinning with column bounds rather than an equality row - exactly the contract .claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows' requires. The CD-074 class sweep found no second pinning writer; the WRITE side of the class is already single-sourced and must stay that way.",
+      "sanctionedBy": ".claude/rules/sddp.md section 'State pinning uses column bounds, not equality rows'"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/state_space.rs storage family (storage_incoming_col, storage_outgoing_col)",
+      "why": "CD-074 class sweep answer for storage: no drift reconciliation exists and none is needed. The incoming storage column is written free at (-INF, +INF) by columns.rs::fill_anticipated_columns' sibling fill_storage_columns and pinned by column bounds each solve; no downstream coupling imposes a finite cap on the incoming state itself, so a pin-then-read cannot land a value outside a bound. Building a shared drift seam for this family would be a one-consumer abstraction.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/state_space.rs inflow-lag family (lag_incoming_col, state_to_lp_column lag remap)",
+      "why": "CD-074 class sweep answer for inflow lags: no drift reconciliation exists and none is needed. Lag columns are written unconstrained and signed by columns.rs::fill_ar_lag_columns, and the lag remap (lag 0 to z_inflow, lag l to the previous stage's lag l-1) couples them to no bounded column, so there is no bound for a pinned value to drift outside of.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/columns.rs::fill_transit_bucket_columns and the transit-bucket family",
+      "why": "CD-074 class sweep answer for transit buckets: no live drift reconciliation and none needed at the baseline. Incoming buckets are free at [0, +INF) and pinned by column bounds; the identity carry has no finite cap on the state. The dormant scaling.rs::apply_bucket_col_scale is a documented reserved seam awaiting the bucket LP fill, not dead code, and must not be swept.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md; CLAUDE.md 'Unwired config is reserved, not dead'"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/state_space.rs::REGION_ORDER and its exhaustive dispatch (state_dim_range, incoming_block_start, classify, classify_incoming_column, set_nonzero_mask)",
+      "why": "The single owner of the storage/lag/bucket/commitment-hold walk order, with every consumer matching exhaustively and no _ catch-all, so adding a StateRegion variant fails to compile until every site handles it. This is the pattern the two B-grade candidates ask the commitment column resolvers to be brought up to; it is the crate's strongest structural defence and worth protecting as is.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/indexer/entity_index.rs",
+      "why": "Names why BusSys, NcsSys and ContractSys are deliberately NOT introduced (a system-index type for them would have no call site and ship as a dead type) and pins six cross-family index swaps with compile_fail doctests. It is both a correct refusal to over-abstract and the precedent for the newtype discipline the commitment-hold family is missing.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/delivery_ring.rs (the ring primitive itself)",
+      "why": "A genuinely two-consumer shared primitive - the water travel-time ring and the anticipated commitment ring - so it clears the pull-don't-push bar rather than being speculative generality. Only its untyped addressing operand order is raised; the abstraction itself is earned. Its module doc claim that both rings advance one Markov-1 slot per stage through the same interior shift-row skeleton is stale for the anticipated ring, which now uses the same-slot carry identity, but that is doc drift on a correct primitive.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs::for_each_fpha_plane",
+      "why": "The in-crate precedent for the Sev A fix shape: one walker drives both the bounds fill and the coefficient fill, so a one-sided edit landing bounds and coefficients on different rows is impossible. The anticipated ring's three-owner residue is the same problem this module already solved, which is why the fix needs no new pattern.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/builder/storage_boundary_grid.rs, range_cursor.rs, study_dimensions.rs, hydro_cell.rs",
+      "why": "Examined for the same three-owner residue and multi-axis index class and found clean: each is a single owner of its arithmetic (block_storage_col's three-arm formula under an exhaustive Boundary match with no _ arm, RangeCursor::alloc's pos..pos versus 0..0 rationale, the state-defining versus non-state exclusion rule, the identity-partition byte-neutrality argument). No candidate raised against them.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/lp/mod.rs, lp/builder/mod.rs, lp/indexer/mod.rs, lp/indexer/layout.rs, lp/builder/rows.rs, lp/builder/template.rs, lp/builder/generic_constraints.rs",
+      "why": "Swept for the 5b questions and clean. builder/mod.rs' shared constants (EVAP_COLS_PER_HYDRO, EVAP_F_PLUS_OFFSET) carry the footgun rationale that justifies them rather than restating the arithmetic, which is the correct shape for a shared-constant module.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "Can a shipped deck declare an anticipated plant with a fixed post-horizon window AND a genuine in-study decision whose delivery target sits above that window? If yes, the Sev A raw-axis residue in columns.rs::fill_anticipated_columns is reachable in production and the fix moves a parity golden; if the combination is rejected upstream at validation, the defect is latent and the fix is byte-neutral against every existing golden. entries.rs carries the fixture (plant0_excised_window_g3_resolution) but a fixture does not establish deck reachability.",
+    "Are the commitment drift tolerances COMMITMENT_DRIFT_REL = 1e-7 and COMMITMENT_DRIFT_ABS = 1e-5 in commitment_reconcile.rs chosen under the assumption that commitment-hold col_scale is exactly 1.0? The two mechanisms never cross-reference, so whether the tolerance budget already absorbs a non-unit scale factor or depends on the override is an owner fact, and it decides whether the candidate's fix is a cross-reference plus assertion or a re-derivation of the constants."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 5,
+    "kept": 5,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

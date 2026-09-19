@@ -1,0 +1,213 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "measuredAt": "2026-09-18",
+  "measuredOn": "the working tree, whose crates/ scripts/ .github/ trees are byte-identical to the pin (drift rule); the parity script and the pytest module read the tree, the pytest module also runs target/release/cobre (built 2026-09-17 from the pin-era tree) and the installed cobre Python module",
+  "sourceLayer": {
+    "gate": "scripts/ci/check_python_parity.py",
+    "command": "python3 scripts/ci/check_python_parity.py --max 0 --root .",
+    "exitCode": 0,
+    "summaryLine": "OK: 0 parity mismatch(es) (max allowed: 0). 18 write functions in both paths.",
+    "extractor": "extract_write_functions(path: 'Path') -> 'set[str]' over crates/cobre-cli/src/commands/run and crates/cobre-python/src/run.rs",
+    "cliNames": [
+      "SimulationParquetWriter",
+      "export_stochastic_artifacts",
+      "write_evaporation_models",
+      "write_fixed_delivery",
+      "write_fpha_deviation_points",
+      "write_fpha_hyperplanes",
+      "write_generic_constraint_echo",
+      "write_hydro_model_summary",
+      "write_paths",
+      "write_policy_checkpoint",
+      "write_provenance_report",
+      "write_row_selection_records",
+      "write_scaling_report",
+      "write_scenario_summary",
+      "write_simulation_results",
+      "write_simulation_solver_stats",
+      "write_solver_stats",
+      "write_training_results"
+    ],
+    "pythonNames": [
+      "SimulationParquetWriter",
+      "export_stochastic_artifacts",
+      "write_evaporation_models",
+      "write_fixed_delivery",
+      "write_fpha_deviation_points",
+      "write_fpha_hyperplanes",
+      "write_generic_constraint_echo",
+      "write_hydro_model_summary",
+      "write_paths",
+      "write_policy_checkpoint",
+      "write_provenance_report",
+      "write_row_selection_records",
+      "write_scaling_report",
+      "write_scenario_summary",
+      "write_simulation_results",
+      "write_simulation_solver_stats",
+      "write_solver_stats",
+      "write_training_results"
+    ],
+    "inBoth": [
+      "SimulationParquetWriter",
+      "export_stochastic_artifacts",
+      "write_evaporation_models",
+      "write_fixed_delivery",
+      "write_fpha_deviation_points",
+      "write_fpha_hyperplanes",
+      "write_generic_constraint_echo",
+      "write_hydro_model_summary",
+      "write_paths",
+      "write_policy_checkpoint",
+      "write_provenance_report",
+      "write_row_selection_records",
+      "write_scaling_report",
+      "write_scenario_summary",
+      "write_simulation_results",
+      "write_simulation_solver_stats",
+      "write_solver_stats",
+      "write_training_results"
+    ],
+    "cliOnly": [],
+    "pythonOnly": [],
+    "sharedCount": 18,
+    "minSharedFloor": 18,
+    "coverageOfMeasuredWriters": {
+      "measuredExternalNames": 17,
+      "coveredByName": [
+        "write_evaporation_models",
+        "write_fixed_delivery",
+        "write_fpha_deviation_points",
+        "write_fpha_hyperplanes",
+        "write_generic_constraint_echo",
+        "write_hydro_model_summary",
+        "write_paths",
+        "write_policy_checkpoint",
+        "write_provenance_report",
+        "write_row_selection_records",
+        "write_scaling_report",
+        "write_scenario_summary",
+        "write_simulation_results",
+        "write_simulation_solver_stats",
+        "write_solver_stats",
+        "write_training_results"
+      ],
+      "coveredCount": 16,
+      "notCoveredByName": [
+        "write_scenario"
+      ],
+      "note": "write_scenario is the SimulationParquetWriter method the script tracks under the writer TYPE name (`\\w+Writer`); write_checkpoint is normalised to write_policy_checkpoint — every measured writer is enforced"
+    },
+    "invisibleToGate": {
+      "names": [
+        "write_checkpoint",
+        "write_scenario"
+      ],
+      "note": "measured external writer names absent from the gate's per-side sets BY NAME, each covered under another name: write_checkpoint is aliased to write_policy_checkpoint by the script's own alias map (scripts/ci/check_python_parity.py:26, the cobre-io writer the cobre-sddp orchestration wrapper calls); write_scenario is covered through its writer type SimulationParquetWriter (cobre-io simulation_writer.rs:536/:645) — neither is a coverage gap"
+    },
+    "crateLocalWrappers": {
+      "cli": [
+        "write_training_outputs",
+        "write_simulation_outputs",
+        "write_sim_outputs_on_root"
+      ],
+      "python": [
+        "write_training_artifacts",
+        "write_fpha_hyperplanes_if_any",
+        "write_evaporation_models_if_any",
+        "write_generic_constraint_echo_if_any",
+        "write_fixed_delivery_if_any",
+        "write_fpha_deviation_points_if_any"
+      ],
+      "note": "orchestrators and helpers the gate cannot see by construction: they are not writers, they call writers; the gate compares the writer names each side reaches"
+    },
+    "ciStep": ".github/workflows/ci.yml:294 (quality-scripts job)"
+  },
+  "writerSurface": {
+    "command": "git grep -o 'write_[a-z_0-9]*(' 077dbe2c -- 'crates/cobre-cli/src/commands/run/*.rs' | wc -l; … | grep -c 'write_line('; git grep -o 'write_[a-z_0-9]*(' 077dbe2c -- crates/cobre-python/src/run.rs | wc -l; … | grep -c '_if_any('",
+    "cliCallSites": 39,
+    "cliTerminalWriteLine": 16,
+    "cliWriterCallSites": 23,
+    "pythonCallSites": 23,
+    "pythonIfAnyHelpers": 5,
+    "externalWriterNames": {
+      "cli": 17,
+      "python": 17,
+      "identical": true
+    },
+    "ticketFigures": {
+      "cliCallSites": 41,
+      "pythonCallSites": 29,
+      "pythonWriterNames": 26,
+      "note": "a136840d figures; superseded at the pin"
+    }
+  },
+  "runtimeLayer": {
+    "test": "crates/cobre-python/tests/test_cli_python_file_set_parity.py",
+    "command": "python3 -m pytest crates/cobre-python/tests/test_cli_python_file_set_parity.py -v -rs -p no:cacheprovider",
+    "outcome": "passed",
+    "passed": 5,
+    "skipped": 0,
+    "skipReason": null,
+    "guard": "conftest.py::cli_binary (session fixture) → _cobre_cli.resolve_cli_binary(repo_root, required=--require-cli-binary): absence of target/release/cobre or target/debug/cobre SKIPS locally (required=False) and FAILS in CI (--require-cli-binary); the ticket's `_cli_binary()` name is the a136840d spelling",
+    "binaryUsed": "target/release/cobre (present, built 2026-09-17)",
+    "case": "examples/deterministic/d28-decomp-weekly-monthly (training + simulation, 5 scenarios) through run_cli and cobre.run.run; module-scoped fixtures d28_cli_output / d28_python_output",
+    "ciExecutes": "yes",
+    "ciEvidence": ".github/workflows/ci.yml job `python` (:505): `maturin develop --release` (:559), `cargo build --release -p cobre-cli` (:561, step 'Build the CLI for the parity tests'), then `pytest crates/cobre-python/tests/ … --require-cli-binary` (:572) — the runtime layer cannot skip in CI",
+    "companionGolden": {
+      "test": "crates/cobre-python/tests/test_cli_python_determinism_parity.py",
+      "tests": 6,
+      "asserts": "value-level equality of the whole output tree from both entry points on examples/1dtoy under two wall-clock masks (CD-025 register note)"
+    }
+  },
+  "thirdLayer": {
+    "test": "crates/cobre-cli/tests/python_parity_check.rs",
+    "testFn": "python_parity_script_passes",
+    "runsUnder": "cargo test --workspace (and the `test` CI job)",
+    "skipCondition": "python3 absent (eprintln + return)",
+    "invokes": "python3 scripts/ci/check_python_parity.py --max 0 (the source layer, from cargo test)"
+  },
+  "ciVisibility": {
+    "cobrePythonRustTests": 19,
+    "perFile": {
+      "errors.rs": 3,
+      "policy.rs": 1,
+      "run.rs": 13,
+      "schema.rs": 2
+    },
+    "command": "git grep -c '#\\[test\\]' 077dbe2c -- 'crates/cobre-python/src/*.rs'",
+    "workspaceExcluded": "Cargo.toml:21-23 — `cargo test --workspace` skips the crate",
+    "executedBy": ".github/workflows/ci.yml:562-568 `Run Rust tests for the bindings crate` (matrix python 3.12) — CI-VISIBLE; the ticket's 'never executes … no job runs cargo test for it' is superseded (see inventory.json → testSurface.ciVisibility)",
+    "ticketFigure": {
+      "count": 22,
+      "executedBy": "none",
+      "note": "a136840d figures; superseded"
+    }
+  },
+  "claims": {
+    "S6a-architecture-06": {
+      "admitted": true,
+      "restsOn": [
+        "sourceLayer.cliNames",
+        "sourceLayer.pythonNames",
+        "writerSurface.cliCallSites",
+        "writerSurface.pythonCallSites",
+        "runtimeLayer.outcome"
+      ],
+      "title": "The mirror's CI gate has leaked into call-site syntax: two writers are called fully qualified so the checker can see them, a reason the pin's import-resolving checker no longer has"
+    },
+    "S6a-over-engineering-03": {
+      "admitted": true,
+      "restsOn": [
+        "sourceLayer.cliNames",
+        "sourceLayer.pythonNames",
+        "writerSurface.cliCallSites",
+        "writerSurface.pythonCallSites",
+        "runtimeLayer.outcome"
+      ],
+      "title": "The per-artifact write guards are mirrored across the CLI/Python boundary by four hand-written comments naming the twin symbol, a granularity the name-matching parity gate cannot check"
+    }
+  },
+  "blockedPendingMeasurement": []
+}

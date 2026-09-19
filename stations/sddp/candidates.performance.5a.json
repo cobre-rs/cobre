@@ -1,0 +1,240 @@
+{
+  "station": "sddp",
+  "subStation": "5a",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "cell": "sddp/5a",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The opening-order chain builder recomputes a whole-tour cost sum for every candidate 2-opt reversal, and fills a symmetric distance matrix twice",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "two_opt_improve"
+        },
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "tour_cost"
+        },
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "shortest_chain_path"
+        },
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "l2_distance_matrix"
+        },
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "nearest_neighbor_tour"
+        },
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "apply_chain_order"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/stochastic/noise_key.rs | sed -n '132,146p;174,222p;223,266p'; git grep -n 'build_noise_key_table' 077dbe2c -- crates/cobre-sddp/src | grep -v 'noise_key.rs:5'",
+        "output": "132:fn tour_cost(tour: &[usize], distances: &[f64], n_o: usize) -> f64 {\n133:    tour.windows(2).map(|w| distances[w[0] * n_o + w[1]]).sum()\n134:}\n140:fn nearest_neighbor_tour(distances: &[f64], n_o: usize, start: usize) -> Vec<usize> {\n141:    let mut tour = Vec::with_capacity(n_o);\n142:    let mut visited = vec![false; n_o];\n...\n174:fn two_opt_improve(tour: &mut [usize], cost: &mut f64, distances: &[f64], n_o: usize) {\n175:    let mut improved = true;\n176:    while improved {\n177:        improved = false;\n178:        for i in 1..n_o.saturating_sub(1) {\n179:            for j in (i + 1)..n_o {\n180:                tour[i..=j].reverse();\n181:                let candidate_cost = tour_cost(tour, distances, n_o);\n182:                if candidate_cost.total_cmp(cost).is_lt() {\n183:                    *cost = candidate_cost;\n184:                    improved = true;\n185:                } else {\n186:                    tour[i..=j].reverse();\n187:                }\n...\n198:fn shortest_chain_path(distances: &[f64], n_o: usize) -> Vec<usize> {\n...\n208:    for start in 0..n_o {\n209:        let mut tour = nearest_neighbor_tour(distances, n_o, start);\n210:        let mut cost = tour_cost(&tour, distances, n_o);\n211:        two_opt_improve(&mut tour, &mut cost, distances, n_o);\n...\n223:fn l2_distance_matrix(\n...\n230:    let mut distances = vec![0.0_f64; n_o * n_o];\n231:    for i in 0..n_o {\n232:        let opening_i = &tree.opening(stage, i)[..n_hydros];\n233:        for j in 0..n_o {\n234:            let opening_j = &tree.opening(stage, j)[..n_hydros];\n235:            distances[i * n_o + j] = opening_i\n236:                .iter()\n237:                .zip(opening_j)\n238:                .map(|(a, b)| (a - b) * (a - b))\n239:                .sum::<f64>()\n240:                .sqrt();\n...\n254:fn apply_chain_order(keys: &mut [Vec<f64>], tree: &OpeningTreeView<'_>, n_hydros: usize) {\n255:    for (stage, stage_keys) in keys.iter_mut().enumerate() {\n256:        let n_o = stage_keys.len();\n257:        if n_o < 3 {\n258:            continue;\n259:        }\n260:        let distances = l2_distance_matrix(tree, stage, n_o, n_hydros);\n261:        let path = shortest_chain_path(&distances, n_o);\n\n077dbe2c:crates/cobre-sddp/src/setup/mod.rs:53:use crate::stochastic::noise_key::build_noise_key_table;\n077dbe2c:crates/cobre-sddp/src/setup/mod.rs:467:        let solve_order_keys = build_noise_key_table(system, &stochastic)?;",
+        "reading": "`two_opt_improve` calls `tour_cost`, a pass over the whole tour, once per candidate segment reversal, and the reversal loop is the quadratic (i, j) sweep repeated under `while improved`. `shortest_chain_path` runs that whole improvement for each of n_o nearest-neighbour starts, and `apply_chain_order` calls it once per study stage carrying at least three openings. A path 2-opt reversal changes exactly two edges, so the accept/reject test needs two matrix reads rather than a whole-tour sum. `l2_distance_matrix` writes every entry of an `n_o` by `n_o` symmetric matrix, so each off-diagonal pair is computed twice and the zero diagonal is computed too. `nearest_neighbor_tour` allocates a fresh `Vec<usize>` plus a fresh `vec![false; n_o]` on every start. Honest reach: the grep finds exactly one production call site, `setup/mod.rs` in `from_broadcast_params`, so this is setup-time work executed once per study and replicated on every rank; it has no per-iteration and no per-solve reach, which is why the severity proposed is local rather than structural."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Two halves with different risk, and they should be queued separately. The byte-exact half: fill the distance matrix symmetrically by writing the mirrored entry instead of recomputing it and skip the zero diagonal, since `(a - b) * (a - b)` equals `(b - a) * (b - a)` exactly in IEEE arithmetic and the per-pair summation order is unchanged, so the matrix is bit-identical; and hoist the nearest-neighbour tour and visited buffers out of the per-start loop, reusing them by clear-and-refill, which changes no value at all. Both leave the winning permutation identical, so the parity goldens in `tests/parity.rs` and `tests/common/parity_hash.rs`, the rank-invariance harness in `tests/common/permute.rs`, and `mpiexec` at one rank versus two ranks all reproduce unchanged and no golden moves. The half that does move goldens: replacing the whole-tour recomputation with the two-edge delta a path reversal actually implies changes the floating-point basis of the accept/reject comparison, can flip a marginal reversal, and so can change the winning permutation. Per `.claude/rules/sddp.md` section Backward opening order is warm-start-only, outcomes are written and aggregated by canonical omega, so a changed permutation cannot break declaration-order invariance or run-to-run reproducibility; but that same section states that changing the order changes the warm-start chain each opening solves from and therefore re-checks the golden parity baselines instead of assuming byte-identical outputs. So the delta half is proposed only with an explicit golden re-check plus the `opening_order_determinism` gate in `tests/mpi_wire.rs` and the rank-invariance comparison. Keep `total_cmp` throughout: a delta formulation must not reintroduce `partial_cmp` or bare `<` ordering, which the same section names as the wrong-but-compiling alternative.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant pass — a whole-tour cost sum recomputed per candidate reversal where only two edges change, a symmetric distance matrix computed twice per pair, and a per-start buffer allocation",
+      "profiledSymbol": "crates/cobre-sddp/src/stochastic/noise_key.rs::shortest_chain_path",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED"
+    },
+    {
+      "title": "The reverse-topological cut level decomposition is a study invariant but is rescanned and reallocated on every backward pass",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "backward_cut_levels"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "NodeGraph"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "build_node_graph"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/setup/node_graph.rs | sed -n '774,798p'; git grep -n 'backward_cut_levels()' 077dbe2c -- crates/cobre-sddp/src/training",
+        "output": "774:    pub(crate) fn backward_cut_levels(&self) -> Vec<Vec<NodePos>> {\n775:        let cut_generating = |pos: NodePos| !self.successors[pos].is_empty();\n776:        let Some(max_stage) = self\n777:            .nodes\n778:            .iter_indexed()\n779:            .filter(|&(pos, _)| cut_generating(pos))\n780:            .map(|(_, n)| n.stage)\n781:            .max()\n...\n786:        let mut levels: Vec<Vec<NodePos>> = Vec::new();\n787:        for stage in (0..=max_stage.0).rev().map(StageIdx) {\n788:            let level: Vec<NodePos> = self\n789:                .nodes\n790:                .iter_indexed()\n791:                .filter(|&(pos, n)| n.stage == stage && cut_generating(pos))\n792:                .map(|(pos, _)| pos)\n793:                .collect();\n794:            if !level.is_empty() {\n795:                levels.push(level);\n796:            }\n797:        }\n798:        levels\n\n077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs:645:        let levels = training_ctx.node_graph.backward_cut_levels();\n077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs:756:        let levels = node_graph.backward_cut_levels();",
+        "reading": "The body walks the whole `nodes` array once to find the maximum cut-generating stage, then walks it again in full for every stage from that maximum down to zero, allocating one `Vec<NodePos>` per non-empty level plus the outer `Vec`. Both production call sites are per-iteration backward drivers: `run_sampled_backward` (the enclosing function at the first hit) and `run_enumerated_backward` (the enclosing function at the second). `NodeGraph` is immutable study-level data reached through `training_ctx.node_graph`, the placement the architecture rules pin in the F7 note, so the returned decomposition is identical on every iteration and the whole computation plus its allocations repeat for no new information. This is the crate hard rule against allocating on hot paths, applied to a driver prelude. Distinct from the deferred per-run allocation item anchored at `run_enumerated_backward`: the subject here is the callee's study-invariant result, and it is reached first from `run_sampled_backward`, which that item does not name."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Resolve the level decomposition once where the graph is constructed, in `build_node_graph`, and store it as a `NodeGraph` field the drivers borrow, so each backward pass reads a slice of slices instead of rescanning and reallocating. The crate already has this precedent: the enumerated plan and the nested upper-bound topology are documented as resolved once at construction rather than every training iteration, and `NodeGraph` is exactly the study-level read-only home the architecture rules name for this data. Byte-neutrality: the stored decomposition must be built by a single stable bucket pass that reproduces both orders the current code produces, the outer list descending by stage and each inner list ascending by canonical node position, because the within-level node order is the order the risk aggregation consumes and the index-order tie-break that `assemble_outcome_weights` documents for the nested risk measure depends on it. With both orders preserved the levels are element-for-element what they are today, the level driver's one state exchange and one batched cut exchange per level stay in the same sequence per `.claude/rules/sddp.md` section Per-level exchange in the backward pass, and the parity goldens in `tests/parity.rs` with `tests/common/parity_hash.rs`, the rank-invariance harness in `tests/common/permute.rs`, and `mpiexec` at one rank versus two ranks all reproduce bit-for-bit. No golden moves.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant pass plus allocation per call — a study-invariant level decomposition recomputed by repeated whole-graph scans and freshly allocated on every backward pass",
+      "profiledSymbol": "crates/cobre-sddp/src/setup/node_graph.rs::backward_cut_levels",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:module-map",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        },
+        {
+          "ref": "mirror:graph-shape-predicate-grep",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "Stage frontier resolution scans the entire node array per stage, so an enumerated sweep pays a whole-graph scan for every stage it visits",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "stage_frontier"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "frontier_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "any_stage_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "build_declared_node_graph"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/setup/node_graph.rs | sed -n '1120,1125p;1133,1135p;1149,1151p'; git grep -n 'stage_frontier(' 077dbe2c -- crates/cobre-sddp/src | grep -v 'node_graph.rs'; git show 077dbe2c:crates/cobre-sddp/src/training/forward/enumerated.rs | sed -n '533,540p'",
+        "output": "1120:    pub(crate) fn stage_frontier(&self, stage: StageIdx) -> impl Iterator<Item = NodePos> + '_ {\n1121:        self.nodes\n1122:            .iter_indexed()\n1123:            .filter(move |(_, n)| n.stage == stage)\n1124:            .map(|(pos, _)| pos)\n1125:    }\n1134:        let mut frontier = self.stage_frontier(stage);\n1150:        self.stage_frontier(stage).next()\n\n077dbe2c:crates/cobre-sddp/src/simulation/enumerated.rs:302:        for node in node_graph.stage_frontier(t) {\n077dbe2c:crates/cobre-sddp/src/training/forward/enumerated.rs:536:        for node in node_graph.stage_frontier(t) {\n077dbe2c:crates/cobre-sddp/src/training/forward_pass_state.rs:2434:        let leaves: Vec<NodePos> = node_graph.stage_frontier(StageIdx(1)).collect();\n\n533:    for t in (0..num_stages).map(StageIdx) {\n534:        // Units: the nodes at stage `t` on this rank's paths, canonical order.\n535:        scratch.stage_units.clear();\n536:        for node in node_graph.stage_frontier(t) {\n537:            if scratch.on_my_paths[node] {\n538:                scratch.stage_units.push(node);\n539:            }\n540:        }\n",
+        "reading": "`stage_frontier` filters the whole `nodes` array on every call, so resolving one stage's frontier costs a pass over every node in the graph. Both enumerated drivers call it inside a loop over every stage, so one sweep costs a number of node visits equal to stages times nodes, and the enumerated forward sweep runs once per training iteration while the simulation sweep runs per simulation pass. `frontier_node` and `any_stage_node` are built on the same scan and are the resolution route used by the simulation pipeline, the simulation state driver, the sampled forward pass, the lower-bound root evaluation and the training session, so the scan is the single shared frontier lookup rather than an isolated one. The remaining hit in `forward_pass_state.rs` is inside that file's test module. Nothing about the scan is required by the graph's shape: `build_declared_node_graph` sorts nodes into canonical position by ascending declared node id, not grouped by stage, which is why a linear filter was the only route available at construction time."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give `NodeGraph` a per-stage membership index built once in `build_node_graph`: an offsets array plus a positions array, the same compressed shape the graph already uses for out-edges, so `stage_frontier` returns an iterator over one contiguous slice and `frontier_node` and `any_stage_node` read that slice's head. The per-stage loop in each enumerated driver then visits only the nodes at that stage. Byte-neutrality: because canonical position is ascending declared node id and not stage-grouped, a stage's members are not contiguous in position space, so the index must be filled by a stable pass over ascending canonical position; each stage's slice then yields exactly the sequence the current filter yields. Same nodes in the same order means the per-stage unit list each driver builds is filled identically, and the claim cursor over it therefore hands the same units to the same workers, so the parity goldens in `tests/parity.rs` with `tests/common/parity_hash.rs`, the rank-invariance harness in `tests/common/permute.rs`, and `mpiexec` at one rank versus two ranks all reproduce bit-for-bit and no golden moves. This touches no pinned contract: the frontier is structural, it selects no opening and no basis, so section Backward opening order is warm-start-only and section A stored basis warm-starts only at its own node are not engaged. The two driver call sites are cited as context only; they belong to sibling sub-stations and the subject of this candidate is the accessor.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "single-process",
+      "layout": "4t",
+      "mechanism": "redundant pass — a whole-graph node scan per stage to select that stage's nodes, driven once per stage per sweep",
+      "profiledSymbol": "crates/cobre-sddp/src/setup/node_graph.rs::stage_frontier",
+      "queuedTo": "perf-sweep",
+      "measured": null,
+      "status": "UNMEASURED",
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:module-map",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        },
+        {
+          "ref": "mirror:graph-shape-predicate-grep",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::rescale_cut_records_for_load — the Legacy (None) cost-scale branch and LEGACY_COST_SCALE_FACTOR",
+      "why": "Reserved seam, cited not raised. Its early return when the loading factor equals the legacy factor is documented as an exact bit-identical no-op and stated to be a correctness requirement rather than an optimization, so the branch that a perf sweep would be tempted to fold away is precisely the branch that must stay. Examined for redundant passes on the load path and found to be a single guard, not a loop.",
+      "sanctionedBy": "register BACKLOG L2272; mirror docs/design/reserved-seams-and-deferred-debt.md:30 section Reserved-seam register (mirror entry owed by E11)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/stochastic/noise.rs",
+      "why": "Examined in full and clean, and the buffer discipline here is worth protecting. Every working buffer is a ScratchBuffers field cleared and resized rather than reallocated; the copy helper clears and extends from slice so capacity is retained; the accumulator snapshot capture, copy and restore all route through that helper; and the NCS column-bound rebuild is keyed on the recorded column start rather than on length alone, which is the conservative choice, not the cheap one.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/stochastic_pipeline.rs",
+      "why": "Examined and clean for this lens. The NCS factor entry builder does re-fetch the resolved factor table inside its innermost block loop, and two helpers deep-clone the study stage vector, but every production call site resolves to study setup, run once, with no per-iteration or per-solve reach. Weighed honestly, that is setup cost with no reach to weigh it against.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/scenario_libraries.rs",
+      "why": "Examined and clean. The per-stage scenario count helper rebuilds a stage id resolver on each of its class calls and the normal-model path reifies a dense per-entity-per-stage model set, but all passes are single and linear and all of it runs once at setup.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs (validate_policy_load, compare_graph_manifest_identity, compare_manifest_slot_identity, select_boundary_pool, check_season_compatibility, check_topology_subset, load_boundary_cuts, build_basis_cache_from_checkpoint)",
+      "why": "Examined and clean, and the sharing is deliberate. The load path already hoists its indices: one identity index is built once and shared between the topology-subset check and the rebind, with an in-code note that the source is hashed once and not per consumer, and one source index is shared between the fold and the rebind and report. The season check binary-searches and walks canonically rather than rescanning. The basis cache build does a linear find per basis record, which is load-time and once. The mandatory validation this file owns is governed by .claude/rules/sddp.md section Policy-load compatibility validation is mandatory, so no fix-shape that skips or reorders a check is proposable here.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/reconcile.rs",
+      "why": "Examined and clean. The identity index and the source interval index are built once by the caller and passed in; the rebind, the per-cut rebind, the dropped-position scan and the report build are single linear passes over aligned vectors. The one hash-map iteration only sums counts, so it is order-independent and the determinism note in that function holds.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_export.rs::build_stage_entity_manifest and crates/cobre-sddp/src/policy/orchestration.rs::write_checkpoint",
+      "why": "Examined; a real re-derivation with no reach, so a positive rather than a candidate. The manifest builder re-derives its anticipated thermal list, its study stage list, two positional scans, the post-study delivery calendar and the extended delivery stages on every call, and the checkpoint writer calls it once per pool, so the work grows with pools times stages plus thermals. Honest reach: the only production callers of the checkpoint writer are the CLI output writer and the Python run path, both once per run at output time. There is no per-iteration or per-solve reach to weigh it against, so it is not a perf candidate.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/accessors.rs",
+      "why": "Examined and clean. The setters, the terminal pool stage lookup, the terminal manifest and window builders and the graph manifest builder are one-shot; the three context builders are pure borrow-only struct literals with no allocation, which is what keeps the per-call context construction on the hot path free.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/bucket_topology.rs",
+      "why": "Examined and deliberately not raised. The three sibling arc builders each independently recompute the study stage durations, the delivery stage durations, the study stage filter and the resolution extension, and the arrival density is quadratic in stages per arc with an allocation per arrival-source pair. But the owning topology struct carries an allow-dead-code attribute with a written note that no production read site consumes its fields yet, and the work is setup-time only, so a perf claim here would be a claim about code no production path executes for value. Recorded as an observation for whoever wires the first reader.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/node_graph.rs (assemble_outcome_weights, successor_outcome_count, max_successor_outcome_count, advance_sampled_node, node_parent)",
+      "why": "Examined and clean, and the shape is worth protecting. The outcome weight assembler clears and reserves into the caller's buffer rather than returning a fresh vector, and is documented as the single owner shared by the backward pass and the lower-bound root evaluation with the index-order sensitivity of the nested risk measure spelled out. The successor outcome count is a cheap sum, the maximum is used once for workspace sizing, and the sampled advance is linear in a node's successors with a single-successor fast path. The parent lookup is test-only and its own doc says production reads the constant-time map, not that scan.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/stochastic/noise_key.rs — the total_cmp ordering discipline",
+      "why": "Worth protecting explicitly, because it is the thing a perf rewrite of this file would break. Every comparison in the nearest-neighbour tie-break, the reversal accept test and the winning-tour test uses total_cmp, with in-code notes that partial_cmp, bare less-than or min_by would reintroduce a NaN and negative-zero dependent order and break run-to-run reproducibility. Any delta-cost reformulation must keep it.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/stochastic/inflow_method.rs, crates/cobre-sddp/src/horizon_mode.rs, crates/cobre-sddp/src/stochastic/mod.rs, crates/cobre-sddp/src/policy/mod.rs",
+      "why": "Examined and clean. Enums with match dispatch and module declarations; no allocation, no loops, nothing for a perf sweep to profile.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/config.rs, crates/cobre-sddp/src/validate_phases.rs, crates/cobre-sddp/src/setup/params.rs, crates/cobre-sddp/src/setup/orchestration.rs, crates/cobre-sddp/src/setup/scenario_library_set.rs, crates/cobre-sddp/src/setup/stage_data.rs, crates/cobre-sddp/src/setup/template_postprocess.rs, crates/cobre-sddp/src/policy/provenance.rs, crates/cobre-sddp/src/policy/resolved_parameters.rs, crates/cobre-sddp/src/policy/scaling_report.rs, crates/cobre-sddp/src/stochastic/stochastic_summary.rs",
+      "why": "Examined and clean for this lens: the config-time and report-time tier. These are default impls, plain struct declarations, a static-string mapper, a pure config projection and report builders. Every production call site resolves to study setup or to output and report writing, once per run: the template postprocessor and the resolved-parameter build are called from the setup constructor, the provenance report from the CLI setup path and the Python run path, the stochastic summary from the Python run path. Whether the resolved parameters should be built per rank at all is an architecture question already carried as a live disposition; it is not a perf claim and is not raised here.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/mod.rs — the NCS slot-to-column bridge and the anticipated commitment history walk",
+      "why": "Examined and clean. Both use a linear position scan inside a loop, and both carry a written rationale: the NCS bridge maps by entity id rather than by index so the map stays correct when only a subset is stochastic or the orders diverge, and the commitment walk states in code that it is a linear scan over the small anticipated list rather than a map. Both are setup-time, once per study, over small entity lists.",
+      "sanctionedBy": null
+    }
+  ],
+  "_needsHuman": [
+    "Does the perf epic want the opening-order chain rewrite at all? The byte-exact half (mirrored distance matrix, hoisted per-start buffers) is free and moves no golden, but the two-edge delta half re-checks the golden parity baselines by the rule that governs opening order, and the whole cost is setup-time once per study. Owner call on whether a golden re-check is worth a setup-once win.",
+    "Where should the two precomputed node-graph indices live: as new NodeGraph fields (which is the F7 placement and reaches the drivers through TrainingContext with no new plumbing), or on StudySetup beside the other resolved-once topologies? The candidates assume the NodeGraph field; the alternative changes which struct grows."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 3,
+    "kept": 3,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

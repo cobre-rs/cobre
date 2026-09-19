@@ -1,12 +1,12 @@
 {
-  "baseline": "00abd53a3316fbcb1222dcbee30815be19ba0ba8",
-  "generatedAt": "2026-09-08T19:43:33.612165+00:00",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "generatedAt": "2026-09-18T10:06:24.462882+00:00",
   "nonTestRule": "mirrors scripts/loc-stats.sh: sibling tests.rs and test_support.rs count zero; inline #[cfg(test)] items excluded; #[cfg(any(test, feature = \"test-support\"))] counts as test; #[cfg(not(test))] does not",
   "files": [
     {
       "path": "crates/cobre-sddp/src/lp/builder/columns.rs",
-      "total_lines": 9026,
-      "non_test_lines": 1313,
+      "total_lines": 9319,
+      "non_test_lines": 1315,
       "top_symbols": [
         "use cobre_core::commissioning",
         "use cobre_core",
@@ -73,8 +73,8 @@
     },
     {
       "path": "crates/cobre-sddp/src/lp/builder/entries.rs",
-      "total_lines": 10079,
-      "non_test_lines": 1672,
+      "total_lines": 10093,
+      "non_test_lines": 1686,
       "top_symbols": [
         "use cobre_core::commissioning",
         "use cobre_core",
@@ -229,7 +229,7 @@
     },
     {
       "path": "crates/cobre-sddp/src/lp/builder/template/tests.rs",
-      "total_lines": 5355,
+      "total_lines": 5356,
       "non_test_lines": 0,
       "top_symbols": [
         "use chrono::NaiveDate",
@@ -475,7 +475,7 @@
   ],
   "totals": {
     "file_count": 30,
-    "total_lines": 44374,
-    "non_test_lines": 11639
+    "total_lines": 44682,
+    "non_test_lines": 11655
   }
 }

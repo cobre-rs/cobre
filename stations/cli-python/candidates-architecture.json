@@ -1,0 +1,1210 @@
+{
+  "station": "cli-python",
+  "stationLabel": "cobre-cli+cobre-python+facade",
+  "subStation": "S6",
+  "cells": [
+    "architecture.S6a",
+    "architecture.S6b",
+    "architecture.S6c"
+  ],
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The run lifecycle is hand-mirrored across both L4 entry points with no Engine seam: two three-branch phase plans, each reading enablement from a different source",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/mod.rs",
+          "symbol": "execute_inner"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "run_via_study"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/mod.rs | grep -n 'if training_enabled\\|n_scenarios > 0\\|nothing to do\\|is_root && !ctx.quiet'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '1419,1423p;1462,1470p'",
+        "output": "166:    if training_enabled {\n224:        if setup.simulation_config.n_scenarios > 0 {\n227:    } else if setup.simulation_config.n_scenarios > 0 {\n230:    } else if ctx.is_root && !ctx.quiet {\n233:            .write_line(\"Training disabled, simulation disabled — nothing to do.\");\n---\n    if study.training_enabled() {\n        let policy = study.train_native(on_iteration)?;\n        let simulation = if should_simulate {\n            Some(study.simulate_native(&policy, None)?)\n    } else if should_simulate {\n        let policy = study.load_policy_native(None)?;\n        let simulation = Some(study.simulate_native(&policy, None)?);\n    } else {\n        Ok(RunSummary {\n            converged: false,\n            iterations: 0,\n            lower_bound: 0.0,",
+        "reading": "Both entry points hard-code the same three-branch phase plan (train-then-maybe-simulate / simulate-from-stored-policy / neither) and neither owns it. The CLI branches on two different objects: `training_enabled`, lifted off the wire type at run/setup.rs:365, and `setup.simulation_config.n_scenarios > 0` at :224 and :227. `run_via_study` branches on `study.training_enabled()` and `study.simulation_enabled()`, which are `config.training.enabled` and `config.simulation.enabled && n_scenarios > 0`. The two predicate pairs agree only because cobre-sddp `setup/params.rs:253-262` forces `n_scenarios = 0` whenever `!config.simulation.enabled`; the agreement rests on an invariant three crates away, not on a shared decision, and nothing fails if one side is edited. The third arm already diverges observably: the CLI writes a stderr line, the bindings return a `RunSummary` with `converged: false, iterations: 0, lower_bound: 0.0`. A second engine means editing two phase plans, and the SDDP vocabulary sits in the CLI's own prose (run/mod.rs:1-2 module doc, clap `about` at :59), which is legal at L4 but is exactly the I.5 claim."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the phase plan one owner at L4 and one query below it: the engine answers which phases a study runs as a small owned value (trained-then-simulated, simulate-from-stored-policy, nothing), and both entry points consume that answer instead of re-deriving it from `training_enabled` plus `n_scenarios` on one side and `config.training.enabled` plus `config.simulation.enabled` on the other. The `Engine` enum and the dispatch stay in cobre-cli and cobre-python (rule 13, Part IV.4); nothing engine-selecting moves down, and the query must be a value the engine already knows rather than a new trait with one implementation (rule 13, V.0). The no-op arm keeps both observable behaviours as presentation, not as plan: the CLI's stderr line and the bindings' zeroed `RunSummary` are public surface. Byte-neutrality: the query only reclassifies predicates already evaluated, so `crates/cobre-python/tests/test_cli_python_determinism_parity.py` (examples/1dtoy, whole tree value-for-value) and `tests/test_cli_python_file_set_parity.py` must stay green unchanged; `scripts/ci/check_python_parity.py --min-shared 18` is untouched because no writer name moves, and the `cobre validate --json` single-object stdout contract is outside this seam.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part IV.4",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "Rule 7 scopes the reserved-seams pre-check to the over-engineering lens. Checked anyway: this candidate is about an ABSENT seam, not an unwired reserved one, so CLAUDE.md § Unwired config is reserved, not dead has nothing to sanction here."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The four simulation writes are emitted in exactly reversed order by the two front ends, and the manifest writer is first on one side and last on the other",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_simulation_outputs"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "run_simulation_phase_py"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n 'write_simulation_results(\\|write_simulation_solver_stats(\\|write_paths(\\|write_scenario_summary('; git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'write_simulation_results(\\|write_simulation_solver_stats(\\|write_paths(\\|write_scenario_summary('",
+        "output": "CLI outputs.rs:\n186:    write_simulation_results(args.output_dir, args.sim_output, args.output_ctx)\n209:        write_simulation_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;\n212:    write_paths(args.output_dir, args.sim_path_rows.to_vec()).map_err(CliError::from)?;\n221:    write_scenario_summary(args.output_dir, &scenario_summary_rows).map_err(CliError::from)?;\nPython run.rs:\n763:    write_paths(output_dir, sim_writer.path_rows().to_vec())\n799:    write_scenario_summary(output_dir, &scenario_summary_rows)\n836:        write_simulation_solver_stats(output_dir, &rows)\n855:    write_simulation_results(output_dir, &sim_out, &sim_ctx)",
+        "reading": "The same four writers run in exactly opposite order: results, stats, paths, summary on the CLI; paths, summary, stats, results in the bindings. `write_simulation_results` writes the run manifest, so it is the FIRST artifact on the CLI path and the LAST on the Python path: an error midway leaves two different partial trees, and the order is unconstrained by the parity bar because both parity tests compare completed trees (rule 8). The bindings have no `write_simulation_outputs` peer symbol at all; the four calls are inline in the phase function, so there is no unit to align. Two transforms are copy-pasted verbatim across the boundary: the scenario-summary tuple reshuffle (outputs.rs:214-220 and run.rs:793-798) and the eight-argument `delta_to_stats_row` call with its five `None` slots (outputs.rs:196-206 and run.rs:819-835). Named as symbols, the delta a single cobre-io entry point must take as typed variation points is exactly four: distribution info (`run/mod.rs::build_distribution_info` against `run.rs::single_process_distribution`), error mapping (`CliError::from` against a `format!` string carrying \"output write error\"), progress sink (`summary.rs::print_output_path` over `console::Term` against no sink at all), and path-row provenance (`simulation.rs::aggregate_simulation_paths` against the writer's own `path_rows()`)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "One simulation-output entry point owned by cobre-io (L2), the crate both front ends already depend on, taking the four variation points above as typed parameters: a distribution descriptor value, an error type the caller maps once, an optional progress sink the CLI supplies and the bindings leave empty, and the path rows as data rather than as a writer method. The write ORDER becomes the entry point's, fixed once, which is the part the current mirror cannot express. A cobre-sddp home or a cobre-cli-local helper is `conflicts` under Part IV.1 (L2 owns shared output orchestration; an engine-specific output tree hard-wired in the CLI is forbidden there) and is not recommended. Byte-neutrality: the entry point must write the same four files with the same contents, so `crates/cobre-python/tests/test_cli_python_determinism_parity.py` (examples/1dtoy, whole tree value-for-value) is the gate on contents, `tests/test_cli_python_file_set_parity.py` on the file set, and `scripts/ci/check_python_parity.py --min-shared 18` must still report 18 shared names after the four bare writer calls collapse into one owner — if the shared count moves, the gate's premise moved with it and the change is not neutral. The `cobre validate --json` contract is untouched.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587",
+        "rule": "Rule 5 and prior-register § Normative: the mirror entry at :587 records CD-025 as OPEN deferred debt, not as a reserved seam, so there is nothing to clear-with-citation. This is a sharpen of that row with new evidence (the reversed order, the absent peer symbol, the two copied transforms), not a re-raise."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The training write set has no common composition unit: nine inline writes on the CLI against a helper plus five if-any helpers in the bindings, with the results writer at a different position and OutputContext owned by a different side",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "write_training_artifacts"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | grep -n 'write_checkpoint(\\|write_training_results(\\|write_fpha_hyperplanes(\\|write_evaporation_models(\\|write_fpha_deviation_points(\\|write_generic_constraint_echo(\\|write_fixed_delivery(\\|write_solver_stats(\\|write_row_selection_records('; git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n 'write_checkpoint(\\|write_training_results(\\|write_solver_stats(\\|write_row_selection_records(\\|fn write_'",
+        "output": "CLI outputs.rs (one function, nine writes):\n67:    write_checkpoint(\n81:    write_training_results(\n95:        write_fpha_hyperplanes(&fpha_path, &args.hydro_models.fpha_export_rows)\n107:        write_evaporation_models(&evaporation_path, &evaporation_rows).map_err(CliError::from)?;\n119:            write_fpha_deviation_points(&deviation_points_path, deviation_point_rows)\n134:        cobre_io::write_generic_constraint_echo(&echo_path, &rows).map_err(CliError::from)?;\n138:    cobre_io::write_fixed_delivery(args.output_dir, &fixed_rows).map_err(CliError::from)?;\n142:        write_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;\n147:        write_row_selection_records(\nPython run.rs (six functions):\n532:pub(crate) fn write_training_artifacts(\n542:    write_checkpoint(\n558:        write_solver_stats(output_dir, &rows)\n563:        write_row_selection_records(\n583:    write_training_results(output_dir, &training.output, system, config, &training_ctx)\n594:pub(crate) fn write_fpha_hyperplanes_if_any(\n614:pub(crate) fn write_evaporation_models_if_any(\n636:pub(crate) fn write_generic_constraint_echo_if_any(\n658:pub(crate) fn write_fixed_delivery_if_any(\n675:pub(crate) fn write_fpha_deviation_points_if_any(",
+        "reading": "Nine writes in one CLI function against six functions in the bindings, and the two orders disagree inside the block that always writes: the CLI runs checkpoint then training results then the five conditional writes then the two stats writes, while `write_training_artifacts` runs checkpoint, solver stats, row-selection records, and only then training results. `write_training_results` is CLI position 2 and Python position 4; the stats writes move from CLI positions 8 and 9 to Python positions 2 and 3. The five `*_if_any` helpers are not called by `write_training_artifacts` at all: their only caller is `study.rs::train_native` (:369-373, cited, S6c's surface), so the bindings' training write set is assembled by a THIRD symbol in a different file, and no single function on either side lists the whole set. `OutputContext` is caller-supplied on the CLI (`run/mod.rs:178-189`) and built inside the writer in the bindings (run.rs:571-582), so the two sides do not agree on who owns the metadata context either. Cost of one new output today: one edit on the CLI, two in the bindings (a new helper plus the `train_native` call list). Separately, `WriteTrainingArgs` carries `hydro_models` (:198) next to `setup` (:195), from which it is already reachable."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "One training-output entry point in cobre-io (L2) that owns the whole set and its order, taking the conditional writes as data rather than as five separately-called helpers: each conditional write is driven by rows that are empty or a config flag that is off, both of which the entry point can test itself, which is what makes the five `*_if_any` helpers collapse instead of moving. `OutputContext` becomes a parameter of that entry point so exactly one side owns it, and the `hydro_models` field of `WriteTrainingArgs` goes away with the tuple of arguments. A cobre-sddp home or a cli-local helper is `conflicts` under Part IV.1 and is not recommended. Byte-neutrality: the set, the contents and the conditional-skip behaviour must all be preserved, so `crates/cobre-python/tests/test_cli_python_determinism_parity.py` (examples/1dtoy, whole tree value-for-value) covers contents, `tests/test_cli_python_file_set_parity.py` covers the set including the files a default run does NOT write, and `scripts/ci/check_python_parity.py --min-shared 18` must still report 18 shared names once both sides call one owner. Fixing the order is a deliberate change of WHEN each file appears, never of WHAT it contains; if any golden byte moves, the entry point is wrong.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:587",
+        "rule": "Rule 5: CD-025's mirror entry records the hand-mirror as open debt. New evidence beyond that row: the position swap of `write_training_results`, the third driver symbol in study.rs, and the split ownership of `OutputContext`."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The positional carrier is nested: a six-slot LoadedCase alias feeds the ten-slot destructure, so one new loaded artifact edits four positional sites",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "LoadedCase"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "load_case_and_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "broadcast_and_build_setup"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | sed -n '68,75p;253,264p;300,318p'",
+        "output": "type LoadedCase = (\n    PrepareStochasticResult,\n    PrepareHydroModelsResult,\n    BroadcastConfig,\n    Config,\n    Vec<ScalarParameter>,\n    SetupTimings,\n);\n---\n    let (\n        raw_system,\n        raw_bcast_config,\n        root_config,\n        root_stochastic,\n        root_estimation_report,\n        root_estimation_path,\n        raw_bcast_tree,\n        root_hydro_models,\n        raw_scalar_parameters,\n        load_err,\n    ) = if ctx.is_root {\n        match load_case_and_config(args, ctx.quiet, &ctx.stderr) {\n            Ok((prepared, hydro_models, bcast, config, scalar_parameters, timings)) => {\n---\n            Err(e) => (\n                None, None, None, None, None, None, None, None, None, Some(e),\n            ),\n        }\n    } else {\n        (None, None, None, None, None, None, None, None, None, None)\n    };",
+        "reading": "CD-025's sibling row CD-002 names the ten-slot destructure. The carrier is two levels deep, which the row does not record: `load_case_and_config` returns `type LoadedCase` (:68-75), itself a six-slot positional tuple, whose root arm re-destructures positionally at :264 (`Ok((prepared, hydro_models, bcast, config, scalar_parameters, timings))`) and fans the six slots out into the ten-slot outer tuple. Both failure arms are positional too: nine `None`s plus `Some(e)` at :303-313 and ten `None`s at :317. Adding one loaded artifact therefore edits four positional sites in this one file: the alias, the inner destructure, the outer destructure, and both `None` arms. All ten outer slots are `Option`s, proven by the all-`None` non-root arm at :317, so the compiler checks arity and never meaning: a reordering that keeps the arity compiles."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Collapse BOTH levels into the one named struct CD-002 already proposes, not into a second carrier: `load_case_and_config` returns the named struct directly, `broadcast_and_build_setup` holds `Option<that struct>` plus the load error, and the non-root arm becomes a single `None` instead of ten. This is the same fix CD-002 names, extended one level inward; a second carrier or a redesign of the wire tuple is `conflicts` against the D14 rank-0-executes restatement the sddp station already made for the carrier (Part V.1), and is not proposed. The home is cli-local: this carrier is the CLI's own MPI staging, not output orchestration, so the register's cobre-io (L2) destination rule does not bind, which is the same reasoning the register applies to CD-009's path helper. The `Config → BroadcastConfig` projection inside the carrier is CD-004's (sddp, ratified) and is untouched. Byte-neutrality: a positional-to-named change moves no value across `broadcast_value`, so the postcard payloads stay byte-identical and the CLI-vs-Python golden `crates/cobre-python/tests/test_cli_python_determinism_parity.py` plus `tests/test_cli_python_file_set_parity.py` must be green unchanged; nothing in `scripts/ci/check_python_parity.py --min-shared 18` or the `cobre validate --json` contract is in this path.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": "CD-002",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:563",
+        "rule": "Rule 7 and rule 5: the mirror's deferred-debt entry at :563 (with the audit bullet at :233) covers `commands/broadcast.rs` and the `BroadcastConfig` projection twin, which is CD-004's and is cited here, never raised. The mirror reserves nothing about the positional carrier in run/setup.rs."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The CLI run path reaches the engine's parameter projection only through the MPI wire type, unconditionally, and both front ends then enter the engine through a constructor named after that transport",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "load_case_and_config"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/run/setup.rs",
+          "symbol": "build_study_setup"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/broadcast.rs",
+          "symbol": "BroadcastConfig"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "build_study_setup"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/setup.rs | sed -n '112,113p;435,437p;457,457p'; git show 077dbe2c:crates/cobre-cli/src/commands/broadcast.rs | sed -n '143,144p;199,201p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '994,998p'; git grep -n 'pub fn new(\\|pub fn new_with_boundary_requirements\\|pub fn from_broadcast_params' 077dbe2c -- crates/cobre-sddp/src/setup/mod.rs",
+        "output": "cli run/setup.rs:\n112:    let mut bcast = BroadcastConfig::from_config(&config)?;\n113:    bcast.boundary = boundary_requirements;\n435:    let config = StudyParams {\n436:        seed: bcast_config.seed,\n457:    StudySetup::from_broadcast_params(\ncli broadcast.rs:\n143:    pub(crate) fn from_config(config: &Config) -> Result<Self, CliError> {\n144:        let params = StudyParams::from_config(config).map_err(CliError::from)?;\n199:        Ok(Self {\n200:            seed: params.seed,\npython run.rs:\n994:    let mut construction = StudyParams::from_config(&config).map_err(|e| e.to_string())?;\n995:    construction.boundary = boundary_requirements;\n996:    construction.scalar_parameters = artifacts.scalar_parameters;\n997:    // export_states is captured by StudyParams::from_config from config.exports.states.\n998:    let setup = StudySetup::from_broadcast_params(\ncobre-sddp setup/mod.rs:\n342:    pub fn new(\n371:    pub fn new_with_boundary_requirements(\n419:    pub fn from_broadcast_params(",
+        "reading": "The caller shape lens question 2 asks for, measured on the run path. `load_case_and_config` calls `BroadcastConfig::from_config` at :112 unconditionally, before any rank count is consulted, so a single-process `cobre run` pays the round trip too. That call builds a full `StudyParams` at broadcast.rs:144 and then decomposes it field-by-field into the wire struct at :199-224; `build_study_setup` recomposes a `StudyParams` from those fields at setup.rs:435-456 and passes it to `StudySetup::from_broadcast_params` at :457. The bindings skip the wire type entirely (`StudyParams::from_config` at run.rs:994, two in-place field writes at :995-996) and then call the SAME `from_broadcast_params` at :998, in a single-process binding that broadcasts nothing. cobre-sddp offers three constructors (`new` :342, `new_with_boundary_requirements` :371, `from_broadcast_params` :419) and both run paths take the transport-named one, so the engine's entry is named after one front end's MPI mechanism. The cost of the two routes is visible in one field: the bindings' own comment at run.rs:997 records that `export_states` arrives through `StudyParams::from_config`, while the CLI re-derives it as the wire field `export_states: config.exports.states` (broadcast.rs:214). One value, two sources, agreeing by hand."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Name the engine's construction entry for what it does rather than for the CLI's transport, and give both front ends one route to it: a single `StudySetup` entry taking an already-built `StudyParams`, with the wire struct demoted to a transport OF that value rather than a parallel source of it, so a field like `export_states` has exactly one derivation. The projection itself (`Config → StudyParams` and its `BroadcastConfig` twin) is CD-004's, ratified at the sddp gate on 2026-09-18 (mirror :563 and :233), and is not touched here; this is the caller shape only, per lens question 2. Do NOT add a `world_size == 1` shortcut around the round trip: one path for one rank and many is what keeps a single-rank and a multi-rank run derivable from the same code, and a shortcut would create a second derivation of every parameter, which is the defect this candidate reports rather than a fix for it. The constructor rename lands in cobre-sddp's public API, which is the sddp station's surface, so this station owns the caller half and hands the name over. Byte-neutrality: every `StudyParams` field must be identical on both routes, so `crates/cobre-python/tests/test_cli_python_determinism_parity.py` (examples/1dtoy, whole tree value-for-value) is the gate, `tests/test_cli_python_file_set_parity.py` guards the set, and the `cobre validate --json` single-object stdout contract must be re-checked because `validate.rs` is the other caller of the same projection. No writer name changes, so `scripts/ci/check_python_parity.py --min-shared 18` is unaffected.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.3-7",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "docs/design/reserved-seams-and-deferred-debt.md:563 and :233",
+        "rule": "Rule 7 and rule 12: the mirror's deferred-debt entry covers the `Config → StudyParams / BroadcastConfig` twin as CD-004's, ratified at the sddp station; it is cited and never raised. Nothing in the mirror reserves the constructor name or the unconditional call site, which is what this candidate claims."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a",
+      "relatedTo": [
+        "CD-002"
+      ]
+    },
+    {
+      "title": "Training solver-stats aggregation is a third hand-mirror outside CD-025's anchor list: two otherwise identical folds differing only by the rank filter, with a bit-for-bit contract living as prose in one copy",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/training.rs",
+          "symbol": "aggregate_solver_stats"
+        },
+        {
+          "path": "crates/cobre-python/src/run.rs",
+          "symbol": "aggregate_training_solve_stats"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/training.rs | sed -n '257,278p;286,293p'; git show 077dbe2c:crates/cobre-python/src/run.rs | sed -n '249,256p;264,270p;276,281p'",
+        "output": "cli training.rs:\n/// Backward entries are allgatherv-replicated across ranks, so filtering by\n/// originating rank is required for the per-rank totals that `allreduce(Sum)`\n/// then sums correctly.\nfn aggregate_solver_stats(\n    stats_log: &[cobre_sddp::SolverStatsLogEntry],\n    my_rank: i32,\n) -> (u64, u64, u64, f64, f64) {\n...\n    for entry in stats_log {\n        if entry.rank != my_rank {\n            continue;\n        }\n...\n        forward_solve_ms / 1000.0,\n        backward_solve_ms / 1000.0,\npython run.rs:\n/// Fold the per-phase training solver-stats log into category totals, mirroring\n/// the CLI's `aggregate_solver_stats` shape. Solve times are ms→s.\n///\n/// `total_lp_solves` is intentionally NOT derived here: the CLI sources it from\n/// the per-iteration convergence records (`IterationRecord.lp_solves`), and the\n/// two sums can diverge for multi-stage cases — the caller must compute it from\n/// the convergence records to stay bit-for-bit identical to the CLI.\nfn aggregate_training_solve_stats(\n    stats_log: &[cobre_sddp::SolverStatsLogEntry],\n) -> (u64, u64, u64, f64, f64) {\n...\n    for entry in stats_log {\n        let delta = &entry.delta;\n...\n        forward_solve_ms / 1000.0,\n        backward_solve_ms / 1000.0,",
+        "reading": "Same return tuple, same five accumulators, same `saturating_sub` for the retry count, same `match entry.phase` arms, same `/ 1000.0` conversion on both returns. The single behavioural difference is the CLI's `if entry.rank != my_rank { continue; }` at training.rs:272-274, required because backward entries are allgatherv-replicated (doc :258-261). The bindings' doc at run.rs:250 states outright that it mirrors \"the CLI's `aggregate_solver_stats` shape\", and its next paragraph is a bit-for-bit correctness contract kept alive as prose in the copy that does not implement it: `total_lp_solves` must be summed from the convergence records by the caller because the two sums diverge for multi-stage cases. Both sides also re-derive the same `MetadataTrainingSolveStats` assembly (training.rs:240-248 and run.rs:311-326). This is NOT the writer boundary CD-025 owns, and the destination differs accordingly: both input types are declared in cobre-sddp, `SolverStatsLogEntry` at src/solver_stats.rs:227 and `SolverStatsDelta` at :15. Call sites confirm both folds are live: training.rs:140 and run.rs:317 plus :2032."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "One fold next to its input types in cobre-sddp `src/solver_stats.rs`, over `&[SolverStatsLogEntry]`, with the rank filter as an explicit argument (this rank, or all ranks) so the MPI caller and the single-process caller differ by a parameter instead of by a copy. The `total_lp_solves` warning moves to the doc of that single fold and gets a named regression test, instead of surviving as prose in one of two copies. Rule 5's cobre-io (L2) destination is checked and does not bind here: it governs the writer hand-mirror, and an L2 home for this fold would force cobre-io to depend on an engine crate for `SolverStatsLogEntry`, which rule 13 forbids and Part IV.1 places out of bounds. Byte-neutrality: the fold must return the same five values for the same log, so `crates/cobre-python/tests/test_cli_python_determinism_parity.py` (examples/1dtoy, whole tree value-for-value) covers the single-rank case through the metadata it writes, the all-ranks argument must be the identity on a one-rank run, and `tests/test_cli_python_file_set_parity.py` plus `scripts/ci/check_python_parity.py --min-shared 18` are unaffected because no writer name changes.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": null,
+        "rule": "Rule 7: checked the mirror at the pin and CLAUDE.md § Unwired config is reserved, not dead for a reservation covering either fold, and found none. Neither is a reserved seam: both are live and called (training.rs:140, run.rs:317 and :2032), so the reserved-is-not-dead precondition does not shield the duplication."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "The mirror's CI gate has leaked into call-site syntax: two writers are called fully qualified so the checker can see them, a reason the pin's import-resolving checker no longer has",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/run/outputs.rs",
+          "symbol": "write_training_outputs"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/run/outputs.rs | sed -n '20,27p;124,127p;134,134p;138,138p'; git show 077dbe2c:scripts/ci/check_python_parity.py | sed -n '6,7p;132,141p'",
+        "output": "outputs.rs imports (bare, ten of them):\nuse cobre_io::write_evaporation_models;\nuse cobre_io::write_fpha_deviation_points;\nuse cobre_io::write_fpha_hyperplanes;\nuse cobre_io::write_row_selection_records;\nuse cobre_io::write_simulation_results;\nuse cobre_io::write_simulation_solver_stats;\nuse cobre_io::write_solver_stats;\nuse cobre_io::write_training_results;\noutputs.rs:124-127 and the two exceptions:\n    // No generic constraint writes no file, so a default run stays byte-identical;\n    // mirror on the Python side: `write_generic_constraint_echo_if_any`. The writer\n    // is called fully qualified, not imported, so the Python-parity checker's\n    // `cobre_io::write_*` match sees it.\n        cobre_io::write_generic_constraint_echo(&echo_path, &rows).map_err(CliError::from)?;\n    cobre_io::write_fixed_delivery(args.output_dir, &fixed_rows).map_err(CliError::from)?;\ncheck_python_parity.py:\n`cobre_sddp::orchestration` for calls to writers from `cobre_io` and\nResolves bare imported calls back to their canonical names through `use`\n        # Match bare calls and resolve through import map.\n        # Matches write_foo(, export_foo(, FooWriter(, and FooWriter::\n        for match in re.finditer(\n            r\"\\b(write_\\w+|export_\\w+|\\w+Writer)(?:\\s*\\(|::)\", line\n        ):\n            name = match.group(1)\n            if name in import_map:\n                canonical = import_map[name]\n                canonical = NORMALISE.get(canonical, canonical)\n                names.add(canonical)",
+        "reading": "outputs.rs imports ten cobre-io writers as bare names (:17-27) and calls them bare, but exactly two, `write_generic_constraint_echo` (:134) and `write_fixed_delivery` (:138), are called `cobre_io::`-qualified and are not imported at all. The comment at :124-127 states the reason in its own words: the writer is called fully qualified so the parity checker's `cobre_io::write_*` match sees it. At the pin the checker does not need that: its docstring says it resolves bare imported calls through `use` statements, and `_extract_from_text` implements exactly that at :132-141, matching a bare `write_*` call and looking the name up in the map `parse_imports` builds. The ten bare siblings are counted by that branch, which is why the shared-name figure is 18. So the stated justification is stale at the pin and the workaround outlives its cause. The point for lens question 4 is the coupling itself, not the two lines: the hand-mirror's only enforcement is a textual CI script, and that script's matcher has shaped how a call may be written. The second exception at :138 already carries the style with no comment at all, so the convention is spreading without its rationale. This is not the superseded 4-of-17 coverage claim (rule 12) and makes no coverage claim: the gate sees both writers either way."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Fold into the same change that gives both front ends one output-orchestration entry point in cobre-io (rule 5): once one owner writes each file once, the textual gate stops being the enforcement mechanism and no call site needs a particular syntax to stay visible to it. Until that lands, import the two exceptions like their ten siblings and delete the stale clause, which is a no-op for the gate because the import map resolves bare calls (check_python_parity.py:132-141). Byte-neutrality is trivial here and is stated anyway per rule 8: call syntax writes no bytes, so `crates/cobre-python/tests/test_cli_python_determinism_parity.py` and `tests/test_cli_python_file_set_parity.py` are unchanged, and `scripts/ci/check_python_parity.py --min-shared 18` must still report 18 shared names — that count IS the check that the import-resolution premise holds, so it is the one command that must be re-run after the two calls change shape. The `cobre validate --json` contract is untouched.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": null,
+      "waveRef": "CD-025",
+      "reRaiseOf": "CD-025",
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "prior-register § Normative (Python-parity hard rule, CLAUDE.md:42)",
+        "rule": "Rule 12 and rule 7: the Python-parity rule itself is normative and not a candidate, and the gate's 4-of-17 coverage figure is superseded and is not claimed here. What is claimed is that the gate's matcher dictates call-site syntax at two sites and that one site's written justification no longer holds at the pin."
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "title": "cobre validate --json emits no error object for any boundary-phase failure, because the boundary error formatter is human-first while the prep-phase formatter is render-agnostic",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_boundary_check"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "format_boundary_error"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "emit_validate_json"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '204,216p;283,310p'  # and: git show 077dbe2c:crates/cobre-cli/tests/cli_validate.rs | grep -n 'fn boundary_.*exits_nonzero' -A 22",
+        "output": "204: fn format_boundary_error(term: &Term, err: &SddpError, case_dir: &Path) -> String {\n205:     let message = err.to_string();\n206:     let _ = term.write_line(&format!(\"Validation: 1 errors, 0 warnings in {}\", case_dir.display()));\n209:     let _ = term.write_line(&format!(\"{} policy.boundary: {message}\", style(\"error:\").red().bold()));\n213:     format!(\"policy.boundary: {message}\")\n---\n296:     match reconcile_boundary(case_dir, config, bp, system, stochastic, hydro_models) {\n297:         Ok(outcome) => Ok(Some(outcome)),\n298:         Err(err) => {\n299:             let Some(term) = stdout else {\n300:                 return Err(CliError::from(err));\n301:             };\n302:             let report_msg = format_boundary_error(term, &err, case_dir);\n---\nexecute() sets `stdout_sink = (!args.json).then_some(&stdout)` (validate.rs:332), so under --json `stdout` is None at :299 and the function returns before any emit_validate_json call.\n---\ncli_validate.rs boundary failure tests: :691 boundary_mismatched_hydro_set_exits_nonzero_and_names_hydro and :760 boundary_superset_source_under_strict_exits_nonzero_and_names_the_family both invoke `validate <dir>` with NO --json and assert human stdout substrings (\"hydro 0\", \"different set of plants\", \"price entities this study does not model\", \"(storage: 1)\", \"policy.boundary.strict\"). No test in the file pairs --json with a boundary failure.",
+        "reading": "The two error-reporting shapes in this one file are not symmetric. describe_prep_error (:145) returns a render-agnostic (kind, report) pair and its caller prep_error_to_cli_error (:160) feeds BOTH the human term and emit_validate_json, which its own doc at :141-144 says exists 'so the two never drift apart'. format_boundary_error takes `term: &Term` as a required parameter, so it cannot run without a human sink; run_boundary_check therefore has to bail out at :299-301 on exactly the path where --json is active. The module doc at :1-26 promises '--json ... an `error` object naming the first failing phase' and then hedges with 'always one such object or empty', so the gap is self-sanctioned by the hedge rather than by a design decision. A programmatic consumer that rejects a case on policy.boundary gets a non-zero exit and empty stdout from the CLI, while cobre.io.validate returns a structured dict (io.rs:305-328 routes all three boundary failures to return_error!(\"BoundaryReconciliationError\", ...)). Accept/reject parity holds; the machine-readable diagnostic does not. Nothing pins the gap: no integration test exercises --json on a boundary rejection. This sharpens CD-029's boundary-bypass half with a user-visible consequence the disposition record does not state, and strengthens its restated fix shape: the ONE engine-owned reconcile function must return a phase kind, not a pre-rendered human line.",
+        "citedNotAnchored": [
+          "crates/cobre-python/src/io.rs::validate (:200, :305-328)",
+          "crates/cobre-python/src/run.rs::reconcile_boundary_policy (:1192)",
+          "crates/cobre-cli/tests/cli_validate.rs:691, :760"
+        ]
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the boundary failure the same render-agnostic shape the prep phases already have: have the boundary reconcile return a (kind, report) pair — kind supplied by the engine-owned reconcile function CD-029's restated fix shape calls for — and let run_boundary_check hand that pair to the human sink when one exists and to emit_validate_json when --json is set, exactly as prep_error_to_cli_error does at :160-178. Byte-neutrality bar: format_boundary_error's two write_line strings must survive verbatim, since cli_validate.rs:691 and :760 assert their substrings on the human path; --json gains an object where it currently emits nothing, so the single-object stdout contract is satisfied rather than altered (one object, never interleaved text); the register's accept/reject parity between cobre validate and cobre.io.validate is untouched because both already reject.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": "CD-029",
+      "reRaiseOf": "CD-029",
+      "reservedSeamsCheck": "docs/design/reserved-seams-and-deferred-debt.md has no reserved-seam entry covering the validate --json error surface; the fix shape touches neither the facade crate nor commands/broadcast.rs, so the register's facade pre-check does not apply. The fold destination is cobre-sddp PrepPhase per the CD-029 disposition, NOT cobre-io.",
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "The validate --json error contract and cobre.io.validate's error dict disagree on kind and message for the same input, and six CLI failure paths emit no JSON at all",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "execute"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "ValidateErrorOutput"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "ValidateBoundaryOutput"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '330,405p' ; git show 077dbe2c:crates/cobre-python/src/io.rs | sed -n '50,60p;227,252p' ; git grep -n 'CaseValidationError' 077dbe2c -- crates scripts",
+        "output": "validate.rs paths that return WITHOUT emit_validate_json even when args.json is true:\n  :334 !case_dir.exists()            -> CliError::Io (exit 2)\n  :348 LoadError::IoError            -> CliError::Io (exit 2)\n  :370 Err(other)  [ParseError | SchemaError | PolicyIncompatible] -> CliError::Internal (exit 4)\n  :381 cobre_io::parse_config(..).map_err(CliError::from)?\n  :397 config.training_scenario_source(..).map_err(CliError::from)?\n  :401 resolve_boundary_state_requirements(..)?\nThe only CLI paths that DO emit JSON: :354-364 (kind \"CaseValidationError\", message = description) and the three run_prep_phase calls via prep_error_to_cli_error.\n---\nio.rs:236-241  match validate_case_with_artifacts(&path) { .. Err(ref err) => return_error!(load_error_kind(err), err.to_string()) }\nio.rs:50 fn load_error_kind(err: &LoadError) -> &'static str  -- total over all five variants -> \"IoError\"|\"ParseError\"|\"SchemaError\"|\"ConstraintError\"|\"PolicyIncompatible\"\nio.rs:227 existence check -> return_error!(\"IoError\", ..)\nio.rs:247 config load  -> return_error!(load_error_kind(err), ..)\nio.rs:274 training_scenario_source -> return_error!(load_error_kind(err), ..)\nio.rs:264 resolve_boundary_state_requirements -> return_error!(\"BoundaryReconciliationError\", ..)\nEvery cobre.io.validate path returns a dict; test_validate.py:222 asserts err[\"kind\"] in (\"ConstraintError\",\"IoError\",\"ParseError\",\"SchemaError\").\n---\ngit grep CaseValidationError: only validate.rs:90 (its own doc) and validate.rs:361 (the emit). No test, script or Python site references the string.",
+        "reading": "Both front ends publish a programmatic error vocabulary over the same cobre-io LoadError, and the two vocabularies are not the same function. On a duplicate-bus-id deck the CLI reports kind \"CaseValidationError\" with `description`; cobre.io.validate reports \"ConstraintError\" with `err.to_string()`. The CLI's classifier is a 3-arm match with a catch-all to CliError::Internal (exit 4, no JSON); the Python classifier is the total 5-variant load_error_kind at io.rs:50. Both surfaces are documented as stable programmatic contracts — validate.rs:89-93 calls the field 'prep_phase_metadata's stable kind string (or CaseValidationError ...)', and errors.rs:19-20 says 'the cobre.io.validate data-report kind field is ... a stable data contract decoupled from these class names' — so this is two stable contracts for one fact, with no shared owner. The coverage half is worse than the naming half: six CLI paths honour --json by emitting nothing, including a malformed config.json and a missing case directory, both of which cobre.io.validate answers with a kind. This is not CD-029 (no boundary phase involved) and not the CD-004 Config-projection twin; it is the error-classification half of the validate mirror that rule 14 assigns to whichever cell sees it.",
+        "citedNotAnchored": [
+          "crates/cobre-python/src/io.rs::load_error_kind (:50)",
+          "crates/cobre-python/src/io.rs::validate (:227, :236, :247, :264, :274)",
+          "crates/cobre-python/src/errors.rs (:19-20)",
+          "crates/cobre-python/tests/test_validate.py:222"
+        ]
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give LoadError one kind map owned by the crate that owns the type — cobre-io (L2), the crate both front ends already depend on — and have the CLI and the bindings both call it, replacing validate.rs's 3-arm match and io.rs's local load_error_kind. Then route every CLI early-return through emit_validate_json when args.json is set, so the --json object exists for the existence check, the config parse, the scenario-source resolve and the residual LoadError variants. Byte-neutrality bar: the direction of the naming unification is forced by what is pinned — test_validate.py:222 asserts the Python kinds, while \"CaseValidationError\" is asserted nowhere (git grep finds only its own declaration and doc), so the CLI adopts the cobre-io vocabulary and no assertion moves; cli_validate.rs:163-197 only requires that stdout parse as one object and that error.message name the offending file, both preserved; the register's accept/reject parity is unchanged because exit codes and the reject decision are untouched.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": "No reserved-seam or deferred-debt entry covers the validate error vocabulary. The destination is cobre-io (L2), not cobre-sddp and not a cli-local helper, so the station's destination rule for shared front-end logic is satisfied and no conflicts trigger fires: LoadError is already an L2 type, there is no engine concept moving down, no engine-to-engine edge, no Engine enum below L4, and two present consumers defeat the one-consumer-abstraction trigger.",
+      "measured": null,
+      "unmeasured": "Whether Err(other) at validate.rs:370 is reachable at all: no test produces a bare LoadError::ParseError, SchemaError or PolicyIncompatible from validate_case_with_artifacts. The duplicate-id deck at cli_validate.rs:225 exits 1, so it arrives as ConstraintError.",
+      "measurementRequest": "Construct a case whose config.json is syntactically valid but whose system/*.json fails the schema layer directly, and record the exit code and stdout of `cobre validate <dir> --json`. If it exits 4 with empty stdout, the severity of the coverage half rises: an input error is reported as an internal error.",
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "The pre-solver phase driver is written twice over one engine-owned PrepPhase: the CLI extracts the (kind, message) pair into a helper, the bindings re-inline the identical two lines three times",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "describe_prep_error"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "run_prep_phase"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "validate"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "load_error_kind"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "load_validate_config"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "convert_load_error"
+        },
+        {
+          "path": "crates/cobre-python/src/io.rs",
+          "symbol": "build_warnings_list"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '141,200p' ; git show 077dbe2c:crates/cobre-python/src/io.rs | sed -n '254,302p'",
+        "output": "validate.rs:145 fn describe_prep_error(phase: PrepPhase, err: &SddpError) -> (&'static str, String) {\n:146     let (kind, file_label) = prep_phase_metadata(phase, err);\n:147     (kind, format!(\"{file_label}: {err}\"))\n:148 }\n:182 fn run_prep_phase<T>(result: Result<T, SddpError>, stdout_sink: Option<&Term>, json: bool, phase: PrepPhase, case_dir: &Path) -> Result<T, CliError>\n  -- called three times: :383 PrepPhase::Config, :402 PrepPhase::Stochastic, :418 PrepPhase::HydroModels\n---\nio.rs:257-258   let (kind, file_label) = prep_phase_metadata(PrepPhase::Config, err);       return_error!(kind, format!(\"{file_label}: {err}\"));\nio.rs:291-292   let (kind, file_label) = prep_phase_metadata(PrepPhase::Stochastic, err);   return_error!(kind, format!(\"{file_label}: {err}\"));\nio.rs:300-301   let (kind, file_label) = prep_phase_metadata(PrepPhase::HydroModels, err);  return_error!(kind, format!(\"{file_label}: {err}\"));\n(io.rs:214-225 defines the return_error! macro that fills {valid:false, errors:[{kind,message}], warnings:[]})",
+        "reading": "cobre-sddp already owns the phase vocabulary: PrepPhase and prep_phase_metadata give a (kind, file_label) pair. What is not owned anywhere is the one line that turns that pair into a report string, `format!(\"{file_label}: {err}\")`. The CLI recognised it as shared and extracted describe_prep_error; the bindings copied the same two statements into three sites. The message format is therefore a four-copy contract across two crates with a single-copy owner nowhere, and its stated purpose in validate.rs:141-144 is anti-drift — a purpose the Python copies silently opt out of. The two phase drivers around it (run_prep_phase vs the return_error! macro) differ in sink handling and are legitimately front-end-specific; the (kind, message) computation is not. This is the phase-driver half of the validate mirror, distinct from CD-029, whose claim is the PrepPhase enum's doc/variant count and the boundary check running outside the enum.",
+        "citedNotAnchored": [
+          "crates/cobre-python/src/io.rs::validate (:257-258, :291-292, :300-301)",
+          "crates/cobre-sddp/src/validate_phases.rs::PrepPhase"
+        ]
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Hoist the two-line body of describe_prep_error next to prep_phase_metadata in cobre-sddp's validate_phases.rs — the same destination CD-029's restated fix shape already names for the boundary phase — so one engine-owned function returns (kind, \"file_label: message\") and both front ends call it. The CLI keeps run_prep_phase for its dual-sink rendering and the bindings keep return_error! for the dict shape; only the string computation moves. Byte-neutrality bar: the rendered message is character-identical on both sides today, so cli_validate.rs's `error.message` contains-assertions and the pytest kind assertions in test_validate.py all keep passing unchanged, and the accept/reject parity between cobre validate and cobre.io.validate is untouched.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1",
+      "partIRef": "I.5",
+      "waveRef": "CD-029",
+      "reRaiseOf": null,
+      "reservedSeamsCheck": "No reserved-seam entry covers prep-phase error description. cobre-sddp (L3) is the correct home because PrepPhase and prep_phase_metadata already live there and both callers are L4; nothing engine-shaped moves down into L0/L1, so no conflicts trigger fires. This is NOT the output-orchestration boundary the station's cobre-io destination rule binds.",
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b",
+      "subSurfaces": [
+        "S6b",
+        "S6c"
+      ],
+      "mergedFrom": [
+        {
+          "cell": "architecture.S6c",
+          "title": "The validate phase driver is hand-mirrored across the two front ends and has already drifted twice: the CLI and the bindings run two phases in opposite order, and their machine-readable error contracts share neither key name nor vocabulary",
+          "evidence": {
+            "command": "git show 077dbe2c:crates/cobre-python/src/io.rs | grep -nE 'StudyParams::from_config|resolve_boundary_state_requirements|training_scenario_source|prepare_stochastic'; git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -nE 'StudyParams::from_config|resolve_boundary_state_requirements|training_scenario_source|prepare_stochastic\\(' | grep -v '///'; git show 077dbe2c:crates/cobre-python/src/io.rs | sed -n '50,56p;171,172p'; git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | grep -nE 'emit_validate_json|LoadError::|CliError::Internal \\{|CliError::Io \\{'",
+            "output": "io.rs:  254: StudyParams::from_config  /  264: resolve_boundary_state_requirements  /  274: config.training_scenario_source  /  281: prepare_stochastic\nvalidate.rs:  384: StudyParams::from_config  /  396: .training_scenario_source  /  401: resolve_boundary_state_requirements  /  403: prepare_stochastic\nfn load_error_kind(err: &LoadError) -> &'static str {\n    match err {\n        LoadError::IoError { .. } => \"IoError\",\n        LoadError::ParseError { .. } => \"ParseError\",\n        LoadError::SchemaError { .. } => \"SchemaError\",\n        LoadError::ConstraintError { .. } => \"ConstraintError\",\n        LoadError::PolicyIncompatible { .. } => \"PolicyIncompatible\",\n/// If any phase fails, the remaining phases are skipped and the error is\n/// returned immediately (short-circuit semantics matching `cobre validate`).\n172:        emit_validate_json(&ValidateBoundaryOutput::error(kind, &report))?;\n348:        Err(LoadError::IoError { path, source }) => {\n349:            return Err(CliError::Io {\n354:        Err(LoadError::ConstraintError { description }) => {\n360:                emit_validate_json(&ValidateBoundaryOutput::error(\n371:            return Err(CliError::Internal {\n465:        emit_validate_json(&ValidateBoundaryOutput::success(boundary_outcome))?;",
+            "reading": "Three independent divergences in a driver both sides claim is the same. (1) Phase order: the bindings run resolve_boundary_state_requirements before config.training_scenario_source (io.rs:264 then :274); the CLI runs them in the opposite order (validate.rs:396 then :401). io.rs:171-172 documents 'short-circuit semantics matching cobre validate', so for a deck that fails both resolutions the two front ends report different first errors and the binding's own doc is false. (2) Key name: the Python error dict sets 'kind' (io.rs return_error! macro, :214-225) while the CLI's ValidateErrorOutput serializes a field named 'phase' (validate.rs:95-99). (3) Vocabulary and coverage: load_error_kind maps all five LoadError variants to their own names, but on the CLI side only ConstraintError reaches stdout, and under a different string — ValidateErrorOutput's doc (validate.rs:89-92) says 'CaseValidationError for the six-layer IO pipeline'. IoError returns CliError::Io (:349) and every remaining variant returns CliError::Internal (:371), neither emitting any stdout object. So one of five variants is machine-readable from the CLI against five of five from the bindings, and the one they share carries a different string under a different key. This candidate deliberately excludes the boundary reconciler body itself (validate.rs::reconcile_boundary and run.rs::reconcile_boundary_policy): that duplicate is CD-029's surviving half with a cobre-sddp PrepPhase destination (rule 5), which is why waveRef and reRaiseOf are null here. Anchored in both files per rule 14."
+          },
+          "fixShape": "The eleven-phase order and the failure vocabulary are one contract and need one owner. The shape: lift the phase sequence and its kind strings to the engine's validation surface next to prep_phase_metadata, so both front ends drive an ordered phase list and render the outcome rather than re-listing the calls; the CLI keeps stderr text and its exit code, the bindings keep the dict projection. Each front end then owns only presentation, which is the part that legitimately differs. Two things must be decided rather than assumed, because they are observable contracts: which of the two orders is correct (boundary before scenario source, or after), and whether the CLI adopts the five variant names or the bindings adopt CaseValidationError. Byte-neutrality bar: cobre validate --json must stay a single JSON object on stdout with one top-level shape per outcome, which is the fourth bar item, and the run output tree is untouched, so the CLI-vs-Python golden test_cli_python_determinism_parity.py and test_cli_python_file_set_parity.py are unaffected and the 18-name floor of scripts/ci/check_python_parity.py does not move. The golden this deliberately does move is whichever front end's error string changes: that is a user-visible contract change and belongs in the changelog, not hidden inside a refactor.",
+          "proposedSeverity": "B",
+          "note": "the S6c half of the validate mirror: the io.rs phase list and its drift evidence; anchors folded into the owner"
+        }
+      ]
+    },
+    {
+      "title": "cobre validate re-runs engine setup work it has already done: the boundary checkpoint is read twice per invocation, where the Python mirror reads it once and reuses the value",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "reconcile_boundary"
+        },
+        {
+          "path": "crates/cobre-cli/src/commands/validate.rs",
+          "symbol": "execute"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/commands/validate.rs | sed -n '229,241p;378,402p' ; git show 077dbe2c:crates/cobre-python/src/io.rs | sed -n '264,272p;305,313p' ; git show 077dbe2c:crates/cobre-sddp/src/setup/mod.rs | sed -n '371,387p'",
+        "output": "validate.rs:401  let boundary_requirements = resolve_boundary_state_requirements(&args.case_dir, &config)?;      // feeds prepare_stochastic's inflow_lag_depth()\nvalidate.rs:232  let boundary_requirements = resolve_boundary_state_requirements(case_dir, config)?;                // same call, same arguments, second time\nvalidate.rs:234  let setup = StudySetup::new_with_boundary_requirements(system, config, stochastic, hydro_models, boundary_requirements)?;\n---\nio.rs:264  let boundary_requirements = match resolve_boundary_state_requirements(&path, &config) { .. };\nio.rs:311      boundary_requirements,          // the SAME value threaded into StudySetup::new_with_boundary_requirements\n---\nsetup/mod.rs:377 pub fn new_with_boundary_requirements(system, config, stochastic, hydro_models, boundary) -> .. {\nsetup/mod.rs:378     let mut params = StudyParams::from_config(config)?;\nsetup/mod.rs:382-387 let training_source = config.training_scenario_source(sentinel_path)..; let simulation_source = config.simulation_scenario_source(sentinel_path)..;\n---\nso a `cobre validate` on a case with policy.boundary runs: resolve_boundary_state_requirements twice (:401, :232), StudyParams::from_config twice (:384 explicitly, :378 inside the setup), config.training_scenario_source twice (:395, :384-of-setup).\nsetup/mod.rs:363-364 documents resolve_boundary_state_requirements as 'an I/O read the caller performs'.",
+        "reading": "resolve_boundary_state_requirements is documented by the engine as an I/O read, and the CLI performs it twice with identical arguments in one invocation. The value is deterministic, so there is no misclassification risk; the cost is a duplicate checkpoint-header read and, more importantly, a divergence from the Python mirror on the same logical pipeline, where io.rs resolves once at :264 and threads the value to :311. The comment at validate.rs:229-231 says the second resolve exists 'so validate mirrors the run path' — but the value it recomputes is already in scope in execute, so the mirror argument is satisfied by threading it in. The wider pattern is Part-I item 7's front-end half: validate re-executes individual engine construction steps ahead of StudySetup so it can label failures, and new_with_boundary_requirements then re-executes the config projection and the scenario-source resolves regardless; the partIRef field carries I.3-7 for that reason, and the same duplication is also an instance of the I.5 CLI/Python hand-mirror asymmetry, recorded here rather than in the field because the field takes one reference. This is neither the Config->StudyParams/BroadcastConfig shape twin (CD-004, ratified at the sddp station) nor CD-029's PrepPhase bypass; it is a duplicated call in this file with a two-line fix.",
+        "citedNotAnchored": [
+          "crates/cobre-python/src/io.rs::validate (:264, :311)",
+          "crates/cobre-sddp/src/setup/mod.rs::new_with_boundary_requirements (:377-387)"
+        ]
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pass the already-resolved BoundaryStateRequirements from execute into reconcile_boundary instead of re-resolving inside it, matching io.rs:264/:311 exactly; that removes one checkpoint read and makes the two front ends structurally identical on this step. Leave the StudyParams::from_config and training_scenario_source re-execution alone: those follow from new_with_boundary_requirements taking &Config, which is the front-end half of Part-I item 7 and belongs to that work, not to this fix. Byte-neutrality bar: the threaded value is the result of the same deterministic call on the same inputs, so every validate output byte is unchanged on both the human and the --json path, and accept/reject parity is unaffected.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": "I.3-7",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": "Not a reserved seam: no entry in docs/design/reserved-seams-and-deferred-debt.md covers the validate boundary-requirements resolve, and the fix introduces no new type, seam or abstraction — it threads an existing value through an existing private signature, so the one-consumer-abstraction trigger cannot fire.",
+      "measured": null,
+      "unmeasured": "The wall-clock cost of the duplicate checkpoint read. resolve_boundary_state_requirements reads a policy checkpoint header; its size is case-dependent and validate is not a hot path, so no performance claim is made here.",
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b",
+      "relatedTo": [
+        "CD-029"
+      ]
+    },
+    {
+      "title": "Seven doc examples across four CLI modules import crate paths that cannot resolve, and the crate has no lib target so no doctest ever compiles them",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "symbol": "find_template"
+        },
+        {
+          "path": "crates/cobre-cli/src/banner.rs",
+          "symbol": "render_banner_string"
+        },
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "CliError"
+        },
+        {
+          "path": "crates/cobre-cli/src/progress.rs",
+          "symbol": "run_progress_thread"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n '^\\s*//[/!] use cobre' 077dbe2c -- 'crates/cobre-cli/src/*.rs' 'crates/cobre-cli/src/**/*.rs' ; git grep -n '//[/!] ```' 077dbe2c -- 'crates/cobre-cli/src/*.rs' ; git grep -n '\\[lib\\]' 077dbe2c -- crates/cobre-cli/Cargo.toml ; git show 077dbe2c:crates/cobre/src/lib.rs",
+        "output": "banner.rs:10   //! use cobre::banner;                                    fence banner.rs:8  ```rust,no_run\nerror.rs:43    /// use cobre_cli::error::CliError;                        fence error.rs:42  ``` (bare -> compiled)\nerror.rs:99    /// use cobre_cli::error::CliError;                        fence error.rs:98  ```\nerror.rs:133   /// use cobre_cli::error::CliError;                        fence error.rs:132 ```\nprogress.rs:16 //! use cobre_cli::progress::{run_progress_thread, RenderMode};  fence progress.rs:13 ```rust,no_run\ntemplates.rs:18  //! use cobre::templates;                                fence templates.rs:17  ```rust\ntemplates.rs:145 /// use cobre::templates;                                fence templates.rs:144 ```rust\n(progress.rs:15 `use cobre_core::TrainingEvent;` is the one line that would resolve)\n---\ngit grep '[lib]' crates/cobre-cli/Cargo.toml -> no match. The manifest declares only:\n  [[bin]]\n  name = \"cobre\"\n  path = \"src/main.rs\"\n  doc = false\n---\ncrates/cobre/src/lib.rs (the whole file):\n  //! Umbrella crate for the Cobre power-system ecosystem; re-exports nothing yet.\n  //! Depend on the individual `cobre-*` crates directly.\n  (and crates/cobre/Cargo.toml has no [dependencies] section at all)",
+        "reading": "Seven of the eight doc-comment import lines in this crate name a path that does not exist. Four say `cobre_cli::`, which is not an importable path because the crate declares no [lib] target; three say `cobre::`, the umbrella crate whose lib.rs re-exports nothing and whose manifest has no dependencies, so it could not supply `banner` or `templates` in any configuration. Every one of the seven sits in a fence kind that compiles — `rust`, `rust,no_run` (no_run skips execution, not compilation) or a bare fence, which defaults to Rust — so each would be a hard doctest failure if it were ever collected. None is collected: rustdoc only runs doctests for library targets, and `doc = false` suppresses the bin from rustdoc as well. The result is four modules documented as if they were a published library, with the compiler backstop that makes Rust examples trustworthy absent by construction, and with three of them pointing readers at a crate the register already records as empty. This is the architectural half of the problem rather than a typo count: the crate's entire `pub` surface (`pub fn print_banner`, `pub fn run_progress_thread`, `pub enum RenderMode`, the `pub` renderers in summary.rs) asserts an external contract that no target publishes.",
+        "citedNotAnchored": [
+          "crates/cobre-cli/Cargo.toml:15-18",
+          "crates/cobre/src/lib.rs",
+          "crates/cobre/Cargo.toml",
+          "docs/design/reserved-seams-and-deferred-debt.md:30"
+        ]
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Make each of the seven examples honest at its current fence. Rewrite the three `cobre::` imports to the module-local form the code actually uses, and for the four `cobre_cli::` ones either re-point the path at a crate that exists or de-annotate the fence so the block is no longer claimed as compilable Rust, using a plain-text fence kind where the snippet is purely illustrative and an ignore-annotated fence where it must stay Rust-shaped but cannot compile, which is the same treatment `summary.rs` already applies to its own example at line 49. Do NOT make the facade crate re-export these: the register's reserved-seams pre-check records no entry for `crates/cobre` and routes any facade change to the owner gate. Whether cobre-cli should instead gain a library target, which would make the `pub` surface and all four `cobre_cli::` examples compiler-verified at the cost of publishing the CLI's internals as a contract, is an owner question raised in `_needsHuman` rather than pre-judged here. Byte-neutrality bar: doc-comment-only edits, no runtime code and no output bytes change, so both parity determinism tests and the validate --json contract are untouched.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": "Performed as the register requires before touching anything facade-adjacent: docs/design/reserved-seams-and-deferred-debt.md:30 carries no entry for crates/cobre, so an OD on the facade cannot be cleared by citation. The fix shape is therefore confined to cobre-cli doc comments and explicitly does not propose a facade re-export; the facade question is left to the owner gate.",
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "summary.rs imports three cobre_sddp provenance types into production module scope, with pub and allow(unused_imports), only so its own test block's use super resolves",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/summary.rs",
+          "symbol": "print_hydro_model_summary"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/summary.rs | sed -n '18,27p' ; git show 077dbe2c:crates/cobre-cli/src/summary.rs | grep -n 'HydroProductionProvenance\\|InflowProvenance\\|ProvenanceSource' | head ; git show 077dbe2c:crates/cobre-cli/src/summary.rs | grep -n '#\\[cfg(test)\\]' | tail -1",
+        "output": ":18 // Rationale: the `#[cfg(test)]` blocks in this module import\n:19 // `HydroProductionProvenance`, `InflowProvenance`, and `ProvenanceSource` via\n:20 // `use super::{...}`; this `pub use` is the declaration that puts those names on\n:21 // the module surface so those test imports resolve. Without it they would not.\n:22 #[allow(unused_imports)]\n:23 pub use cobre_sddp::{\n:24     BoundaryReconciliationReport, HydroModelSummary, HydroProductionProvenance, InflowProvenance,\n:25     ModelProvenanceReport, ProvenanceSource,\n:26 };\n---\nHydroProductionProvenance / InflowProvenance / ProvenanceSource occur at :19 (the comment), :24-25 (the re-export), then only from :1969 onward -- and the module's test block opens at :911. Zero production occurrences.\nThe other three names ARE production-used: HydroModelSummary :29/:198/:215/:224, ModelProvenanceReport :295/:303/:330, BoundaryReconciliationReport :364/:375/:395.",
+        "reading": "Three of the six re-exported engine types have no production consumer in this module; they exist in production scope purely so the test block can write `use super::{...}`, and #[allow(unused_imports)] suppresses the warning that would otherwise say so. The `pub` does the same job for the other three: a bin-only crate has no external consumer, so `pub` here is not an API decision, it is a visibility workaround for an intra-crate test import. The author documented the mechanism honestly at :18-21, which makes this avoidable rather than hidden. Under Part-I item I.5 the CLI's engine coupling is expected at L4 and is not a genericity violation; what is a flaw is that three units of that coupling are paid for by the test code alone, in the crate's production surface, with a lint suppression attached. The register's I.5 sharpening note separately treats the report/summary subcommand doc claim as an E9/E11 correction; that claim is not re-raised here — this is the code-level re-export mechanism, not the doc claim.",
+        "citedNotAnchored": [
+          "crates/cobre-cli/src/summary.rs:1969 (test-module use super import)",
+          "plans/architecture-debt-audit/stations/cli-python/prior-register.md:49"
+        ]
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Split the declaration: keep a plain `use cobre_sddp::{BoundaryReconciliationReport, HydroModelSummary, ModelProvenanceReport};` for the three types the renderers name in their signatures, and let the #[cfg(test)] block import HydroProductionProvenance, InflowProvenance and ProvenanceSource from cobre_sddp directly instead of through `use super`. Both `pub` and #[allow(unused_imports)] then come off, and the crate stops carrying three engine types in production scope for test-only reasons. Byte-neutrality bar: imports and visibility only, no rendered line and no output file changes, so the CLI/Python determinism and file-set parity tests and the validate --json contract are all untouched; the same test assertions run against the same renderers.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": "No reserved-seam or deferred-debt entry covers summary.rs's imports; the unwired-config reserve rule in CLAUDE.md does not apply because these are type imports, not loaded-and-validated config. L4 may name engine types, so nothing here is a genericity-gate violation and no conflicts trigger fires.",
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "The two L4 classifications of cobre_sddp::SddpError are not jointly owned and only the CLI's is compiler-enforced, so a new engine variant is silently absorbed on the Python side",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/src/error.rs",
+          "symbol": "CliError"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/src/error.rs | sed -n '218,259p' ; git show 077dbe2c:crates/cobre-python/src/errors.rs | sed -n '242,250p;10,20p'",
+        "output": "error.rs:218 impl From<cobre_sddp::SddpError> for CliError -- an exhaustive match over 11 variants mapping to 4 CliError variants:\n  Infeasible -> Solver | Solver -> Solver | Io -> From<LoadError> | Validation -> Validation\n  Communication | Simulation | Stochastic | WireVersionMismatch | BasisShapeMismatch | AnticipatedCommitmentOutOfBounds -> Internal\n  (no wildcard arm: a 12th variant is a compile error here)\n---\nerrors.rs:242 ErrorSource::Sddp { error, message } => match error {\n:243     SddpError::Infeasible { stage, iteration, scenario } => solver_error_infeasible(..),\n:248     SddpError::Simulation(_) => new_leaf_err(py, &SIMULATION_ERROR, &message),\n:249     _other => solver_error_plain(py, &message),\n:250 },\n---\nerrors.rs:14-17 (the crate's own rationale): 'The SddpError match keeps explicit Infeasible/Simulation arms plus the documented total `other => SolverError(None)` fallthrough (every other SddpError reaches this site only through the training/simulation phase helpers, whose failures are RuntimeError-shaped).'\nErrorSource::Sddp is constructed at exactly three production sites: run.rs:1750, study.rs:49, study.rs:630 (plus three test sites in errors.rs).",
+        "reading": "One engine error type, two L4 classification tables, and only one of them is enforced by the compiler. The CLI's match is exhaustive over all 11 variants, so adding a 12th SddpError variant will not compile until someone chooses an exit code. The Python match is two named arms and a `_other` wildcard, so the same new variant lands silently in SolverError. I checked the fairness case before filing: errors.rs:14-17 states a reachability argument for the wildcard, and I did not attempt to disprove it — tracing every RunError::Sddp / PhaseError::Sddp construction into the three call sites is S6c work and the claim may well hold today. The finding is therefore not that the current mapping is wrong; it is that the asymmetric enforcement makes the two tables drift independently by default, with the mapping they must agree on documented in prose at errors.rs:14-17 rather than pinned by a type. The two stable vocabularies are also not comparable: SddpError::Validation is an exit-1 user-facing validation error in the CLI and, if it ever reached the bindings site, a SolverError in Python.",
+        "citedNotAnchored": [
+          "crates/cobre-python/src/errors.rs::convert_error_with (:242-250, :10-20)",
+          "crates/cobre-python/src/run.rs:1750",
+          "crates/cobre-python/src/study.rs:49, :630"
+        ]
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Replace the `_other` wildcard at errors.rs:249 with the remaining variants listed explicitly, all mapping to the same solver_error_plain target they reach today, so the behaviour is identical and the compiler starts forcing a decision for any future variant exactly as it already does in the CLI. If the reachability argument at errors.rs:14-17 is the real contract, encode it as a match arm per variant with a one-clause note instead of a wildcard, so the argument survives a variant being added. Byte-neutrality bar: every present input maps to the same Python exception class and message, so no pytest assertion changes; the CLI side is untouched, so exit codes and the validate --json contract are unaffected. Note the edited line lives in cobre-python/src/errors.rs, which is S6c's file: the anchor here is the CLI half, which is the reference implementation.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part IV.4",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": "No reserved-seam entry covers the error-class mapping; errors.rs:19-20 explicitly excludes the cobre.io.validate `kind` data contract from this site, so this candidate does not overlap the validate --json candidate above. Both front ends are L4 and are allowed to name SddpError, so no conflicts trigger fires and nothing is proposed for a lower layer.",
+      "measured": null,
+      "unmeasured": "Whether any SddpError variant other than Infeasible and Simulation can actually reach ErrorSource::Sddp. errors.rs:14-17 asserts not; I did not trace RunError::Sddp / PhaseError::Sddp construction to confirm or refute it.",
+      "measurementRequest": "S6c (bindings) should trace every RunError::Sddp and PhaseError::Sddp construction site feeding run.rs:1750, study.rs:49 and study.rs:630 and report which SddpError variants are constructible there. If SddpError::Validation or SddpError::Io is reachable, this becomes a present divergence rather than a drift hazard and the severity rises to B.",
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": "S6c (bindings) for the reachability trace only; the finding itself stays here",
+      "dupOf": null,
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "title": "The bindings carry no Engine seam: Study and Policy are typed directly on six cobre_sddp types, and two separately registered public entry points reach the one engine with no dispatch between them",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "Study"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "Policy"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "new_native"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "train_native"
+        },
+        {
+          "path": "crates/cobre-python/src/study.rs",
+          "symbol": "simulate_native"
+        },
+        {
+          "path": "crates/cobre-python/src/lib.rs",
+          "symbol": "run_module"
+        },
+        {
+          "path": "crates/cobre-python/src/lib.rs",
+          "symbol": "register_submodule"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE 'enum Engine|Engine::|engine_kind|fn engine' 077dbe2c -- crates/cobre-python/src crates/cobre-cli/src | wc -l; git show 077dbe2c:crates/cobre-python/src/study.rs | sed -n '22,25p;65,69p;583,584p'; git show 077dbe2c:crates/cobre-python/src/lib.rs | sed -n '125,127p;163,167p'",
+        "output": "0\nuse cobre_sddp::{\n    FutureCostFunction, HydroModelSummary, ModelProvenanceReport, StochasticSummary, StudySetup,\n    TrainingResult,\n};\n#[pyclass(name = \"Study\")]\npub struct Study {\n    /// The live, fully prepared study setup; the only field `train`/`simulate`\n    /// mutate.\n    setup: StudySetup,\n    /// Artifacts reach disk via an identical call sequence to\n    /// [`crate::run::run_via_study`], invoking the same writers; byte-identity\n#[pymodule]\n#[pyo3(name = \"_native\")]\nfn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {\n    // Top-level classes (`cobre.Study`, `cobre.Policy`), not submodule members.\n    m.add_class::<study::Study>()?;\n    m.add_class::<study::Policy>()?;",
+        "reading": "Zero occurrences of any engine-selection token across both front ends, so the L4 seam Part IV.4 assigns to cobre-cli and cobre-python does not exist on the bindings side either. Study's single mutated field is a cobre_sddp::StudySetup and Policy holds TrainingResult + FutureCostFunction; the file's `use cobre_sddp` names six engine types (study.rs:22-25). The module topology is already engine-generic: register_submodule installs exactly six submodules named model, io, run, results, errors and schema (lib.rs:131-160), and nothing in those names is SDDP-shaped. What is SDDP-shaped is confined to three symbols: run_module registers run::run (lib.rs:66) and the two top-level classes are added directly (lib.rs:166-167). That is two public entry points over one engine — cobre.run.run and cobre.Study — and only the first is exercised by the byte-neutrality gates (determinism parity test:210 and file-set parity test:113 both call cobre.run.run). study.rs:583-584 and :694-695 state that the Study path reaches disk 'via an identical call sequence to run_via_study ... byte-identity is not yet asserted by a test', so the second entry point has no golden at all."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "The Engine enum and its dispatch belong in the bindings crate itself (Part IV.4), not below it. The narrow shape: an engine tag parsed from the study config block, matched once at the two SDDP-typed symbols — run_module's run and Study::new_native — with everything else in the crate left untouched, because the six-submodule topology, convert.rs, errors.rs, model.rs and results.rs name no engine today. The admission gate is a typed rejection at new_native: an engine plus option combination the crate cannot build is an exception, never a silent fall-through to SDDP. The open design question is whether Study becomes generic over the engine or stays the SDDP study behind a dispatching constructor (carried to _needsHuman, since it decides whether cobre.Study is a public API break). Byte-neutrality bar: with SDDP as the only arm in Phase 0a the run path is pinned value-for-value by the CLI-vs-Python golden test_cli_python_determinism_parity.py and by test_cli_python_file_set_parity.py, and the shared writer floor stays at 18 under scripts/ci/check_python_parity.py --min-shared 18. Neither golden moves. The gap this candidate names is that the Study entry point has no golden to hold it: the seam work must add a Study-path tree comparison against the same 1dtoy deck before the second entry point can be refactored, which is exactly what study.rs:583-584 admits is missing today.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part IV.4",
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 — checked the mirror at the pin, CLAUDE.md § Unwired config is reserved not dead, and the crate for an #[allow] or 'reserved' rationale: the missing Engine seam is a roadmap gap (rule 13, Part IV.4), not an unwired seam anyone sanctioned"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c",
+      "relatedTo": [
+        "CD-025"
+      ]
+    },
+    {
+      "title": "results.rs re-enumerates the simulation entity-family list as a ten-name constant against the fourteen families cobre-io writes, so the documented load-everything path silently omits four written families",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "ENTITY_TYPES"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_simulation"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_simulation_arrow"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '1068,1079p'; git show 077dbe2c:crates/cobre-io/src/output/simulation_writer.rs | grep -oE 'subpath: \"[a-z_/]+\"' | sort; git show 077dbe2c:crates/cobre-python/src/results.rs | grep -n 'all available entity types'",
+        "output": "const ENTITY_TYPES: &[&str] = &[\n    \"costs\", \"buses\", \"hydros\", \"thermals\", \"exchanges\",\n    \"pumping_stations\", \"contracts\", \"non_controllables\",\n    \"inflow_lags\", \"violations/generic\",\n];\n(cobre-io, sorted) anticipated_lanes, buses, contracts, costs, exchanges, hydro_bus_generation, hydros, inflow_lags, in_transit, non_controllables, pumping_stations, thermals, transit_seed, violations/generic\n1095:///   returned. When `None`, all available entity types are loaded and a dict of\n1322:///   returned. When `None`, all available entity types are loaded and a",
+        "reading": "Ten names in the bindings against fourteen subpath values in the writer. The four absent from ENTITY_TYPES are anticipated_lanes, hydro_bus_generation, in_transit and transit_seed. cobre-io names itself the owner of this set: simulation_writer.rs:29 says 'SIMULATION_FAMILIES is the single table of every' family and the writer loops over it at :588. Both binding readers iterate ENTITY_TYPES in their entity_type=None branch (load_simulation body at results.rs:1147-1154, .exists()-gated), while both docstrings promise 'all available entity types are loaded' (:1095, :1322). A Python caller who omits the argument on a study with travel-time arcs or post-study stages gets a dict with no in_transit, transit_seed or anticipated_lanes key and no error, and the same for hydro_bus_generation on any multi-bus hydro deck. This is not an abort and not unreachable data: the explicit branch joins the name without validating it against ENTITY_TYPES (results.rs:1143-1145), so load_simulation(dir, 'in_transit') does work — which is why the rating is B rather than A. Nothing detects the gap: the file-set parity test compares what the two front ends WRITE, and the parity gate matches writer names, so neither sees a reader that reads less than the writer wrote."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "The family-name set has exactly one owner already, and it is not the bindings. cobre-io should expose the family names it writes as public data next to SIMULATION_FAMILIES, and both readers should iterate that instead of a hand-kept copy, which makes the next family the writer gains visible to Python the moment it is written. Until that export exists the honest interim is to stop promising completeness: the docstring should say which families the call returns. Byte-neutrality bar: this is read-only, so the written tree does not change and all three write-path bars are untouched — the CLI-vs-Python golden test_cli_python_determinism_parity.py, test_cli_python_file_set_parity.py and the 18-name floor of scripts/ci/check_python_parity.py all hold by construction. The test this needs is a new one on the read side: load the deck that exercises travel-time arcs and post-study stages, then assert the no-argument load returns a key for every directory present under simulation/.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "no mirror entry for the simulation entity-family list; CLAUDE.md § Unwired config is reserved not dead does not apply — these are written output directories, not unconsumed config",
+        "rule": "rule 7"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "load_convergence hand-lists fourteen of the fifteen columns cobre-io declares for convergence.parquet, and its sibling load_convergence_arrow documents the same fourteen while passing all fifteen through",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_convergence"
+        },
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_convergence_arrow"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '243,336p' | grep -c 'get_column_by_name'; git show 077dbe2c:crates/cobre-io/src/output/schemas.rs | sed -n '371,389p' | grep -c 'Field::new'; git grep -c 'mean_rows_in_lp' 077dbe2c -- crates/cobre-python/src | wc -l; git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '385p'",
+        "output": "14\n15\n0\n    let schema = builder.schema().clone();",
+        "reading": "convergence_schema() declares fifteen fields (cobre-io schemas.rs:371-389), the last being mean_rows_in_lp. load_convergence reaches exactly fourteen of them by name through get_column_by_name, and mean_rows_in_lp appears zero times anywhere in cobre-python/src, so the dict-returning reader drops a written column with no error. The arrow sibling does not share the defect but misdescribes itself: load_convergence_arrow takes the file's own schema (results.rs:385), so all fifteen columns reach the caller, while its doc table (:337-352) lists fourteen rows under the claim that it 'matches the convergence Parquet schema written by the solver'. So the same file contains one reader that silently drops a column and one whose documentation of the same contract is wrong in the other direction. Both are hand-maintained copies of a schema cobre-io owns in one place."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "A reader that must name columns should derive them from the schema that declares them rather than from a second list. For the dict reader that means iterating the file's own schema fields, which is what the arrow reader already does correctly and which removes the drift class entirely, not just this instance; for the arrow reader's doc table it means stating the column set by reference to cobre-io's convergence schema rather than re-typing it, per the doc-integrity rule against freezing an enumeration without a guard. Byte-neutrality bar: read-only, so the written tree is unchanged and the CLI-vs-Python golden, the file-set parity test and the 18-name parity floor are all untouched. The regression that pins it is an assertion that the keys of the returned mapping equal the field names of the written convergence file, which fails today on mean_rows_in_lp.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "no mirror entry for the convergence column list; not an unwired-config seam",
+        "rule": "rule 7"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "Both front ends bypass cobre-io's two typed metadata readers in production and read the same files untyped, leaving the L2 reader exercised only by test code",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/results.rs",
+          "symbol": "load_results"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'read_training_metadata|read_simulation_metadata' 077dbe2c -- crates/cobre-python/src crates/cobre-cli/src; git show 077dbe2c:crates/cobre-python/src/run.rs | grep -n '^#\\[cfg(test)\\]'; git show 077dbe2c:crates/cobre-python/src/results.rs | sed -n '160p'; git show 077dbe2c:crates/cobre-io/src/lib.rs | sed -n '116p'",
+        "output": "crates/cobre-python/src/run.rs:2097, :2100, :2276, :2279, :2411, :2434  (six call sites, all of them)\n1758:#[cfg(test)]\n    let metadata_val = read_json_file(&training_dir.join(\"metadata.json\"))?;\n    read_simulation_metadata, read_training_metadata, write_dictionaries, write_evaporation_models,",
+        "reading": "cobre-io exports read_training_metadata and read_simulation_metadata (lib.rs:116, declared at manifest.rs:495 and :505) with ordinary public docs and no test-only note. Every call site in either front end is in cobre-python/src/run.rs at :2097 through :2434, all after the #[cfg(test)] attribute at :1758 — so both typed readers have zero production consumers, and the cobre-cli side never mentions them. Production reads the same two files untyped: load_results calls read_json_file on training/metadata.json (:160) and on simulation/metadata.json (:175). The contrast inside the same file shows the reuse is available and works: results.rs:1519 calls cobre_io::read_policy_checkpoint in production, as does cobre-cli policy.rs:60. Scope note that keeps this at C: results.rs's parquet readers do NOT duplicate cobre-io readers, because cobre-io exports none — its only public read_* functions are these two plus read_policy_checkpoint, and its parquet reading is either #[cfg(test)] or the pub(crate) input-side helper parquet_helpers::open_record_batch_reader. The duplication is confined to the metadata pair."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Either the typed readers get their production consumers or they stop claiming to be the read path. The first option has a real cost the fix shape must acknowledge: load_results returns metadata to Python as a dict, so a typed read would have to be re-projected, and an unknown field that the typed struct rejects would turn a readable artifact into an exception — which is a behavior change, not a cleanup. The second option is to narrow the two readers to the crate-internal test helpers they effectively are, leaving read_policy_checkpoint as the one typed output reader the front ends share. Deciding which needs the cobre-io owner, because the answer is about how strict reading a metadata file should be. Byte-neutrality bar: read-side only under either option, so the written tree is unchanged and the CLI-vs-Python golden, the file-set parity test and the 18-name parity floor are untouched; the only observable change is whether a malformed or forward-dated metadata.json raises instead of returning a dict.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "no mirror entry and no #[allow] or reserved note on manifest.rs:495 / :505; their docs are ordinary public-API docs",
+        "rule": "rule 7 — a public reader with no production consumer is the closest thing here to a reserved seam, and nothing sanctions it"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "The Python exception class of a failed run is recovered by string-prefix matching on an error message that twenty-five hand-written literals in the run path mint, and five of the eight recognized prefixes are pinned by no test",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/errors.rs",
+          "symbol": "message_prefix_to_pyerr"
+        },
+        {
+          "path": "crates/cobre-python/src/errors.rs",
+          "symbol": "ErrorSource"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/errors.rs | sed -n '256,275p'; git show 077dbe2c:crates/cobre-python/src/run.rs | grep -cE 'format!\\(\"(output write error|policy checkpoint error|config override error|config parse error|config read error|policy validation error|simulation error|internal error)'; git show 077dbe2c:crates/cobre-python/src/errors.rs | grep -nE '\"(simulation|internal|training) error'",
+        "output": "fn message_prefix_to_pyerr(py: Python<'_>, msg: &str) -> PyErr {\n    if msg.starts_with(\"output write error\") || msg.starts_with(\"policy checkpoint error\") {\n        case_io_error(py, msg)\n    } else if msg.starts_with(\"config override error\") || ... \"config parse error\" ... \"config read error\" {\n        validation_error(py, msg)\n    } else if msg.starts_with(\"policy validation error\") { ... POLICY_INCOMPATIBLE_ERROR\n    } else if msg.starts_with(\"simulation error\") { ... SIMULATION_ERROR\n    } else if msg.starts_with(\"internal error\") { ... INTERNAL_ERROR\n    } else {\n        // Unrecognized prefix (e.g. \"training error\" / \"training failed after\")\n        // falls through to SolverError.\n25\n430:            let sim_msg = \"simulation error: x\".to_string();\n442:            let solver_msg = \"training error: solver error: numerical failure\".to_string();\n465:            let msg = \"internal error: drain thread panicked\".to_string();",
+        "reading": "Eight prefixes select five exception classes, and the else arm makes any unrecognized message a SolverError by design. The strings those branches test for are minted by twenty-five format! literals in run.rs, none of which shares a constant with the classifier. Three prefixes are pinned by a test in errors.rs (simulation error at :430, the training-error fallthrough at :442, internal error at :465); the other five — output write error, policy checkpoint error, config override error, config parse error, policy validation error — are pinned by nothing, so editing one literal at one mint site silently reclassifies that failure as SolverError, and the type a Python caller catches changes with no test failing. What holds the severity at C is that the typed path already exists next to it: PhaseError (run.rs:166-179) carries typed Load(LoadError) and Sddp arms, and its doc states the From<String> impl 'keeps every existing ? site unchanged' — so this is a deliberate, documented split rather than an oversight, and the classes that matter most already travel typed."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "The classifier and the mint sites should agree by construction rather than by convention: one set of named constants for the prefixes, referenced at both ends, so a renamed prefix is a compile error instead of a silent downgrade to SolverError. That is a local change with no boundary impact and it does not require finishing the typed PhaseError migration, which is the larger and separate piece of work. Byte-neutrality bar: no output file is touched, so the CLI-vs-Python golden, the file-set parity test and the 18-name parity floor are unaffected; the only observable surface is the exception type, and the existing errors.rs tests pin three of the eight prefixes, so five new assertions complete the mapping before anything is renamed.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": null,
+        "rule": "rule 7 — no reserved-seam claim is in play; the documented From<String> split at run.rs:166-179 is cited as the mitigating rationale, not as a sanction for the unpinned prefixes"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "The schema-export write loop is duplicated verbatim between the bindings and the CLI, down to three identical message strings, and only the CLI copy is covered by the schema drift job",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/schema.rs",
+          "symbol": "export"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-python/src/schema.rs | sed -n '35,58p'; git show 077dbe2c:crates/cobre-cli/src/commands/schema.rs | sed -n '56,88p'",
+        "output": "bindings export():  create_dir_all -> \"creating output directory '{}'\"  |  generate_schemas() -> \"schema generation failed: {e}\"  |  let count = schemas.len();  |  for (filename, value) in schemas { output_dir.join(&filename); to_string_pretty -> \"failed to serialize schema '{filename}': {e}\"; fs::write }  |  Ok(count)\nCLI execute_export():  create_dir_all -> \"creating output directory '{}'\"  |  generate_schemas() -> \"schema generation failed: {e}\"  |  let count = schemas.len();  |  for (filename, value) in schemas { output_dir.join(&filename); to_string_pretty -> \"failed to serialize schema '{filename}': {e}\"; fs::write }  |  Term::stderr() \"Exported {count} schema files to {}\"",
+        "reading": "Five steps in the same order with the same three message strings; the two copies differ only in the error type they build (PyOSError/PyValueError against CliError::Io/CliError::Internal) and in the CLI's trailing stderr line. This is a distinct duplicate from CD-025, whose anchors are the run-output orchestrators write_training_outputs and write_simulation_outputs and the five *_if_any helpers — none of which appears here, and the tree written is schemas/, not the run output tree — which is why reRaiseOf and waveRef are null rather than CD-025. The asymmetry that makes it matter: CI's schema drift job diffs schemas/ against the CLI export only, so the bindings copy could diverge in what it writes and nothing would fail. The schema CONTENT is not duplicated — both sides call the shared cobre_io::schema::generate_schemas, recorded as a positive."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "The loop that turns the generated map into files belongs beside generate_schemas in cobre-io, returning the count and a typed error each front end maps to its own type; the CLI keeps its stderr line and the bindings keep returning the count, because that is the only part that legitimately differs. Byte-neutrality bar: the written bytes are serde_json::to_string_pretty over the same generated map either way, so schemas/ is unchanged and the existing CI schema drift job stays green as the neutrality check; the run output tree is not involved, so the CLI-vs-Python golden, the file-set parity test and the 18-name parity floor are untouched. The bindings side is pinned by test_export_writes_all_schemas_as_valid_json and test_export_creates_missing_directory in schema.rs, which must keep passing against the shared implementation.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "checked the mirror for a schema-export entry: CD-025's entry at docs/design/reserved-seams-and-deferred-debt.md:587 covers the run-output orchestration only, and its anchors are disjoint from this loop",
+        "rule": "rule 7, with rule 5 checked and found not to reach this write path"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "title": "write_policy_checkpoint in the bindings re-declares the engine's cost-scale default as a bare literal while cobre-sddp exports the named constant the bindings already depend on",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/src/policy.rs",
+          "symbol": "write_policy_checkpoint"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n '1_000_000\\.0' 077dbe2c -- crates/cobre-python/src crates/cobre-cli/src crates/cobre/src; git grep -n 'DEFAULT_COST_SCALE_FACTOR' 077dbe2c -- crates/cobre-sddp/src/setup/params.rs crates/cobre-sddp/src/lib.rs",
+        "output": "crates/cobre-python/src/policy.rs:510:                    .unwrap_or(1_000_000.0),\ncrates/cobre-sddp/src/setup/params.rs:43:pub const DEFAULT_COST_SCALE_FACTOR: f64 = 1_000_000.0;\ncrates/cobre-sddp/src/setup/params.rs:300:            .unwrap_or(DEFAULT_COST_SCALE_FACTOR);\ncrates/cobre-sddp/src/setup/params.rs:528:    /// [`DEFAULT_COST_SCALE_FACTOR`] — the byte-neutral-at-default contract.\ncrates/cobre-sddp/src/lib.rs:166:    BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED,",
+        "reading": "Exactly one occurrence of the literal in all three front-end crates, and it is the final fallback of the cost_scale_factor a policy checkpoint is written with (policy.rs:507-510, inside write_policy_checkpoint at :448). The engine declares the same value as a public constant at params.rs:43, consumes it through the same unwrap_or at :300, ties it to the golden baselines in its own test doc at :528 ('the byte-neutral-at-default contract'), and re-exports it at lib.rs:166. The bindings already depend on cobre-sddp and already import from it by name (study.rs:22-25), so the constant is reachable with no new dependency. The blast radius is specific rather than cosmetic: if the engine default ever moves, a checkpoint written through this Python path records the stale scale while the engine scales cuts at the new one, and cut rescaling on reload is exactly what a checkpoint's cost_scale_factor drives."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Replace the literal with the re-exported cobre_sddp::DEFAULT_COST_SCALE_FACTOR so the engine's default has one declaration, which is a one-line change requiring no new dependency. Byte-neutrality bar: the values are equal at this baseline, so every written byte is identical today and the CLI-vs-Python golden test_cli_python_determinism_parity.py, test_cli_python_file_set_parity.py and the 18-name parity floor all hold unchanged — the change is what happens on the day the default moves, which is the point. Worth stating for the gate: if the intent is that a checkpoint written without a configured scale should be pinned forever at this value independently of the engine, then the literal is correct and what is missing is the comment saying so, and that intent is the owner's to confirm.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": "I.5",
+      "waveRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-applicable",
+        "citation": "checked the mirror's Legacy cost-scale entry (BACKLOG L2272, cobre-sddp policy_load.rs::rescale_cut_records_for_load) — that is the load-side legacy branch, not this write-side default",
+        "rule": "rule 7"
+      },
+      "measured": null,
+      "unmeasured": null,
+      "measurementRequest": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "dupOf": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "dupOf": [],
+  "positives": [
+    {
+      "subject": "crates/cobre-cli/src/commands/run/mod.rs::check_stats_overflow",
+      "why": "Checks every u64 solver-stats total against the f64 exact-integer limit BEFORE the allreduce that sums them, so a very large run degrades to a named warning instead of silently writing a rounded metadata number. The guard sits at the one place where the widening happens.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/simulation.rs::run_simulation_phase (reconcile_global_ok at :119-126) and crates/cobre-cli/src/commands/run/setup.rs::run_pre_training (:499-517)",
+      "why": "Both reconcile the global ok flag BEFORE the first collective that follows, with the reason written down at simulation.rs:115-118: a strict subset of ranks failing would otherwise leave the healthy ranks blocked in the allreduce. The same shape appears at both collective boundaries, which is the property that makes an MPI abort path survivable.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/setup.rs::reconstruct_stochastic_context_non_root",
+      "why": "A thin caller over the single cobre-sddp owner of the stochastic-context rebuild. The duplicated non-root reconstruction CD-001 named is gone from this file, and the function that remains adds no second derivation.",
+      "sanctionedBy": "CD-001 retired at the sddp gate, commit b051c410",
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "the root / non-root hydro-model split: crates/cobre-cli/src/commands/run/setup.rs::load_case_and_config (prepare_hydro_models_from_artifacts at :129-135) against crates/cobre-cli/src/commands/run/setup.rs::broadcast_and_build_setup (prepare_hydro_models(..., false) at :360)",
+      "why": "Examined as a candidate and clean. The two call sites reach ONE owner (cobre-sddp `prepare_hydro_models` delegates to `prepare_hydro_models_from_artifacts`), the only difference is the deviation-point collection flag, that flag is documented to leave the fit bit-identical, a named test pins the equivalence, and setup.rs:353-357 states the rationale for rebuilding on non-root rather than broadcasting. This is an asymmetry with a written reason and a test, not drift.",
+      "sanctionedBy": "crates/cobre-sddp/src/production/hydro_models/mod.rs doc :70-72 and the test prepare_hydro_models_from_artifacts_matches_prepare_hydro_models_for_computed_fpha (:217)",
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/mod.rs::execute_inner (the training write / error order at :172-173 and :205-222)",
+      "why": "Training outputs are written before simulation begins, and a training error is returned only AFTER that write. A run that fails in simulation, or a training run that ends in an error, still leaves its artifacts on disk. The ordering is a deliberate durability choice and the abort path preserves it.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/training.rs::aggregate_solver_stats (the rank filter at :272-274 and its doc at :257-261)",
+      "why": "The filter itself is correct and its reason is recorded at the site that needs it: backward entries are allgatherv-replicated, so per-rank totals must exclude other ranks' entries or the following allreduce double-counts. Only the DUPLICATION of this fold in the bindings is a candidate; the contract is stated in the right place.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/run/outputs.rs module doc (:3-4) and the mirror-pointer clauses at :99-100, :110-111 and :124-125",
+      "why": "The Python-parity obligation is stated at the write site, and three conditional writes name their Python twin by symbol, so the mirror duty is visible where it is incurred rather than only in CLAUDE.md. While the mirror exists, this is the right place to say so. The trailing checker clause of the third comment is candidate C7's subject, not part of this positive.",
+      "sanctionedBy": "CLAUDE.md:42 (Python parity hard rule)",
+      "cell": "architecture.S6a",
+      "subSurface": "S6a"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/validate.rs::describe_prep_error",
+      "why": "The render-agnostic (kind, report) pair is the correct shape for a diagnostic that must feed two sinks, and its doc at :141-144 states the anti-drift purpose explicitly: 'shared by the human stdout render and the --json error object, so the two never drift apart'. prep_error_to_cli_error (:160) then writes to the human term when one exists and to emit_validate_json when --json is set, from one computation. This is the template the boundary path should have followed and the reason the first candidate has a concrete fix shape rather than a redesign.",
+      "sanctionedBy": "crates/cobre-cli/src/commands/validate.rs:141-178 (the stated purpose and its single-computation implementation)",
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/main.rs::Command",
+      "why": "Five variants, five execute entry points at :96-102, one-to-one, with no engine type named in the dispatch and no Engine-like enum anywhere in the shell. The dispatch is a pure clap-to-function table, so the Phase 0a Engine seam can be added at exactly this site without disturbing any subcommand. The layering brief puts the Engine enum and its dispatch at L4 and nowhere else; the current shell already satisfies that precondition.",
+      "sanctionedBy": "plans/architecture-debt-audit/tools/target-layering-brief.md L4 row and conflicts trigger 3 (Part IV.4)",
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/progress.rs::run_progress_thread",
+      "why": "The whole progress subsystem is typed on cobre_core::TrainingEvent and imports nothing from cobre-sddp: the file contributes zero of the crate's 97 cobre_sddp occurrences. Both renderers match on TrainingEvent variants only, so a second engine emitting the same event stream needs no CLI change. In a crate where the coupling census runs to 20 occurrences in one file, an engine-neutral 1,140-line renderer is the exception worth preserving.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/cli-python/inventory.json sddpCoupling ranking (progress.rs absent) and target-layering-brief.md IV.1",
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/commands/schema.rs::execute_export",
+      "why": "A thin L4 shell over cobre_io::schema::generate_schemas with no engine reference at all: it creates the directory, serialises what L2 hands it, and reports a count. The one-variant SchemaCommand enum costs six lines and buys the `cobre schema export` grammar, which is the durable choice for a user-visible command surface that is expensive to change later, so the single variant is right-sized rather than speculative.",
+      "sanctionedBy": "target-layering-brief.md L2/L4 rows; CLAUDE.md Architecture and Cleanliness Bar, the one-way-door tie-breaker",
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-cli/src/templates.rs::find_template",
+      "why": "The 1dtoy case exists twice on disk (crates/cobre-cli/templates/ for include_bytes! under cargo publish, examples/1dtoy/ as the canonical source), the mechanical reason is stated at :8-13, and test_1dtoy_embedded_files_match_canonical_source (:198-222) asserts byte equality over the whole file set, parquet included, rather than a spot check. The registry itself is fully exercised: init.rs:57-60 iterates it for --list and :79-92 lists the available names in the unknown-template error, so ALL_TEMPLATES is earned by the --template flag contract and not speculative generality. This is the shape CD-025's unguarded output hand-mirror lacks.",
+      "sanctionedBy": "crates/cobre-cli/src/templates.rs:198-222 (the guard test) and crates/cobre-cli/src/commands/init.rs:57-92 (both consumers)",
+      "cell": "architecture.S6b",
+      "subSurface": "S6b"
+    },
+    {
+      "subject": "crates/cobre-python/src/model.rs — PyBus, PyLine, PyThermal, PyHydro, PyEnergyContract, PyPumpingStation, PyNonControllableSource, PySystem",
+      "why": "Not entity twins. Every pyclass is a newtype holding the cobre-core value (pub struct PyBus { inner: Bus }, PySystem { inner: Arc<System> }) with a from_rust constructor, so no field list is re-declared and a core-side field change cannot drift here. The wrapper IS the PyO3 boundary: the orphan rule forbids attaching #[pyclass] to a foreign type. PySystem::from_arc goes further and shares the study's System by refcount bump instead of cloning it for the getter.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/policy.rs — PyEntitySlot, PyCutRecord and their From impls",
+      "why": "Same reading as model.rs: FromPyObject twins of cobre-io record types exist because a derive cannot be attached to a foreign struct. The twin is the FFI boundary, not duplicated logic.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/convert.rs — py_to_json_value, pydict_to_json_map",
+      "why": "Examined and clean. The documented inverse of results::json_value_to_py, with the bool-before-int check ordering called out because Python bools are ints, and a module doc stating the override map must be converted under the GIL before the solver lifecycle releases it with py.detach. Its trailing note explains why coverage lives in tests/test_convert.py rather than a Rust #[cfg(test)] module: attaching a Python interpreter cannot link against the extension-module build.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/errors.rs — convert_error over ErrorSource",
+      "why": "One classification entry point over a concrete enum of sources rather than a trait object, which is what the workspace rule requires. The dual-base exception classes are built once and cached in a PyOnceLock, so the class identity a caller catches is stable across calls.",
+      "sanctionedBy": "CLAUDE.md § Hard Rules — Never use Box<dyn Trait>, enum dispatch for closed variant sets",
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/results.rs:1519 — cobre_io::read_policy_checkpoint reuse",
+      "why": "The in-crate proof that reusing the L2 typed reader works and is available: the same function is the production read path in both front ends (cobre-cli run/policy.rs:60 and three sites in cobre-python run.rs). It is the contrast that makes the metadata-reader candidate specific rather than a general complaint about the bindings.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/schema.rs::export and crates/cobre-cli/src/commands/schema.rs::execute_export — shared cobre_io::schema::generate_schemas",
+      "why": "The schema content has exactly one owner and both front ends call it. Only the write loop around it is duplicated, which is why that candidate is scoped to the loop and not to the export as a whole.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/lib.rs — register_submodule and the six-submodule topology",
+      "why": "The module tree is already engine-neutral: model, io, run, results, errors and schema name no algorithm, and register_submodule writes each into sys.modules so that both import cobre.run and from cobre import run resolve. That is what confines the missing Engine seam to two symbols instead of the whole crate surface.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre-python/src/study.rs::simulate_native — replace_fcf before simulate",
+      "why": "A trained policy and a policy loaded from disk take the identical simulate path, because the future cost function is swapped into the existing setup rather than each case building its own pipeline. One path means one behavior to keep deterministic.",
+      "sanctionedBy": null,
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "crates/cobre/src/lib.rs and crates/cobre/Cargo.toml — the facade crate",
+      "why": "Examined, not raised. Rule 7 pre-check recorded: sanctioned by the crate map (ARCHITECTURE.md:102-106 at the pin declares it an empty skeleton reserved for a future single-dependency convenience re-export), not-found in the mirror's reserved-seam register (prior-register § Normative). At the pin it is two doc lines saying it re-exports nothing yet, and its manifest has no [dependencies] section. It also has no row in the L0-L4 table of target-layering-brief.md § 1, so its layer is undeclared rather than wrong. Neither kept nor retired here — the question is in _needsHuman.",
+      "sanctionedBy": "ARCHITECTURE.md:102-106 (crate map); no mirror entry",
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    },
+    {
+      "subject": "The Python-parity hard rule as applied to the bindings' write surface",
+      "why": "Normative, not a candidate. Recorded here because it is the mechanism that has kept the two front ends' file sets equal while the seam is missing, and because every read-side candidate above sits in the gap the rule does not cover: it binds what Python WRITES, so a reader that reads less than the writer wrote is invisible to it.",
+      "sanctionedBy": "CLAUDE.md:42",
+      "cell": "architecture.S6c",
+      "subSurface": "S6c"
+    }
+  ],
+  "cleanVerdicts": [],
+  "_needsHuman": [
+    {
+      "cell": "architecture.S6a",
+      "subSurface": "S6a",
+      "question": "C1: when the phase plan gets a single owner, should the no-op arm's two behaviours converge? The CLI writes 'Training disabled, simulation disabled' to stderr and the bindings return a RunSummary with converged: false, iterations: 0, lower_bound: 0.0. Both are public surface, and neither is covered by the file-set parity test because neither writes a file, so unifying them is a deliberate API decision rather than a refactor."
+    },
+    {
+      "cell": "architecture.S6a",
+      "subSurface": "S6a",
+      "question": "C6: does the owner accept a cobre-sddp (L3) home for the solver-stats fold? The register's destination rule makes a cobre-sddp home `conflicts` for the WRITER boundary; this fold is outside that boundary (its input types are declared in cobre-sddp `src/solver_stats.rs`, so an L2 home would make cobre-io depend on an engine crate). The distinction is checked and stated, not assumed, and needs confirming before the fix shape is recorded as the direction."
+    },
+    {
+      "cell": "architecture.S6a",
+      "subSurface": "S6a",
+      "question": "C5: is renaming `StudySetup::from_broadcast_params` in scope for this station's follow-up, or does it belong to the sddp station that owns cobre-sddp's public API? The caller route through the wire type is this station's; the constructor name is not."
+    },
+    {
+      "cell": "architecture.S6b",
+      "subSurface": "S6b",
+      "question": "CD-029 destination, restated from the disposition record because this station's first candidate assumes it: is cobre-sddp's PrepPhase the confirmed home for the folded boundary check (its fourth phase), rather than cobre-io? The fix shape for the --json boundary gap depends on an engine-owned reconcile function that returns a phase kind, so the answer determines where that kind is defined."
+    },
+    {
+      "cell": "architecture.S6b",
+      "subSurface": "S6b",
+      "question": "Should cobre-cli gain a [lib] target? It would make the crate's pub surface and its four cobre_cli:: doc examples compiler-verified, closing the doctest gap structurally; it would also publish the CLI's internal renderers, error enum and progress types as a contract the workspace must then maintain. The alternative is to de-annotate the examples and accept that no example in this crate is ever compiled. This changes the crate's published surface, so it is not a candidate's call."
+    },
+    {
+      "cell": "architecture.S6b",
+      "subSurface": "S6b",
+      "question": "May the CLI's --json kind string \"CaseValidationError\" be retired in favour of the cobre-io/Python vocabulary (\"ConstraintError\" etc.)? No test, script or binding references it, so the change is free mechanically, but it is a user-visible field in a documented machine-readable contract (validate.rs:89-93) and some downstream consumer may match on it."
+    },
+    {
+      "cell": "architecture.S6b",
+      "subSurface": "S6b",
+      "question": "Where should the LoadError -> stable kind map live? cobre-io (L2) owns LoadError and both front ends depend on it, which is why the second candidate names it, but the station's committed destination rule is written for output orchestration specifically. Confirm that the same L2 destination binds a shared error-classification map, or name a different owner."
+    },
+    {
+      "cell": "architecture.S6c",
+      "subSurface": "S6c",
+      "question": "The facade crate crates/cobre: keep it as a documented reserved seam, or retire it until the convenience re-export actually exists? Rule 7 pre-check: sanctioned by ARCHITECTURE.md:102-106 ('Currently an empty skeleton ... reserved for a future single-dependency convenience re-export'), not-found in the mirror's reserved-seam register, and absent from the L0-L4 table in target-layering-brief.md § 1 — so a third possibility is that it stays and the layer map gains a row for it. Not pre-judged either way; it is published on crates.io under the project name, which is a consideration this station cannot weigh."
+    },
+    {
+      "cell": "architecture.S6c",
+      "subSurface": "S6c",
+      "question": "Under the Phase-0a Engine seam, does cobre.Study become generic over the engine (its setup field moving behind the enum), or does it stay the SDDP study with a dispatching constructor above it? Both satisfy Part IV.4 and neither is derivable from the code. The choice decides whether cobre.Study is a public API break for existing Python callers, and it also decides where the typed admission gate for an unsupported engine-plus-option combination lives — at Study construction or at the run function."
+    }
+  ],
+  "coverage": {
+    "S6a": "candidates",
+    "S6b": "candidates",
+    "S6c": "candidates"
+  },
+  "gate": {
+    "S6a": {
+      "cell": "architecture.S6a",
+      "wave": 1,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 7,
+      "candidates": 7,
+      "dupOf": [],
+      "positives": 7,
+      "needsHuman": 3,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6b": {
+      "cell": "architecture.S6b",
+      "wave": 1,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "redispatched": true,
+      "firstFailure": [
+        "$.candidates[3].partIRef: not an I.3-n / I.5 reference (the worker wrote 'I.3-7, I.5')",
+        "$.candidates[4].fixShape: looks like a diff or a code block; prose only",
+        "re-dispatched once with both lines quoted; the rewrite passed the validator with the same 7 candidates / 5 positives / 4 needs-human"
+      ],
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 7,
+      "candidates": 7,
+      "dupOf": [],
+      "positives": 5,
+      "needsHuman": 4,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false
+    },
+    "S6c": {
+      "cell": "architecture.S6c",
+      "wave": 1,
+      "gatedAt": "2026-09-18",
+      "promptBytes": 46814,
+      "validator": "pass",
+      "validatorErrors": [],
+      "checkAnchors": "pass",
+      "rawCandidates": 8,
+      "candidates": 7,
+      "dupOf": [],
+      "positives": 10,
+      "needsHuman": 2,
+      "reraise": {
+        "exit": 0,
+        "hits": []
+      },
+      "cleanVerdict": false,
+      "mergedDupOf": [
+        {
+          "title": "The validate phase driver is hand-mirrored across the two front ends and has already drifted twice: the CLI and the bindings run two phases in opposite order, and their machine-readable error contracts share neither key name nor vocabulary",
+          "into": "architecture.S6b 'The pre-solver phase driver is written twice over one engine-owned PrepPhase: th'"
+        }
+      ]
+    }
+  }
+}

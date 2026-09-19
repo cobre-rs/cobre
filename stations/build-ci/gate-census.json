@@ -1,0 +1,424 @@
+{
+  "station": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "generatedAt": "2026-09-18",
+  "classes": {
+    "blocking": "wired in a workflow step (or scripts/pre-commit) whose non-zero exit fails the job",
+    "advisory-by-design": "wired in a step whose comment states the script exits 0 regardless of findings, with the script's terminal exit 0 cited",
+    "unwired": "no hit in .github/workflows or scripts/pre-commit by the negative grep"
+  },
+  "wiringSites": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/invariance-shuffle.yml",
+    ".github/workflows/mpi-slurm.yml",
+    ".github/workflows/publish.yml",
+    ".github/workflows/release-mpi.yml",
+    ".github/workflows/release-python.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/slurm-base-image.yml",
+    "scripts/pre-commit"
+  ],
+  "negativeGrepCommand": "for f in scripts/ci/*.sh scripts/ci/*.py scripts/ci/lib/*.sh; do n=$(basename \"$f\"); grep -rq \"$n\" .github/workflows/ scripts/pre-commit || echo \"UNWIRED: $n\"; done",
+  "rows": [
+    {
+      "script": "scripts/ci/check-allow-rationale.sh",
+      "kind": "sh",
+      "lines": 710,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check rationale on new suppressions (E4 gate)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 292
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-allow-rationale.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-allow-rationale.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-comment-banners.sh",
+      "kind": "sh",
+      "lines": 174,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Advisory — in-fn box-drawing banners / N5 candidates (E7)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 284
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": {
+        "stepComment": "ADVISORY: exits 0 regardless of hits; its output is informational and never fails the job.",
+        "stepCommentAnchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 282
+        },
+        "terminalExit0Anchor": {
+          "path": "scripts/ci/check-comment-banners.sh",
+          "line": 174
+        },
+        "allExit0Lines": [
+          170,
+          174
+        ]
+      },
+      "evidence": "run: bash scripts/ci/check-comment-banners.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-comment-banners.sh'",
+      "class": "advisory-by-design"
+    },
+    {
+      "script": "scripts/ci/check-comment-bloat.sh",
+      "kind": "sh",
+      "lines": 114,
+      "workflow": null,
+      "workflowJob": null,
+      "step": null,
+      "anchor": null,
+      "alsoWiredIn": [],
+      "transitiveInvocation": {
+        "path": "scripts/ci/quality-report.sh",
+        "line": 132,
+        "text": "bash \"${REPO_ROOT}/scripts/ci/check-comment-bloat.sh\" \"${REPO_ROOT}\"",
+        "invokerClass": "advisory-by-design"
+      },
+      "advisoryEvidence": null,
+      "class": "unwired",
+      "evidence": "no hit in .github/workflows/ or scripts/pre-commit; invoked by scripts/ci/quality-report.sh:132",
+      "evidenceCommand": "for f in scripts/ci/*.sh scripts/ci/*.py scripts/ci/lib/*.sh; do n=$(basename \"$f\"); grep -rq \"$n\" .github/workflows/ scripts/pre-commit || echo \"UNWIRED: $n\"; done   # at 077dbe2c; then: grep -n 'check-comment-bloat.sh' scripts/ci/*.sh"
+    },
+    {
+      "script": "scripts/ci/check-comment-line-refs.sh",
+      "kind": "sh",
+      "lines": 157,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Advisory — drift-prone line references in comments (E2)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 280
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": {
+        "stepComment": "ADVISORY: exits 0 regardless of hits; its output is informational and never fails the job.",
+        "stepCommentAnchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 278
+        },
+        "terminalExit0Anchor": {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 157
+        },
+        "allExit0Lines": [
+          153,
+          157
+        ]
+      },
+      "evidence": "run: bash scripts/ci/check-comment-line-refs.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-comment-line-refs.sh'",
+      "class": "advisory-by-design"
+    },
+    {
+      "script": "scripts/ci/check-comment-refs.sh",
+      "kind": "sh",
+      "lines": 230,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check comment references (un-rottable-ref gate)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 276
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-comment-refs.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-comment-refs.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-cut-selection-determinism.sh",
+      "kind": "sh",
+      "lines": 296,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Cut-selection determinism gate",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 264
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-cut-selection-determinism.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-cut-selection-determinism.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-doc-paths.sh",
+      "kind": "sh",
+      "lines": 257,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check repo-relative doc paths/links",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 274
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-doc-paths.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-doc-paths.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-doc-placeholders.sh",
+      "kind": "sh",
+      "lines": 123,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check for doc placeholders (E5 placeholder gate)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 286
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-doc-placeholders.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-doc-placeholders.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-docs-examples.sh",
+      "kind": "sh",
+      "lines": 139,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "docs-examples",
+      "step": "Verify init/run structural invariants",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 360
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: ./scripts/ci/check-docs-examples.sh --build",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-docs-examples.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-infra-genericity.sh",
+      "kind": "sh",
+      "lines": 143,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Infra genericity gate",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 262
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-infra-genericity.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-infra-genericity.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-no-past-inflows.sh",
+      "kind": "sh",
+      "lines": 75,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check for past_inflows regression",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 272
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-no-past-inflows.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-no-past-inflows.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check-no-plan-leaks.sh",
+      "kind": "sh",
+      "lines": 225,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check for plan-structure leaks",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 270
+      },
+      "alsoWiredIn": [
+        {
+          "path": "scripts/pre-commit",
+          "line": 11,
+          "text": "bash scripts/ci/check-no-plan-leaks.sh"
+        }
+      ],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/check-no-plan-leaks.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check-no-plan-leaks.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check_schemas.sh",
+      "kind": "sh",
+      "lines": 43,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "schemas",
+      "step": "Verify schema freshness",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 339
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: ./scripts/ci/check_schemas.sh --build",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check_schemas.sh'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/quality-report.sh",
+      "kind": "sh",
+      "lines": 134,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Advisory — code-quality hotspot report",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 300
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": {
+        "stepComment": "ADVISORY: always exits 0. Prints a ranked \"where to act first\" table (churn x size x suppression density x in-body banners) to the job log.",
+        "stepCommentAnchor": {
+          "path": ".github/workflows/ci.yml",
+          "line": 298
+        },
+        "terminalExit0Anchor": {
+          "path": "scripts/ci/quality-report.sh",
+          "line": 134
+        },
+        "allExit0Lines": [
+          134
+        ]
+      },
+      "evidence": "run: bash scripts/ci/quality-report.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'quality-report.sh'",
+      "class": "advisory-by-design"
+    },
+    {
+      "script": "scripts/ci/check_doc_voice.py",
+      "kind": "py",
+      "lines": 252,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check doc voice (no hype / unpinned numbers)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 296
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: python3 scripts/ci/check_doc_voice.py",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check_doc_voice.py'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/check_python_parity.py",
+      "kind": "py",
+      "lines": 240,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "Check Python parity",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 294
+      },
+      "alsoWiredIn": [
+        {
+          "path": "scripts/pre-commit",
+          "line": 14,
+          "text": "python3 scripts/ci/check_python_parity.py --max 0"
+        }
+      ],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: python3 scripts/ci/check_python_parity.py --max 0",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'check_python_parity.py'",
+      "class": "blocking"
+    },
+    {
+      "script": "scripts/ci/lib/comment_scan.sh",
+      "kind": "lib",
+      "lines": 65,
+      "workflow": ".github/workflows/ci.yml",
+      "workflowJob": "quality-scripts",
+      "step": "cfg(test) boundary drift guard (shared scan lib)",
+      "anchor": {
+        "path": ".github/workflows/ci.yml",
+        "line": 268
+      },
+      "alsoWiredIn": [],
+      "transitiveInvocation": null,
+      "advisoryEvidence": null,
+      "evidence": "run: bash scripts/ci/lib/comment_scan.sh",
+      "evidenceCommand": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'comment_scan.sh'",
+      "class": "blocking",
+      "sourcedBy": [
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 43,
+          "text": "source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\""
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 51,
+          "text": "source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\""
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 49,
+          "text": "source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\""
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 102,
+          "text": "source \"${REPO_ROOT}/scripts/ci/lib/comment_scan.sh\""
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "blocking": 13,
+    "advisory-by-design": 3,
+    "unwired": 1
+  },
+  "expected": {
+    "unwired": 1,
+    "advisory": 3,
+    "blocking": 13
+  },
+  "notes": [
+    "scripts/ci/__pycache__ is gitignored and not a gate",
+    "allow-rationale-allowlist.txt is data (21 lines, 0 active entries), not a gate row",
+    "check-comment-bloat.sh is unwired by the negative grep and transitively invoked from quality-report.sh:132 inside an advisory step (invokerClass advisory-by-design) — the attacker ticket may reclassify it transitively-advisory without re-deriving",
+    "check-no-plan-leaks.sh and check_python_parity.py are wired in ci.yml AND scripts/pre-commit (alsoWiredIn)",
+    "lib/comment_scan.sh is both a wired blocking gate (its own step) and a library sourced by four gates (sourcedBy)"
+  ]
+}

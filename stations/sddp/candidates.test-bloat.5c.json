@@ -1,0 +1,378 @@
+{
+  "station": "sddp",
+  "subStation": "5c",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "test-bloat",
+  "cell": "sddp/5c",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The sync_cuts count-mismatch rejection is asserted twice, in two separate integration binaries, each carrying its own byte-identical 2-rank Communicator stub",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs",
+          "symbol": "sync_cuts_rejects_mismatched_local_cut_count"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs",
+          "symbol": "StubComm2Rank"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs",
+          "symbol": "sync_cuts_invariant_rejected_when_cut_count_mismatches"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs",
+          "symbol": "StubComm2Rank"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs > /tmp/a.rs; git show 077dbe2c:crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs > /tmp/b.rs; diff /tmp/a.rs /tmp/b.rs; git grep -c 'mod common;' 077dbe2c -- crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs crates/cobre-sddp/tests/test_mpi_sync_cuts_invariant.rs; git grep -rn 'allgatherv_nonuniform|test_mpi_sync_cuts_invariant' 077dbe2c -- .github scripts",
+        "output": "nonuniform binary = 113 lines, 1 #[test]; sync_cuts_invariant binary = 216 lines, 2 #[test]. Both declare `struct StubComm2Rank` with the same 6-method `impl Communicator` body over 47 lines (nonuniform 22-71, invariant 25-71); the only textual difference is doc-comment wording. Both tests build `CutSyncBuffers::with_distribution(2, 3, 2, 6)` plus `FutureCostFunction::new(1, 2, 3, 10, &[0; 1])`, submit 2 local cuts against per_rank_cuts[0]==3, and assert the same Err(SddpError::Validation) with the same two substrings ('sync_cuts invariant violated', 'rank 0 produced 2 cuts, expected 3'). `mod common;` count = 0 in both files. Neither file name appears anywhere under .github/ or scripts/ at the baseline (0 hits).",
+        "reading": "Two integration binaries, two solver links, one assertion. The nonuniform binary's own module doc states the assertion it is named for has moved out: 'The separate `n_workers_local` uniformity handshake is covered by the unit test `handshake_rejects_nonuniform_workers`.' What remains in it is therefore only the duplicate of the sibling's first test. The sibling additionally carries the real-communicator K-fan rank-invariance gate, which the nonuniform binary does not, so the sibling is the strict superset. Per testing-architecture.md section 7 the suite cost is per-binary and per-feature-combo, never per-test, so a wholly redundant binary is the one thing that is cheap to remove without touching coverage."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the test_mpi_allgatherv_nonuniform_workers.rs binary and keep the surviving sync_cuts count-mismatch assertion in test_mpi_sync_cuts_invariant.rs, which is a strict superset of it. This is coverage-neutral, not a coverage reduction: the deleted file's titular nonuniform-workers assertion already lives in the handshake_rejects_nonuniform_workers unit test by its own module doc, and its only remaining test is the byte-for-byte same assertion as the survivor's. It removes exactly one integration binary and one static solver link, which is the per-binary cost testing-architecture.md section 7 names. No CI edit is needed: neither file is enumerated by name under .github or scripts, so the binary roster is discovered by cargo. If the owner instead wants both file names retained, then the alternative is to hoist one strict 2-rank Communicator stub into the existing cobre_sddp::test_support surface behind its current cfg(any(test, feature = 'test-support')) gate per testing-architecture.md section 5.2 and have both binaries consume it; a dedicated fixture crate is explicitly out of bounds. Byte-neutrality bar: the change is confined to crates/cobre-sddp/tests, touches no src path and no LP construction, so the parity goldens in tests/parity.rs and tests/common/parity_hash.rs are untouched, the rank-invariance harness in tests/common/permute.rs is untouched, and mpiexec -n 1 versus -n 2 is unaffected because the deleted test uses a hand-rolled stub rather than the real communicator while the survivor keeps the real-MPI K-fan gate under its test-support feature gate. Gate the change on test-count parity per testing-architecture.md section 6 so the deletion is shown to drop only the duplicated assertion.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "cut_basis.rs re-declares five fixture helpers two and three times inside a single binary that already wires mod common",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/cut_basis.rs",
+          "symbol": "write_test_checkpoint"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/cut_basis.rs",
+          "symbol": "d01_case_dir"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/cut_basis.rs",
+          "symbol": "d03_case_dir"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/cut_basis.rs",
+          "symbol": "ascending_stage_end_dates"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/cut_basis.rs",
+          "symbol": "build_setup"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "symbol": "build_setup_for_case"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE '^    fn (write_test_checkpoint|d01_case_dir|d03_case_dir|ascending_stage_end_dates|build_setup)' 077dbe2c -- crates/cobre-sddp/tests/cut_basis.rs; then per-pair: git show 077dbe2c:crates/cobre-sddp/tests/cut_basis.rs | sed -n '<range>p' > /tmp/x; diff /tmp/x /tmp/y",
+        "output": "cut_basis.rs = 3463 lines, 9 inline modules, `mod common;` declared at line 23. write_test_checkpoint declared 3x (61, 1600, 2754); the 61 and 1600 copies are byte-identical across 52 lines and the 2754 copy differs only by a hoisted `use cobre_sddp::policy_export` block. d01_case_dir declared 3x (41, 917, 1580); 41 and 1580 byte-identical, 917 differs only in .unwrap() versus .expect(). ascending_stage_end_dates declared 3x (54, 1593, 2745), all three byte-identical across 7 lines. d03_case_dir declared 2x (908, 1884), byte-identical. build_setup declared 2x (113, 1652) with the same 5-statement body (load_case, prepare_stochastic with seed 42, prepare_hydro_models, StudySetup::new) differing only in return type, (StudySetup, System) versus StudySetup. Duplicated total is approximately 154 lines inside one compilation unit.",
+        "reading": "Every copy is in the same compilation unit as every other, so this duplication buys nothing at all; a single file-scope declaration is visible to all nine inline modules. The binary already wires `mod common;`, so the sharing seam is present and unused for these five helpers. Two of the five are genuinely divergent in signature and must stay distinguishable: build_setup returns a tuple at one site and a bare StudySetup at the other. write_test_checkpoint is NOT the same fixture as test_support::write_synthetic_boundary, which writes a single-cut boundary checkpoint rather than a multi-pool one, so the consolidation must not collapse those two."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Declare each of the five helpers once at cut_basis.rs file scope, above the nine inline modules that consume them, since all copies already share one compilation unit and no cfg gate separates them. Keep the two genuinely divergent variants distinguishable rather than forcing one signature: the tuple-returning setup builder and the bare-StudySetup one differ in return type and both have callers, so give the second a distinct name or have it delegate to the first and discard the System. Do not collapse the multi-pool checkpoint writer into test_support::write_synthetic_boundary, which writes a single-cut boundary checkpoint and is a different fixture. Only if a second binary later needs these helpers does ownership move to tests/common; a new fixture crate is out of bounds per testing-architecture.md section 5.2. Byte-neutrality bar: the change is confined to one file under crates/cobre-sddp/tests, so the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 are all untouched. The relocation is behavior-neutral by construction because the surviving body is the byte-identical text of the copies it replaces; gate it on test-count parity per testing-architecture.md section 6 to prove no assertion was dropped, and note that this file exercises the stored-basis path so the module docs of crates/cobre-sddp/src/cut/basis_reconstruct.rs govern which reconstruct entry point each retained test may call.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "write_synthetic_boundary",
+          "rejected": "anchor outside the 5c manifest: crates/cobre-sddp/src/test_support.rs (5d)"
+        }
+      ]
+    },
+    {
+      "title": "No Communicator test double lives in the shared test_support surface, so src-side unit tests re-declare StubComm four times and Rank0Of2 twice while tests/common already exports both",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "symbol": "Rank0Of2"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/tests.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/training/tests.rs",
+          "symbol": "StubComm"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "Rank0Of2"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "Rank0Of2"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "ThreeRankComm"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_sync.rs",
+          "symbol": "TwoRankStubComm"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE '^\\s*(pub )?struct (StubComm|Rank0Of2|ThreeRankComm|TwoRankStubComm)\\b' 077dbe2c -- crates/cobre-sddp/src crates/cobre-sddp/tests; git grep -nE 'impl Communicator' 077dbe2c -- crates/cobre-sddp/src/test_support.rs",
+        "output": "Inside the 5c manifest: `struct StubComm;` declared 4x (training/backward/tests.rs:233, training/backward_pass_state.rs:2216, training/session/mod.rs:1654, training/training/tests.rs:173) and `struct Rank0Of2;` 2x (training/backward_pass_state.rs:2258, training/session/mod.rs:2767). tests/common/mod.rs already exports `pub struct StubComm` (impl at 34) and `pub struct Rank0Of2` (impl at 88). crates/cobre-sddp/src/test_support.rs is 3652 lines and contains 0 occurrences of `impl Communicator`. Within cut/cut_sync.rs the same file declares `struct ThreeRankComm` twice (1173 and 1301, the two 49-line stub blocks verbatim identical) and `struct TwoRankStubComm` twice (1675 and 1751, verbatim identical over 50 lines).",
+        "reading": "tests/common is only reachable from crates/cobre-sddp/tests, whereas crates/cobre-sddp/src/test_support.rs is declared at src/lib.rs under cfg(any(test, feature = 'test-support')) and is therefore reachable from BOTH src unit tests and integration binaries. It is the sanctioned shared-fixture home named by testing-architecture.md section 5.2, yet it carries no Communicator double at all, which is exactly why the src side re-rolls one. The two verbatim same-file duplicates inside cut/cut_sync.rs are duplication with no reachability excuse whatsoever. Genuinely distinct doubles that must NOT be folded in: FailingComm, FailingBcastComm, NonUniformStubComm, Rank1Of2, StubCommN, LbReconcileStub, ReconcileStub, Rank0Of2Outcome, Rank0Of2Preserve, DualRankStubComm."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Move one strict single-rank Communicator double and one rank-0-of-2 double into crates/cobre-sddp/src/test_support.rs behind the cfg(any(test, feature = 'test-support')) gate it already carries, then have the src-side unit tests and tests/common/mod.rs consume that one pair instead of re-declaring it; collapse the two verbatim same-file stub pairs in cut/cut_sync.rs to one declaration each. The consolidation must preserve per-site strictness rather than average it: at least one existing copy implements broadcast as unreachable with the message that broadcast is not used in backward pass tests, and rewriting that to Ok(()) would silently weaken a live assertion, so the shared double keeps the strict body and any site that genuinely needs a permissive broadcast declares that permissiveness explicitly at the call site. Leave FailingComm, FailingBcastComm, NonUniformStubComm, Rank1Of2, StubCommN, LbReconcileStub, ReconcileStub, Rank0Of2Outcome, Rank0Of2Preserve and DualRankStubComm alone; each encodes a different failure or outcome shape and is not a duplicate. Do not introduce a dedicated fixture crate, which testing-architecture.md section 5.2 rules out. Byte-neutrality bar: the moved items are test-only and gated, so no production build changes and the parity goldens in tests/parity.rs and tests/common/parity_hash.rs are unaffected; the rank-invariance harness in tests/common/permute.rs is unaffected because no permutation input changes; mpiexec -n 1 versus -n 2 is unaffected because these are hand-rolled stubs, never the real communicator, and the real-MPI gates keep their own communicator construction. Gate on test-count parity per testing-architecture.md section 6.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "fill_consistent_basis",
+          "rejected": "anchor outside the 5c manifest: crates/cobre-sddp/src/test_support.rs (5d)"
+        }
+      ]
+    },
+    {
+      "title": "Eight same-named MockSolver doubles re-implement the SolverInterface required methods across the manifest, with no shared base in test_support",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward/tests.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/tests.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward_pass_state.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/lower_bound.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/training/tests.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "MockSolver"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE '^\\s*(pub )?struct MockSolver' 077dbe2c -- crates/cobre-sddp/src/cut crates/cobre-sddp/src/training crates/cobre-sddp/src/solve crates/cobre-sddp/src/workspace crates/cobre-sddp/src/convergence; then per file: git show 077dbe2c:crates/cobre-sddp/src/<f> | awk '/impl SolverInterface for MockSolver/{f=1} f{c++; brace-depth} f&&d==0&&c>1{print c; exit}'",
+        "output": "8 declarations of the identically-named `MockSolver` inside the 5c manifest: training/backward/tests.rs:283, training/backward_pass_state.rs:2298, training/forward/tests.rs:57, training/forward_pass_state.rs:1101, training/lower_bound.rs:873, training/session/mod.rs:1593, training/training/tests.rs:96, workspace/workspace.rs:1155. Their `impl SolverInterface for MockSolver` block sizes are 64, 48, 45, 43, 52, 46, 52 and 31 lines, total 381 lines. The trait they satisfy, SolverInterface in crates/cobre-solver/src/trait_def.rs, declares 13 methods of which 11 are required, so each of the eight sites pays the whole required surface to vary one or two behaviors.",
+        "reading": "One name, eight bodies, 381 lines of boilerplate whose only purpose is to satisfy the 11 required methods so a test can vary a single return. Adding a required method to SolverInterface is therefore an eight-site edit inside this crate alone. The shared home already exists and is reachable from src unit tests: crates/cobre-sddp/src/test_support.rs is gated cfg(any(test, feature = 'test-support')), but it holds no solver double. Genuinely distinct doubles that are not part of this claim, because each records or fails in a way a shared base would have to expose anyway: TwoPhaseMock in cut/dcs.rs, RecordingMockSolver in the row builder, RecordingSolver in training/stage_solve_prep/tests.rs, and PerChildProbeSolver in training/backward/tests.rs."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Put one configurable solver double in crates/cobre-sddp/src/test_support.rs behind the cfg(any(test, feature = 'test-support')) gate it already carries, implementing the 11 required SolverInterface methods once, and let each of the eight sites configure the one or two behaviors it actually varies instead of restating the whole surface. Keep it a plain struct with fields, not a trait-object or closure-per-method design, so the crate-wide ban on Box<dyn Trait> is respected and the double stays enum-or-field dispatched. Preserve each site's current strictness exactly: where a body panics or asserts on an unexpected call today, the shared double must keep a mode that still panics there rather than returning a default, because turning a panic into a silent success removes a live assertion. Leave the genuinely distinct recording and probing doubles alone, specifically the two-phase mock in cut/dcs.rs, the recording mock in the row builder, the recording solver in training/stage_solve_prep/tests.rs and the per-child probe solver in training/backward/tests.rs. Byte-neutrality bar: the change is test-only and feature-gated so no production path and no LP construction changes, leaving the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 all unaffected. Gate on test-count parity per testing-architecture.md section 6, and note that the lower-bound and backward-pass sites are covered by pinned contracts in .claude/rules/sddp.md, so no assertion about Benders cut sign, column-bound state pinning or NCS availability factors may be weakened while the doubles are consolidated.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The inline-versus-extracted test homing split is accidental in training, cut, workspace and solve: three measured inversions and a third homing convention",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward/tests.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/tests.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/training/tests.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/stage_solve_prep/tests.rs",
+          "symbol": "RecordingSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/lower_bound.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/session/mod.rs",
+          "symbol": "MockSolver"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/cut_selection.rs",
+          "symbol": "make_pool"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/pool.rs",
+          "symbol": "new_creates_pool_with_correct_capacity_and_all_inactive"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/solver_phase.rs",
+          "symbol": "highs_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/solver_phase.rs",
+          "symbol": "clp_tests"
+        },
+        {
+          "path": "crates/cobre-sddp/src/solve/solver_phase.rs",
+          "symbol": "validate_phase_solver_config_tests"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -nE '^mod tests;$' 077dbe2c -- crates/cobre-sddp/src; git grep -nE '^mod tests \\{' 077dbe2c -- crates/cobre-sddp/src; git grep -c '#\\[test\\]' 077dbe2c -- <each file>; git show 077dbe2c:crates/cobre-sddp/src/solve/solver_phase.rs | sed -n '630,660p'",
+        "output": "4 extracted siblings in the manifest: training/backward/tests.rs 6514 lines and 52 tests, training/forward/tests.rs 4175 and 49, training/training/tests.rs 3035 and 25, training/stage_solve_prep/tests.rs 813 and 3. Against 34 retained inline `mod tests {` modules, 9 of which are LARGER than the smallest extracted sibling: backward_pass_state.rs 2931 inline test lines, lower_bound.rs 2856, cut/dcs.rs 2022, forward_pass_state.rs 1861, cut/cut_selection.rs 1766, training/session/mod.rs 1570, workspace/workspace.rs 1530, cut/cut_sync.rs 1367, cut/pool.rs 1075. The two highest test-function counts in the whole sub-station are both inline, cut/cut_selection.rs at 67 and cut/pool.rs at 59, each exceeding every extracted sibling whose maximum is 52. training/session/ is itself a directory module yet keeps 1570 inline test lines and 15 tests in mod.rs. solve/solver_phase.rs uses neither convention: it declares three uniquely-named inline modules, validate_phase_solver_config_tests at 638, highs_tests at 652 and clp_tests at 1042, holding 27 tests across 718 lines.",
+        "reading": "Three independent inversions, so neither of the two thresholds testing-architecture.md section 5.1 proposes is the operative rule here. No line threshold can order these, because a 2931-line inline module sits above an 813-line extracted one. No test-count threshold can either, because the two largest test-count modules are the inline ones. And directory-module status is not the rule, because training/session/ is a directory module that kept its tests inline. The asymmetry section 3.2.4 calls a coin-flip is present intra-directory within training/ itself, where backward/, forward/, training/ and stage_solve_prep/ extract while backward_pass_state.rs, forward_pass_state.rs, lower_bound.rs and session/mod.rs do not. solve/solver_phase.rs adds a third convention that neither of the two documented options covers. This is NEW evidence in the 5c manifest and is disjoint from the anchors already registered against CD-007, which sit in lp/builder/entries.rs."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pick one deterministic homing rule and apply it mechanically across the manifest, rather than continuing to decide per file. The rule must be checkable by a script so it cannot drift back, and it must resolve the three inversions this evidence records, meaning it cannot be a bare line threshold nor a bare test-count threshold nor directory-module status, since each of those is already contradicted by a file in this manifest. The backend-named triple in solve/solver_phase.rs is the one place where a third convention is arguably load-bearing, because the highs and clp modules are per-backend cfg-gated bodies rather than a single test module, so the chosen rule should either sanction cfg-gated sibling modules explicitly or the file should be normalized like the rest. This is a homing question only: no test may be added, removed, renamed or reordered by the normalization, and the cfg_attr slow-tests ignore gates stay exactly as they are since they are the local-dev tier switch and not bloat. Byte-neutrality bar: moving a cfg(test) module between a file and its sibling changes no compiled production code, so the parity goldens in tests/parity.rs and tests/common/parity_hash.rs, the rank-invariance harness in tests/common/permute.rs, and mpiexec -n 1 versus -n 2 are all unaffected by construction. Gate on test-count parity per testing-architecture.md section 6. Where a moved module asserts a pinned contract, the named regression tests and rule entries in .claude/rules/sddp.md must keep resolving to the relocated test names.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "CD-007",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "HydroPenalties has no Default, so fixtures spell all sixteen fields; the crate answers with per-file private constructors including one inside test_support itself",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/lower_bound.rs",
+          "symbol": "zero_hydro_penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/lower_bound.rs",
+          "symbol": "default_hydro_penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/builders.rs",
+          "symbol": "neutral_hydro_penalties"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/forward_sampler_no_alloc.rs",
+          "symbol": "make_hydro_spec"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -c 'HydroPenalties {' 077dbe2c -- crates/cobre-sddp/src/cut crates/cobre-sddp/src/training crates/cobre-sddp/src/solve crates/cobre-sddp/src/workspace crates/cobre-sddp/src/convergence crates/cobre-sddp/src/test_support.rs; git grep -nE 'fn [a-z_]*penalties[a-z_]*\\(\\) -> HydroPenalties' 077dbe2c -- crates/cobre-sddp/src crates/cobre-sddp/tests",
+        "output": "Struct literal sites inside the 5c manifest: training/lower_bound.rs 4, training/forward/tests.rs 3, training/backward/tests.rs 2, training/forward_pass_state.rs 2, training/backward_pass_state.rs 1, training/session/mod.rs 1, training/stage_solve_prep/tests.rs 1, training/training/tests.rs 1, for 15 sites; src/test_support.rs itself carries 4 more. Across the ten binaries that exercise the manifest: forward_sampler_integration.rs 11, cut_basis.rs 3, tests/common/builders.rs 2, forward_sampler_no_alloc.rs 1. Constructor helpers are private everywhere they exist: src/test_support.rs:205 declares `fn geometry_zero_penalties()` with no pub, tests/common/builders.rs:190 declares `fn neutral_hydro_penalties()` with no pub. training/lower_bound.rs declares two of them in one file, zero_hydro_penalties at 2258 and default_hydro_penalties at 2390, which differ in exactly 2 of 16 fields, storage_violation_below_cost 0.0 versus 500.0 and filling_target_violation_cost 0.0 versus 100.0.",
+        "reading": "The underlying cause is upstream and is cited rather than anchored: HydroPenalties in cobre-core derives Debug, Clone, Copy and PartialEq but not Default, so no call site can spread the remaining fields and every fixture must name all sixteen. The shared test-support surface already holds an all-zero constructor and keeps it private, which is why the pattern repeats instead of being reused. The two constructors in lower_bound.rs are NOT identical duplicates and must not be merged; they encode two different fixture intents. In forward_sampler_no_alloc.rs the sixteen-field literal inside make_hydro_spec varies only inflow_nonnegativity_cost, so it is exactly the case a reachable neutral constructor would collapse to one line. Crate-wide the same helper name recurs under ten spellings, but that total belongs to the test-corpus station and is deliberately not claimed here."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Expose one neutral all-zero penalties constructor from crates/cobre-sddp/src/test_support.rs, which already has a private one, and let fixtures build on it with struct-update syntax so a site that varies one cost names one field instead of sixteen; re-export it from tests/common/builders.rs so the integration binaries stop carrying their own private copy. Do not merge the two constructors in training/lower_bound.rs: they differ in the storage-violation and filling-target costs and encode two distinct fixture intents, so both survive, each expressed as the neutral base plus its two deliberate overrides, which makes the intent visible instead of buried in a sixteen-field literal. The module doc invariant in tests/common/builders.rs, that a new required field on a cobre-core entity is absorbed by editing only that module, is the property to extend rather than break. Deriving Default on the upstream HydroPenalties would be the smaller fix but it is a cobre-core change outside this manifest and would make a cost of zero the silent default for production code as well, so it is named as the alternative and left to the owner, not assumed. Byte-neutrality bar: every touched site is test-only, and each rewritten literal must be value-identical to the one it replaces so no penalty coefficient reaching the LP objective changes; on that basis the parity goldens in tests/parity.rs and tests/common/parity_hash.rs are unaffected, the rank-invariance harness in tests/common/permute.rs is unaffected, and mpiexec -n 1 versus -n 2 is unaffected. Because penalty coefficients do reach the objective, gate this one on an actual re-run of the golden digests rather than on inspection alone, and keep the FPHA average-storage and NCS availability contracts in .claude/rules/sddp.md intact at the lower-bound sites.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "symbol": "geometry_zero_penalties",
+          "rejected": "anchor outside the 5c manifest: crates/cobre-sddp/src/test_support.rs (5d)"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "Golden-set membership in crates/cobre-sddp/tests/parity.rs is justified case by case, and no two of the five cases cover the same LP structure",
+      "why": "This is the answer to the golden-set question and it is a positive, not a candidate. The selection rationale is documented at the point of use: the case_dir doc in tests/common/parity_hash.rs states the five labels are deliberately non-sequential and pins each to distinct machinery, D06 to the variable-head FPHA average-storage coefficient on both incoming and outgoing storage columns, D15 to the NCS availability factor and the lower-bound-patches-NCS contract, D30 to multi-resolution monthly and quarterly decomposition, D34 to anticipated dispatch under non-uniform per-stage block counts, and D41 to energy import and export contract columns. It also states that the simpler d01 through d05 single-feature cases are covered at the behavioral tier in tests/deterministic.rs and that promoting a case into this golden set needs justification, which is the promotion rule testing-architecture.md section 5.3 asks for, already written down. The same module doc pre-empts the obvious reduction, recording that hash fields 4 through 6 are each an n_blks-dependent read kept specifically to surface an extraction, cost or base bug that a uniform-block case cannot detect and must not be dropped as duplicates. The ten test functions are two backends over those five cases, and the backend halves are not redundant either: the CLP module doc records that CLP's simplex legitimately reaches different-but-valid optima so its digests differ, which is why the baselines live in a separate parity_baselines_clp fixture directory and why a HiGHS digest cannot stand in for a CLP one. Worth noting for the reader that ten only materializes when both additive Cargo features are enabled, since each backend module is cfg-gated per feature and the default is highs alone. No reduction is available here that does not lose a distinct failure mode.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.3 promotion rule; crates/cobre-sddp/tests/common/parity_hash.rs case_dir documentation"
+    },
+    {
+      "subject": "The determinism, rank-invariance and wire gates are correctly treated as informational and are not bloat",
+      "why": "tests/parity.rs, tests/deterministic.rs, tests/mpi_wire.rs, tests/common/permute.rs and tests/common/parity_hash.rs together are the bit-for-bit contract, so their apparent repetition is the point rather than a cost. The Cobre determinism definition is reproducibility plus declaration-order invariance, which structurally requires running the same case more than once under different orderings and different world sizes, and a Phase-0a bit-for-bit gate reuses exactly this machinery. Shrinking any of them would remove the only mechanism that can detect an order-dependent regression.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/sddp/inventory.json tests.informationalGates"
+    },
+    {
+      "subject": "The slow-tests feature gate is the right tier switch and is explicitly not bloat",
+      "why": "Long-running cases carry cfg_attr(not(feature = 'slow-tests'), ignore = ...), so the default cargo test run skips them and the full suite is available on demand. This matches the tier taxonomy in testing-architecture.md section 5.3 and its non-goal in section 7 that suite cost is per-binary and per-feature-combo rather than per-test: a gated test costs nothing when not selected, so gating is the correct lever and deletion is not.",
+      "sanctionedBy": "docs/design/testing-architecture.md sections 5.3 and 7"
+    },
+    {
+      "subject": "tests/mpi_wire.rs delegates its setup to the shared pipeline instead of rebuilding it",
+      "why": "Each determinism gate in that binary routes through common::fresh_setup_with rather than assembling its own study setup, and the helper's own doc names it as the pipeline shared by every mpi_wire.rs fresh_setup. This is the sharing seam the cut_basis.rs duplication finding says is available and unused, so the same binary set already demonstrates the target shape.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "forward_sampler_no_alloc.rs, forward_sampler_integration.rs, node_native_backward_gate.rs and basis_trajectory_probe.rs consume the shared builders rather than re-rolling entity fixtures",
+      "why": "These binaries build their entities through the spec types and make functions in tests/common/builders.rs, which is why that module can carry the invariant its doc states, that a new required field on a cobre-core entity is absorbed by editing only that module while call sites spreading defaults recompile unchanged. They are the good-citizen baseline that the two duplicated MPI binaries and cut_basis.rs depart from.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "The branching and extensive-form oracle harness duplication is already on the register and is cross-referenced rather than re-raised",
+      "why": "The registered entry records that extensive_form_oracle.rs carries a verbatim copy of the comparison harness in branching_value_oracle.rs, including the close tolerance helper and its scaffolding, and pays a second static link of the solver against the test cost discipline. It already names the test-infrastructure owner, a trigger of the next consolidation of the branching oracle test suite, and two resolution options, so nothing here is new. It is listed only so the dispatcher can see that the two oracle binaries in this manifest were examined and deliberately not double-counted.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md section Oracle test-harness duplication"
+    }
+  ],
+  "_needsHuman": [
+    "Deleting test_mpi_allgatherv_nonuniform_workers.rs is coverage-neutral by the evidence, since its titular nonuniform-workers assertion moved to the handshake_rejects_nonuniform_workers unit test by its own module doc and its one remaining test duplicates the sibling's, and no CI workflow or script names the file. The open question is whether the owner wants the file NAME retained anyway as provenance for the historical nonuniform-workers bug, in which case the fix becomes the shared-stub consolidation instead of the deletion.",
+    "Deriving Default on HydroPenalties in cobre-core would be the smaller fix for the sixteen-field fixture literals, but it is outside this manifest and would make a penalty cost of zero the silent default for production code as well. Whether that upstream derive is acceptable, or whether the fix must stay a test-support constructor, is the owner's call."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 6,
+    "kept": 6,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

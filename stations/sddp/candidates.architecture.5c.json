@@ -1,0 +1,293 @@
+{
+  "station": "sddp",
+  "subStation": "5c",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "cell": "sddp/5c",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "The cut-binding metadata channel is a sampled-traversal-only side duty: the enumerated backward commits cuts but records no binding activity, so DCS resident-set seeding silently degrades to a generation-age filter on a combination no admission gate rejects",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "run_enumerated_backward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/replicated.rs",
+          "symbol": "run_backward_node_replicated"
+        },
+        {
+          "path": "crates/cobre-sddp/src/cut/dcs.rs",
+          "symbol": "build_initial_resident_set"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'record_binding' 077dbe2c -- crates/ ; git grep -n -i 'dcs' 077dbe2c -- crates/cobre-sddp/src/setup/mod.rs ; git show 077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs | grep -n 'Traversal::Enumerated\\|Traversal::Sampled\\|sync_stage_metadata(\\|PoolRegion {\\|fcf.add_cut' ; git grep -n 'slot_increments' 077dbe2c -- crates/cobre-sddp/src/training/backward/replicated.rs ; git show 077dbe2c:crates/cobre-sddp/src/cut/dcs.rs | sed -n '758,768p'",
+        "output": "record_binding: cut/pool.rs:475 (the declaration) and backward_pass_state.rs:1063 'fcf.pools[pool].record_binding(slot, inc, iteration);' -- one production caller, no other.\nsetup/mod.rs: zero matches for 'dcs' (case-insensitive).\nbackward_pass_state.rs:508 'Traversal::Enumerated(plan) => self.run_enumerated_backward(inputs, plan),' / :509 'Traversal::Sampled { .. } => self.run_sampled_backward(inputs),'; :880 'inputs.fcf.add_cut(' (inside run_enumerated_backward, decl :721); :1673 'state.sync_stage_metadata(' (inside run_one_backward_level, decl :1534, reached only from run_sampled_backward :647); :1810 'state.level_pool_regions_scratch.push(PoolRegion {' (inside compute_one_backward_node, decl :1727); :1981 'inputs.fcf.add_cut('.\nreplicated.rs: zero matches for 'slot_increments'.\ndcs.rs:762-766 'let meta = pool.metadata(s); let within_window = current_iteration.saturating_sub(meta.last_active_iter) <= window; let is_current_iter = meta.iteration_generated == current_iteration; if within_window || is_current_iter { out.push(s as u32); }'",
+        "reading": "CutPool::record_binding has exactly one production caller (backward_pass_state.rs:1063, inside sync_stage_metadata), and sync_stage_metadata has exactly one production call site (:1673, inside run_one_backward_level), which is reached only from run_sampled_backward (:647). BackwardPassState::run routes Traversal::Enumerated to run_enumerated_backward (:508); that function commits cuts (inputs.fcf.add_cut at :880) but never pushes a PoolRegion -- the sole push is :1810 inside compute_one_backward_node, on the sampled path -- and never calls sync_stage_metadata. Its per-node worker, replicated.rs::run_backward_node_replicated, never names slot_increments at all. So on an enumerated traversal no binding increment is ever produced, allreduced, or recorded. Meanwhile DCS is fully wired on the enumerated FORWARD: forward/enumerated.rs:327-354 calls build_initial_resident_set then lazy_solve_preloaded, :288 and :546 gate fusion and basis capture on params.dcs, and :1018 passes training_ctx.dcs.filter(|p| p.is_active(iteration)) into the stage worker; setup/mod.rs contains zero occurrences of 'dcs', so the admission gate neither rejects nor mentions the enumerated-plus-DCS combination. CutPool::add_cut initialises active_count: 0 and last_active_iter: iteration (the generation iteration) and record_binding is the only mutator of either field, so on an enumerated run last_active_iter == iteration_generated for every cut and build_initial_resident_set's 'within_window || is_current_iter' test collapses to a pure generation-age window: the resident set is seeded by how recently a cut was CREATED, never by whether it recently BOUND, which is the signal the field exists to carry. This is not the mirror's 'Enumerated backward observability gap' entry (that one is the empty per-stage worker-statistics vector feeding the solver-statistics log, and states cuts and bounds are unaffected) and not PD-004 (per-run allocation in the same function, queued to the perf epic): the subject here is the binding-metadata channel and its DCS consumer. The architectural defect is that contributing binding metadata is an undeclared per-driver duty -- hand-copied into two drivers and simply absent from the third -- rather than a step of the shared successor-outcome contract, so a driver omits it silently and no gate notices."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Two roads, and the pick is the owner's because it turns on whether enumerated-plus-DCS is a supported combination. Road (a), make the exclusion explicit: reject the combination in the study admission gate exactly as the by-node scheduler's DCS exclusion is already handled, and pin it with a named test plus a rules entry, so an unsupported combination is a rejection rather than a silent degradation. Road (b), make the channel driver-independent: fold the slot_increments contribution into the shared outcome-aggregation step every backward driver already calls, so the replicated driver cannot omit it, and give the enumerated backward the per-stage allreduce that sync_stage_metadata performs on the sampled path. Road (a) is the smaller and the reversible one and matches the existing precedent; road (b) is the durable one if enumerated-plus-DCS is meant to work. Byte-neutrality bar: road (a) is byte-neutral by construction on every currently-passing configuration, since it only converts a silently-degraded run into a rejected one. Road (b) is NOT byte-neutral in solver statistics, because a differently-seeded DCS resident set changes the LP-solve count; it must remain byte-neutral in cuts, bounds and reported objective, which the parity goldens plus the rank-invariance harness and mpiexec -n 1 versus -n 2 verify, and which holds because the DCS lazy loop is exact. Both roads touch pinned contracts and must cite them: .claude/rules/sddp.md section 'By-node scheduler is warm-start-only' is the precedent for an explicitly pinned traversal-by-DCS exclusion, and the append-only cut pool and slot-identity basis section owns active_count and last_active_iter, which only record_binding may advance.",
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part V.1 -- 0a's typed admission gate: an unsupported combination is a rejection, never a silent ignore",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "relatedTo": [
+        {
+          "id": "CD-022",
+          "sharedSymbols": [
+            "run_enumerated_backward"
+          ],
+          "titleJaccard": 0.02
+        }
+      ],
+      "retiredOverlaps": [
+        {
+          "ref": "PD-004",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        },
+        {
+          "ref": "mirror:performance-debt-follow-ups-first-performance-pass-2026-08-18",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "CD-015 sharpened: by_scenario's risk aggregation HAS moved out into process_by_scenario_backward, leaving exactly the cross-worker staged-cut merge and the add_cut commit loop inline in compute_one_backward_node against by_node_finish's extracted scatter-aggregate-commit, and the register's proposed commit_by_scenario_cuts does not exist at the pin",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "compute_one_backward_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_node.rs",
+          "symbol": "by_node_finish"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_scenario.rs",
+          "symbol": "process_by_scenario_backward"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'commit_by_scenario_cuts' 077dbe2c -- crates/ ; git show 077dbe2c:crates/cobre-sddp/src/training/backward/by_scenario.rs | grep -n '^pub(crate) fn ' ; git show 077dbe2c:crates/cobre-sddp/src/training/backward/by_node.rs | grep -n '^pub(crate) fn ' ; git show 077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs | sed -n '1950,1990p'",
+        "output": "commit_by_scenario_cuts: no match anywhere under crates/.\nby_scenario.rs declares exactly one top-level fn: :398 process_by_scenario_backward.\nby_node.rs declares :56 resolve_block_size, :68 by_node_block_count, :77 identity_block_order, :98 hardest_first_block_order, :131 process_stage_backward_by_node, :416 by_node_finish, :529 merge_block_pivots.\nbackward_pass_state.rs:1950-1990 (inline, by-scenario arm): 'state.staged_cuts_buf.clear(); let mut worker_failure: Option<SddpError> = None; for worker_result in worker_staged { match worker_result { Ok((w, cuts)) => state.staged_cuts_buf.extend(cuts.into_iter().map(|cut| (w, cut))), Err(e) => { worker_failure = Some(e); break; } } } ... state.staged_cuts_buf.sort_by_key(|(_, cut)| cut.trial_state_idx); debug_assert_eq!(state.staged_cuts_buf.len(), trial_points.len()); for (w, cut) in &state.staged_cuts_buf { ... inputs.fcf.add_cut(node_id, pool_id, inputs.iteration, cut.forward_pass_index, cut.intercept, &arena[range]); } Ok(state.staged_cuts_buf.len())'",
+        "reading": "New evidence that narrows CD-015 rather than restating it. The by-node arm of compute_one_backward_node is a single call to by_node_finish (:1913); that extracted function owns the whole tail -- canonical_scatter of worker outcomes into the arena, the ascending-routed-position aggregation over omega, and the fcf.add_cut insertion -- and returns cuts_added. On the by-scenario side the aggregation half of CD-015's claim HAS since moved: by_scenario.rs declares exactly ONE top-level function, process_by_scenario_backward, and it now owns the per-omega risk aggregation and returns a StagedCut. What survives inline at backward_pass_state.rs:1950-1990 is therefore precisely the cross-worker residue: the staged_cuts_buf clear, the worker-result fold with its first-error break, the sort_by_key on trial_state_idx, the length assertion, and the add_cut commit loop with its arena-range debug assertion. The register's proposed target name commit_by_scenario_cuts returns no match anywhere under crates/, so the extraction has not been started. The sharpened claim is thus not 'the aggregation is inline' but 'the merge-and-commit is inline in the god function while its by-node counterpart is a module-local function', which is a smaller and better-defined fix than the register describes."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Move the backward_pass_state.rs:1950-1990 block into training/backward/by_scenario.rs as the by-scenario counterpart of by_node_finish -- the register's commit_by_scenario_cuts -- taking the worker-staged results, the staged_cuts_buf scratch, the workspaces for their agg_arena, the cut-state slot count for the range assertion, and a mutable FutureCostFunction, and returning Result<usize, SddpError>. compute_one_backward_node then reads as one call per scheduler arm, which also relieves the CD-014-remnant size residue without being that finding. Byte-neutrality bar: trial_state_idx must remain the SOLE sort key and the add_cut calls must stay in that ascending order, because cut insertion order IS cut-pool slot identity; the first-error-wins fold must keep breaking on the lowest worker index so a failing run reports the same error. Contracts to cite: .claude/rules/sddp.md section on the append-only cut pool and slot-identity basis governs insertion order, and the section 'By-node scheduler is warm-start-only' governs the sibling arm's ascending-trial-point insertion. Verified by the parity goldens, the rank-invariance harness, mpiexec -n 1 versus -n 2, and the Clp determinism harness.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "CD-015",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "CD-016 sharpened: the per-worker backward_accum bookkeeping is duplicated at more than the pre-allocation the register names -- the slot_increments into metadata_sync_contribution fold is a second copied block, in two different modules on two different reset schedules, and the replicated driver participates in neither",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward_pass_state.rs",
+          "symbol": "process_stage_backward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_node.rs",
+          "symbol": "process_stage_backward_by_node"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/by_scenario.rs",
+          "symbol": "process_by_scenario_backward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/workspace/workspace.rs",
+          "symbol": "BackwardAccumulators"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/training/backward/by_scenario.rs | sed -n '560,566p' ; git show 077dbe2c:crates/cobre-sddp/src/training/backward/by_node.rs | sed -n '386,392p' ; git show 077dbe2c:crates/cobre-sddp/src/training/backward_pass_state.rs | grep -n 'slot_increments' ; git grep -n 'slot_increments\\|metadata_sync_contribution' 077dbe2c -- crates/cobre-sddp/src/training/backward/replicated.rs",
+        "output": "by_scenario.rs:560-566 'let pop = ws.backward_accum.slot_increments.len(); for slot in 0..pop { let count = ws.backward_accum.slot_increments[slot]; if count > 0 { ws.backward_accum.metadata_sync_contribution[slot] += count; } }'\nby_node.rs:386-392 'for slot in 0..pop { let increment = ws.backward_accum.slot_increments[slot]; if increment > 0 { ws.backward_accum.metadata_sync_contribution[slot] += increment; } }'\nbackward_pass_state.rs slot_increments sites: :2073 'if ws.backward_accum.slot_increments.len() < pop {' / :2074 'ws.backward_accum.slot_increments.resize(pop, 0u64);' / :2132 'ws.backward_accum.slot_increments[..pop].fill(0);'\nreplicated.rs: zero matches for slot_increments or metadata_sync_contribution.",
+        "reading": "CD-016's surviving claim is scoped to roughly 25 lines of per-worker backward_accum buffer PRE-ALLOCATION duplicated between process_stage_backward and process_stage_backward_by_node. The new evidence is a second duplicated block that the register does not name: the fold that promotes this trial point's or block's slot_increments into the rank's metadata_sync_contribution appears at by_scenario.rs:560-566 and again at by_node.rs:386-392, character-identical apart from the loop variable name (count versus increment) and where pop comes from. The two copies also sit on different reset schedules -- process_stage_backward resizes slot_increments at :2073-2074 and clears it per trial point at :2132, while by_node.rs runs its own resize-and-clear for its per-block granularity at :204-207 -- so the duplication is not a single copy-paste but a shared invariant maintained twice, which is what makes it a hazard rather than mere noise: the fold, the reset and the allreduce must agree, and nothing declares that they must. replicated.rs names neither buffer, which is the third driver's non-participation recorded in this candidate's sibling on the enumerated traversal."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Give BackwardAccumulators a named method that performs the fold over a caller-supplied population count, and have both drivers call it, leaving the reset schedule at each caller because the granularities genuinely differ -- per trial point for by-scenario, per opening block for by-node. That keeps the pre-allocation half exactly as CD-016 describes it and makes the fold single-owner, so a change to the metadata contract lands in one place. Byte-neutrality bar: the fold is a conditional accumulate into a u64 buffer that is subsequently allreduced with Sum, so extracting it is arithmetic-identical with no floating-point reassociation to worry about; the buffer feeds CutPool::record_binding, whose active_count and last_active_iter fields are pinned by the .claude/rules/sddp.md section on the append-only cut pool and slot-identity basis, so the extraction must not change when the reset happens relative to the fold. Verified by the parity goldens plus the rank-invariance harness and mpiexec -n 1 versus -n 2, which is the configuration that exercises the allreduce.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "CD-016",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "The replicated backward driver never enters the outcome_aggregation module and open-codes a second owner of the Benders intercept derivation, so the crate's cut-intercept formula lives in two places with no shared owner",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/backward/replicated.rs",
+          "symbol": "solve_replicated_outcome_slice"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/backward/replicated.rs",
+          "symbol": "run_backward_node_replicated"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/training/backward/replicated.rs | grep -n '^use \\|^pub(crate) fn \\|intercept' ; git show 077dbe2c:crates/cobre-sddp/src/training/backward/outcome_aggregation.rs | sed -n '95,123p' ; git grep -n 'outcome_aggregation' 077dbe2c -- crates/cobre-sddp/src/training/backward/replicated.rs",
+        "output": "replicated.rs declares :60 outcome_stride, :83 solve_replicated_outcome_slice, :204 run_backward_node_replicated; its super-import list names duals_extraction::extract_state_duals_only and lp_setup::{fill_external_opening_noise, patch_opening_bounds} and does NOT name outcome_aggregation (git grep for 'outcome_aggregation' in this file: no match).\nreplicated.rs:301 'intercept: 0.0,' then :317 'out.intercept = objective - succ.cut_state.dot_trial_state(coefficients, x_hat);'\noutcome_aggregation.rs:95-123 write_opening_outcome: 'out.intercept = objective - cut_state.dot_trial_state(&out.coefficients, x_hat);'",
+        "reading": "Direct answer to the shared-but-copied half of the retrofitted-variant question. Of the three backward drivers, by_scenario and by_node both route their per-opening outcome through the outcome_aggregation helpers; replicated does not import the module at all. Instead solve_replicated_outcome_slice assembles the outcome fields itself -- initialising intercept: 0.0 at :301 and then writing 'out.intercept = objective - succ.cut_state.dot_trial_state(coefficients, x_hat)' at :317 -- which is the same derivation write_opening_outcome performs as 'out.intercept = objective - cut_state.dot_trial_state(&out.coefficients, x_hat)'. What did NOT move is therefore the outcome WRITE for the enumerated traversal, and that is a smell rather than a legitimate per-variant difference, because the expression being duplicated is a pinned numerical contract (the Benders cut sign and scaling), not a borrow-shape or scheduling concern: a future change to how the intercept is formed has to be found in two modules, one of which is not the module named for the job. Deliberately anchored only on replicated.rs symbols and distinct from the two live dispositions in the same neighbourhood: CD-035 is the role ambiguity of the bare CutStateProjection parameter inside write_opening_outcome and accumulate_opening_outcome, and CD-038 is the fused-only dot_trial_state versus the open-coded gather loop in run_cut_management. Neither says that a driver bypasses the module."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Have solve_replicated_outcome_slice call write_opening_outcome for the outcome write instead of assembling intercept, coefficients and objective_value inline. write_opening_outcome is the correct target rather than accumulate_opening_outcome because the replicated driver needs only the write, not the running accumulation -- which is exactly the per-variant difference that justifies two helpers and does not justify two intercept formulas. Byte-neutrality bar: the two expressions are the same objective minus dot_trial_state with the same operand order, so the fused dot product's summation order is unchanged, and that is the load-bearing requirement here because the .claude/rules/sddp.md section on Benders cut sign and scaling pins the intercept derivation and any reassociation of the fused product would move the last bits. Verify with the parity goldens, the enumerated branching-value and extensive-form oracle fixtures, the rank-invariance harness and mpiexec -n 1 versus -n 2, since the replicated driver's outcome slice is what the allgatherv exchanges.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "CD-028 sharpened: the shared claim-and-scatter owner already exists and its module doc declares a boundary narrower than the duplication, so what remains twice-declared between the enumerated forward and the enumerated simulation is the path marking and the worker-result fold that sit outside any stated boundary -- the fix is extending an owner with two consumers, not minting a new one",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "run_enumerated_forward"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "run_sweep"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "mark_own_paths"
+        },
+        {
+          "path": "crates/cobre-sddp/src/claim_scatter.rs",
+          "symbol": "canonical_scatter"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "enumerated_sim_stage_worker"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "re_expand"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "EnumeratedSimScratch"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "SimNodeVisit"
+        },
+        {
+          "path": "crates/cobre-sddp/src/simulation/enumerated.rs",
+          "symbol": "EnumeratedSimParams"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "enumerated_stage_worker"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "EnumeratedForwardScratch"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "NodeVisit"
+        },
+        {
+          "path": "crates/cobre-sddp/src/training/forward/enumerated.rs",
+          "symbol": "EnumeratedParams"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/claim_scatter.rs | sed -n '1,11p' ; git show 077dbe2c:crates/cobre-sddp/src/training/forward/enumerated.rs | sed -n '472,660p' ; git show 077dbe2c:crates/cobre-sddp/src/simulation/enumerated.rs | sed -n '124,145p;290,353p'",
+        "output": "claim_scatter.rs:1-11 '//! Shared work-claim and scatter primitives for the crate's two dynamic parallel-region schedulers: the by-node backward pass (training::backward::by_node) and the enumerated forward engine (training::forward::enumerated). Both claim units from a shared atomic counter in any order, then scatter each worker's captures into a shared arena in ascending (worker, item) order so the result is independent of claim order and worker count. Only these two narrow, genuinely-identical primitives live here -- the claim loop BODIES and the scatter-item WRITES stay at each caller, since their borrow shapes and per-item work differ.'\nforward/enumerated.rs run_enumerated_forward: on_my_paths marking loop, per-stage stage_units rebuild from node_graph.stage_frontier(t), ClaimCursor::new(...), 'let capture_basis = params.dcs.is_none();', par_iter_mut().zip(...).map(enumerated_stage_worker), 'collect::<Result<Vec<usize>, SddpError>>()?', 'lp_solves += counts.iter().map(|&c| c as u64).sum::<u64>()', 'for (w, i) in canonical_scatter(&counts)' then the basis swap.\nsimulation/enumerated.rs: :124-145 mark_own_paths (the same marking loop), :290-353 run_sweep with the same stage_frontier rebuild, ClaimCursor, par_iter_mut worker map, collect into Result<Vec<usize>, SimulationError>, counts sum and canonical_scatter loop.",
+        "reading": "New evidence that changes CD-028's fix shape rather than repeating its claim. The shared owner already exists: claim_scatter.rs holds ClaimCursor and canonical_scatter, and its module doc does two things -- it enumerates its consumers as the by-node backward pass and the enumerated forward engine, and it declares its own boundary, that only genuinely-identical primitives live there while claim-loop bodies and per-item writes stay at each caller. The enumerated SIMULATION is not in that consumer list, yet run_sweep runs the same stage-synchronous skeleton as run_enumerated_forward with SimulationError substituted for SddpError, and the crate concedes the mirroring in its own doc comments: EnumeratedSimParams is documented as the simulation analog of training::forward::enumerated::EnumeratedParams and enumerated_sim_stage_worker as the simulation analog of enumerated_stage_worker. Two pieces of the skeleton are identical AND outside the module's stated boundary, so they are neither shared nor deliberately excluded: the path-marking loop, which simulation extracted as mark_own_paths and the training side left inline (this is CD-030, which the register itself says folds with the CD-028 dedup, so it is raised here once, not twice), and the worker-result fold that turns a vector of per-worker Result<(usize, usize), E> into the counts vector plus the summed unit total. This also means the one-consumer-abstraction objection does not apply: the owner exists and would gain a third consumer, not a first. Raised once for both files as the shared-with-5d question requires."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Extend claim_scatter.rs with the two pieces its own doc excludes only by omission and that are genuinely identical across the three consumers: the path-marking loop that computes each rank's own-path mask (mark_own_paths, folding CD-030), and the fold that turns a per-worker vector of Result<(worker, count), E> into the counts vector and the summed unit total, generic over the error type so the SddpError and SimulationError callers share it. Everything the module doc reserves to the caller stays at the caller: the claim-loop bodies, the per-item scatter writes and the basis swap. Update the module doc's consumer list to name the simulation engine, since that list is the boundary statement the next reader will trust. Byte-neutrality bar: the scatter order is the determinism contract -- canonical_scatter yields ascending worker-then-item so results are independent of claim order and worker count -- and the fold must keep first-error-by-lowest-worker-index semantics so a failing run reports the same error. .claude/rules/sddp.md section 'By-node scheduler is warm-start-only' pins claim-order independence for the sibling consumer of these same primitives. Verified by the parity goldens, the rank-invariance harness and mpiexec -n 1 versus -n 2, plus the enumerated oracle fixtures for the simulation arm.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": "CD-028",
+      "claimType": null,
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:post-lifecycle-walk-findings-fresh-pass-2026-08-18",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ],
+      "mergedFrom": "architecture.5d"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/cut/cut_sync.rs::sync_cuts, ::pack_local_records, ::sync_packed_records (live path ::sync_level_records)",
+      "why": "Registered and deferred dead public surface, not a finding for this station: the three legacy single-pool exchange methods have no production call site but remain re-exported public API on a published crate, so removal is a breaking change already queued to the next licensed public-API break. Handed to this station as a dup-of by the solver-comm station.",
+      "sanctionedBy": "CD-019 / mirror section Superseded cut-sync public methods"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/training/backward_pass_state.rs::resolve_backward_scheduler",
+      "why": "Examined and correct. The by-node scheduler's exclusion under dynamic cut selection is not an accident of wiring: resolve_backward_scheduler forces the by-scenario arm whenever DCS is active, the exclusion is stated as a contract rather than left implicit, and it is pinned by named regression tests. This is the model the sibling enumerated-traversal gap in this envelope should be measured against -- an unsupported combination handled as an explicit, tested rejection rather than a silent degradation.",
+      "sanctionedBy": ".claude/rules/sddp.md section By-node scheduler is warm-start-only"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/training/backward/mod.rs::SuccessorSpec and ::SuccessorOutcomes",
+      "why": "The genuinely-shared part of the retrofitted-variant question, and it is shared properly. All three backward drivers consume one reified successor contract rather than each re-deriving the successor set from the node graph, so the per-variant differences that remain are scheduling and borrow shape -- the work-unit granularity, the claim scheduler, the MPI exchange -- which is what legitimately differs between a trial-point driver, an opening-block claim scheduler and a per-node replicated driver. The asymmetries reported in this envelope are all in the outcome tail, never in the successor contract itself.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/training/stage_solve_prep.rs::StageSolvePrep::run and crates/cobre-sddp/src/training/backward/lp_setup.rs::patch_opening_bounds",
+      "why": "The state-pinning pipeline has exactly one owner and no variation point where it matters. StageSolvePrep::run performs pin, then row patches, then the NCS patch, then commit, then reconciliation, and the reconciliation step is unconditional -- it takes no hook, early-returning only when there is no anticipated-commitment geometry to reconcile, with the rustdoc recording why (an opt-in hook is what previously let four call sites silently lose it). All five production call sites go through it: simulation/pipeline.rs, training/backward/lp_setup.rs, training/forward/enumerated.rs, training/forward/stage_solve.rs and training/lower_bound.rs. In particular the backward opening seam does not fork the pipeline: patch_opening_bounds is a thin delegation to StageSolvePrep::run that propagates the out-of-bounds error rather than re-implementing the pin, and fill_col_state_patches, which writes the equal lower and upper bound for every incoming state column, has exactly one production caller.",
+      "sanctionedBy": ".claude/rules/sddp.md section State pinning uses column bounds, not equality rows"
+    },
+    {
+      "subject": "The storage, inflow-lag and transit-bucket state families in crates/cobre-sddp/src/lp/builder/columns.rs (fill_storage_columns, fill_ar_lag_columns, fill_transit_bucket_columns) versus the anticipated-commitment family",
+      "why": "The class sweep for the CD-074 shape finds no second instance, and the reason is structural rather than incidental. The shape requires a pinned incoming state coupled by a no-slack equality to a DIFFERENT column that carries a finite enforced bound, so that solver-scale drift on the pinned value can push the coupled column past a real cap and turn a feasible LP into a false infeasibility. Each of the three other families fails that test at the build site, which is the correct reason for having no reconciliation and no tolerance constants: incoming storage is left unconstrained at build time and pinned only by column bounds at solve time; the AR lag columns are unconstrained and signed, so no drift can cross a bound; and the reachable transit-bucket columns are bounded below by zero with no finite upper bound, with masked unreachable slots pinned to a degenerate zero range, so any drift at a bucket bound is an absolute-tiny quantity near zero and inside the backend's own primal feasibility tolerance rather than a relative quantity on a large megawatt cap. The anticipated-commitment family is the only one whose carried state is forced by an equality onto a generation column with a finite enforced upper bound, which is exactly why the reconciliation exists there and only there. Consequence for the question asked: a shared drift-handling seam would today have exactly one consumer, which is the one-consumer-abstraction trigger, so the answer is that drift handling should NOT be hoisted into a shared seam at this baseline. The defect CD-074 already records is the mechanism and its hard-coded constants within that single family, not the absence of a cross-family owner.",
+      "sanctionedBy": ".claude/rules/sddp.md section State pinning uses column bounds, not equality rows"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/claim_scatter.rs (module doc, ClaimCursor, canonical_scatter)",
+      "why": "Worth protecting even though this envelope proposes extending it. The module states its consumers by name and, unusually, states its own boundary -- only genuinely-identical primitives live there, while claim-loop bodies and per-item writes stay at each caller because their borrow shapes and per-item work differ. That written boundary is what made the residual duplication precisely diagnosable and the fix shape bounded, instead of leaving a reader to guess how much of the skeleton was meant to be shared. A shared-primitive module that documents what it refuses to own is the pattern to copy.",
+      "sanctionedBy": null
+    },
+    {
+      "subject": "crates/cobre-sddp/src/gemm.rs",
+      "why": "The crate's unsafe_code allowance is honoured as narrowly as the rule intends: the workspace forbids unsafe by default and cobre-sddp's override exists for one call, which is isolated in this single module rather than spread across the cut-selection kernel that needs it. Examined and clean.",
+      "sanctionedBy": "CLAUDE.md hard rule: cobre-sddp overrides unsafe_code for the matrixmultiply dgemm call, isolated in src/gemm.rs"
+    }
+  ],
+  "_needsHuman": [
+    "Is enumerated traversal combined with dynamic cut selection a SUPPORTED configuration? The two roads in the first candidate diverge on this and only the owner can pick. If it is supported, the enumerated backward needs a binding-metadata contribution and its own per-stage allreduce, which changes DCS resident-set seeding and therefore the LP-solve count on existing enumerated-plus-DCS runs (cuts, bounds and objective stay byte-identical). If it is not supported, the combination should be rejected in the study admission gate and pinned with a named test, the way the by-node scheduler's DCS exclusion already is. Today it is neither: it runs, and it silently seeds the resident set by cut age alone."
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 5,
+    "kept": 5,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

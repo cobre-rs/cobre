@@ -44,6 +44,14 @@ DECL = (
     r"^\s*(pub(\([^)]*\))?\s+)?(async\s+)?"
     r"(fn|struct|enum|trait|type|const|static|mod|impl)\s+{sym}\b"
 )
+# `.py` anchors (the cobre-python pytest corpus): a def / class at any indent, or a
+# module-level constant assignment at column 0.
+PY_DECL = r"^\s*(async\s+)?(def|class)\s+{sym}\b|^{sym}\s*(:[^=\n]*)?="
+
+
+def decl_pattern(path: str, symbol: str) -> re.Pattern[str]:
+    form = PY_DECL if path.endswith(".py") else DECL
+    return re.compile(form.format(sym=re.escape(symbol)), re.MULTILINE)
 
 
 def check_anchor(baseline: str, anchor: Anchor) -> str | None:
@@ -51,7 +59,7 @@ def check_anchor(baseline: str, anchor: Anchor) -> str | None:
     if blob is None:
         return "path-missing"
     if anchor.symbol:
-        pattern = re.compile(DECL.format(sym=re.escape(anchor.symbol)), re.MULTILINE)
+        pattern = decl_pattern(anchor.path, anchor.symbol)
         return None if pattern.search(blob) else "symbol-missing"
     if anchor.line is not None and anchor.line > blob.count("\n") + 1:
         return "line-out-of-range"

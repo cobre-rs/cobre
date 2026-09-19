@@ -1,0 +1,237 @@
+{
+  "station": "sddp",
+  "subStation": "5a",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "cell": "sddp/5a",
+  "gatedAt": "2026-09-18",
+  "candidates": [
+    {
+      "title": "Four production #[allow(clippy::...)] sites in the 5a manifest carry no written rationale, so the census's sanctioned-by-construction claim is false at those four",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/policy/orchestration.rs",
+          "symbol": "write_checkpoint"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "build_chain_node_graph"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/node_graph.rs",
+          "symbol": "NodeOpenings"
+        },
+        {
+          "path": "crates/cobre-sddp/src/stochastic/noise_key.rs",
+          "symbol": "chain_position_key"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -c -E '^[[:space:]]*#!?\\[allow\\(' 077dbe2c -- <the 28 manifest paths> ; then for each hit: git show 077dbe2c:<file> | sed -n '<site-1>,<site+12>p'",
+        "output": "Census over the 5a manifest: 18 of 28 files, 71 attribute-position openers, split 43 test-side / 28 production-side. Of the 28 production sites, 24 carry an inline bound and 4 carry none: policy/orchestration.rs:230 '#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]' directly above 'pub fn write_checkpoint'; setup/node_graph.rs:297 '#[allow(clippy::cast_precision_loss)]' above 'fn new' in 'impl NodeOpenings' (computes 'q: 1.0 / (len as f64)'); setup/node_graph.rs:488 '#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]' inside 'build_chain_node_graph' over '(0..n_stages as i32).map(NodeId)'; stochastic/noise_key.rs:245 '#[allow(clippy::cast_precision_loss)]' above 'fn chain_position_key(n_o: usize, pos: usize) -> f64 { (n_o - pos) as f64 }'. Contrast setup/stochastic_pipeline.rs:160, whose allow is followed by '// block_idx is a small count (< 1000 in practice); fits in i32.', and setup/orchestration.rs, whose train_inner allow carries an explicit '// Rationale:' line. A fifth site, setup/node_graph.rs:905 above 'pool_cut_stride', has a long formula doc but no lint-specific bound; it is cited, not anchored, as the borderline case. An earlier count of 73 openers was an over-count: 'git grep -c -E \"#!?\\[allow\\(\"' also matches the phrase '#[allow(dead_code)] refires once ...' written inside comments at setup/mod.rs:312 and setup/bucket_topology.rs:26, so the count must anchor the attribute to line start.",
+        "reading": "The prior register excludes the allow census by construction on the ground that every site is sanctioned. That holds for 24 of 28 production sites and fails at four. An allow with no stated bound is an unbounded suppression: a later edit that widens the value range keeps compiling with no signal. chain_position_key is the sharpest of the four because the cast feeds a deterministic noise-ordering key, so the safe-range claim is a determinism surface and nothing on the page states it."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Add one clause to each of the four sites naming the range that makes the cast safe (opening count, stage count, chain position, checkpoint iteration), in the same '// Rationale:' form the 24 sibling sites already use, or narrow the cast so no allow is needed at all. Prefer narrowing at chain_position_key, where the bound is the claim a determinism reader needs. This is comment-only or cast-shape-only, so no numeric result moves; bound it with the parity goldens in crates/cobre-sddp/tests/parity.rs and crates/cobre-sddp/tests/common/parity_hash.rs plus the rank-invariance harness in crates/cobre-sddp/tests/common/permute.rs.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": "OD-009",
+      "claimType": "structural",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null,
+      "retiredOverlaps": [
+        {
+          "ref": "mirror:module-map",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        },
+        {
+          "ref": "mirror:graph-shape-predicate-grep",
+          "kind": "anchor-overlap",
+          "justification": "distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise"
+        }
+      ]
+    },
+    {
+      "title": "ncs_stochastic_dormant_for_test ships in the default public API while its four sibling test hooks in the same file are test-support-gated",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "ncs_stochastic_dormant_for_test"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/setup/accessors.rs (read in full, 370 lines) ; git grep -n -w ncs_stochastic_dormant_for_test 077dbe2c -- crates ; git show 077dbe2c:crates/cobre-sddp/Cargo.toml",
+        "output": "In accessors.rs, 'set_risk_measures', 'set_scheduler', 'set_hardest_first_claim_order' and 'training_ctx' each sit under '#[cfg(any(test, feature = \"test-support\"))]'. 'ncs_stochastic_dormant_for_test' is declared plain: '#[must_use] pub fn ncs_stochastic_dormant_for_test(&self) -> Vec<Vec<bool>>', documented as 'reconstructed for the out-of-crate tests/ harness'. Its only caller anywhere in the workspace at the pin is crates/cobre-sddp/tests/deterministic.rs:2014, inside the D18 per-stage NCS commissioning dormancy test whose doc block runs :1971-1980; that test is not feature-gated. Cargo.toml declares 'default = [\"highs\"]' and 'test-support = [\"cobre-core/test-support\"]', so test-support is off by default.",
+        "reading": "The method allocates a Vec<Vec<bool>> reconstruction of dormancy state that no production path reads, and its own name carries the _for_test suffix, so it is a test seam published to every downstream consumer of the crate. The same file already applies the correct gate four times, which is what makes this a miss rather than a design choice: the pattern exists and one member of the family does not follow it."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Either move the method under the same '#[cfg(any(test, feature = \"test-support\"))]' as its four siblings and declare test-support as a required feature of the one consuming test, or, if the published surface is intended, drop the _for_test suffix and document it as a supported query. Prefer the gate. Note the real trade-off the gate carries: the D18 dormancy test runs today under a plain 'cargo test --workspace', so gating it moves that coverage behind a feature flag and the station should say so rather than let it silently drop. No production caller exists either way, so the solve paths are untouched; parity goldens and the rank-invariance harness bound the change.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "structural",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "train_inner hand-mirrors the 19-field TrainingContext and the StageContext literal that accessors.rs already constructs, and the training_ctx constructor it duplicates is cfg-gated with no production consumer",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "training_ctx"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/accessors.rs",
+          "symbol": "stage_ctx"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/orchestration.rs",
+          "symbol": "train_inner"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n -w 'training_ctx' 077dbe2c -- crates ; git grep -n -w 'stage_ctx' 077dbe2c -- crates/cobre-sddp/src crates/cobre-cli crates/cobre-python ; git show 077dbe2c:crates/cobre-sddp/src/setup/accessors.rs | sed -n '262,300p' ; git show 077dbe2c:crates/cobre-sddp/src/setup/orchestration.rs | sed -n '168,215p'",
+        "output": "accessors.rs:274 declares '#[cfg(any(test, feature = \"test-support\"))] #[must_use] pub fn training_ctx(&self) -> TrainingContext<'_>' and builds a 19-field literal. orchestration.rs:177, inside train_inner, builds the same 19 fields in the same order from the same expressions, down to the identical tail 'dcs: self.cut_management.cut_selection.as_ref().and_then(DcsParams::from_strategy)' and the same 'let tr = &self.scenario_libraries.training;' preamble. The only training_ctx() call sites in cobre-sddp are setup/tests.rs:862, :6460 and :6516; there is no production caller. The sibling path does the opposite: at orchestration.rs:241-242 simulate calls 'self.stage_ctx()' and 'self.simulation_ctx()', while train_inner re-inlines StageContext at :147. stage_ctx() does have production consumers (simulation/enumerated.rs:542, training/forward/enumerated.rs:1005), so that constructor is earned and merely bypassed. The doc on training_ctx states its purpose is to let a probe drive production entry points 'without duplicating this crate's private field layout'. crates/cobre-sddp/src/training/backward_pass_state.rs:4811-4812, cited not anchored, records the same bypass in its own words: 'stage_ctx/training_ctx are built as direct field literals (mirroring StudySetup::train_inner), not via the setup.stage_ctx()/...'.",
+        "reading": "The constructor exists, the crate's own primary training path does not use it, and the cfg gate is why: production cannot call a cfg(test)-gated method. The result is two hand-synchronised copies of one 19-field context, the accessor copy exercised only by tests. Under the Context Struct Pattern a new datum threaded into training is a new TrainingContext field, which now needs two edits; miss the accessor copy and the tests keep compiling while exercising a context production never builds. The doc on the gated method claims to prevent exactly the duplication that sits 100 lines away in the same module directory."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Un-gate training_ctx to pub(crate), matching stage_ctx, and have train_inner call self.stage_ctx() and self.training_ctx() the way simulate already calls self.stage_ctx() and self.simulation_ctx(), deleting both inlined literals. One constructor then serves production and tests, so a new context field has a single edit site and the gated-mirror drift class disappears. Construction is field-for-field identical, so the change is byte-neutral by inspection; bound it with the parity goldens, the rank-invariance harness, and an mpiexec -n 1 versus -n 2 run because train_inner is the MPI training entry point.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "structural",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    },
+    {
+      "title": "setup/scenario_library_set.rs is a 46-line public module of two impl-less structs whose name collides with the sibling setup/scenario_libraries.rs, which does not contain the type ScenarioLibraries",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/setup/scenario_library_set.rs",
+          "symbol": "ScenarioLibraries"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/scenario_library_set.rs",
+          "symbol": "PhaseLibraries"
+        },
+        {
+          "path": "crates/cobre-sddp/src/setup/scenario_libraries.rs",
+          "symbol": "build_historical_inflow_library"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/src/setup/scenario_library_set.rs ; git grep -n -E '^(pub |pub\\(crate\\) )?fn ' 077dbe2c -- crates/cobre-sddp/src/setup/scenario_libraries.rs ; git grep -n -E '^(pub |pub\\(crate\\) )?mod ' 077dbe2c -- crates/cobre-sddp/src/setup/mod.rs ; git grep -n 'ScenarioLibraries|PhaseLibraries' 077dbe2c -- crates/cobre-sddp/src/lib.rs",
+        "output": "scenario_library_set.rs is 46 lines end to end: 'pub struct PhaseLibraries' with 7 fields (inflow_scheme, load_scheme, ncs_scheme, historical, external_inflow, external_load, external_ncs) and 'pub struct ScenarioLibraries { pub training: PhaseLibraries, pub simulation: PhaseLibraries }'. Neither type has an impl block of any kind. scenario_libraries.rs holds five functions and no types: build_historical_inflow_library, per_stage_scenario_counts, build_external_inflow_library, build_external_load_library, build_external_ncs_library. setup/mod.rs:59-60 declares 'pub(crate) mod scenario_libraries;' immediately above 'pub mod scenario_library_set;'. The grep for ScenarioLibraries and PhaseLibraries in lib.rs returns nothing, so neither type is re-exported at the crate root and the only path to the aggregate is cobre_sddp::setup::scenario_library_set::ScenarioLibraries. setup/stage_data.rs repeats the shape: 77 lines, one impl-less 'pub struct StageData' with roughly 16 fields and no methods.",
+        "reading": "The directive's question resolves as: these are two real structs, not a typedef. The flaw is the module boundary, not the types. Two same-directory modules whose names differ by one noun split the aggregate types from their builders, and the plural-named module is the one without the plural type, so a reader grepping for ScenarioLibraries lands in the file that does not define it. Neither 46-line module carries behaviour that a module boundary buys, and the confusable pair is a standing cost paid on every read of setup/. This is a naming and boundary claim only; it is not the StudySetup field-role claim that CD-005 already owns, and it proposes no change to StudySetup."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Collapse one of the two nouns. Either rename the builder module to scenario_library_builders.rs and let scenario_libraries.rs own the two aggregates, or fold the aggregates into the module that owns their only holder and keep a single scenario_libraries.rs for both types and builders. Fold stage_data.rs the same way if the station wants the pattern settled once rather than twice. The edit is module paths and use lines only, no behaviour and no field moves, and the compiler proves the rename complete, so the parity goldens are a formality rather than the guard.",
+      "alignmentHint": "neutral",
+      "alignmentCitation": "Part V.0",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "claimType": "structural",
+      "layout": null,
+      "mechanism": null,
+      "profiledSymbol": null,
+      "queuedTo": null
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_export.rs::splice_reserved_state_block and ::reserve_boundary_inflow_lag_slots — the policy writer's second-family slot body",
+      "why": "Reached during the sweep and deliberately not raised. The writer reserves the second boundary-state family's slot body with no reader at the pin; that is the reserved seam, not dead code, and CLAUDE.md's 'unwired config is reserved, not dead' rule governs it. The adjacent anticipated post-study-commitment channel was checked too: its field was renamed from delivery_date to reference_date / interval_start / interval_end, so delivery_date is correctly absent and must not be anchored by any station.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § Reserved-seam register (mirror :871) / CD-039"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::rescale_cut_records_for_load and ::LEGACY_COST_SCALE_FACTOR — the Legacy cost-scale load branch",
+      "why": "Reached and not raised. The branch rescales cut records written under the legacy cost scale so an older checkpoint still loads. Recorded honestly: at this pin the sanction is the register BACKLOG entry plus the code's own rustdoc at policy_load.rs:52-60; there is no reserved-seam-register entry in the mirror for it. That mirror gap is a real documentation debt owed by E11, not a licence for a later station to raise the branch as dead.",
+      "sanctionedBy": "plans/architecture-debt-audit/BACKLOG.md (register BACKLOG L2272) plus crates/cobre-sddp/src/policy/policy_load.rs rustdoc :52-60; mirror entry owed by E11"
+    },
+    {
+      "subject": "LipschitzConfig.mode and the vertex-based UpperBoundEvaluationConfig it belongs to — cited from cobre-io, never anchored here",
+      "why": "Loaded, validated and schema-exported by cobre-io and never read anywhere in the 5a manifest. A one-valued enum with no LP consumer is exactly the shape this lens would otherwise flag, and it is exactly what the hard rule protects: under CLAUDE.md, unwired config is reserved, not dead. It reserves the seam for vertex-based upper-bound evaluation.",
+      "sanctionedBy": "CLAUDE.md hard rule 'Unwired config is reserved, not dead' / docs/design/reserved-seams-and-deferred-debt.md § Reserved-seam register (mirror :54)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/mod.rs StudySetup.transit_bucket_topology and crates/cobre-sddp/src/setup/bucket_topology.rs::TransitBucketTopology",
+      "why": "The stored field has no post-construction reader at the pin and carries '#[allow(dead_code)]'. It is not a candidate: the code states the condition for the allow to refire, and every field is consumed via the constructor's threaded local before the stored field is set. TransitBucketTopology having no impl block is the same fact, not a second one.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § Reserved-seam register (mirror :32)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/horizon_mode.rs::HorizonMode — the only single-variant enum in the 5a manifest",
+      "why": "The enum census over the manifest returns 11 enums and exactly one with a single variant, and that one is already documented as a reserved seam. It also earns its module on its own terms: three methods (is_terminal, validate, num_stages), a validate that rejects num_stages < 2, and 11 tests over 104 lines. A single-variant enum is this lens's signature target, so recording why it is not raised matters more than the count.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § Post-lifecycle-walk findings (mirror :743, :749) — 'a documented reserved seam'"
+    },
+    {
+      "subject": "5a enum census — 11 enums, variant counts recorded",
+      "why": "HorizonMode 1; OpeningSource 2; Traversal 2; SimulationEnumeratedRequest 2; ProvenanceSource 3; PerStageBlockCoverageIssue 3; StochasticSource 3; PrepPhase 3; InflowNonNegativityMethod 4; RebindOp 5; ResolvedParametersError 5. Command: git grep -n -E '^\\s*pub enum |^\\s*pub\\(crate\\) enum ' 077dbe2c over the six manifest roots. Zero single-variant-enum candidates survive, since the one that exists is mirror-sanctioned.",
+      "sanctionedBy": "attacker-prompt.md § Lens: over-engineering (census requirement)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/config.rs",
+      "why": "Examined for one-variant enums, constructor-only structs and unconsumed knobs. LoopConfig and CutManagementConfig carry Default impls; LoopParams, EventConfig, EventParams and TrainingConfig are plain parameter carriers with real readers. Nothing survives the lens, and the module was already cleared once on a prior pass.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md § Post-lifecycle-walk findings (mirror :749)"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/validate_phases.rs — the module earns its home",
+      "why": "88 production lines holding 'pub enum PrepPhase { Config, Stochastic, HydroModels }' and 'pub fn prep_phase_metadata', shared by the CLI and the Python binding. Its own module doc gives the structural reason it cannot move down a layer: cobre-io cannot import from cobre-sddp without creating a cycle, so the shared mapping must live in cobre-sddp or above it. Its doc-table drift ('four SDDP preparation steps' over three rows) is left where it belongs and is not raised here.",
+      "sanctionedBy": "CD-029 doc drift is a dup-of owned by E06; module placement justified in the module's own doc"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/policy_load.rs::PolicyLoadProof and ::PolicyLoadKind — the sealed type-state credential",
+      "why": "A sealed trait with a phantom-typed proof struct is the classic ceremony shape, and it survives the lens on evidence. There are two real kinds (FullFcf, BoundaryInjection), validate_policy_load is the only constructor, and three crates require the proof positionally in signatures: cut/fcf.rs:215 and :289, cobre-cli/src/commands/run/policy.rs:59 and :123, cobre-python/src/run.rs:1087 and :1146. The unused '_proof' binding in cut/fcf.rs is the mechanism working, not a smell: presence in the signature is the check.",
+      "sanctionedBy": "two present consumers plus signature-enforced use across three crates; not a one-consumer abstraction under the layering brief's trigger 4"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/node_graph.rs::TypedVec and ::TypedIndex",
+      "why": "A generic newtype over Vec with a hand-rolled index trait would be a one-consumer abstraction if only one index type existed. Two do: StageIdx and NodePos both implement TypedIndex, and the type carries real Index, IndexMut, FromIterator, IntoIterator (three forms), Default and From<Vec<T>> impls that make the stage-versus-position distinction a compile error rather than a convention. Earned.",
+      "sanctionedBy": "two present index consumers; the layering brief's trigger 4 requires the second consumer to precede the abstraction, and here it does"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/setup/params.rs::BoundaryStateRequirements",
+      "why": "The counter-example worth recording in the same crate as a setter wall: private fields, two named constructors (none, present) that encode the '0 reserves none' rule at the boundary, two read accessors, and heavy cross-crate use in cobre-cli, cobre-python and policy_load. This is a struct whose constructors decide something, which is the distinction between an earned constructor and the constructor-only data bag this lens hunts.",
+      "sanctionedBy": "examined and clean; recorded so a later station does not mistake it for the setter-wall pattern"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/policy/scaling_report.rs and crates/cobre-sddp/src/policy/provenance.rs — impl-less nested report trees",
+      "why": "Nine impl-less structs across the two files, which reads as noun sprawl until the consumers are checked. Every one is a Serialize node of an artifact that ships: the scaling report is written to training/scaling_report.json by both cobre-cli/src/commands/run/setup.rs:592 and cobre-python/src/run.rs:1038, and ModelProvenanceReport with its two sub-reports is consumed by cobre-cli/src/summary.rs and converted to a Python dict in cobre-python/src/run.rs:1555. Nested serialized shapes justify nested types. Not raised.",
+      "sanctionedBy": "examined and clean; consumers verified cross-crate at the pin"
+    },
+    {
+      "subject": "The superseded cut-sync public methods",
+      "why": "Named in the do-not-raise set and honoured. Their anchors are in crates/cobre-sddp/src/cut/cut_sync.rs, outside the 5a manifest, so they are cited here as context rather than anchored, and no candidate touches them.",
+      "sanctionedBy": "CD-019 / mirror § Superseded cut-sync public methods"
+    },
+    {
+      "subject": "crates/cobre-sddp/src/stochastic/ and crates/cobre-sddp/src/policy/ module roots",
+      "why": "Both were checked for the empty-wrapper shape and neither is one. stochastic/mod.rs is 24 lines declaring four members with the two intra-crate ones correctly narrowed to pub(crate); policy/mod.rs is 9 lines of seven module declarations with no re-export laundering. A module root that only declares is the correct shape, and inflow_method.rs earns its place on a real From<&InflowNonNegativityConfig> conversion rather than a bare type alias.",
+      "sanctionedBy": "examined and clean"
+    }
+  ],
+  "_needsHuman": [
+    {
+      "question": "Does the 'sanctioned #[allow(...)] census' stay excluded-by-construction in the do-not-raise set now that four production sites in the 5a manifest are shown to carry no written rationale?",
+      "context": "The prior register excludes the census wholesale on the ground that each site is sanctioned, while attacker-prompt.md's over-engineering lens states that an allow with a written rationale is sanctioned and one without is a candidate. Those two instructions point opposite ways for exactly these four sites, so candidate 1 is raised under OD-009 with reRaiseOf set rather than suppressed. An owner ruling would let later stations apply one rule instead of re-deriving this conflict: either narrow the exclusion to rationale-bearing sites, or keep it whole and route rationale-absent sites somewhere else."
+    }
+  ],
+  "dropped": [],
+  "gate": {
+    "validator": "pass",
+    "rawCandidates": 4,
+    "kept": 4,
+    "dropped": 0,
+    "checkAnchors": "pass",
+    "checkReraise": "pass-or-annotated"
+  }
+}

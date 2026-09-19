@@ -1841,8 +1841,11 @@ class SectionVerifyTests(TestCorpusCase):
         self.assertEqual(self.driver_run.returncode, 0, out[-2500:])
         self.assertIn(VERIFY_MARKER, out)
         for row in VERIFY_ROWS:
-            self.assertRegex(
-                out, rf"^\| \d+ \| {re.escape(row)} \| .* \| 0 \| PASS \|$", row
+            self.assertIsNotNone(
+                re.search(
+                    rf"^\| \d+ \| {re.escape(row)} \| .* \| 0 \| PASS \|$", out, re.M
+                ),
+                row,
             )
         self.assertNotIn("| FAIL |", out)
         self.assertIn("Station-specific result: PASS (10/10 checks).", out)

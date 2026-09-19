@@ -1,0 +1,1421 @@
+{
+  "station": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "gateDate": "2026-09-19",
+  "decision": "ratified",
+  "sectionTitle": "STATION 7 — build/CI/scripts/schemas/docs (2026-09)",
+  "scaffoldHeading": "## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — build-ci",
+  "rounds": {
+    "R1-two-site": {
+      "round": "R1-two-site",
+      "kind": "two-site-first",
+      "subject": "CD-099: The infra-genericity gate's crate list is a hand-kept literal in two unpaired places, so the rule's coverage cannot follow the target layering without a synchr… — two-site edit CLAUDE.md:39-41 + SCAN_DIRS :62-68 + ci.yml:261-262; Alignment advances-1 (Part IV.1)",
+      "options": [
+        "accept (both sites stand)",
+        "amend scope (name the crates/dirs)",
+        "downgrade (reviewer's rating preserved)",
+        "defer (trigger: the cobre-model carve at Phase 0b)"
+      ],
+      "ids": [
+        "CD-099"
+      ],
+      "answer": {
+        "choice": "Accept",
+        "decision": "accept",
+        "rationale": "Both sites stand as recorded; the fix-shape amends the existing script and rule together; Alignment advances-1 citing Part IV.1 stays provisional for E9."
+      }
+    },
+    "R2-vocabulary": {
+      "round": "R2-vocabulary",
+      "kind": "single",
+      "subject": "PATTERN (check-infra-genericity.sh:79) matches SDDP nouns rather than engine concepts — architecture-01 dismissed deliberate-and-documented at scripts/ci/check-infra-genericity.sh:15",
+      "options": [
+        "keep dismissed (citation stands)",
+        "record entry (own id; widen PATTERN in place)",
+        "fold into CD-099 (second clause, no id)",
+        "defer (trigger: cobre-direct first compiles)"
+      ],
+      "ids": [],
+      "answer": {
+        "choice": "Keep dismissed",
+        "decision": "keep-dismissed",
+        "rationale": "The citation stands (check-infra-genericity.sh:15 declares the standalone word-boundary scope); the candidate stays in the section's Cleared list with the defender's basis; the owner questions it still carries (token scope, FreezeScratch site) are answered in NH #2."
+      }
+    },
+    "R3-census": {
+      "round": "R3-census",
+      "kind": "census-batch",
+      "subject": "architecture (CD-100, CD-101, CD-102, CD-103) + the check-comment-bloat.sh census row (transitively-advisory, no id)",
+      "options": [
+        "accept all as recorded",
+        "downgrade (name)",
+        "reject (name)",
+        "defer (name + trigger)"
+      ],
+      "ids": [
+        "CD-100",
+        "CD-101",
+        "CD-102",
+        "CD-103"
+      ],
+      "answer": {
+        "choice": "Accept all as recorded",
+        "rationale": "The four entries enter the actionable set at the house severity and wiring class (the three A→B downgrades keep the reviewer's A in the row); the check-comment-bloat.sh classification is ratified as transitively-advisory with its invoker recorded."
+      }
+    },
+    "R4-over-eng": {
+      "round": "R4-over-eng",
+      "kind": "over-engineering-batch",
+      "subject": "over-engineering (CD-112, CD-113, CD-114, CD-115, OD-049, OD-050) — MPICH 8x + 2 (CD-112), version literal (CD-113), five SCAN_DIRS copies (CD-114), publish list vs stubs (CD-115), no-op slow-tests OD-049 / OD-050",
+      "options": [
+        "accept all as recorded",
+        "downgrade (name)",
+        "reject (name)",
+        "defer (name + trigger)"
+      ],
+      "ids": [
+        "CD-112",
+        "CD-113",
+        "CD-114",
+        "CD-115",
+        "OD-049",
+        "OD-050"
+      ],
+      "answer": {
+        "choice": "Accept all as recorded",
+        "rationale": "All six enter the actionable set at their house severities; the MPICH duplication is many-consumer and exempt from the one-consumer objection; the fix direction for the slow-tests declarations and the stubs' publish policy are decided in NH #9 and #10."
+      }
+    },
+    "R5-drift": {
+      "round": "R5-drift",
+      "kind": "drift-batch",
+      "subject": "drift (CD-111, CD-104, CD-105, CD-106, CD-107, CD-108, CD-109, CD-110) — each names the contradicting tree location",
+      "options": [
+        "accept all as recorded",
+        "downgrade (name)",
+        "reject (name)",
+        "defer (name + trigger)"
+      ],
+      "ids": [
+        "CD-111",
+        "CD-104",
+        "CD-105",
+        "CD-106",
+        "CD-107",
+        "CD-108",
+        "CD-109",
+        "CD-110"
+      ],
+      "answer": {
+        "choice": "Accept all as recorded",
+        "rationale": "The eight entries enter the actionable set at their house severities (the two B→C downgrades keep the reviewer's B); CD-110 stays evidence-only with no disposition; CD-111's three sites stand."
+      }
+    },
+    "R6-nh-1": {
+      "round": "R6-nh-1",
+      "kind": "needs-human",
+      "subject": "#1 CD-099 / defender:architecture-00",
+      "options": [
+        "Gate owns the list; CLAUDE.md enumeration pinned by a divergence check",
+        "CLAUDE.md becomes a shape-only pointer",
+        "Defer to E9",
+        "other"
+      ],
+      "n": 1,
+      "answer": {
+        "choice": "Gate owns the list; CLAUDE.md enumeration pinned by a divergence check",
+        "rationale": "SCAN_DIRS in check-infra-genericity.sh is the owner and the gate verifies CLAUDE.md:39-41 names exactly the same crates, so an amendment edits the script first and the prose fails loudly until it follows (guard-pinned literal per doc-integrity §2)."
+      }
+    },
+    "R6-nh-2": {
+      "round": "R6-nh-2",
+      "kind": "needs-human",
+      "subject": "#2 — / defender:architecture-01 (dismissed); attacker:architecture #5",
+      "options": [
+        "Keep standalone-token scope; no FreezeScratch addition",
+        "Widen to underscore boundaries with owner sign-off",
+        "Keep scope; add the FreezeScratch site to CD-061's I.3-6 widening",
+        "other"
+      ],
+      "n": 2,
+      "answer": {
+        "choice": "Keep standalone-token scope; no FreezeScratch addition",
+        "rationale": "The dismissal stands (check-infra-genericity.sh:15 declares the word-boundary scope); CD-061's widening is an I.3-6 disposition matter for E9, not a gate change; the FreezeScratch site is outside CD-061's cobre-io scope and is not added."
+      }
+    },
+    "R6-nh-3": {
+      "round": "R6-nh-3",
+      "kind": "needs-human",
+      "subject": "#3 CD-100 / defender:architecture-02; attacker:architecture #1",
+      "options": [
+        "Extend pull_request to [main, develop]",
+        "Ratify post-merge detection; document the trade in ci.yml",
+        "Defer — trigger: the first develop merge that ships a gate regression",
+        "other"
+      ],
+      "n": 3,
+      "answer": {
+        "choice": "Extend pull_request to [main, develop]",
+        "rationale": "Every develop pull request runs ci.yml before merge; the filter becomes symmetric with the push trigger at ci.yml:4-5; one edit site."
+      }
+    },
+    "R6-nh-4": {
+      "round": "R6-nh-4",
+      "kind": "needs-human",
+      "subject": "#4 CD-101 / defender:architecture-03 (2 items); attacker:architecture #2",
+      "options": [
+        "cfg_attr slow-tests form; fix the two run lines; no compile-only step",
+        "Restore the nightly schedule at :5-7",
+        "Both: cfg_attr form and the nightly schedule",
+        "other"
+      ],
+      "n": 4,
+      "answer": {
+        "choice": "cfg_attr slow-tests form; fix the two run lines; no compile-only step",
+        "rationale": "The shuffle tests join the slow-tests suite (CLAUDE.md's slow-tests rule) so the automatic run covers them; invariance-shuffle.yml's two run lines gain test-support and become a convenience; ci.yml:114/:233 already compile the target."
+      }
+    },
+    "R6-nh-5": {
+      "round": "R6-nh-5",
+      "kind": "needs-human",
+      "subject": "#5 CD-102 / defender:architecture-04",
+      "options": [
+        "One-way canonical-subset inclusion with an explicit non-input allowlist",
+        "Set equality",
+        "Defer — trigger: the next template added to examples/",
+        "other"
+      ],
+      "n": 5,
+      "answer": {
+        "choice": "One-way canonical-subset inclusion with an explicit non-input allowlist",
+        "rationale": "Every input file under examples/1dtoy/ must be embedded (canonical ⊆ embedded); README-like non-input files are allowlisted by name inside the existing gate; adding an input file without embedding it fails."
+      }
+    },
+    "R6-nh-6": {
+      "round": "R6-nh-6",
+      "kind": "needs-human",
+      "subject": "#6 CD-103 / defender:architecture-05 (3 items); attacker:architecture #3; attacker:architecture #4; attacker:drift #3",
+      "options": [
+        "Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING",
+        "Clippy in a no-interpreter job; doc = false sanctioned; checklists unchanged",
+        "Clippy in the python job; also lift doc = false and add a bindings rustdoc step",
+        "other"
+      ],
+      "n": 6,
+      "answer": {
+        "choice": "Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING",
+        "rationale": "One step on the 3.12 matrix entry inheriting interpreter and backend; the rustdoc bar does not apply (readers are Python users, doc = false is the seam); CONTRIBUTING.md:386 and :602-604 gain the manifest-scoped clippy command so the stated obligation and CI agree."
+      }
+    },
+    "R6-nh-7": {
+      "round": "R6-nh-7",
+      "kind": "needs-human",
+      "subject": "#7 CD-112 / defender:over-engineering-00; attacker:over-engineering #3",
+      "options": [
+        "Composite action under a new .github/actions/",
+        "Checked-in setup script invoked by one step per job",
+        "Keep the eight copies; add an in-file rationale",
+        "other"
+      ],
+      "n": 7,
+      "answer": {
+        "choice": "Composite action under a new .github/actions/",
+        "rationale": "The ten sites (8 ci.yml + mpi-slurm.yml + release-mpi.yml) consume one action; the matrix guard becomes an input; the one-consumer objection is waived (10 consumers); the release-critical MPI workflows move with ci.yml in one change."
+      }
+    },
+    "R6-nh-8": {
+      "round": "R6-nh-8",
+      "kind": "needs-human",
+      "subject": "#8 CD-114 / defender:over-engineering-02; attacker:over-engineering #4",
+      "options": [
+        "Cover quality-report.sh too; fix the comment_scan.sh header when hoisting",
+        "Cover the five sourcing gates only",
+        "Defer the sixth copy — trigger: quality-report.sh sources comment_scan.sh",
+        "other"
+      ],
+      "n": 8,
+      "answer": {
+        "choice": "Cover quality-report.sh too; fix the comment_scan.sh header when hoisting",
+        "rationale": "The hoisted list has six consumers; the header :11-14 is corrected to name all three holdouts so it matches the array :46-50; no new id for the header mismatch — it rides CD-114."
+      }
+    },
+    "R6-nh-9": {
+      "round": "R6-nh-9",
+      "kind": "needs-human",
+      "subject": "#9 OD-049 / defender:over-engineering-03; defender:over-engineering-04; attacker:over-engineering #2",
+      "options": [
+        "Delete the three inert declarations",
+        "Keep as a declared convention; restate the rationale and extend to cobre-core, cobre-solver, cobre-comm",
+        "Keep as-is; restate the :55-56 rationale without the workspace-wide claim",
+        "other"
+      ],
+      "n": 9,
+      "answer": {
+        "choice": "Delete the three inert declarations",
+        "rationale": "No cfg consumer, no forwarding; the workspace command keeps resolving through cobre-sddp; ci.yml:21's feature census comment and cobre-stochastic/README.md:81 are corrected in the same change (the stochastic instance is routed to E11)."
+      }
+    },
+    "R6-nh-10": {
+      "round": "R6-nh-10",
+      "kind": "needs-human",
+      "subject": "#10 CD-115 / defender:over-engineering-05; attacker:over-engineering #1",
+      "options": [
+        "publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false",
+        "Re-publish the five stubs every release; add them to the list",
+        "Defer — trigger: the first stub gains a real implementation",
+        "other"
+      ],
+      "n": 10,
+      "answer": {
+        "choice": "publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false",
+        "rationale": "The names were reserved once and need no re-publish per release; the decision sits beside each crate and the workflow derives its list instead of restating it."
+      }
+    },
+    "R6-nh-11": {
+      "round": "R6-nh-11",
+      "kind": "needs-human",
+      "subject": "#11 CD-105 / defender:drift-02",
+      "options": [
+        "A vocabulary token, optionally followed by a qualifier",
+        "Presence only; descriptive prose allowed",
+        "other"
+      ],
+      "n": 11,
+      "answer": {
+        "choice": "A vocabulary token, optionally followed by a qualifier",
+        "rationale": "The two descriptive-prose docs get a token; README.md:4 is tightened to say the status uses the vocabulary; CD-105's dismissed half becomes part of the fix."
+      }
+    },
+    "R6-nh-12": {
+      "round": "R6-nh-12",
+      "kind": "needs-human",
+      "subject": "#12 — / attacker:drift #1; defender:drift-00 (dismissed)",
+      "options": [
+        "Fold both docs into their homes and delete them per README.md:31; no sixth value",
+        "Add a sixth vocabulary value for retained-pending-fold",
+        "Defer — trigger: the live spec absorbs both docs",
+        "other"
+      ],
+      "n": 12,
+      "answer": {
+        "choice": "Fold both docs into their homes and delete them per README.md:31; no sixth value",
+        "rationale": "The retained-pending-fold status is transitional; E11 carries the fold and the two rows disappear with the docs."
+      }
+    },
+    "R6-nh-13": {
+      "round": "R6-nh-13",
+      "kind": "needs-human",
+      "subject": "#13 CD-108 / defender:drift-06 (2 items)",
+      "options": [
+        "Re-anchor to in-tree targets; align check-comment-refs.sh's scan set",
+        "Publish the backend-*.md docs into docs/design and keep the citations",
+        "Re-anchor only; leave the scan set",
+        "other"
+      ],
+      "n": 13,
+      "answer": {
+        "choice": "Re-anchor to in-tree targets; align check-comment-refs.sh's scan set",
+        "rationale": "The citations name the surfaces under test or testing-architecture.md; the private backend docs are not published; the scan set gains crates/*/tests and crates/*/benches (rides CD-114's hoisted list)."
+      }
+    },
+    "R6-nh-14": {
+      "round": "R6-nh-14",
+      "kind": "needs-human",
+      "subject": "#14 CD-109 / defender:drift-07; attacker:drift #2",
+      "options": [
+        "Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class",
+        "Re-point the five citations only; no new check",
+        "Keep section numbers citable; add stable anchors to the rule files",
+        "other"
+      ],
+      "n": 14,
+      "answer": {
+        "choice": "Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class",
+        "rationale": "The existing gate already parses the .claude/rules/ token class at :75; a suffix check makes the class un-citable by number; the five headers are re-pointed in the same change."
+      }
+    },
+    "R6-nh-15": {
+      "round": "R6-nh-15",
+      "kind": "needs-human",
+      "subject": "#15 CD-110 / defender:drift-08",
+      "options": [
+        "Yes: E9 amends the roadmap row and the tracked mirror together",
+        "Mirror only; the untracked roadmap is out of scope",
+        "other"
+      ],
+      "n": 15,
+      "answer": {
+        "choice": "Yes: E9 amends the roadmap row and the tracked mirror together",
+        "rationale": "This station records the evidence only; the disposition and the Alignment stay epic 9's; both copies move in E9's amendment."
+      }
+    },
+    "R6-nh-16": {
+      "round": "R6-nh-16",
+      "kind": "needs-human",
+      "subject": "#16 performance-00 / defender:performance-00; attacker:performance #1",
+      "options": [
+        "Derive per job; drop the triple from schemas and python",
+        "Keep the prelude uniform for readability",
+        "other"
+      ],
+      "n": 16,
+      "answer": {
+        "choice": "Derive per job; drop the triple from schemas and python",
+        "rationale": "Direction for whoever amends ci.yml (rides CD-112's composite action); informational, no PD id, no E10 line."
+      }
+    },
+    "R6-nh-17": {
+      "round": "R6-nh-17",
+      "kind": "needs-human",
+      "subject": "#17 performance-02 / defender:performance-02; attacker:performance #2",
+      "options": [
+        "No populator; keep parallel restores",
+        "Add a populator job with needs: edges",
+        "other"
+      ],
+      "n": 17,
+      "answer": {
+        "choice": "No populator; keep parallel restores",
+        "rationale": "Every consumer restores in parallel and nothing waits; the cold-key fan-out is rare; informational."
+      }
+    },
+    "R6-nh-18": {
+      "round": "R6-nh-18",
+      "kind": "needs-human",
+      "subject": "#18 performance-03 / defender:performance-03; attacker:performance #3",
+      "options": [
+        "Keep per-job builds; no producer/consumer edge",
+        "One producer job publishes the binary as an artifact",
+        "other"
+      ],
+      "n": 18,
+      "answer": {
+        "choice": "Keep per-job builds; no producer/consumer edge",
+        "rationale": "Each gate stays independent and surfaces its own failure; informational."
+      }
+    },
+    "R6-nh-19": {
+      "round": "R6-nh-19",
+      "kind": "needs-human",
+      "subject": "#19 performance-05 / defender:performance-05 (2 items); attacker:performance #4",
+      "options": [
+        "Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time",
+        "Leave all three cargo install sites",
+        "other"
+      ],
+      "n": 19,
+      "answer": {
+        "choice": "Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time",
+        "rationale": "Both external facts are checked when the amend lands; informational, no PD id."
+      }
+    },
+    "R6-nh-20": {
+      "round": "R6-nh-20",
+      "kind": "needs-human",
+      "subject": "#20 performance-06 / defender:performance-06",
+      "options": [
+        "Keep the single recursive checkout",
+        "Tailor the submodule set per job",
+        "other"
+      ],
+      "n": 20,
+      "answer": {
+        "choice": "Keep the single recursive checkout",
+        "rationale": "A hand-listed submodule set duplicates .gitmodules with no guard; the pointer stays inert; informational."
+      }
+    },
+    "R7-handoffs": {
+      "round": "R7-handoffs",
+      "kind": "handoff-confirm",
+      "subject": "E9: CD-099 (advances-1) + CD-110 (I.3-6 evidence, disposition epic 9) · E10: nothing · E08: td-queue empty-with-reason · E11: policy.fbs path drift, SN-06, README fold (NH #12), stochastic slow-tests twin (NH #9)",
+      "options": [
+        "confirm",
+        "amend (name)"
+      ],
+      "ids": [],
+      "answer": {
+        "choice": "confirm",
+        "rationale": "All four handoffs recorded as listed in gate.md §4 and decisions.json; the RETURNED marker is written and the test-corpus station is unblocked."
+      }
+    }
+  },
+  "counts": {
+    "presented": 21,
+    "entries": 19,
+    "accepted": 19,
+    "amended": 0,
+    "downgraded": 0,
+    "rejected": 0,
+    "deferred": 0,
+    "overridden": 0,
+    "held": 0,
+    "needsHumanAnswered": 20,
+    "dismissalsRatified": 1,
+    "censusRowsRatified": 1,
+    "informational": 5
+  },
+  "decisions": [
+    {
+      "kind": "new-entry",
+      "id": "CD-099",
+      "candidateRef": "architecture-00",
+      "lens": "architecture",
+      "round": "R1-two-site",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R1-two-site)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "advances-1",
+      "sites": [
+        "CLAUDE.md:39",
+        "scripts/ci/check-infra-genericity.sh:62",
+        ".github/workflows/ci.yml:261"
+      ],
+      "hardRule": "infra-genericity",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-1",
+          "choice": "Gate owns the list; CLAUDE.md enumeration pinned by a divergence check",
+          "rationale": "SCAN_DIRS in check-infra-genericity.sh is the owner and the gate verifies CLAUDE.md:39-41 names exactly the same crates, so an amendment edits the script first and the prose fails loudly until it follows (guard-pinned literal per doc-integrity §2)."
+        }
+      ],
+      "queue": "alignment"
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-100",
+      "candidateRef": "architecture-02",
+      "lens": "architecture",
+      "round": "R3-census",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R3-census)",
+      "reviewerSeverity": "A",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-3",
+          "choice": "Extend pull_request to [main, develop]",
+          "rationale": "Every develop pull request runs ci.yml before merge; the filter becomes symmetric with the push trigger at ci.yml:4-5; one edit site."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-101",
+      "candidateRef": "architecture-03",
+      "lens": "architecture",
+      "round": "R3-census",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R3-census)",
+      "reviewerSeverity": "A",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-4",
+          "choice": "cfg_attr slow-tests form; fix the two run lines; no compile-only step",
+          "rationale": "The shuffle tests join the slow-tests suite (CLAUDE.md's slow-tests rule) so the automatic run covers them; invariance-shuffle.yml's two run lines gain test-support and become a convenience; ci.yml:114/:233 already compile the target."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-102",
+      "candidateRef": "architecture-04",
+      "lens": "architecture",
+      "round": "R3-census",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R3-census)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-5",
+          "choice": "One-way canonical-subset inclusion with an explicit non-input allowlist",
+          "rationale": "Every input file under examples/1dtoy/ must be embedded (canonical ⊆ embedded); README-like non-input files are allowlisted by name inside the existing gate; adding an input file without embedding it fails."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-103",
+      "candidateRef": "architecture-05",
+      "lens": "architecture",
+      "round": "R3-census",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R3-census)",
+      "reviewerSeverity": "A",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-6",
+          "choice": "Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING",
+          "rationale": "One step on the 3.12 matrix entry inheriting interpreter and backend; the rustdoc bar does not apply (readers are Python users, doc = false is the seam); CONTRIBUTING.md:386 and :602-604 gain the manifest-scoped clippy command so the stated obligation and CI agree."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-112",
+      "candidateRef": "over-engineering-00",
+      "lens": "over-engineering",
+      "round": "R4-over-eng",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R4-over-eng)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-7",
+          "choice": "Composite action under a new .github/actions/",
+          "rationale": "The ten sites (8 ci.yml + mpi-slurm.yml + release-mpi.yml) consume one action; the matrix guard becomes an input; the one-consumer objection is waived (10 consumers); the release-critical MPI workflows move with ci.yml in one change."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-113",
+      "candidateRef": "over-engineering-01",
+      "lens": "over-engineering",
+      "round": "R4-over-eng",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R4-over-eng)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-114",
+      "candidateRef": "over-engineering-02",
+      "lens": "over-engineering",
+      "round": "R4-over-eng",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R4-over-eng)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-8",
+          "choice": "Cover quality-report.sh too; fix the comment_scan.sh header when hoisting",
+          "rationale": "The hoisted list has six consumers; the header :11-14 is corrected to name all three holdouts so it matches the array :46-50; no new id for the header mismatch — it rides CD-114."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-115",
+      "candidateRef": "over-engineering-05",
+      "lens": "over-engineering",
+      "round": "R4-over-eng",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R4-over-eng)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-10",
+          "choice": "publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false",
+          "rationale": "The names were reserved once and need no re-publish per release; the decision sits beside each crate and the workflow derives its list instead of restating it."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-049",
+      "candidateRef": "over-engineering-03",
+      "lens": "over-engineering",
+      "round": "R4-over-eng",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R4-over-eng)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-9",
+          "choice": "Delete the three inert declarations",
+          "rationale": "No cfg consumer, no forwarding; the workspace command keeps resolving through cobre-sddp; ci.yml:21's feature census comment and cobre-stochastic/README.md:81 are corrected in the same change (the stochastic instance is routed to E11)."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "OD-050",
+      "candidateRef": "over-engineering-04",
+      "lens": "over-engineering",
+      "round": "R4-over-eng",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R4-over-eng)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-9",
+          "choice": "Delete the three inert declarations",
+          "rationale": "No cfg consumer, no forwarding; the workspace command keeps resolving through cobre-sddp; ci.yml:21's feature census comment and cobre-stochastic/README.md:81 are corrected in the same change (the stochastic instance is routed to E11)."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-111",
+      "candidateRef": "drift-09",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "B",
+      "newSeverity": "B",
+      "alignment": "neutral",
+      "sites": [
+        "CLAUDE.md:19",
+        "Cargo.toml:36",
+        ".github/workflows/ci.yml:154"
+      ],
+      "hardRule": "unsafe-code",
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-104",
+      "candidateRef": "drift-01",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-105",
+      "candidateRef": "drift-02",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-11",
+          "choice": "A vocabulary token, optionally followed by a qualifier",
+          "rationale": "The two descriptive-prose docs get a token; README.md:4 is tightened to say the status uses the vocabulary; CD-105's dismissed half becomes part of the fix."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-106",
+      "candidateRef": "drift-03",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "n/a",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-107",
+      "candidateRef": "drift-04",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-108",
+      "candidateRef": "drift-06",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-13",
+          "choice": "Re-anchor to in-tree targets; align check-comment-refs.sh's scan set",
+          "rationale": "The citations name the surfaces under test or testing-architecture.md; the private backend docs are not published; the scan set gains crates/*/tests and crates/*/benches (rides CD-114's hoisted list)."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-109",
+      "candidateRef": "drift-07",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "B",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-14",
+          "choice": "Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class",
+          "rationale": "The existing gate already parses the .claude/rules/ token class at :75; a suffix check makes the class un-citable by number; the five headers are re-pointed in the same change."
+        }
+      ],
+      "queue": null
+    },
+    {
+      "kind": "new-entry",
+      "id": "CD-110",
+      "candidateRef": "drift-08",
+      "lens": "drift",
+      "round": "R5-drift",
+      "wiring": "blocking",
+      "decision": "accept",
+      "rationale": "as recorded (R5-drift)",
+      "reviewerSeverity": "C",
+      "houseSeverity": "C",
+      "newSeverity": "C",
+      "alignment": "neutral",
+      "sites": [],
+      "hardRule": null,
+      "deferTrigger": null,
+      "overrideRationale": null,
+      "clearedMoved": false,
+      "directions": [
+        {
+          "round": "R6-nh-15",
+          "choice": "Yes: E9 amends the roadmap row and the tracked mirror together",
+          "rationale": "This station records the evidence only; the disposition and the Alignment stay epic 9's; both copies move in E9's amendment."
+        }
+      ],
+      "queue": "alignment"
+    }
+  ],
+  "vocabulary": {
+    "kind": "cleared-ratification",
+    "id": "architecture-01",
+    "round": "R2-vocabulary",
+    "wiring": "blocking",
+    "decision": "keep-dismissed",
+    "rationale": "Keep dismissed — The citation stands (check-infra-genericity.sh:15 declares the standalone word-boundary scope); the candidate stays in the section's Cleared list with the defender's basis; the owner questions it still carries (token scope, FreezeScratch site) are answered in NH #2.",
+    "dismissalBasis": "deliberate-and-documented",
+    "basisCitation": "scripts/ci/check-infra-genericity.sh:15",
+    "reRaiseOf": "CD-061",
+    "clearedMoved": false,
+    "directions": []
+  },
+  "censusRow": {
+    "kind": "census-row",
+    "id": "check-comment-bloat.sh",
+    "round": "R3-census",
+    "wiring": "transitively-advisory",
+    "censusClass": "unwired",
+    "invoker": "scripts/ci/quality-report.sh:132",
+    "decision": "ratify-classification",
+    "rationale": "The four entries enter the actionable set at the house severity and wiring class (the three A→B downgrades keep the reviewer's A in the row); the check-comment-bloat.sh classification is ratified as transitively-advisory with its invoker recorded."
+  },
+  "holds": [],
+  "needsHuman": [
+    {
+      "n": 1,
+      "id": "CD-099",
+      "sources": [
+        "defender:architecture-00"
+      ],
+      "question": "CD-099 — where does the single owner of the infra-crate set sit? CLAUDE.md:39-41 keeps its enumeration pinned by a new divergence check in the gate, or the bullet becomes a shape-only pointer to the gate's list (doc-integrity §3 mode 1 admits either; the choice decides which site an amendment edits first).",
+      "recommended": "Gate owns the list; CLAUDE.md enumeration pinned by a divergence check",
+      "answer": "Gate owns the list; CLAUDE.md enumeration pinned by a divergence check",
+      "recordedAs": "SCAN_DIRS in check-infra-genericity.sh is the owner and the gate verifies CLAUDE.md:39-41 names exactly the same crates, so an amendment edits the script first and the prose fails loudly until it follows (guard-pinned literal per doc-integrity §2).",
+      "round": "R6-nh-1",
+      "route": "CD-099"
+    },
+    {
+      "n": 2,
+      "id": "—",
+      "sources": [
+        "defender:architecture-01 (dismissed)",
+        "attacker:architecture #5"
+      ],
+      "question": "PATTERN scope (architecture-01, dismissed): should the gate's token scope ever widen past standalone word-boundary tokens, given an underscore boundary would red this blocking gate on the cobre-io timing / row-selection columns CD-061 ratified as needing no rename; and should CD-061's I.3-6 widening also name the cobre-solver FreezeScratch field site (crates/cobre-solver/src/freeze.rs:22)?",
+      "recommended": "Keep standalone-token scope; no FreezeScratch addition",
+      "answer": "Keep standalone-token scope; no FreezeScratch addition",
+      "recordedAs": "The dismissal stands (check-infra-genericity.sh:15 declares the word-boundary scope); CD-061's widening is an I.3-6 disposition matter for E9, not a gate change; the FreezeScratch site is outside CD-061's cobre-io scope and is not added.",
+      "round": "R6-nh-2",
+      "route": "informational"
+    },
+    {
+      "n": 3,
+      "id": "CD-100",
+      "sources": [
+        "defender:architecture-02",
+        "attacker:architecture #1"
+      ],
+      "question": "CD-100 — the ci.yml trigger list: extend the pull_request filter to [main, develop], accepting a full ci.yml run on every develop pull request, or ratify post-merge detection on develop as the intended trade and record that rationale in the workflow (no text at the pin states it)?",
+      "recommended": "Extend pull_request to [main, develop]",
+      "answer": "Extend pull_request to [main, develop]",
+      "recordedAs": "Every develop pull request runs ci.yml before merge; the filter becomes symmetric with the push trigger at ci.yml:4-5; one edit site.",
+      "round": "R6-nh-3",
+      "route": "CD-100"
+    },
+    {
+      "n": 4,
+      "id": "CD-101",
+      "sources": [
+        "defender:architecture-03 (2 items)",
+        "attacker:architecture #2"
+      ],
+      "question": "CD-101 — shuffle-matrix reachability: restore the commented-out nightly schedule at invariance-shuffle.yml:5-7, or convert the bare-ignore shuffle tests to the crate's slow-tests cfg_attr form so the automatically triggered suite runs them; and is a compile-only guard over the parity test binary wanted, given ci.yml:114 and :233 already compile that target under a working feature set?",
+      "recommended": "cfg_attr slow-tests form; fix the two run lines; no compile-only step",
+      "answer": "cfg_attr slow-tests form; fix the two run lines; no compile-only step",
+      "recordedAs": "The shuffle tests join the slow-tests suite (CLAUDE.md's slow-tests rule) so the automatic run covers them; invariance-shuffle.yml's two run lines gain test-support and become a convenience; ci.yml:114/:233 already compile the target.",
+      "round": "R6-nh-4",
+      "route": "CD-101"
+    },
+    {
+      "n": 5,
+      "id": "CD-102",
+      "sources": [
+        "defender:architecture-04"
+      ],
+      "question": "CD-102 — is examples/1dtoy/ contractually EQUAL to what cobre init materializes, or a superset allowed to carry non-input files as examples/4ree/README.md does? The answer decides whether the missing assertion is set equality or one-way canonical-subset inclusion.",
+      "recommended": "One-way canonical-subset inclusion with an explicit non-input allowlist",
+      "answer": "One-way canonical-subset inclusion with an explicit non-input allowlist",
+      "recordedAs": "Every input file under examples/1dtoy/ must be embedded (canonical ⊆ embedded); README-like non-input files are allowlisted by name inside the existing gate; adding an input file without embedding it fails.",
+      "round": "R6-nh-5",
+      "route": "CD-102"
+    },
+    {
+      "n": 6,
+      "id": "CD-103",
+      "sources": [
+        "defender:architecture-05 (3 items)",
+        "attacker:architecture #3",
+        "attacker:architecture #4",
+        "attacker:drift #3"
+      ],
+      "question": "CD-103 — the bindings crate's lint coverage: where does the manifest-scoped clippy pass live (beside the existing manifest-scoped test step in the python job, inheriting interpreter and backend on the single 3.12 entry, or a job without an interpreter)? Does the documentation-warning bar apply to the bindings' rustdoc given `doc = false` at crates/cobre-python/Cargo.toml:18? And once CI covers the crate, do CONTRIBUTING.md:386 / :602-604 also carry the manifest-scoped clippy command?",
+      "recommended": "Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING",
+      "answer": "Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING",
+      "recordedAs": "One step on the 3.12 matrix entry inheriting interpreter and backend; the rustdoc bar does not apply (readers are Python users, doc = false is the seam); CONTRIBUTING.md:386 and :602-604 gain the manifest-scoped clippy command so the stated obligation and CI agree.",
+      "round": "R6-nh-6",
+      "route": "CD-103"
+    },
+    {
+      "n": 7,
+      "id": "CD-112",
+      "sources": [
+        "defender:over-engineering-00",
+        "attacker:over-engineering #3"
+      ],
+      "question": "CD-112 — is a first .github/actions/ directory acceptable for the MPICH Cache/Build/Set triple (eight intra-ci.yml copies plus mpi-slurm.yml and release-mpi.yml), or should a checked-in setup script invoked by one step per job carry it? GitHub Actions cannot share steps by YAML anchor, so those are the two shapes.",
+      "recommended": "Composite action under a new .github/actions/",
+      "answer": "Composite action under a new .github/actions/",
+      "recordedAs": "The ten sites (8 ci.yml + mpi-slurm.yml + release-mpi.yml) consume one action; the matrix guard becomes an input; the one-consumer objection is waived (10 consumers); the release-critical MPI workflows move with ci.yml in one change.",
+      "round": "R6-nh-7",
+      "route": "CD-112"
+    },
+    {
+      "n": 8,
+      "id": "CD-114",
+      "sources": [
+        "defender:over-engineering-02",
+        "attacker:over-engineering #4"
+      ],
+      "question": "CD-114 — must the guard over the hoisted crate-source directory list also cover quality-report.sh:53-64, the sixth copy, given comment_scan.sh's holdout array at :46-50 already tracks that script while its header at :11-14 names only two holdouts? (The attacker routed the header/array enumeration mismatch as a drift observation.)",
+      "recommended": "Cover quality-report.sh too; fix the comment_scan.sh header when hoisting",
+      "answer": "Cover quality-report.sh too; fix the comment_scan.sh header when hoisting",
+      "recordedAs": "The hoisted list has six consumers; the header :11-14 is corrected to name all three holdouts so it matches the array :46-50; no new id for the header mismatch — it rides CD-114.",
+      "round": "R6-nh-8",
+      "route": "CD-114"
+    },
+    {
+      "n": 9,
+      "id": "OD-049",
+      "sources": [
+        "defender:over-engineering-03",
+        "defender:over-engineering-04",
+        "attacker:over-engineering #2"
+      ],
+      "question": "OD-049 / OD-050 — the three unconsumed slow-tests = [] declarations (cobre-cli:57, cobre-io:19, cobre-stochastic:18): delete them, or keep the convention deliberately and then either restate the :55-56 rationale without the workspace-wide claim or extend the declaration to cobre-core:15, cobre-solver:15 and cobre-comm:20 so the stated property becomes true? (No mirror entry sanctions them; the same call governs the cobre-stochastic instance documented at cobre-stochastic/README.md:81.)",
+      "recommended": "Delete the three inert declarations",
+      "answer": "Delete the three inert declarations",
+      "recordedAs": "No cfg consumer, no forwarding; the workspace command keeps resolving through cobre-sddp; ci.yml:21's feature census comment and cobre-stochastic/README.md:81 are corrected in the same change (the stochastic instance is routed to E11).",
+      "round": "R6-nh-9",
+      "route": "OD-049"
+    },
+    {
+      "n": 10,
+      "id": "CD-115",
+      "sources": [
+        "defender:over-engineering-05",
+        "attacker:over-engineering #1"
+      ],
+      "question": "CD-115 — are the five reserved crate names (cobre-mcp, cobre-tui, cobre-flow, cobre-uc, cobre-emt) meant to be re-published at every release so they keep holding their place on crates.io (their manifests inherit the workspace version and set no publish key), or is their absence from publish.yml's eight-name list the intended policy the manifests should state with publish = false?",
+      "recommended": "publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false",
+      "answer": "publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false",
+      "recordedAs": "The names were reserved once and need no re-publish per release; the decision sits beside each crate and the workflow derives its list instead of restating it.",
+      "round": "R6-nh-10",
+      "route": "CD-115"
+    },
+    {
+      "n": 11,
+      "id": "CD-105",
+      "sources": [
+        "defender:drift-02"
+      ],
+      "question": "CD-105 — must a design doc's own status line use one of the five index vocabulary values, or only be present? At the pin enumerated-traversal-distribution.md:3 and backward-warm-start-channels.md:10 carry descriptive status prose instead of a token, and docs/design/README.md:4 states only that a status exists.",
+      "recommended": "A vocabulary token, optionally followed by a qualifier",
+      "answer": "A vocabulary token, optionally followed by a qualifier",
+      "recordedAs": "The two descriptive-prose docs get a token; README.md:4 is tightened to say the status uses the vocabulary; CD-105's dismissed half becomes part of the fix.",
+      "round": "R6-nh-11",
+      "route": "CD-105"
+    },
+    {
+      "n": 12,
+      "id": "—",
+      "sources": [
+        "attacker:drift #1",
+        "defender:drift-00 (dismissed)"
+      ],
+      "question": "docs/design/README.md:26-27 — the two docs statused 'Implemented (retained pending fold into the live spec)': fold both into their authoritative homes and delete them as README.md:31 prescribes, or give the status vocabulary a sixth value for the retained-pending-fold state? (The drift claim itself was dismissed — the vocabulary block does not claim exhaustiveness — so this is the direction, not a finding.)",
+      "recommended": "Fold both docs into their homes and delete them per README.md:31; no sixth value",
+      "answer": "Fold both docs into their homes and delete them per README.md:31; no sixth value",
+      "recordedAs": "The retained-pending-fold status is transitional; E11 carries the fold and the two rows disappear with the docs.",
+      "round": "R6-nh-12",
+      "route": "informational"
+    },
+    {
+      "n": 13,
+      "id": "CD-108",
+      "sources": [
+        "defender:drift-06 (2 items)"
+      ],
+      "question": "CD-108 — the private spec-§ citation family (local_conformance.rs:4 and the eight banners; ferrompi.rs:241/:272/:279 citing backend docs that exist nowhere): re-anchor to in-tree targets or publish the backend docs? And should check-comment-refs.sh's scan set be aligned to check-no-plan-leaks.sh, which appends crates/*/tests and crates/*/benches at :148 and whose header :76-80 records an incident caused by exactly this asymmetry?",
+      "recommended": "Re-anchor to in-tree targets; align check-comment-refs.sh's scan set",
+      "answer": "Re-anchor to in-tree targets; align check-comment-refs.sh's scan set",
+      "recordedAs": "The citations name the surfaces under test or testing-architecture.md; the private backend docs are not published; the scan set gains crates/*/tests and crates/*/benches (rides CD-114's hoisted list).",
+      "round": "R6-nh-13",
+      "route": "CD-108"
+    },
+    {
+      "n": 14,
+      "id": "CD-109",
+      "sources": [
+        "defender:drift-07",
+        "attacker:drift #2"
+      ],
+      "question": "CD-109 — are `.claude/rules/*.md` section numbers a citable coordinate at all? Five gate headers cite them and four do not resolve; no gate scans shell-script headers. The alternative is directive ids and heading titles, as check-allow-rationale.sh:5 already does with D4.",
+      "recommended": "Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class",
+      "answer": "Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class",
+      "recordedAs": "The existing gate already parses the .claude/rules/ token class at :75; a suffix check makes the class un-citable by number; the five headers are re-pointed in the same change.",
+      "round": "R6-nh-14",
+      "route": "CD-109"
+    },
+    {
+      "n": 15,
+      "id": "CD-110",
+      "sources": [
+        "defender:drift-08"
+      ],
+      "question": "CD-110 — the Part-I source plans/generalizing/beyond-sddp-generalization.md is untracked at the pin, so no in-repo guard can see its copy of the exemption parenthetical: is a correction expected in the untracked source as well as in the tracked mirror at target-layering-brief.md:91?",
+      "recommended": "Yes: E9 amends the roadmap row and the tracked mirror together",
+      "answer": "Yes: E9 amends the roadmap row and the tracked mirror together",
+      "recordedAs": "This station records the evidence only; the disposition and the Alignment stay epic 9's; both copies move in E9's amendment.",
+      "round": "R6-nh-15",
+      "route": "CD-110"
+    },
+    {
+      "n": 16,
+      "id": "performance-00",
+      "sources": [
+        "defender:performance-00",
+        "attacker:performance #1"
+      ],
+      "question": "Informational — the MPICH prelude: keep it byte-identical on every ci.yml job for readability even where the job's feature string excludes mpi (schemas, python), or derive it per job from that feature string? No PD id either way.",
+      "recommended": "Derive per job; drop the triple from schemas and python",
+      "answer": "Derive per job; drop the triple from schemas and python",
+      "recordedAs": "Direction for whoever amends ci.yml (rides CD-112's composite action); informational, no PD id, no E10 line.",
+      "round": "R6-nh-16",
+      "route": "informational"
+    },
+    {
+      "n": 17,
+      "id": "performance-02",
+      "sources": [
+        "defender:performance-02",
+        "attacker:performance #2"
+      ],
+      "question": "Informational — a populator job with needs: edges for the shared MPICH cache key would collapse the rare cold-key fan-out at the cost of a serialization point on every warm run. Wanted?",
+      "recommended": "No populator; keep parallel restores",
+      "answer": "No populator; keep parallel restores",
+      "recordedAs": "Every consumer restores in parallel and nothing waits; the cold-key fan-out is rare; informational.",
+      "round": "R6-nh-17",
+      "route": "informational"
+    },
+    {
+      "n": 18,
+      "id": "performance-03",
+      "sources": [
+        "defender:performance-03",
+        "attacker:performance #3"
+      ],
+      "question": "Informational — the release cobre binary is built independently by three jobs: give it one producer plus a publish/consume edge (the first needs: edge; one broken build would block the consumers), or keep per-job builds so each gate surfaces its own failure?",
+      "recommended": "Keep per-job builds; no producer/consumer edge",
+      "answer": "Keep per-job builds; no producer/consumer edge",
+      "recordedAs": "Each gate stays independent and surfaces its own failure; informational.",
+      "round": "R6-nh-18",
+      "route": "informational"
+    },
+    {
+      "n": 19,
+      "id": "performance-05",
+      "sources": [
+        "defender:performance-05 (2 items)",
+        "attacker:performance #4"
+      ],
+      "question": "Informational — cargo-audit (ci.yml:413) and cargo-llvm-cov (coverage job) are installed from source while the workflow already uses a prebuilt-binary install action; whether a prebuilt cargo-about exists for the version pinned at :443, and whether rust-cache at :412/:495 already restores compiled binaries, are external facts this station cannot verify.",
+      "recommended": "Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time",
+      "answer": "Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time",
+      "recordedAs": "Both external facts are checked when the amend lands; informational, no PD id.",
+      "round": "R6-nh-19",
+      "route": "informational"
+    },
+    {
+      "n": 20,
+      "id": "performance-06",
+      "sources": [
+        "defender:performance-06"
+      ],
+      "question": "Informational — actions/checkout exposes no per-submodule input, so a job-tailored submodule set means hand-listing submodule paths in a following step on each affected job, a second copy of the four-entry .gitmodules registry with no guard. Acceptable?",
+      "recommended": "Keep the single recursive checkout",
+      "answer": "Keep the single recursive checkout",
+      "recordedAs": "A hand-listed submodule set duplicates .gitmodules with no guard; the pointer stays inert; informational.",
+      "round": "R6-nh-20",
+      "route": "informational"
+    }
+  ],
+  "informational": [
+    {
+      "candidateRef": "performance-00",
+      "status": "UNMEASURED",
+      "directions": [
+        {
+          "n": 16,
+          "id": "performance-00",
+          "sources": [
+            "defender:performance-00",
+            "attacker:performance #1"
+          ],
+          "question": "Informational — the MPICH prelude: keep it byte-identical on every ci.yml job for readability even where the job's feature string excludes mpi (schemas, python), or derive it per job from that feature string? No PD id either way.",
+          "recommended": "Derive per job; drop the triple from schemas and python",
+          "answer": "Derive per job; drop the triple from schemas and python",
+          "recordedAs": "Direction for whoever amends ci.yml (rides CD-112's composite action); informational, no PD id, no E10 line.",
+          "round": "R6-nh-16",
+          "route": "informational"
+        }
+      ]
+    },
+    {
+      "candidateRef": "performance-02",
+      "status": "UNMEASURED",
+      "directions": [
+        {
+          "n": 17,
+          "id": "performance-02",
+          "sources": [
+            "defender:performance-02",
+            "attacker:performance #2"
+          ],
+          "question": "Informational — a populator job with needs: edges for the shared MPICH cache key would collapse the rare cold-key fan-out at the cost of a serialization point on every warm run. Wanted?",
+          "recommended": "No populator; keep parallel restores",
+          "answer": "No populator; keep parallel restores",
+          "recordedAs": "Every consumer restores in parallel and nothing waits; the cold-key fan-out is rare; informational.",
+          "round": "R6-nh-17",
+          "route": "informational"
+        }
+      ]
+    },
+    {
+      "candidateRef": "performance-03",
+      "status": "UNMEASURED",
+      "directions": [
+        {
+          "n": 18,
+          "id": "performance-03",
+          "sources": [
+            "defender:performance-03",
+            "attacker:performance #3"
+          ],
+          "question": "Informational — the release cobre binary is built independently by three jobs: give it one producer plus a publish/consume edge (the first needs: edge; one broken build would block the consumers), or keep per-job builds so each gate surfaces its own failure?",
+          "recommended": "Keep per-job builds; no producer/consumer edge",
+          "answer": "Keep per-job builds; no producer/consumer edge",
+          "recordedAs": "Each gate stays independent and surfaces its own failure; informational.",
+          "round": "R6-nh-18",
+          "route": "informational"
+        }
+      ]
+    },
+    {
+      "candidateRef": "performance-05",
+      "status": "UNMEASURED",
+      "directions": [
+        {
+          "n": 19,
+          "id": "performance-05",
+          "sources": [
+            "defender:performance-05 (2 items)",
+            "attacker:performance #4"
+          ],
+          "question": "Informational — cargo-audit (ci.yml:413) and cargo-llvm-cov (coverage job) are installed from source while the workflow already uses a prebuilt-binary install action; whether a prebuilt cargo-about exists for the version pinned at :443, and whether rust-cache at :412/:495 already restores compiled binaries, are external facts this station cannot verify.",
+          "recommended": "Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time",
+          "answer": "Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time",
+          "recordedAs": "Both external facts are checked when the amend lands; informational, no PD id.",
+          "round": "R6-nh-19",
+          "route": "informational"
+        }
+      ]
+    },
+    {
+      "candidateRef": "performance-06",
+      "status": "UNMEASURED",
+      "directions": [
+        {
+          "n": 20,
+          "id": "performance-06",
+          "sources": [
+            "defender:performance-06"
+          ],
+          "question": "Informational — actions/checkout exposes no per-submodule input, so a job-tailored submodule set means hand-listing submodule paths in a following step on each affected job, a second copy of the four-entry .gitmodules registry with no guard. Acceptable?",
+          "recommended": "Keep the single recursive checkout",
+          "answer": "Keep the single recursive checkout",
+          "recordedAs": "A hand-listed submodule set duplicates .gitmodules with no guard; the pointer stays inert; informational.",
+          "round": "R6-nh-20",
+          "route": "informational"
+        }
+      ]
+    }
+  ],
+  "presentedNoDecision": {
+    "partI": {
+      "ref": "I.3-6",
+      "evidence": [
+        "scripts/ci/check-infra-genericity.sh:74",
+        "scripts/ci/check-infra-genericity.sh:70",
+        "scripts/ci/check-infra-genericity.sh:40"
+      ],
+      "stationVerdict": "claim-stale",
+      "disposition": "epic 9"
+    },
+    "sanctioned": [
+      "advisory-by-design exit 0 of check-comment-line-refs.sh, check-comment-banners.sh, check-comment-bloat.sh and quality-report.sh",
+      "the entry-free scripts/ci/allow-rationale-allowlist.txt",
+      "the five reserved stub crates cobre-mcp, cobre-tui, cobre-flow, cobre-uc, cobre-emt (Cargo.toml:12-16)",
+      "the cobre-python workspace exclusion",
+      "EXCLUDED_FILES=() in the genericity gate"
+    ],
+    "informational": [
+      "CI wall time — no PD id, no E10 queue line"
+    ]
+  },
+  "noRoundFor": [
+    "partI-handoff.json I.3-6: EXCLUDED_FILES empty at scripts/ci/check-infra-genericity.sh:74 with the header's retirement rationale (:38-44, :70-73) — presented read-only, disposition: epic 9",
+    "cleared[reason=sanctioned]: check-comment-line-refs.sh, check-comment-banners.sh, check-comment-bloat.sh and quality-report.sh exit 0 by design (advisory-by-design headers :35 / :40 / :39 / :42; ADVISORY step comments ci.yml:278-279, :282-283, :298-299)",
+    "cleared[reason=sanctioned]: the five reserved stub members cobre-{mcp,tui,flow,uc,emt} — CLAUDE.md:10, ARCHITECTURE.md:108-125, roadmap IV.1; only their release-path hand-mirror is a finding (CD-115)",
+    "cleared[reason=sanctioned]: the entry-free scripts/ci/allow-rationale-allowlist.txt (:1 intentionally EMPTY, :15 KEEP THIS FILE EMPTY) and the cobre-python workspace exclusion (Cargo.toml:18-23)",
+    "conflicts holds: none at this station (calibration.json pullDontPush.conflictsHeld = 0; the MPICH block has ten consumers and is exempt) — the hold round is empty and the marker guard still refuses any 'conflicts (held)' row",
+    "performance lens: CI wall time is informational only — the five UNMEASURED rows carry no PD id and no E10 queue line is written; their owner directions are needs-human items, not severity questions",
+    "DEVIATION (ticket premise stale at the defender pass): the slow-tests declarations are confirmed entries OD-049 / OD-050, not sanctioned — asked in the over-engineering batch and NH #9; the two docs/design/README.md rows (drift-00) were dismissed premise-false-at-pin — the direction is NH #12, no drift entry"
+  ],
+  "handoffsAfterGate": {
+    "E9": {
+      "rows": [
+        "CD-099",
+        "CD-110"
+      ],
+      "note": "CD-099 advances-1 (Part IV.1) with the ratified two-site edit; CD-110 I.3-6 evidence only, disposition epic 9",
+      "directions": [
+        "R6-nh-1",
+        "R6-nh-15"
+      ]
+    },
+    "E10": {
+      "rows": [],
+      "note": "nothing — informational lens; owner directions on the five UNMEASURED rows are recorded on the rows"
+    },
+    "E08": {
+      "rows": [],
+      "note": "td-queue.json empty-with-reason (epic 8)"
+    },
+    "E11": {
+      "note": "policy.fbs path drift; SN-06; README fold (NH #12); cobre-stochastic slow-tests twin (NH #9); the doc/status corrections directed above",
+      "directions": [
+        "R6-nh-9",
+        "R6-nh-12"
+      ]
+    }
+  },
+  "handoffConfirmation": {
+    "decision": "confirm",
+    "round": "R7-handoffs",
+    "rationale": "All four handoffs recorded as listed in gate.md §4 and decisions.json; the RETURNED marker is written and the test-corpus station is unblocked."
+  },
+  "returned": true,
+  "marker": "**Gate: RETURNED 2026-09-19** — baseline `077dbe2c`; accepted 19, amended 0, downgraded 0, rejected 0, deferred 0, overridden 0, held 0; 1 dismissal ratified (PATTERN, architecture-01), 1 census classification ratified (check-comment-bloat.sh transitively-advisory); 20 needs-human answered; Part-I I.3-6 presented read-only (disposition: epic 9); CI wall time informational (no PD id, no E10 line). Test-corpus station unblocked.",
+  "askUserQuestionCalls": 8
+}

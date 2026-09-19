@@ -40,5 +40,23 @@
   "carriedBy": [
     "candidates-drift.json → handoffs[0]",
     "verdicts.json → drift-08"
-  ]
+  ],
+  "twoSiteEdit": {
+    "id": "CD-099",
+    "sites": [
+      "CLAUDE.md:39",
+      "scripts/ci/check-infra-genericity.sh:62",
+      ".github/workflows/ci.yml:261"
+    ],
+    "decision": "accept",
+    "alignment": "advances-1",
+    "ratifiedAt": "2026-09-19",
+    "note": "synced from the owner gate; item 6's evidence and unset disposition are untouched"
+  },
+  "ownerGate": {
+    "date": "2026-09-19",
+    "presented": "read-only",
+    "disposition": "epic 9",
+    "round": null
+  }
 }

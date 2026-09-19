@@ -1498,7 +1498,16 @@ class CalibrationTests(sc.StationCase):
             r = self.run_tool(tool, *extra)
             self.assertEqual(r.returncode, 0, f"{tool} {extra}: {r.stdout}{r.stderr}")
         self.assertIn(self.baseline(), self.section)
-        self.assertIn("_(pending — filled by the gate ticket)_", self.section)
+        gate_block = self.section.split("#### Owner gate — decisions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        self.assertTrue(
+            "_(pending — filled by the gate ticket)_" in gate_block
+            or re.search(
+                r"^\*\*Gate: RETURNED \d{4}-\d{2}-\d{2}\*\*", gate_block, re.M
+            ),
+            "the owner-gate block is neither pending nor returned",
+        )
         for heading in (
             "#### Architecture (CD)",
             "#### Over-engineering",
@@ -1868,6 +1877,359 @@ class SectionVerifyTests(sc.StationCase):
             "M_WORKFLOWS",
         ):
             self.assertIn(f'{measured}="', text, measured)
+
+
+GATE_DATE = "2026-09-19"
+GATE_HEADINGS = (
+    "### 1.1 The genericity two-site entry",
+    "### 1.2 The PATTERN vocabulary limitation",
+    "### 1.3 Census-derived entries",
+    "### 1.4 Over-engineering entries",
+    "### 1.5 Drift entries",
+    "### 1.6 Holds",
+    "### 1.7 Cleared and sanctioned — presented read-only, no decision taken",
+    "### 1.8 Queues handed on",
+    "### 1.9 Worker needs-human items",
+    "## 2. Round plan",
+    "## 3. Decision record",
+    "### 3.1 The two-site entry",
+    "### 3.2 The PATTERN vocabulary limitation",
+    "### 3.3 Census, over-engineering and drift entries",
+    "### 3.4 Holds",
+    "### 3.5 Worker needs-human answers",
+    "### 3.6 Presented, no decision taken",
+    "### 3.7 Informational",
+    "## 4. Handoffs after the gate",
+)
+DECISION_VERBS = {
+    "accept",
+    "amend-scope",
+    "downgrade",
+    "reject",
+    "defer",
+    "override-conflicts",
+}
+TWO_SITES = (
+    "CLAUDE.md",
+    "scripts/ci/check-infra-genericity.sh",
+    ".github/workflows/ci.yml",
+)
+ENTRY_ROUNDS = ("R1-two-site", "R3-census", "R4-over-eng", "R5-drift")
+SANCTIONED_GATES = (
+    "check-comment-line-refs.sh",
+    "check-comment-banners.sh",
+    "check-comment-bloat.sh",
+    "quality-report.sh",
+)
+GATE_TIMING_RE = re.compile(
+    r"(?<![\w.\-/:])\d+(?:\.\d+)?\s?(?:ms|µs|us|ns|secs?|seconds?|minutes?|hours?)\b"
+)
+
+
+def table_rows(block: str, first_cell: str) -> list[list[str]]:
+    return [
+        [c.strip() for c in ln.strip().strip("|").split("|")]
+        for ln in block.splitlines()
+        if ln.startswith(first_cell)
+    ]
+
+
+class GateTests(sc.StationCase):
+    """The owner gate (E07-6): gate.md, decisions.json, the BACKLOG owner-gate block, the
+    entry-level owner-decision bullets, the handoff sync and the marker.
+
+    The gate ticket runs this class after recording the owner decision; the class asserts the
+    recorded state and never asks a question or writes a file.
+    """
+
+    SLUG = "build-ci"
+    SECTION_TITLE = SECTION_TITLE
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.gate = cls.station_dir().joinpath("gate.md").read_text(encoding="utf-8")
+        cls.rec = sc.load_json(cls.station_dir() / "decisions.json")
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.census = sc.load_json(cls.station_dir() / "gate-census.json")
+        cls.handoff = sc.load_json(cls.station_dir() / "partI-handoff.json")
+        cls.register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
+        cls.section = cls.register.split("### " + SECTION_TITLE, 1)[1].split(
+            "\n## ", 1
+        )[0]
+        cls.owner_gate = cls.section.split("#### Owner gate — decisions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        cls.cleared = cls.section.split("#### ↩︎ Cleared", 1)[1].split("\n#### ", 1)[0]
+        cls.decisions = cls.rec["decisions"]
+        cls.by_id = {r["id"]: r for r in cls.cal["assigned"]}
+
+    def block(self, entry_id: str) -> str:
+        return self.section.split(f"**{entry_id} · ", 1)[1].split("\n**", 1)[0]
+
+    def test_gate_md_carries_one_decision_line_and_the_two_site_entry_leads(
+        self,
+    ) -> None:
+        lines = [ln for ln in self.gate.splitlines() if ln.startswith("**Decision: ")]
+        self.assertEqual(len(lines), 1)
+        self.assertIsNotNone(
+            re.match(r"^\*\*Decision: (ratified|returned)\*\*", lines[0])
+        )
+        positions = [self.gate.index(h) for h in GATE_HEADINGS]
+        self.assertEqual(positions, sorted(positions), "gate.md sections out of order")
+        lead = self.gate.split(GATE_HEADINGS[0], 1)[1].split("\n### ", 1)[0]
+        rows = [r for r in table_rows(lead, "| ") if re.match(r"^\d+$", r[0])]
+        self.assertEqual([r[1] for r in rows], ["CD-099"])
+        for site in TWO_SITES:
+            self.assertIn(site, rows[0][7])
+        self.assertEqual(rows[0][3], "blocking")
+        pattern = self.gate.split(GATE_HEADINGS[1], 1)[1].split("\n### ", 1)[0]
+        self.assertIn("architecture-01", pattern)
+        self.assertIn("scripts/ci/check-infra-genericity.sh:15", pattern)
+        for heading in GATE_HEADINGS[2:5]:
+            body = self.gate.split(heading, 1)[1].split("\n### ", 1)[0]
+            for r in table_rows(body, "| "):
+                if not re.match(r"^(CD|OD)-\d{3}$", r[1]):
+                    continue
+                self.assertIn(r[3], {*WIRING_VOCAB, "n/a"}, r[1])
+                if self.by_id[r[1]].get("isGate"):
+                    self.assertIn(r[3], WIRING_VOCAB, r[1])
+                self.assertIn(r[4], ALIGN_VOCAB, r[1])
+        ids_in_digest = [
+            r[1]
+            for h in GATE_HEADINGS[2:5]
+            for r in table_rows(self.gate.split(h, 1)[1].split("\n### ", 1)[0], "| ")
+            if re.match(r"^(CD|OD)-\d{3}$", r[1])
+        ]
+        self.assertEqual(sorted(ids_in_digest + ["CD-099"]), sorted(self.by_id))
+        self.assertEqual(ids_in_digest[:4], sorted(ids_in_digest[:4]))
+        self.assertEqual([m.group(0) for m in GATE_TIMING_RE.finditer(self.gate)], [])
+
+    def test_round_plan_order_options_and_omissions(self) -> None:
+        plan = self.gate.split("## 2. Round plan", 1)[1].split("\n## ", 1)[0]
+        rows = [r for r in table_rows(plan, "| R") if re.match(r"^R\d", r[0])]
+        ids = [r[0] for r in rows]
+        self.assertEqual(
+            ids[:5],
+            ["R1-two-site", "R2-vocabulary", "R3-census", "R4-over-eng", "R5-drift"],
+        )
+        self.assertEqual(ids[5:25], [f"R6-nh-{n}" for n in range(1, 21)])
+        self.assertEqual(ids[-1], "R7-handoffs")
+        self.assertNotIn("conflicts-hold", [r[1] for r in rows])
+        for r in rows:
+            self.assertLessEqual(len(r[3].split("·")), 4, r[0])
+        self.assertIn("presented read-only, disposition: epic 9", plan)
+        for gate in SANCTIONED_GATES:
+            self.assertIn(gate, plan)
+        self.assertIn("cobre-{mcp,tui,flow,uc,emt}", plan)
+        self.assertIn("allow-rationale-allowlist.txt", plan)
+        self.assertIn("CI wall time is informational only", plan)
+        self.assertIn("conflicts holds: none at this station", plan)
+        self.assertEqual(len(self.rec["noRoundFor"]), 7)
+
+    def test_decisions_cover_every_calibrated_entry(self) -> None:
+        self.assertEqual({d["id"] for d in self.decisions}, set(self.by_id))
+        for d in self.decisions:
+            self.assertIn(d["decision"], DECISION_VERBS, d["id"])
+            self.assertTrue(d["rationale"].strip(), d["id"])
+            self.assertIn(d["round"], ENTRY_ROUNDS, d["id"])
+            self.assertEqual(
+                d["wiring"], self.by_id[d["id"]].get("enforcement") or "n/a", d["id"]
+            )
+            if self.by_id[d["id"]].get("isGate"):
+                self.assertIn(d["wiring"], WIRING_VOCAB, d["id"])
+            self.assertIn(d["alignment"], ALIGN_VOCAB, d["id"])
+            if d["decision"] == "downgrade":
+                self.assertLess(
+                    RANK[d["newSeverity"]], RANK[d["reviewerSeverity"]], d["id"]
+                )
+            if d["decision"] == "defer":
+                self.assertTrue(
+                    d["deferTrigger"], f"{d['id']}: defer without a trigger"
+                )
+            if d["decision"] == "reject":
+                self.assertTrue(d["clearedMoved"], d["id"])
+            if d["decision"] == "override-conflicts":
+                self.assertTrue(d["overrideRationale"], d["id"])
+            if d["hardRule"]:
+                self.assertEqual(len(d["sites"]), 3, d["id"])
+        lead = next(d for d in self.decisions if d["id"] == "CD-099")
+        self.assertEqual(lead["round"], "R1-two-site")
+        for site in TWO_SITES:
+            self.assertTrue(any(site in s for s in lead["sites"]), site)
+        self.assertEqual(lead["alignment"], "advances-1")
+        self.assertEqual(self.rec["vocabulary"]["id"], "architecture-01")
+        self.assertEqual(self.rec["vocabulary"]["reRaiseOf"], "CD-061")
+        self.assertFalse(self.rec["vocabulary"]["clearedMoved"])
+        self.assertEqual(self.rec["censusRow"]["id"], "check-comment-bloat.sh")
+        self.assertEqual(self.rec["censusRow"]["wiring"], "transitively-advisory")
+        self.assertEqual(self.rec["holds"], [])
+        answered = [
+            n for n in self.rec["needsHuman"] if str(n.get("answer", "")).strip()
+        ]
+        self.assertEqual(len(answered), len(self.rec["needsHuman"]))
+        self.assertEqual(len(answered), 20)
+        counts = self.rec["counts"]
+        verbs = [d["decision"] for d in self.decisions]
+        for key, verb in (
+            ("accepted", "accept"),
+            ("downgraded", "downgrade"),
+            ("rejected", "reject"),
+            ("deferred", "defer"),
+            ("overridden", "override-conflicts"),
+        ):
+            self.assertEqual(counts[key], verbs.count(verb), key)
+        self.assertEqual(counts["entries"], len(self.decisions))
+        self.assertEqual(counts["needsHumanAnswered"], 20)
+        self.assertEqual(counts["held"], 0)
+        self.assertTrue(self.rec["returned"])
+        self.assertEqual(self.rec["decision"], "ratified")
+        self.assertEqual(self.rec["handoffConfirmation"]["decision"], "confirm")
+        self.assertEqual(
+            self.rec["presentedNoDecision"]["partI"]["disposition"], "epic 9"
+        )
+
+    def test_backlog_carries_the_ratified_line_the_table_and_the_marker(self) -> None:
+        counts = self.rec["counts"]
+        head = self.section.split("\n**Station.**", 1)[0]
+        self.assertNotIn("_(owner gate pending", head)
+        self.assertNotIn("_(pending — filled by the gate ticket)_", self.owner_gate)
+        if self.rec["decision"] == "ratified":
+            self.assertIn(
+                f"**Ratified {GATE_DATE}** — owner gate; baseline `{self.baseline()[:8]}`",
+                head,
+            )
+        else:
+            self.assertNotIn("**Ratified ", head)
+        marker = re.search(
+            rf"^\*\*Gate: RETURNED {GATE_DATE}\*\* — baseline `{self.baseline()[:8]}`; "
+            r"accepted (\d+), amended (\d+), downgraded (\d+), rejected (\d+), deferred (\d+), overridden (\d+), held (\d+)",
+            self.owner_gate,
+            re.M,
+        )
+        self.assertIsNotNone(marker, "Gate: RETURNED marker missing or malformed")
+        assert marker is not None
+        self.assertEqual(
+            [int(marker.group(i)) for i in range(1, 8)],
+            [
+                counts[k]
+                for k in (
+                    "accepted",
+                    "amended",
+                    "downgraded",
+                    "rejected",
+                    "deferred",
+                    "overridden",
+                    "held",
+                )
+            ],
+        )
+        for d in self.decisions:
+            self.assertEqual(
+                self.owner_gate.count(f"| {d['id']} | {d['decision']} |"), 1, d["id"]
+            )
+            row = next(
+                ln
+                for ln in self.owner_gate.splitlines()
+                if ln.startswith(f"| {d['id']} | ")
+            )
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            if RANK[d["newSeverity"]] < RANK[d["reviewerSeverity"]]:
+                self.assertEqual(
+                    cells[2],
+                    f"{d['newSeverity']} (reviewer: {d['reviewerSeverity']})",
+                    d["id"],
+                )
+            else:
+                self.assertEqual(cells[2], d["newSeverity"], d["id"])
+            self.assertEqual(cells[3], d["wiring"], d["id"])
+            if d["decision"] == "defer":
+                self.assertRegex(cells[6], r"^trigger: \S", d["id"])
+            if d["hardRule"]:
+                self.assertTrue(cells[6].startswith("sites: "), d["id"])
+        self.assertIn("**Cleared by this gate (do not re-raise):**", self.owner_gate)
+        for d in self.decisions:
+            if d["decision"] == "reject":
+                self.assertIn(f"**↩︎ CLEARED — {d['id']}", self.cleared, d["id"])
+                self.assertNotIn(f"**{d['id']} · Sev", self.section)
+        self.assertIn("disposition: epic 9", self.owner_gate)
+        self.assertIn("advisory-by-design", self.owner_gate)
+        self.assertIn("no PD id", self.owner_gate)
+        self.assertNotIn("conflicts (held)", self.section)
+        self.assertIsNone(re.search(r"^\*\*PD-\d{3}", self.section, re.M))
+        self.assertNotIn("E10 queue", self.section)
+        self.assertNotIn("perf-queue.json row", self.section)
+        self.assertEqual(sc.run_checker("check-reraise.py", SECTION_TITLE), 0)
+
+    def test_owner_decisions_sit_beneath_the_alignment_field(self) -> None:
+        with_directions = [d for d in self.decisions if d["directions"]]
+        self.assertGreaterEqual(len(with_directions), 12)
+        for d in with_directions:
+            block = self.block(d["id"])
+            align_at = block.index("- **Alignment:**")
+            for direction in d["directions"]:
+                line = f"- **Owner decision ({GATE_DATE}, {direction['round']}):** {direction['choice']}"
+                self.assertIn(line, block, d["id"])
+                self.assertGreater(block.index(line), align_at, d["id"])
+            if d["decision"] == "defer":
+                self.assertIn(
+                    f"- **Owner decision ({GATE_DATE}, {d['round']}):** defer — trigger: ",
+                    block,
+                )
+        for info in self.rec["informational"]:
+            head = f"**Informational · UNMEASURED · {info['candidateRef']}**"
+            block = self.section.split(head, 1)[1].split("\n**", 1)[0]
+            for direction in info["directions"]:
+                self.assertIn(
+                    f"- **Owner decision ({GATE_DATE}, {direction['round']}):** {direction['answer']}",
+                    block,
+                )
+        queued_out = self.section.split("#### Queued out", 1)[1].split("\n#### ", 1)[0]
+        self.assertEqual(queued_out.count(f"Owner gate {GATE_DATE}"), 2)
+
+    def test_handoff_synced_and_item_6_untouched(self) -> None:
+        two_site = self.handoff["twoSiteEdit"]
+        self.assertEqual(two_site["id"], "CD-099")
+        self.assertEqual(two_site["decision"], "accept")
+        self.assertEqual(two_site["alignment"], "advances-1")
+        for site in TWO_SITES:
+            self.assertTrue(any(site in s for s in two_site["sites"]), site)
+        self.assertNotIn("disposition", self.handoff)
+        self.assertEqual(self.handoff["stationVerdict"], "claim-stale")
+        self.assertTrue(self.handoff["baselineEvidence"])
+        self.assertEqual(self.handoff["ownerGate"]["disposition"], "epic 9")
+        self.assertIn(
+            "scripts/ci/check-infra-genericity.sh:74",
+            "".join(
+                f"{b['path']}:{b['line']}" for b in self.handoff["baselineEvidence"]
+            ),
+        )
+        read_only = self.gate.split("### 3.6 Presented, no decision taken", 1)[1].split(
+            "\n### ", 1
+        )[0]
+        self.assertIn("I.3-6", read_only)
+        self.assertIn("disposition: epic 9", read_only)
+        self.assertIn("scripts/ci/check-infra-genericity.sh:74", read_only)
+
+    def test_sanctioned_items_carry_no_id_and_no_question(self) -> None:
+        dismissed = {c["candidateRef"] for c in self.cal["cleared"]}
+        informational = {i["candidateRef"] for i in self.cal["informational"]}
+        decided_refs = {d["candidateRef"] for d in self.decisions}
+        self.assertFalse(decided_refs & dismissed)
+        self.assertFalse(decided_refs & informational)
+        for gate in SANCTIONED_GATES:
+            self.assertNotIn(
+                gate,
+                [
+                    r.get("script", "") or ""
+                    for r in self.cal["assigned"]
+                    if r.get("hardRule")
+                ],
+            )
+        for subject in self.rec["presentedNoDecision"]["sanctioned"]:
+            self.assertIn(subject, self.gate)
+        plan_rounds = set(self.rec["rounds"])
+        self.assertNotIn("R6-hold", " ".join(plan_rounds))
+        self.assertEqual(len([r for r in plan_rounds if r.startswith("R6-nh-")]), 20)
 
 
 if __name__ == "__main__":

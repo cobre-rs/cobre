@@ -164,5 +164,103 @@ Assembled before any question is asked. Options are capped at four per question;
 
 ## 3. Decision record
 
-**Decision: pending** — rounds not yet asked; this section is written by `owner_gate.py apply`.
+**Decision: ratified** — 2026-09-19, main session, baseline `077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c`. Presented 21 (19 calibrated entries + the PATTERN dismissal + the check-comment-bloat.sh census row) over 8 AskUserQuestion calls: round 1 (the two-site entry), round 2 (PATTERN), the census, over-engineering and drift batches, 20 needs-human questions and the handoff confirmation. Every answer was the recommended option unless the Rationale column says otherwise. No conflicts hold existed.
 
+### 3.1 The two-site entry (round 1)
+
+Owner: Accept — Both sites stand as recorded; the fix-shape amends the existing script and rule together; Alignment advances-1 citing Part IV.1 stays provisional for E9.
+
+| ID | Decision | Severity | Wiring | Alignment | Rationale (owner) | Sites |
+| -- | -- | -- | -- | -- | -- | -- |
+| CD-099 | accept | B | blocking | advances-1 | as recorded (R1-two-site) | sites: CLAUDE.md:39 + scripts/ci/check-infra-genericity.sh:62 + .github/workflows/ci.yml:261 |
+
+### 3.2 The PATTERN vocabulary limitation (round 2)
+
+- **architecture-01** (re-raise-of CD-061) — **keep-dismissed** — Keep dismissed — The citation stands (check-infra-genericity.sh:15 declares the standalone word-boundary scope); the candidate stays in the section's Cleared list with the defender's basis; the owner questions it still carries (token scope, FreezeScratch site) are answered in NH #2. Basis `deliberate-and-documented`, citation `scripts/ci/check-infra-genericity.sh:15`; stays in the section's Cleared list. Directions: -.
+
+### 3.3 Census, over-engineering and drift entries (rounds 3-5)
+
+Census row **check-comment-bloat.sh** — **ratify-classification** (R3-census): gate-census.json class `unwired`, rendered `transitively-advisory`, invoked by `scripts/ci/quality-report.sh:132`; no id. The four entries enter the actionable set at the house severity and wiring class (the three A→B downgrades keep the reviewer's A in the row); the check-comment-bloat.sh classification is ratified as transitively-advisory with its invoker recorded.
+
+**Batches (rounds 3-5).** R3-census — Accept all as recorded: The four entries enter the actionable set at the house severity and wiring class (the three A→B downgrades keep the reviewer's A in the row); the check-comment-bloat.sh classification is ratified as transitively-advisory with its invoker recorded. R4-over-eng — Accept all as recorded: All six enter the actionable set at their house severities; the MPICH duplication is many-consumer and exempt from the one-consumer objection; the fix direction for the slow-tests declarations and the stubs' publish policy are decided in NH #9 and #10. R5-drift — Accept all as recorded: The eight entries enter the actionable set at their house severities (the two B→C downgrades keep the reviewer's B); CD-110 stays evidence-only with no disposition; CD-111's three sites stand.
+
+| ID | Decision | Severity | Wiring | Alignment | Rationale (owner) | Trigger / override / sites | Directions |
+| -- | -- | -- | -- | -- | -- | -- | -- |
+| CD-100 | accept | B (reviewer: A) | blocking | neutral | as recorded (R3-census) | - | R6-nh-3: Extend pull_request to [main, develop] |
+| CD-101 | accept | B (reviewer: A) | blocking | neutral | as recorded (R3-census) | - | R6-nh-4: cfg_attr slow-tests form; fix the two run lines; no compile-only step |
+| CD-102 | accept | B | blocking | neutral | as recorded (R3-census) | - | R6-nh-5: One-way canonical-subset inclusion with an explicit non-input allowlist |
+| CD-103 | accept | B (reviewer: A) | blocking | neutral | as recorded (R3-census) | - | R6-nh-6: Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING |
+| CD-112 | accept | B | blocking | neutral | as recorded (R4-over-eng) | - | R6-nh-7: Composite action under a new .github/actions/ |
+| CD-113 | accept | B | n/a | neutral | as recorded (R4-over-eng) | - | - |
+| CD-114 | accept | B | blocking | neutral | as recorded (R4-over-eng) | - | R6-nh-8: Cover quality-report.sh too; fix the comment_scan.sh header when hoisting |
+| CD-115 | accept | B | blocking | neutral | as recorded (R4-over-eng) | - | R6-nh-10: publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false |
+| OD-049 | accept | C | n/a | neutral | as recorded (R4-over-eng) | - | R6-nh-9: Delete the three inert declarations |
+| OD-050 | accept | C | n/a | neutral | as recorded (R4-over-eng) | - | R6-nh-9: Delete the three inert declarations |
+| CD-111 | accept | B | n/a | neutral | as recorded (R5-drift) | sites: CLAUDE.md:19 + Cargo.toml:36 + .github/workflows/ci.yml:154 | - |
+| CD-104 | accept | C | n/a | neutral | as recorded (R5-drift) | - | - |
+| CD-105 | accept | C | n/a | neutral | as recorded (R5-drift) | - | R6-nh-11: A vocabulary token, optionally followed by a qualifier |
+| CD-106 | accept | C | n/a | neutral | as recorded (R5-drift) | - | - |
+| CD-107 | accept | C | blocking | neutral | as recorded (R5-drift) | - | - |
+| CD-108 | accept | C (reviewer: B) | blocking | neutral | as recorded (R5-drift) | - | R6-nh-13: Re-anchor to in-tree targets; align check-comment-refs.sh's scan set |
+| CD-109 | accept | C (reviewer: B) | blocking | neutral | as recorded (R5-drift) | - | R6-nh-14: Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class |
+| CD-110 | accept | C | blocking | neutral | as recorded (R5-drift) | - | R6-nh-15: Yes: E9 amends the roadmap row and the tracked mirror together |
+
+### 3.4 Holds — none
+
+No `conflicts` row was calibrated at this station, so nothing was asked alone and nothing is held or overridden (overridden 0, held 0).
+
+### 3.5 Worker needs-human answers (round 6, 20/20)
+
+| # | Entry | From | Question | Answer | Recorded as |
+| -- | -- | -- | -- | -- | -- |
+| 1 | CD-099 | defender:architecture-00 | CD-099 — where does the single owner of the infra-crate set sit? CLAUDE.md:39-41 keeps its enumeration pinned by a new divergence check in the gate, or the bullet becomes a shape-only pointer to the… | **Gate owns the list; CLAUDE.md enumeration pinned by a divergence check** | SCAN_DIRS in check-infra-genericity.sh is the owner and the gate verifies CLAUDE.md:39-41 names exactly the same crates, so an amendment edits the script first and the prose fails loudly until it follows (guard-pinned literal per doc-integrity §2). |
+| 2 | — | defender:architecture-01 (dismissed); attacker:architecture #5 | PATTERN scope (architecture-01, dismissed): should the gate's token scope ever widen past standalone word-boundary tokens, given an underscore boundary would red this blocking gate on the cobre-io ti… | **Keep standalone-token scope; no FreezeScratch addition** | The dismissal stands (check-infra-genericity.sh:15 declares the word-boundary scope); CD-061's widening is an I.3-6 disposition matter for E9, not a gate change; the FreezeScratch site is outside CD-061's cobre-io scope and is not added. |
+| 3 | CD-100 | defender:architecture-02; attacker:architecture #1 | CD-100 — the ci.yml trigger list: extend the pull_request filter to [main, develop], accepting a full ci.yml run on every develop pull request, or ratify post-merge detection on develop as the intend… | **Extend pull_request to [main, develop]** | Every develop pull request runs ci.yml before merge; the filter becomes symmetric with the push trigger at ci.yml:4-5; one edit site. |
+| 4 | CD-101 | defender:architecture-03 (2 items); attacker:architecture #2 | CD-101 — shuffle-matrix reachability: restore the commented-out nightly schedule at invariance-shuffle.yml:5-7, or convert the bare-ignore shuffle tests to the crate's slow-tests cfg_attr form so the… | **cfg_attr slow-tests form; fix the two run lines; no compile-only step** | The shuffle tests join the slow-tests suite (CLAUDE.md's slow-tests rule) so the automatic run covers them; invariance-shuffle.yml's two run lines gain test-support and become a convenience; ci.yml:114/:233 already compile the target. |
+| 5 | CD-102 | defender:architecture-04 | CD-102 — is examples/1dtoy/ contractually EQUAL to what cobre init materializes, or a superset allowed to carry non-input files as examples/4ree/README.md does? The answer decides whether the missing… | **One-way canonical-subset inclusion with an explicit non-input allowlist** | Every input file under examples/1dtoy/ must be embedded (canonical ⊆ embedded); README-like non-input files are allowlisted by name inside the existing gate; adding an input file without embedding it fails. |
+| 6 | CD-103 | defender:architecture-05 (3 items); attacker:architecture #3; attacker:architecture #4; attacker:drift #3 | CD-103 — the bindings crate's lint coverage: where does the manifest-scoped clippy pass live (beside the existing manifest-scoped test step in the python job, inheriting interpreter and backend on th… | **Clippy beside the python job's test step; doc = false stays sanctioned; add the command to CONTRIBUTING** | One step on the 3.12 matrix entry inheriting interpreter and backend; the rustdoc bar does not apply (readers are Python users, doc = false is the seam); CONTRIBUTING.md:386 and :602-604 gain the manifest-scoped clippy command so the stated obligation and CI agree. |
+| 7 | CD-112 | defender:over-engineering-00; attacker:over-engineering #3 | CD-112 — is a first .github/actions/ directory acceptable for the MPICH Cache/Build/Set triple (eight intra-ci.yml copies plus mpi-slurm.yml and release-mpi.yml), or should a checked-in setup script… | **Composite action under a new .github/actions/** | The ten sites (8 ci.yml + mpi-slurm.yml + release-mpi.yml) consume one action; the matrix guard becomes an input; the one-consumer objection is waived (10 consumers); the release-critical MPI workflows move with ci.yml in one change. |
+| 8 | CD-114 | defender:over-engineering-02; attacker:over-engineering #4 | CD-114 — must the guard over the hoisted crate-source directory list also cover quality-report.sh:53-64, the sixth copy, given comment_scan.sh's holdout array at :46-50 already tracks that script whi… | **Cover quality-report.sh too; fix the comment_scan.sh header when hoisting** | The hoisted list has six consumers; the header :11-14 is corrected to name all three holdouts so it matches the array :46-50; no new id for the header mismatch — it rides CD-114. |
+| 9 | OD-049 | defender:over-engineering-03; defender:over-engineering-04; attacker:over-engineering #2 | OD-049 / OD-050 — the three unconsumed slow-tests = [] declarations (cobre-cli:57, cobre-io:19, cobre-stochastic:18): delete them, or keep the convention deliberately and then either restate the :55-… | **Delete the three inert declarations** | No cfg consumer, no forwarding; the workspace command keeps resolving through cobre-sddp; ci.yml:21's feature census comment and cobre-stochastic/README.md:81 are corrected in the same change (the stochastic instance is routed to E11). |
+| 10 | CD-115 | defender:over-engineering-05; attacker:over-engineering #1 | CD-115 — are the five reserved crate names (cobre-mcp, cobre-tui, cobre-flow, cobre-uc, cobre-emt) meant to be re-published at every release so they keep holding their place on crates.io (their manif… | **publish = false in the five reserved manifests; publish.yml asserts every member is published or publish = false** | The names were reserved once and need no re-publish per release; the decision sits beside each crate and the workflow derives its list instead of restating it. |
+| 11 | CD-105 | defender:drift-02 | CD-105 — must a design doc's own status line use one of the five index vocabulary values, or only be present? At the pin enumerated-traversal-distribution.md:3 and backward-warm-start-channels.md:10… | **A vocabulary token, optionally followed by a qualifier** | The two descriptive-prose docs get a token; README.md:4 is tightened to say the status uses the vocabulary; CD-105's dismissed half becomes part of the fix. |
+| 12 | — | attacker:drift #1; defender:drift-00 (dismissed) | docs/design/README.md:26-27 — the two docs statused 'Implemented (retained pending fold into the live spec)': fold both into their authoritative homes and delete them as README.md:31 prescribes, or g… | **Fold both docs into their homes and delete them per README.md:31; no sixth value** | The retained-pending-fold status is transitional; E11 carries the fold and the two rows disappear with the docs. |
+| 13 | CD-108 | defender:drift-06 (2 items) | CD-108 — the private spec-§ citation family (local_conformance.rs:4 and the eight banners; ferrompi.rs:241/:272/:279 citing backend docs that exist nowhere): re-anchor to in-tree targets or publish t… | **Re-anchor to in-tree targets; align check-comment-refs.sh's scan set** | The citations name the surfaces under test or testing-architecture.md; the private backend docs are not published; the scan set gains crates/*/tests and crates/*/benches (rides CD-114's hoisted list). |
+| 14 | CD-109 | defender:drift-07; attacker:drift #2 | CD-109 — are `.claude/rules/*.md` section numbers a citable coordinate at all? Five gate headers cite them and four do not resolve; no gate scans shell-script headers. The alternative is directive id… | **Not citable: re-point the five citations to directive ids / heading titles and add the section-suffix check to check-comment-refs.sh's .claude/rules token class** | The existing gate already parses the .claude/rules/ token class at :75; a suffix check makes the class un-citable by number; the five headers are re-pointed in the same change. |
+| 15 | CD-110 | defender:drift-08 | CD-110 — the Part-I source plans/generalizing/beyond-sddp-generalization.md is untracked at the pin, so no in-repo guard can see its copy of the exemption parenthetical: is a correction expected in t… | **Yes: E9 amends the roadmap row and the tracked mirror together** | This station records the evidence only; the disposition and the Alignment stay epic 9's; both copies move in E9's amendment. |
+| 16 | performance-00 | defender:performance-00; attacker:performance #1 | Informational — the MPICH prelude: keep it byte-identical on every ci.yml job for readability even where the job's feature string excludes mpi (schemas, python), or derive it per job from that featur… | **Derive per job; drop the triple from schemas and python** | Direction for whoever amends ci.yml (rides CD-112's composite action); informational, no PD id, no E10 line. |
+| 17 | performance-02 | defender:performance-02; attacker:performance #2 | Informational — a populator job with needs: edges for the shared MPICH cache key would collapse the rare cold-key fan-out at the cost of a serialization point on every warm run. Wanted? | **No populator; keep parallel restores** | Every consumer restores in parallel and nothing waits; the cold-key fan-out is rare; informational. |
+| 18 | performance-03 | defender:performance-03; attacker:performance #3 | Informational — the release cobre binary is built independently by three jobs: give it one producer plus a publish/consume edge (the first needs: edge; one broken build would block the consumers), or… | **Keep per-job builds; no producer/consumer edge** | Each gate stays independent and surfaces its own failure; informational. |
+| 19 | performance-05 | defender:performance-05 (2 items); attacker:performance #4 | Informational — cargo-audit (ci.yml:413) and cargo-llvm-cov (coverage job) are installed from source while the workflow already uses a prebuilt-binary install action; whether a prebuilt cargo-about e… | **Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time** | Both external facts are checked when the amend lands; informational, no PD id. |
+| 20 | performance-06 | defender:performance-06 | Informational — actions/checkout exposes no per-submodule input, so a job-tailored submodule set means hand-listing submodule paths in a following step on each affected job, a second copy of the four… | **Keep the single recursive checkout** | A hand-listed submodule set duplicates .gitmodules with no guard; the pointer stays inert; informational. |
+
+### 3.6 Presented, no decision taken
+
+- Part-I item I.3-6 — evidence `scripts/ci/check-infra-genericity.sh:74`, `scripts/ci/check-infra-genericity.sh:70`, `scripts/ci/check-infra-genericity.sh:40`, station verdict `claim-stale`; disposition: epic 9 (no Alignment value set here; the handoff's two-site block is synced from CD-099).
+- sanctioned: advisory-by-design exit 0 of check-comment-line-refs.sh, check-comment-banners.sh, check-comment-bloat.sh and quality-report.sh — no question offered.
+- sanctioned: the entry-free scripts/ci/allow-rationale-allowlist.txt — no question offered.
+- sanctioned: the five reserved stub crates cobre-mcp, cobre-tui, cobre-flow, cobre-uc, cobre-emt (Cargo.toml:12-16) — no question offered.
+- sanctioned: the cobre-python workspace exclusion — no question offered.
+- sanctioned: EXCLUDED_FILES=() in the genericity gate — no question offered.
+- CI wall time — no PD id, no E10 queue line; the five UNMEASURED rows stay under the Performance (informational) block.
+- the three remaining defender dismissals (drift-00, drift-05, performance-04) and the performance-01 dup-of fold — Cleared with basis and citation, no question offered.
+
+### 3.7 Informational (no severity, no id)
+
+- R6-nh-2: Keep standalone-token scope; no FreezeScratch addition — The dismissal stands (check-infra-genericity.sh:15 declares the word-boundary scope); CD-061's widening is an I.3-6 disposition matter for E9, not a gate change; the FreezeScratch site is outside CD-061's cobre-io scope and is not added.
+- R6-nh-12: Fold both docs into their homes and delete them per README.md:31; no sixth value — The retained-pending-fold status is transitional; E11 carries the fold and the two rows disappear with the docs.
+- R6-nh-16: Derive per job; drop the triple from schemas and python — Direction for whoever amends ci.yml (rides CD-112's composite action); informational, no PD id, no E10 line.
+- R6-nh-17: No populator; keep parallel restores — Every consumer restores in parallel and nothing waits; the cold-key fan-out is rare; informational.
+- R6-nh-18: Keep per-job builds; no producer/consumer edge — Each gate stays independent and surfaces its own failure; informational.
+- R6-nh-19: Move cargo-audit and cargo-llvm-cov to the install action; cargo-about joins only if a prebuilt of the pinned version exists — verify at amend time — Both external facts are checked when the amend lands; informational, no PD id.
+- R6-nh-20: Keep the single recursive checkout — A hand-listed submodule set duplicates .gitmodules with no guard; the pointer stays inert; informational.
+
+## 4. Handoffs after the gate
+
+- **E9** — CD-099 advances-1 (Part IV.1) with the ratified two-site edit; CD-110 I.3-6 evidence only, disposition epic 9; rows: CD-099, CD-110; directions: R6-nh-1, R6-nh-15.
+- **E10** — nothing — informational lens; owner directions on the five UNMEASURED rows are recorded on the rows.
+- **E08** — td-queue.json empty-with-reason (epic 8).
+- **E11** — policy.fbs path drift; SN-06; README fold (NH #12); cobre-stochastic slow-tests twin (NH #9); the doc/status corrections directed above; directions: R6-nh-9, R6-nh-12.
+- **Handoff confirmation** — confirm (R7-handoffs): All four handoffs recorded as listed in gate.md §4 and decisions.json; the RETURNED marker is written and the test-corpus station is unblocked.
+
+**Gate: RETURNED 2026-09-19** — baseline `077dbe2c`; accepted 19, amended 0, downgraded 0, rejected 0, deferred 0, overridden 0, held 0; 1 dismissal ratified (PATTERN, architecture-01), 1 census classification ratified (check-comment-bloat.sh transitively-advisory); 20 needs-human answered; Part-I I.3-6 presented read-only (disposition: epic 9); CI wall time informational (no PD id, no E10 line). Test-corpus station unblocked.

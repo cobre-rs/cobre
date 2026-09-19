@@ -1726,6 +1726,213 @@ class CalibrationTests(TestCorpusCase):
         )
 
 
+VERIFY_MARKER = "## Station-specific checks — test-corpus"
+VERIFY_ROWS = (
+    "check-anchors",
+    "check-reraise",
+    "fields-check",
+    "fields-check-alignment",
+    "figure-completeness",
+    "both-definitions-ran",
+    "slow-tests-census-tracked",
+    "entry-definition-claimkind-provenance",
+    "mirror-items-dup-of-only",
+    "read-only-workspace",
+)
+
+
+def load_station_verify():
+    spec = importlib.util.spec_from_file_location(
+        "station_verify", sc.TOOLS / "station_verify.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SectionVerifyTests(TestCorpusCase):
+    """E08-6: executable proof of the station verification.
+
+    verify-station.sh runs this module, so nothing here may invoke it (recursion); the station
+    driver verify-test-corpus.py is run once with --no-shared for the same reason. Every recount is
+    taken from the tree at the station baseline and compared with inventory.json; the shared
+    verifier's new count-census branch is proven on a tampered copy.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.driver = cls.station_dir() / "verify-test-corpus.py"
+        cls.driver_run = subprocess.run(
+            [sys.executable, str(cls.driver), CAL_SCAFFOLD, "--no-shared"],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        cls.inv = sc.load_json(cls.station_dir() / "inventory.json")
+        cls.t = cls.tree()
+        cls.sv = load_station_verify()
+
+    def test_harness_checkers_exit_zero_over_the_scaffold_title(self) -> None:
+        for tool in ("check-anchors", "check-reraise", "fields-check"):
+            r = subprocess.run(
+                [sys.executable, str(sc.TOOLS / f"{tool}.py"), CAL_SCAFFOLD],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r.returncode, 0, f"{tool}: {(r.stdout + r.stderr)[-800:]}")
+
+    def test_no_tracked_modification_outside_the_station(self) -> None:
+        station = "plans/architecture-debt-audit/stations/test-corpus/"
+        self.assertEqual(
+            [
+                m
+                for m in sc.tracked_modifications()
+                if not m.split()[-1].startswith(station)
+            ],
+            [],
+        )
+
+    def test_remeasured_census_equals_a_fresh_recount_at_the_pin(self) -> None:
+        rows = {r["crate"]: r for r in self.inv["perCrate"]}
+        for crate, rec in rows.items():
+            tests = self.t.ls_files(f"crates/{crate}/tests/")
+            rs = [f for f in tests if f.endswith(".rs")]
+            self.assertEqual(rec["integrationFiles"], len(rs), crate)
+            self.assertEqual(
+                rec["integrationBinaries"],
+                sum(1 for f in rs if f.count("/") == 3),
+                crate,
+            )
+            siblings = [
+                f
+                for f in self.t.ls_files(f"crates/{crate}/src/")
+                if f.endswith("tests.rs")
+            ]
+            self.assertEqual(rec["siblingTestsRs"], len(siblings), crate)
+        figs = {f["id"]: f for f in self.inv["figures"]}
+        self.assertEqual(
+            figs["int-binaries"]["value"],
+            sum(r["integrationBinaries"] for r in rows.values()),
+        )
+        self.assertEqual(
+            figs["int-binaries"]["altDefinition"]["integrationFiles"],
+            sum(r["integrationFiles"] for r in rows.values()),
+        )
+        to_bits = [
+            f
+            for f in self.t.ls_files("crates")
+            if f.endswith(".rs") and "to_bits" in self.t.read_text(f)
+        ]
+        self.assertEqual(figs["to-bits"]["value"], len(to_bits))
+        self.assertNotEqual(
+            rows["cobre-sddp"]["integrationBinaries"],
+            rows["cobre-sddp"]["integrationFiles"],
+        )
+        self.assertNotEqual(
+            rows["cobre-io"]["integrationBinaries"],
+            rows["cobre-io"]["integrationFiles"],
+        )
+
+    def test_station_verifier_passes_without_the_shared_run(self) -> None:
+        out = self.driver_run.stdout + self.driver_run.stderr
+        self.assertEqual(self.driver_run.returncode, 0, out[-2500:])
+        self.assertIn(VERIFY_MARKER, out)
+        for row in VERIFY_ROWS:
+            self.assertRegex(
+                out, rf"^\| \d+ \| {re.escape(row)} \| .* \| 0 \| PASS \|$", row
+            )
+        self.assertNotIn("| FAIL |", out)
+        self.assertIn("Station-specific result: PASS (10/10 checks).", out)
+
+    def test_station_verifier_refuses_an_ambiguous_or_absent_title(self) -> None:
+        r = subprocess.run(
+            [sys.executable, str(self.driver), "no such heading", "--no-shared"],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("matched 0 headings", r.stderr)
+
+    def test_report_carries_the_station_block_when_rendered(self) -> None:
+        report = self.station_dir() / "verification.md"
+        if not report.exists() or VERIFY_MARKER not in report.read_text(
+            encoding="utf-8"
+        ):
+            raise unittest.SkipTest(
+                "verification.md not yet rendered by a full run (bootstrap inside verify-station.sh)"
+            )
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("# Station verification — test-corpus", text)
+        self.assertEqual(text.count(VERIFY_MARKER), 1)
+        self.assertIn("verify-station.sh test-corpus", text)
+        block = text[text.index(VERIFY_MARKER) :]
+        self.assertNotIn("| FAIL |", block)
+        self.assertIn("Station-specific result: PASS", block)
+        self.assertNotRegex(
+            text,
+            r"\b20\d\d-\d\d-\d\d\b",
+            "the report carries no run date (byte-stable)",
+        )
+
+    def test_shared_count_census_branch_and_its_failure_path(self) -> None:
+        rows = self.sv.count_census_rows(self.inv)
+        self.assertIsNotNone(rows)
+        assert rows is not None
+        self.assertEqual(len(rows), len(self.inv["perCrate"]))
+        self.assertIsNone(self.sv.count_census_rows({"baseline": "x", "files": []}))
+        self.assertIsNone(self.sv.count_census_rows({"baseline": "x", "crates": {}}))
+        self.assertEqual(self.sv.census_baseline(self.inv), self.baseline())
+        self.assertEqual(self.sv.count_census_diff(sc.REPO, self.baseline(), rows), [])
+        tampered = json.loads(json.dumps(rows))
+        row = next(r for r in tampered if r["crate"] == "cobre-sddp")
+        row["integrationBinaries"] += 1
+        bad = self.sv.count_census_diff(sc.REPO, self.baseline(), tampered)
+        self.assertEqual(len(bad), 1)
+        self.assertIn("cobre-sddp: integrationBinaries recorded", bad[0])
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "station_verify.py"),
+                "inventory",
+                str(self.station_dir() / "inventory.json"),
+                str(sc.REPO),
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("test-file census", r.stdout)
+
+    def test_partI_handoff_owns_no_row_and_genericity_asserts_the_gate_alone(
+        self,
+    ) -> None:
+        handoff = sc.load_json(self.station_dir() / "partI-handoff.json")
+        self.assertEqual(handoff["dispositions"], [])
+        self.assertEqual(handoff["entries"], [])
+        self.assertIn("owns no Part-I row", handoff["resolutionRule"])
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "station_verify.py"),
+                "genericity",
+                str(sc.REPO),
+                str(self.station_dir() / "partI-handoff.json"),
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_is_modified(self) -> None:
         station = "plans/architecture-debt-audit/stations/test-corpus/"

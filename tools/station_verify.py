@@ -316,8 +316,71 @@ def baseline_rs_files(
     return out
 
 
+def count_census_rows(inventory: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """The per-crate COUNT census of a station whose corpus is the test tree itself
+    (`perCrate[]` rows carrying `integrationBinaries` / `integrationFiles` /
+    `siblingTestsRs`, no path list) — the sixth census shape; None for the five
+    path-listing shapes `reconstruct_listed` handles."""
+    rows = inventory.get("perCrate")
+    if not isinstance(rows, list) or any(
+        k in inventory for k in ("files", "src", "crates", "gates")
+    ):
+        return None
+    return rows
+
+
+def census_baseline(inventory: dict[str, Any]) -> str:
+    """The census tree: a bare sha, or the `{sha, describe, …}` record a re-measurement writes."""
+    baseline = inventory["baseline"]
+    return str(baseline["sha"] if isinstance(baseline, dict) else baseline)
+
+
+def count_census_diff(
+    root: pathlib.Path, baseline: str, rows: list[dict[str, Any]]
+) -> list[str]:
+    """One line per crate whose recorded test-file counts differ from the tree at `baseline`:
+    depth-1 `crates/<c>/tests/*.rs` are the linked integration binaries, the recursive
+    `tests/**/*.rs` set is the file reading, `src/**/tests.rs` the extracted siblings."""
+    bad: list[str] = []
+    for rec in rows:
+        crate = rec["crate"]
+        tests = f"crates/{crate}/tests"
+        src = f"crates/{crate}/src"
+        listing = _git(root, "ls-tree", "-r", "--name-only", baseline, "--", tests, src)
+        if listing.returncode != 0:
+            raise RuntimeError(listing.stderr.strip() or f"{crate} at {baseline[:8]}")
+        paths = listing.stdout.split()
+        rs_tests = [p for p in paths if p.startswith(tests + "/") and p.endswith(".rs")]
+        measured = {
+            "integrationBinaries": sum(1 for p in rs_tests if p.count("/") == 3),
+            "integrationFiles": len(rs_tests),
+            "siblingTestsRs": sum(
+                1 for p in paths if p.startswith(src + "/") and p.endswith("tests.rs")
+            ),
+        }
+        for key, value in measured.items():
+            if key in rec and rec[key] != value:
+                bad.append(
+                    f"{crate}: {key} recorded {rec[key]}, the tree at {baseline[:8]} measures {value}"
+                )
+    return bad
+
+
 def _cmd_inventory(inventory_path: pathlib.Path, root: pathlib.Path) -> int:
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    rows = count_census_rows(inventory)
+    if rows is not None:
+        baseline = census_baseline(inventory)
+        bad = count_census_diff(root, baseline, rows)
+        for line in bad:
+            print(f"FAIL inventory count-census at {baseline[:8]}: {line}")
+        if bad:
+            return EXIT_VIOLATION
+        print(
+            f"inventory and the tree at {baseline[:8]} agree on the test-file census of "
+            f"{len(rows)} crates (integration binaries / files, sibling tests.rs)"
+        )
+        return EXIT_OK
     listed = reconstruct_listed(inventory)
     if len(listed) != len(set(listed)):
         dupes = sorted({p for p in listed if listed.count(p) > 1})

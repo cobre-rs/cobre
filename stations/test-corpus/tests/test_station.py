@@ -133,9 +133,7 @@ class InventoryTests(TestCorpusCase):
         )
         for fid, fig in self.figures.items():
             self.assertEqual(fig["status"], "measured", fid)
-            parts = [
-                b for b in self.blocks.values() if b["command"] in fig["command"]
-            ]
+            parts = [b for b in self.blocks.values() if b["command"] in fig["command"]]
             self.assertTrue(parts, fid)
             for block in parts:
                 self.assertEqual(block["exit"], "0", fid)
@@ -472,7 +470,8 @@ class InventoryTests(TestCorpusCase):
         self.assertIn(f"# {len(files)} files claim some invariance", self.lens)
         self.assertIn(f"holds for {len(with_permute)}", self.lens)
         self.assertIn(
-            f"The {len(files) - len(with_permute)} files without a permute call", self.lens
+            f"The {len(files) - len(with_permute)} files without a permute call",
+            self.lens,
         )
         self.assertIn(f"The {len(with_permute)} permute-carrying files", self.lens)
         for f in with_permute:
@@ -502,7 +501,8 @@ SHARED_DOCS = {
 }
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PERF_TIMING_RE = re.compile(
-    r"\b\d+(?:\.\d+)?\s*(?:ms|seconds|secs|sec)\b|\bx\s*faster|\d+x faster|speed-?up", re.I
+    r"\b\d+(?:\.\d+)?\s*(?:ms|seconds|secs|sec)\b|\bx\s*faster|\d+x faster|speed-?up",
+    re.I,
 )
 
 
@@ -525,7 +525,9 @@ class CandidateEnvelopeTests(TestCorpusCase):
             lens: sc.load_json(cls.station_dir() / f"candidates-{lens}.json")
             for lens in LENSES
         }
-        cls.prompt = (cls.station_dir() / "attacker-prompt.md").read_text(encoding="utf-8")
+        cls.prompt = (cls.station_dir() / "attacker-prompt.md").read_text(
+            encoding="utf-8"
+        )
         cls.log = (cls.station_dir() / "attacker-log.md").read_text(encoding="utf-8")
         cls.seeds = sc.load_json(cls.station_dir() / "seeds.json")
         cls.t = cls.tree()
@@ -538,11 +540,21 @@ class CandidateEnvelopeTests(TestCorpusCase):
             for c in env["candidates"]:
                 yield lens, c
 
-    def test_every_candidates_file_validates_through_the_shared_tool_and_the_profile(self) -> None:
+    def test_every_candidates_file_validates_through_the_shared_tool_and_the_profile(
+        self,
+    ) -> None:
         for lens in LENSES:
             path = self.station_dir() / f"candidates-{lens}.json"
             r = subprocess.run(
-                [sys.executable, str(sc.TOOLS / "validate-envelope.py"), "--role", "attacker", "--station", "test-corpus", str(path)],
+                [
+                    sys.executable,
+                    str(sc.TOOLS / "validate-envelope.py"),
+                    "--role",
+                    "attacker",
+                    "--station",
+                    "test-corpus",
+                    str(path),
+                ],
                 capture_output=True,
                 text=True,
             )
@@ -552,7 +564,9 @@ class CandidateEnvelopeTests(TestCorpusCase):
     def test_header_names_the_station_the_pin_and_the_lens(self) -> None:
         for lens, env in self.env.items():
             self.assertEqual((env["station"], env["lens"]), ("test-corpus", lens))
-            self.assertEqual(env["baseline"], self.sha if hasattr(self, "sha") else self.baseline())
+            self.assertEqual(
+                env["baseline"], self.sha if hasattr(self, "sha") else self.baseline()
+            )
             self.assertEqual(env["primary"], lens == "test-bloat")
             self.assertEqual(env["informational"], lens == "performance")
             self.assertTrue(env["workers"], lens)
@@ -586,7 +600,9 @@ class CandidateEnvelopeTests(TestCorpusCase):
             self.assertTrue(c.get("raisedBy"), c["title"])
             mv = c.get("measuredValue")
             if mv is not None:
-                self.assertRegex(mv["key"], r"^(figures|perCrate|harness)\.", c["title"])
+                self.assertRegex(
+                    mv["key"], r"^(figures|perCrate|harness)\.", c["title"]
+                )
 
     def test_anchor_grammar_points_at_the_test_surface(self) -> None:
         for lens, c in self.all_candidates():
@@ -601,9 +617,13 @@ class CandidateEnvelopeTests(TestCorpusCase):
                     or re.match(r"^crates/[a-z-]+/Cargo\.toml$", path) is not None
                     or path in SHARED_DOCS
                 )
-                self.assertTrue(on_surface, f"{lens}: {path} is not a test-surface anchor")
+                self.assertTrue(
+                    on_surface, f"{lens}: {path} is not a test-surface anchor"
+                )
                 if "symbol" in a and a["symbol"] is not None:
-                    self.assertTrue(IDENT_RE.match(a["symbol"]), f"{path}::{a['symbol']}")
+                    self.assertTrue(
+                        IDENT_RE.match(a["symbol"]), f"{path}::{a['symbol']}"
+                    )
                 else:
                     self.assertIsInstance(a.get("line"), int, f"{lens}: {path}")
                     self.assertGreaterEqual(a["line"], 1)
@@ -612,7 +632,11 @@ class CandidateEnvelopeTests(TestCorpusCase):
         hits = 0
         for lens, c in self.all_candidates():
             text = (c["title"] + " " + c["evidence"].get("reading", "")).lower()
-            if c.get("dupOf") == "Oracle test-harness duplication" or "fn close" in text or ("stubcomm" in text and "rank0of2" in text):
+            if (
+                c.get("dupOf") == "Oracle test-harness duplication"
+                or "fn close" in text
+                or ("stubcomm" in text and "rank0of2" in text)
+            ):
                 hits += 1
                 paths = {a["path"] for a in c["anchors"]}
                 self.assertGreaterEqual(len(paths), 2, c["title"])
@@ -626,25 +650,41 @@ class CandidateEnvelopeTests(TestCorpusCase):
         for lens, c in self.all_candidates():
             blob = json.dumps(c)
             paths = {(a["path"], a.get("line")) for a in c["anchors"]}
-            if ("docs/design/testing-architecture.md", 524) in paths and "crates/cobre-comm/Cargo.toml" in blob:
+            if (
+                "docs/design/testing-architecture.md",
+                524,
+            ) in paths and "crates/cobre-comm/Cargo.toml" in blob:
                 doc_side.append(c)
             if ("crates/cobre-sddp/tests/common/mod.rs", 32) in paths and (
-                "crates/cobre-sddp/tests/common/mod.rs", 86
+                "crates/cobre-sddp/tests/common/mod.rs",
+                86,
             ) in paths:
                 tree_side.append(c)
-        self.assertTrue(doc_side, "no candidate anchors §5.8 (:524) against the cobre-comm manifest")
-        self.assertTrue(tree_side, "no candidate anchors the canonical home mod.rs:32 and :86")
+        self.assertTrue(
+            doc_side, "no candidate anchors §5.8 (:524) against the cobre-comm manifest"
+        )
+        self.assertTrue(
+            tree_side, "no candidate anchors the canonical home mod.rs:32 and :86"
+        )
         for c in doc_side:
             self.assertIn("mod.rs:32", json.dumps(c))
         for c in tree_side:
-            copies = [a for a in c["anchors"] if a["path"].startswith("crates/cobre-sddp/src/")]
-            self.assertGreaterEqual(len(copies), 2, "the copy census needs private copies anchored")
+            copies = [
+                a
+                for a in c["anchors"]
+                if a["path"].startswith("crates/cobre-sddp/src/")
+            ]
+            self.assertGreaterEqual(
+                len(copies), 2, "the copy census needs private copies anchored"
+            )
         for c in doc_side + tree_side:
             self.assertNotIn("targetNotDefect", c)
             self.assertIn(c["claimKind"], self.vtb.CLAIM_KINDS)
             self.assertTrue(c["evidence"].get("reading"))
         self.assertIn("StubComm / Rank0Of2 copy census", self.log)
-        self.assertIn("crates/cobre-sddp/src/training/backward_pass_state.rs:2216", self.log)
+        self.assertIn(
+            "crates/cobre-sddp/src/training/backward_pass_state.rs:2216", self.log
+        )
         self.assertIn("StubComm", self.log)
 
     def test_performance_file_is_informational_and_number_free(self) -> None:
@@ -653,39 +693,77 @@ class CandidateEnvelopeTests(TestCorpusCase):
             self.assertIs(c["informational"], True, c["title"])
             self.assertEqual(c["status"], "UNMEASURED", c["title"])
             self.assertTrue(c["statusReason"], c["title"])
-            self.assertRegex(c["costMechanism"], r"(?i)binar|static solver link|cadence|wall", c["title"])
+            self.assertRegex(
+                c["costMechanism"],
+                r"(?i)binar|static solver link|cadence|wall",
+                c["title"],
+            )
             self.assertEqual(c["mechanism"], c["costMechanism"], c["title"])
-        text = (self.station_dir() / "candidates-performance.json").read_text(encoding="utf-8")
-        self.assertIsNone(PERF_TIMING_RE.search(text), "timing literal in the performance file")
+        text = (self.station_dir() / "candidates-performance.json").read_text(
+            encoding="utf-8"
+        )
+        self.assertIsNone(
+            PERF_TIMING_RE.search(text), "timing literal in the performance file"
+        )
 
     def test_no_candidate_targets_a_reserved_stub_or_the_golden_roster(self) -> None:
         for lens, c in self.all_candidates():
             for a in c["anchors"]:
-                self.assertFalse(a["path"].startswith(RESERVED_PREFIXES), f"{lens}: {a['path']}")
-                self.assertFalse(str(a.get("symbol", "")).startswith("parity_hash_"), c["title"])
+                self.assertFalse(
+                    a["path"].startswith(RESERVED_PREFIXES), f"{lens}: {a['path']}"
+                )
+                self.assertFalse(
+                    str(a.get("symbol", "")).startswith("parity_hash_"), c["title"]
+                )
             self.assertFalse(
-                re.search(r"\b(delete|remove|drop|skip)\b[^.]{0,60}\btests?\b", c["fixShape"], re.I)
+                re.search(
+                    r"\b(delete|remove|drop|skip)\b[^.]{0,60}\btests?\b",
+                    c["fixShape"],
+                    re.I,
+                )
                 and c["claimKind"] != "prose-drift"
                 and c.get("seedRef") is None,
                 f"{lens}: a deletion fix-shape outside a ratified seed: {c['title']}",
             )
-        positives = json.dumps([p for env in self.env.values() for p in env["positives"]])
+        positives = json.dumps(
+            [p for env in self.env.values() for p in env["positives"]]
+        )
         self.assertIn("parity_hash", positives)
         self.assertIn("mpi_wire", positives)
-        self.assertTrue(any(stub.rstrip("/") in positives for stub in RESERVED_PREFIXES[1:]), "reserved stubs must appear under positives")
+        self.assertTrue(
+            any(stub.rstrip("/") in positives for stub in RESERVED_PREFIXES[1:]),
+            "reserved stubs must appear under positives",
+        )
 
     def test_attacker_log_records_every_dispatch_and_the_self_check(self) -> None:
         for w in self.vtb.__dict__.get("TB_WORKERS", []) or []:
             self.assertIn(f"| {w} | test-bloat |", self.log)
-        rows = re.findall(r"^\| (tb-[a-z0-9-]+|sec-[a-z-]+) \| ([a-z-]+) \| (\d+) \| (valid|EXCLUDED) \| (\d) \|", self.log, re.M)
+        rows = re.findall(
+            r"^\| (tb-[a-z0-9-]+|sec-[a-z-]+) \| ([a-z-]+) \| (\d+) \| (valid|EXCLUDED) \| (\d) \|",
+            self.log,
+            re.M,
+        )
         self.assertEqual(len(rows), 12)
         self.assertEqual(sum(1 for r in rows if r[0].startswith("tb-")), 9)
-        self.assertEqual({r[1] for r in rows if r[0].startswith("sec-")}, {"architecture", "over-engineering", "performance"})
+        self.assertEqual(
+            {r[1] for r in rows if r[0].startswith("sec-")},
+            {"architecture", "over-engineering", "performance"},
+        )
         for r in rows:
             self.assertLessEqual(int(r[4]), 1, "at most one re-dispatch per worker")
-        for section in ("## Gaps", "## Seed ledger", "## Self-check", "git status --porcelain"):
+        for section in (
+            "## Gaps",
+            "## Seed ledger",
+            "## Self-check",
+            "git status --porcelain",
+        ):
             self.assertIn(section, self.log)
-        excluded = [w for env in self.env.values() for w, s in env["workers"].items() if s.startswith("excluded")]
+        excluded = [
+            w
+            for env in self.env.values()
+            for w, s in env["workers"].items()
+            if s.startswith("excluded")
+        ]
         for w in excluded:
             self.assertIn(f"| {w} | envelope-invalid", self.log)
         if not excluded:
@@ -704,9 +782,15 @@ class CandidateEnvelopeTests(TestCorpusCase):
             if s["disposition"] in ("dropped", "dup-of"):
                 self.assertTrue(s["dispositionReason"], s["id"])
             if s["disposition"] in ("confirmed", "sharpened"):
-                self.assertIn(s["candidateTitle"], by_ref.get(s["seedRef"], []), s["id"])
-        self.assertEqual(self.env["test-bloat"]["seedLedger"]["seedsIn"], counts["seedsIn"])
-        self.assertIn("## Seed ledger (filled by the dispatcher after the merge)", self.prompt)
+                self.assertIn(
+                    s["candidateTitle"], by_ref.get(s["seedRef"], []), s["id"]
+                )
+        self.assertEqual(
+            self.env["test-bloat"]["seedLedger"]["seedsIn"], counts["seedsIn"]
+        )
+        self.assertIn(
+            "## Seed ledger (filled by the dispatcher after the merge)", self.prompt
+        )
 
     def test_partition_holds_on_the_committed_prompt(self) -> None:
         ok, report = self.vtb.check_partition(self.prompt, self.t)
@@ -718,16 +802,41 @@ class CandidateEnvelopeTests(TestCorpusCase):
         import tempfile
 
         good = {
-            "station": "test-corpus", "subStation": "tb-cobre-comm", "worker": "tb-cobre-comm",
-            "baseline": self.baseline(), "lens": "test-bloat",
-            "candidates": [{
-                "title": "a shared harness double is redeclared beside its canonical home",
-                "anchors": [{"path": "crates/cobre-comm/tests/local_conformance.rs", "line": 198}],
-                "evidence": {"command": "git grep -n StubComm 077dbe2c -- crates/cobre-comm", "output": "", "reading": "none"},
-                "yardstickRef": "ta-5.2", "claimKind": "target-gap", "measurementDefinition": "n/a", "measuredValue": None,
-                "proposedSeverity": "C", "fixShape": "Re-home the double into the shared harness so both binaries consume one definition.",
-                "alignmentHint": "neutral", "seedRef": None, "dupOf": None}],
-            "seedDispositions": [], "positives": [{"subject": "x", "why": "clean"}], "cleanVerdict": None, "_needsHuman": []}
+            "station": "test-corpus",
+            "subStation": "tb-cobre-comm",
+            "worker": "tb-cobre-comm",
+            "baseline": self.baseline(),
+            "lens": "test-bloat",
+            "candidates": [
+                {
+                    "title": "a shared harness double is redeclared beside its canonical home",
+                    "anchors": [
+                        {
+                            "path": "crates/cobre-comm/tests/local_conformance.rs",
+                            "line": 198,
+                        }
+                    ],
+                    "evidence": {
+                        "command": "git grep -n StubComm 077dbe2c -- crates/cobre-comm",
+                        "output": "",
+                        "reading": "none",
+                    },
+                    "yardstickRef": "ta-5.2",
+                    "claimKind": "target-gap",
+                    "measurementDefinition": "n/a",
+                    "measuredValue": None,
+                    "proposedSeverity": "C",
+                    "fixShape": "Re-home the double into the shared harness so both binaries consume one definition.",
+                    "alignmentHint": "neutral",
+                    "seedRef": None,
+                    "dupOf": None,
+                }
+            ],
+            "seedDispositions": [],
+            "positives": [{"subject": "x", "why": "clean"}],
+            "cleanVerdict": None,
+            "_needsHuman": [],
+        }
         with tempfile.TemporaryDirectory() as d:
             p = pathlib.Path(d)
             (p / "good.json").write_text(json.dumps(good))
@@ -735,21 +844,438 @@ class CandidateEnvelopeTests(TestCorpusCase):
             bad = json.loads(json.dumps(good))
             bad["candidates"][0]["claimKind"] = "defect"
             (p / "kind.json").write_text(json.dumps(bad))
-            self.assertTrue(any("$.candidates[0].claimKind" in e for e in self.vtb.validate_file(p / "kind.json")))
+            self.assertTrue(
+                any(
+                    "$.candidates[0].claimKind" in e
+                    for e in self.vtb.validate_file(p / "kind.json")
+                )
+            )
             bad = json.loads(json.dumps(good))
             del bad["candidates"][0]["measurementDefinition"]
-            bad["candidates"][0]["title"] = "cobre-comm has 6 source files with inline tests"
+            bad["candidates"][0]["title"] = (
+                "cobre-comm has 6 source files with inline tests"
+            )
             (p / "def.json").write_text(json.dumps(bad))
-            self.assertTrue(any("$.candidates[0].measurementDefinition" in e for e in self.vtb.validate_file(p / "def.json")))
+            self.assertTrue(
+                any(
+                    "$.candidates[0].measurementDefinition" in e
+                    for e in self.vtb.validate_file(p / "def.json")
+                )
+            )
             (p / "prose.json").write_text("Here is the envelope:\n" + json.dumps(good))
-            self.assertTrue(any("$ not parseable JSON" in e for e in self.vtb.validate_file(p / "prose.json")))
+            self.assertTrue(
+                any(
+                    "$ not parseable JSON" in e
+                    for e in self.vtb.validate_file(p / "prose.json")
+                )
+            )
+
+
+DISPOSITIONS = {
+    "defended",
+    "anchor-missing",
+    "needs-human",
+    "coverage-reduction",
+    "dup-of",
+    "re-raise",
+}
+STATES = {
+    "accepted",
+    "rejected-anchor",
+    "rejected-defender",
+    "dup-of",
+    "proposal-adjudicated",
+    "needs-human",
+    "coverage-reduction",
+    "re-raise",
+}
+BASES = {
+    "sanctioned-seam",
+    "premise-false-at-pin",
+    "deliberate-and-documented",
+    "contract",
+    "cost-accepted-by-rule",
+    "target-not-defect",
+}
+SHAPES = (
+    "consolidation",
+    "re-homing",
+    "feature-surface unification",
+    "cadence tiering",
+)
+PROBE_TITLE = "INGEST ANCHOR PROBE — test-corpus (2026-09, baseline)"
+DELETION_RE = re.compile(
+    r"\b(delet\w*|remov\w*|drop\w*|skip\w*|#\[ignore\])\b[^.;]{0,40}\b(tests?|assertions?)\b(?![/_])",
+    re.I,
+)
+NEGATED_RE = re.compile(
+    r"\b(no|none|nothing|never|not|without|instead of|rather than|inadmissible|removes none)\b",
+    re.I,
+)
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
+
+
+def _jaccard(a: str, b: str) -> float:
+    ta, tb = set(_norm(a).split()), set(_norm(b).split())
+    return len(ta & tb) / max(1, len(ta | tb))
+
+
+class IngestTests(TestCorpusCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.vtb = load_validate_tb()
+        cls.verdicts_doc = sc.load_json(cls.station_dir() / "verdicts.json")
+        cls.verdicts = cls.verdicts_doc["verdicts"]
+        cls.log = (cls.station_dir() / "ingest-log.md").read_text(encoding="utf-8")
+        cls.probe = (cls.station_dir() / "anchor-probe.md").read_text(encoding="utf-8")
+        cls.brief = (cls.station_dir() / "defender-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        cls.cands = {}
+        for lens in LENSES:
+            doc = sc.load_json(cls.station_dir() / f"candidates-{lens}.json")
+            for i, c in enumerate(doc["candidates"]):
+                cls.cands[f"{lens}-{i:02d}"] = dict(c, lens=lens)
+        cls.t = cls.tree()
+        cls.register = backlog_parse.read_register(sc.BACKLOG)
+        cls.entry_ids = {
+            m.group("id")
+            for ln in cls.register
+            if (m := backlog_parse.ENTRY_RE.match(ln))
+        }
+
+    def anchor_str(self, a: dict) -> str:
+        return (
+            f"`{a['path']}::{a['symbol']}`"
+            if a.get("symbol")
+            else f"`{a['path']}:{a['line']}`"
+        )
+
+    def test_verdicts_cover_every_candidate_exactly_once_and_counts_sum(self) -> None:
+        self.assertEqual(set(self.verdicts), set(self.cands))
+        counts = self.verdicts_doc["counts"]
+        self.assertEqual(counts["received"], len(self.cands))
+        self.assertEqual(self.verdicts_doc["baseline"], self.baseline())
+        self.assertEqual(
+            counts["received"],
+            counts["anchorRejected"]
+            + counts["definitionFlipDowngraded"]
+            + counts["coverageReductionDismissed"]
+            + counts["dupOf"]
+            + counts["reRaiseRejected"]
+            + counts["defended"],
+        )
+        self.assertEqual(sum(counts["byState"].values()), counts["received"])
+        self.assertEqual(sum(counts["byDisposition"].values()), counts["received"])
+        self.assertEqual(
+            counts["needsHuman"],
+            sum(1 for v in self.verdicts.values() if v["_needsHuman"]),
+        )
+        self.assertEqual(counts["unresolved"], 0)
+        for ref, v in self.verdicts.items():
+            self.assertEqual(v["candidateRef"], ref)
+            self.assertEqual(v["title"], self.cands[ref]["title"])
+
+    def test_disposition_and_state_vocabularies_agree(self) -> None:
+        for ref, v in self.verdicts.items():
+            self.assertIn(v["disposition"], DISPOSITIONS, ref)
+            self.assertIn(v["state"], STATES, ref)
+            d, s = v["disposition"], v["state"]
+            if d == "defended":
+                self.assertIn(
+                    s,
+                    {
+                        "accepted",
+                        "rejected-defender",
+                        "proposal-adjudicated",
+                        "needs-human",
+                    },
+                    ref,
+                )
+                self.assertIn(v["verdict"], {"confirmed", "dismissed", None}, ref)
+            elif d == "dup-of":
+                self.assertEqual(s, "dup-of", ref)
+                self.assertIsNone(v["verdict"], ref)
+            elif d == "anchor-missing":
+                self.assertEqual(s, "rejected-anchor", ref)
+            elif d == "coverage-reduction":
+                self.assertEqual(s, "coverage-reduction", ref)
+                self.assertIn("testing-architecture.md:602-604", v["dismissedBy"], ref)
+                self.assertIn(".claude/rules/testing.md:113", v["dismissedBy"], ref)
+            elif d == "needs-human":
+                self.assertEqual(s, "needs-human", ref)
+                self.assertIsNone(v["proposedSeverity"], ref)
+            else:
+                self.assertEqual(s, d, ref)
+
+    def test_every_defended_verdict_is_adjudicated_and_well_formed(self) -> None:
+        for ref, v in self.verdicts.items():
+            if v["disposition"] != "defended" or v["verdict"] is None:
+                continue
+            self.assertIn(v["claimKind"], self.vtb.CLAIM_KINDS, ref)
+            self.assertIsInstance(v["targetNotDefect"], bool, ref)
+            self.assertRegex(v["yardstickRef"], r"^ta-\d(\.\d+)?$", ref)
+            self.assertIn(v["measurementDefinition"], self.vtb.DEFINITIONS, ref)
+            self.assertGreaterEqual(len(v["argument"]), 120, ref)
+            self.assertIn(
+                v["alignmentHint"],
+                {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"},
+                ref,
+            )
+            self.assertEqual(v["conflicts"], v["alignmentHint"] == "conflicts", ref)
+            self.assertEqual(
+                v["measurement"],
+                "UNMEASURED" if v["lens"] == "performance" else "n/a",
+                ref,
+            )
+            if v["verdict"] == "confirmed":
+                scl = v["survivingClaim"]
+                self.assertTrue(scl and len(scl) >= 40, ref)
+                self.assertNotEqual(_norm(scl), _norm(v["title"]), ref)
+                self.assertLess(_jaccard(scl, v["title"]), 0.85, ref)
+                self.assertTrue(
+                    any(
+                        str(v["coverageNeutralShape"]).lower().startswith(s)
+                        for s in SHAPES
+                    ),
+                    ref,
+                )
+                self.assertFalse(v["targetNotDefect"], ref)
+                self.assertIsNone(v["dismissalBasis"], ref)
+            else:
+                self.assertIn(v["dismissalBasis"], BASES, ref)
+                self.assertTrue(v["basisCitation"], ref)
+                self.assertIsNone(v["survivingClaim"], ref)
+                self.assertEqual(
+                    v["targetNotDefect"],
+                    v["dismissalBasis"] == "target-not-defect",
+                    ref,
+                )
+                if v["dismissalBasis"] == "target-not-defect":
+                    self.assertEqual(v["claimKind"], "target-gap", ref)
+                if v["dismissalBasis"] == "sanctioned-seam":
+                    self.assertIn(
+                        v["sanctionedBy"],
+                        self.verdicts_doc["sanctionedByClosedSet"],
+                        ref,
+                    )
+            if self.cands[ref].get("seedRef"):
+                self.assertEqual(v["seedRef"], self.cands[ref]["seedRef"], ref)
+        self.assertIn("targetNotDefect", self.brief)
+        self.assertIn("claimKind", self.brief)
+
+    def test_accepted_anchors_resolve_at_the_pin(self) -> None:
+        checked = 0
+        for ref, v in self.verdicts.items():
+            if v["state"] in {"accepted", "proposal-adjudicated"}:
+                for a in v["anchors"]:
+                    self.assertTrue(
+                        sc.anchor_exists(self.anchor_str(a), self.t), f"{ref}: {a}"
+                    )
+                    checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_dup_of_verdicts_name_the_mirror_item_and_a_resolving_sharpened_anchor(
+        self,
+    ) -> None:
+        dups = {
+            ref: v for ref, v in self.verdicts.items() if v["disposition"] == "dup-of"
+        }
+        self.assertTrue(dups)
+        for ref, v in dups.items():
+            self.assertIn(v["mirrorRef"], self.vtb.MIRROR_ITEMS, ref)
+            anchors = sc.anchors_in(v["sharpenedAnchor"])
+            self.assertTrue(anchors, ref)
+            for a in anchors:
+                self.assertTrue(sc.anchor_exists(a, self.t), f"{ref}: {a}")
+            for id_ in v["relatedRegisterIds"]:
+                self.assertIn(id_, self.entry_ids, ref)
+            if not v["relatedRegisterIds"]:
+                self.assertIn("mirror-only", self.log)
+        blob = json.dumps(self.verdicts_doc)
+        self.assertIsNone(
+            re.search(r"\bTD-0(7[4-9]|[89]\d)\b", blob), "no fresh TD id may appear"
+        )
+
+    def test_mandatory_proposal_adjudications_recorded(self) -> None:
+        mandatory = set(self.verdicts_doc["mandatoryAdjudications"])
+        self.assertEqual(
+            mandatory, {"test-bloat-30", "test-bloat-43", "architecture-00"}
+        )
+        for ref in mandatory:
+            v = self.verdicts[ref]
+            self.assertEqual(v["state"], "proposal-adjudicated", ref)
+            a = v["adjudication"]
+            self.assertIn(a["side"], {"proposal", "tree"}, ref)
+            self.assertEqual(
+                a["side"], "tree" if v["verdict"] == "confirmed" else "proposal", ref
+            )
+            self.assertRegex(a["yardstickRef"], r"^ta-\d(\.\d+)?$", ref)
+            self.assertIn(a["claimKind"], self.vtb.CLAIM_KINDS, ref)
+            self.assertIsInstance(a["targetNotDefect"], bool, ref)
+            if v["verdict"] == "confirmed":
+                self.assertEqual(v["claimKind"], "prose-drift", ref)
+            else:
+                self.assertEqual(v["dismissalBasis"], "target-not-defect", ref)
+                self.assertTrue(v["targetNotDefect"], ref)
+        self.assertEqual(self.verdicts_doc["counts"]["proposalAdjudicated"], 3)
+
+    def test_ingest_log_names_the_pin_and_carries_one_roster_row_per_candidate(
+        self,
+    ) -> None:
+        self.assertIn(f"Baseline: `{self.baseline()}`", self.log)
+        for section in (
+            "## Candidate census",
+            "## Anchor screen",
+            "### Anchor rejections",
+            "## Definition screen",
+            "### Definition-flip downgrades",
+            "## Positives (coverage-reduction dismissals)",
+            "## Prior register, do-not-touch and re-raise screen",
+            "### Dup-of merges (no fresh TD id)",
+            "### Re-raise and dup-of rejections",
+            "## Defender summary",
+            "## Per-candidate roster",
+            "## Reconciliation",
+        ):
+            self.assertIn(section, self.log, section)
+        roster = self.log.split("## Per-candidate roster", 1)[1]
+        for ref in self.cands:
+            self.assertEqual(
+                len(re.findall(rf"^\| {re.escape(ref)} \|", roster, re.M)), 1, ref
+            )
+
+    def test_anchor_probe_resolves_with_the_harness_checker(self) -> None:
+        self.assertEqual(self.probe.count("· probe ·"), len(self.cands))
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "check-anchors.py"),
+                PROBE_TITLE,
+                "--register",
+                str(self.station_dir() / "anchor-probe.md"),
+                "--baseline",
+                self.baseline(),
+                "--json",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 0, r.stdout[-800:] + r.stderr[-800:])
+        report = json.loads(r.stdout[r.stdout.index("{") :])
+        self.assertEqual(report["failures"], [])
+        self.assertGreaterEqual(report["checked"], len(self.cands))
+        # the three anchor shapes the ticket names: an integration-test path plus a free function, the shared
+        # harness plus its Rank0Of2 declaration line, and a workflow path plus a line. The ticket's example
+        # instance for the first shape (extensive_form_oracle.rs::close) is not a candidate anchor at the pin —
+        # the oracle item arrived as a dup-of whose sharpened anchor lives in verdicts.json — so the shape is
+        # asserted, not the instance.
+        self.assertRegex(
+            self.probe, r"`crates/cobre-[a-z]+/tests/[a-z0-9_]+\.rs::[a-z0-9_]+`"
+        )
+        for needle in (
+            "`crates/cobre-sddp/tests/common/mod.rs:32`",
+            "`.github/workflows/ci.yml:32`",
+        ):
+            self.assertIn(needle, self.probe, needle)
+
+    def test_coverage_screen_kept_no_test_deleting_fix_shape(self) -> None:
+        """Independent oracle: an un-negated 'delete … test' fix shape must not be defended.
+
+        The one sanctioned exception is lens-rules.md § Rule 2 "Boundary": a ratified duplicate-test seed whose
+        fold removes exact-duplicate assertions is defended only as a `consolidation` shape that keeps every
+        assertion and hands the nextest-count change to the owner gate through `_needsHuman`.
+        """
+        for ref, v in self.verdicts.items():
+            if v["disposition"] != "defended":
+                continue
+            fix = self.cands[ref]["fixShape"]
+            for m in DELETION_RE.finditer(fix):
+                sentence_start = (
+                    max(fix.rfind(". ", 0, m.start()), fix.rfind("; ", 0, m.start()))
+                    + 1
+                )
+                sentence_end = min(
+                    e
+                    for e in (
+                        fix.find(". ", m.end()),
+                        fix.find("; ", m.end()),
+                        len(fix),
+                    )
+                    if e != -1
+                )
+                sentence = fix[sentence_start:sentence_end]
+                if NEGATED_RE.search(sentence):
+                    continue
+                self.assertIsNotNone(
+                    v.get("seedRef"),
+                    f"{ref}: un-negated deletion shape outside the ratified seed class: {sentence}",
+                )
+                self.assertEqual(v["verdict"], "confirmed", ref)
+                self.assertTrue(
+                    v["coverageNeutralShape"].startswith("consolidation"),
+                    f"{ref}: {v['coverageNeutralShape'][:80]}",
+                )
+                self.assertTrue(
+                    any(
+                        re.search(r"nextest list|test count", item)
+                        for item in v["_needsHuman"]
+                    ),
+                    f"{ref}: the fold's nextest-count change must be handed to the owner gate",
+                )
+        self.assertIn("Regex hits:", self.log)
+
+    def test_definition_screen_rows_and_the_majority_claim(self) -> None:
+        keys = self.vtb.inventory_keys()
+        section = self.log.split("## Definition screen", 1)[1].split("## Positives", 1)[
+            0
+        ]
+        for ref, v in self.verdicts.items():
+            mv = v["measuredValue"]
+            if (
+                mv
+                and mv["key"].startswith(("figures.int-binaries", "perCrate."))
+                and ("int-binaries" in mv["key"] or "integration" in mv["key"])
+            ):
+                self.assertIn(f"| {ref} |", section, ref)
+        b = (
+            keys["figures.int-binaries-solver-linking.perCrate.cobre-sddp"]
+            / keys["figures.int-binaries-solver-linking.value"]
+        )
+        f = keys["figures.int-binaries.altDefinition.perCrate.cobre-sddp"] / sum(
+            keys[f"figures.int-binaries.altDefinition.perCrate.{c}"]
+            for c in ("cobre-sddp", "cobre-cli", "cobre-solver")
+        )
+        self.assertEqual(b > 0.5, f > 0.5)
+        self.assertNotIn(
+            "performance-01 | 40 | 56",
+            self.log.split("### Definition-flip downgrades", 1)[1].split(
+                "## Positives", 1
+            )[0],
+        )
+        self.assertEqual(
+            self.verdicts_doc["counts"]["definitionFlipDowngraded"],
+            sum(
+                1
+                for v in self.verdicts.values()
+                if v["disposition"] == "needs-human" and v["defender"] is None
+            ),
+        )
 
 
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_is_modified(self) -> None:
         station = "plans/architecture-debt-audit/stations/test-corpus/"
         self.assertEqual(
-            [m for m in sc.tracked_modifications() if not m.split()[-1].startswith(station)],
+            [
+                m
+                for m in sc.tracked_modifications()
+                if not m.split()[-1].startswith(station)
+            ],
             [],
         )
         out = subprocess.run(

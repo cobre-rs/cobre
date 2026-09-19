@@ -459,5 +459,113 @@
       ],
       "targetStation": "test-corpus"
     }
-  ]
+  ],
+  "gate": {
+    "gateDate": "2026-09-18",
+    "decision": "ratified",
+    "rowsKept": [
+      "TD-057",
+      "TD-058",
+      "TD-059",
+      "TD-060",
+      "TD-061",
+      "TD-062",
+      "TD-063",
+      "TD-064",
+      "TD-065",
+      "TD-066",
+      "TD-067",
+      "TD-068",
+      "TD-069",
+      "TD-070",
+      "TD-071",
+      "TD-072",
+      "TD-073"
+    ],
+    "rowsStruck": [],
+    "directions": {
+      "TD-057": [
+        {
+          "round": "R5-nh-22",
+          "choice": "Consolidate now under the standing rule",
+          "rationale": "TD-057 lands now: tests/common/ plus the fold of the single-#[test] binaries under the Cost-discipline contract; the Layer-1 migration later moves the consolidated shape once"
+        },
+        {
+          "round": "R5-nh-23",
+          "choice": "tests/common/ in cobre-cli (rule 14)",
+          "rationale": "the process-spawning CLI helpers (fn cobre(), write_file, the valid-case builder) live in crates/cobre-cli/tests/common/; they are not engine test-support"
+        }
+      ],
+      "TD-058": [
+        {
+          "round": "R5-nh-24",
+          "choice": "Not standing policy; the shared fixture is sanctioned",
+          "rationale": "TD-058 stands: a module-scoped trained-policy fixture in conftest.py serves the five pure argument-validation tests; the two docstrings are rewritten"
+        }
+      ],
+      "TD-059": [
+        {
+          "round": "R5-nh-36",
+          "choice": "Retire them; the live derivation is the authority",
+          "rationale": "TD-059 as filed: the pytest parity suite owns the 1dtoy agreement; the inline bindings test keeps only what it alone can assert"
+        }
+      ],
+      "TD-060": [
+        {
+          "round": "R5-nh-25",
+          "choice": "It freezes the comparisons, not the files",
+          "rationale": "§5.11 exempts the parity suite from the binary migration only; assertion-preserving fixture hygiene is in scope; TD-060 / TD-061 / TD-062 stand as calibrated"
+        }
+      ],
+      "TD-062": [
+        {
+          "round": "R5-nh-26",
+          "choice": "Front-end assertion covering both call sites",
+          "rationale": "the assertion becomes a CLI-vs-Python parity assertion over the two delta_to_stats_row call sites; TD-062 is a move plus one new assertion"
+        }
+      ],
+      "TD-064": [
+        {
+          "round": "R5-nh-35",
+          "choice": "Yes, one change with TD-064",
+          "rationale": "the four cfg(test) twins are deleted, the print_* renderers build through private *_lines helpers and the 61 tests are repointed in one change"
+        }
+      ],
+      "TD-065": [
+        {
+          "round": "R5-nh-37",
+          "choice": "Incidental; keyword knobs with defaults",
+          "rationale": "TD-065's builder exposes the four knobs with defaults and each call site keeps today's values"
+        }
+      ],
+      "TD-067": [
+        {
+          "round": "R5-nh-27",
+          "choice": "E08's ratification call; default inline",
+          "rationale": "TD-067 collapses the fifteen spawn tests inline; whether the module is extracted follows E08's §5.1 threshold ratification (routed, not decided here)"
+        }
+      ],
+      "TD-071": [
+        {
+          "round": "R5-nh-28",
+          "choice": "Both in one change",
+          "rationale": "the two false rationales are corrected and convert.rs gains its own cfg(test) module on the errors.rs pattern; the seven pytest tests stay"
+        }
+      ],
+      "TD-072": [
+        {
+          "round": "R5-nh-29",
+          "choice": "Normalize onto __file__-resolved paths",
+          "rationale": "TD-072 as filed: conftest.py owns the repo-root constant and the case-path helpers; the nine modules stop deriving parents[3] or cwd"
+        }
+      ],
+      "TD-073": [
+        {
+          "round": "R5-nh-30",
+          "choice": "Confirm: pytest anchors stay first-class (already resolving)",
+          "rationale": "the E06-3 extension is the ruling; check-anchors.py resolves def / class names for .py paths; no further action"
+        }
+      ]
+    }
+  }
 }

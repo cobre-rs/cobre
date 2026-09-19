@@ -87,5 +87,28 @@
       "status": "UNMEASURED",
       "reason": "this station runs no timing; the perf sweep owns the protocol (CAL 4t on cobre_reduzido; Python-side reader harness over its outputs)"
     }
-  ]
+  ],
+  "gate": {
+    "gateDate": "2026-09-18",
+    "decision": "ratified",
+    "rowsKept": [
+      "PD-049",
+      "PD-050",
+      "PD-051"
+    ],
+    "rowsStruck": [],
+    "directions": {
+      "PD-050": {
+        "round": "R5-nh-14",
+        "choice": "Supported bulk reader; PD-050 proceeds, doc cross-links Arrow",
+        "rationale": "load_simulation stays a supported reader; PD-050's per-column typed-view hoist stays queued; its rustdoc gains a pointer to load_simulation_arrow for large trees"
+      },
+      "PD-052 (section-only)": {
+        "round": "R5-nh-16",
+        "choice": "Identity unspecified; the memo shape is acceptable",
+        "rationale": "element identity across reads is not part of the contract; PD-052's memo (or index-into-shared-Arc) shape is accepted as calibrated; the module doc states identity is unspecified"
+      }
+    },
+    "note": "every queued row stays UNMEASURED single-process 4t; the training-write overlap (NH13) and the rooted gather (NH11) stay out of the sweep"
+  }
 }

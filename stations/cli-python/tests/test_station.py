@@ -2434,6 +2434,405 @@ class SectionVerifyTests(sc.StationCase):
         # run, so asserting it here would be circular; only the check rows are asserted.
 
 
+GATE_DATE = "2026-09-18"
+DECISION_VERBS = {
+    "ratify-as-presented",
+    "re-dispose",
+    "accept",
+    "downgrade",
+    "reject",
+    "defer",
+    "override-with-rationale",
+    "take-the-alternative",
+}
+HOLD_VERBS = {"take-the-alternative", "override-with-rationale", "reject", "defer"}
+GATE_HEADINGS = (
+    "### 1.1 Wave-5 dispositions",
+    "### 1.2 Part-I I.5 dispositions",
+    "### 1.3 New entries by house severity",
+    "### 1.4 Holds",
+    "### 1.5 Cleared and dup-of",
+    "### 1.6 Queues handed on",
+    "### 1.7 Handoffs the alignment epic consumes",
+    "### 1.8 Worker needs-human items",
+    "## 2. Round plan",
+    "## 3. Decision record",
+    "### 3.1 Wave-5 dispositions",
+    "### 3.2 Part-I I.5 dispositions",
+    "### 3.3 New entries",
+    "### 3.4 Holds",
+    "### 3.5 Worker needs-human answers",
+    "## 4. Handoffs after the gate",
+)
+HOLD_ROUNDS = (
+    "R4-hold-CD-025-cobre-sddp-home",
+    "R4-hold-CD-025-cli-local-helper",
+    "R4-hold-CD-029-cobre-io-home",
+    "R4-hold-CD-029-two-front-end-copies",
+)
+GATE_TIMING = (
+    re.compile(
+        r"(?<![\w.\-/])\d+(?:\.\d+)?\s?(?:ns|µs|us|ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?)\b"
+    ),
+    re.compile(
+        r"(?<![\w.\-/])\d+(?:\.\d+)?\s?(?:x|×)\s?(?:faster|slower|speed-?ups?)\b", re.I
+    ),
+)
+
+
+def table_rows(block: str, first_cell: str) -> list[list[str]]:
+    return [
+        [c.strip() for c in ln.strip().strip("|").split("|")]
+        for ln in block.splitlines()
+        if ln.startswith(first_cell)
+    ]
+
+
+class GateTests(sc.StationCase):
+    """The owner gate (E06-7): gate.md, decisions.json, the queue stamps, alignment-queue.json,
+    the BACKLOG owner-gate block and the marker.
+
+    The gate ticket runs this class after recording the owner decision; the class asserts the
+    recorded state and never asks a question or writes a file.
+    """
+
+    SLUG = "cli-python"
+    SECTION_TITLE = "cli-python"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.gate = cls.station_dir().joinpath("gate.md").read_text(encoding="utf-8")
+        cls.rec = sc.load_json(cls.station_dir() / "decisions.json")
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        cls.wave = sc.load_json(cls.station_dir() / "wave-dispositions.json")
+        cls.handoff = sc.load_json(cls.station_dir() / "partI-handoff.json")
+        cls.perf = sc.load_json(cls.station_dir() / "perf-queue.json")
+        cls.td = sc.load_json(cls.station_dir() / "td-queue.json")
+        cls.align = sc.load_json(cls.station_dir() / "alignment-queue.json")
+        cls.register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
+        cls.section = cls.register.split(SCAFFOLD_CLI, 1)[1].split("\n## ", 1)[0]
+        cls.owner_gate = cls.section.split("#### Owner gate — decisions", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        cls.new = [d for d in cls.rec["decisions"] if d["kind"] == "new-entry"]
+        cls.prior = [
+            d for d in cls.rec["decisions"] if d["kind"] == "prior-disposition"
+        ]
+        cls.i5 = [d for d in cls.rec["decisions"] if d["kind"] == "i5-subclaim"]
+
+    def block(self, entry_id: str) -> str:
+        return self.section.split(f"**{entry_id} · ", 1)[1].split("\n**", 1)[0]
+
+    def test_gate_md_carries_one_decision_line_and_presents_the_priors_first(
+        self,
+    ) -> None:
+        lines = [ln for ln in self.gate.splitlines() if ln.startswith("**Decision: ")]
+        self.assertEqual(len(lines), 1)
+        self.assertIsNotNone(
+            re.match(r"^\*\*Decision: (ratified|returned)\*\*", lines[0])
+        )
+        positions = [self.gate.index(h) for h in GATE_HEADINGS]
+        self.assertEqual(positions, sorted(positions), "gate.md sections out of order")
+        prior = self.gate.split(GATE_HEADINGS[0], 1)[1].split("\n### ", 1)[0]
+        rows = [r for r in table_rows(prior, "| ") if re.match(r"^\d+$", r[0])]
+        self.assertEqual([r[1] for r in rows], ["CD-025", "CD-029", "CD-002", "CD-009"])
+        for r in rows:
+            self.assertEqual(r[3], "sharpen", r[1])
+            self.assertIn("→", r[5], r[1])
+            self.assertRegex(r[4], r"^`crates/[^`]+::[A-Za-z_]+`$", r[1])
+        cd025 = next(r for r in rows if r[1] == "CD-025")
+        self.assertIn("cobre-io", cd025[6])
+        self.assertIn("cobre-sddp or cobre-io", cd025[7])
+        for layer in PARITY_LAYERS:
+            self.assertIn(layer.split("/")[-1], cd025[10])
+        i5 = self.gate.split(GATE_HEADINGS[1], 1)[1].split("\n### ", 1)[0]
+        i5_rows = [r for r in table_rows(i5, "| ") if re.match(r"^\d+$", r[0])]
+        self.assertEqual(
+            [r[1] for r in i5_rows[:-1]], [q["ref"] for q in self.handoff["i5Queue"]]
+        )
+        self.assertEqual(i5_rows[-1][1], "I.3-7 fragment")
+        for r in i5_rows:
+            self.assertIn(r[3].split(" ")[0], {"keep", "retire", "sharpen"}, r[1])
+            self.assertRegex(r[6], r"^`.+`", f"{r[1]}: no re-measure command")
+        self.assertNotIn("(measured-by:", self.gate)
+
+    def test_round_plan_keeps_holds_out_of_batches(self) -> None:
+        plan = self.gate.split("## 2. Round plan", 1)[1].split("\n## ", 1)[0]
+        rows = [r for r in table_rows(plan, "| R") if re.match(r"^R\d", r[0])]
+        kinds = [r[1] for r in rows]
+        self.assertEqual(
+            kinds[:4],
+            [
+                "prior-disposition",
+                "prior-severity",
+                "prior-severity",
+                "prior-disposition",
+            ],
+        )
+        first_batch = kinds.index("severity-batch")
+        self.assertGreater(first_batch, 3)
+        holds = [r for r in rows if r[1] == "conflicts-hold"]
+        self.assertEqual([r[0] for r in holds], list(HOLD_ROUNDS))
+        for r in rows:
+            self.assertLessEqual(len(r[3].split("·")), 4, r[0])
+            if r[1] == "severity-batch":
+                self.assertNotIn("variant", r[2])
+                self.assertNotRegex(r[2], r"\bCD-025\b|\bCD-029\b")
+            if r[1] == "conflicts-hold":
+                self.assertIn("take-the-alternative", r[3])
+                self.assertIn("override-with-rationale", r[3])
+        self.assertEqual(sum(1 for k in kinds if k == "needs-human"), 37)
+        self.assertEqual(kinds[-2:], ["handoff-confirm", "record-shape"])
+
+    def test_decisions_cover_every_prior_id_i5_row_and_calibrated_entry(self) -> None:
+        wave_ids = {d["id"] for d in self.wave["dispositions"]}
+        new_ids = {r["id"] for r in self.cal["assigned"]}
+        self.assertEqual({d["id"] for d in self.prior}, wave_ids)
+        self.assertEqual(len(self.prior), 4)
+        self.assertEqual(
+            [d["id"] for d in self.i5],
+            [q["ref"] for q in self.handoff["i5Queue"]] + ["I.3-7 fragment"],
+        )
+        self.assertEqual({d["id"] for d in self.new}, new_ids)
+        for d in self.rec["decisions"]:
+            self.assertIn(d["decision"], DECISION_VERBS, d["id"])
+            self.assertTrue(d["rationale"].strip(), d["id"])
+            if (
+                d["kind"] == "prior-disposition"
+                and d.get("ownerDisposition") == "retire"
+            ):
+                self.assertRegex(
+                    d["resolvingCommit"] or "", r"^[0-9a-f]{8,40}$", d["id"]
+                )
+                self.assertTrue(d["clearedMoved"], d["id"])
+            if d["decision"] == "defer":
+                self.assertTrue(
+                    d["deferTrigger"], f"{d['id']}: defer without a trigger"
+                )
+            if d["decision"] == "override-with-rationale":
+                self.assertTrue(d["overrideRationale"], d["id"])
+            if d["decision"] == "reject":
+                self.assertTrue(d["clearedMoved"], d["id"])
+            if d["decision"] == "downgrade":
+                self.assertNotEqual(d["newSeverity"], d["reviewerSeverity"])
+        for d in self.i5:
+            self.assertTrue(d["command"], d["id"])
+            self.assertIn(d["ownerDisposition"], {"keep", "retire", "sharpen"})
+        cd002 = next(d for d in self.prior if d["id"] == "CD-002")
+        self.assertEqual((cd002["reviewerSeverity"], cd002["newSeverity"]), ("B", "C"))
+        cd029 = next(d for d in self.prior if d["id"] == "CD-029")
+        self.assertEqual(cd029["newSeverity"], "B")
+        for d in self.prior:
+            self.assertEqual(d["ownerDisposition"], "sharpen", d["id"])
+            self.assertEqual(d["decision"], "ratify-as-presented", d["id"])
+        gap = [d for d in self.rec["decisions"] if d.get("enforcementLayers")]
+        self.assertEqual([d["id"] for d in gap], ["CD-025"])
+        self.assertEqual(
+            sorted(p.split("/")[-1] for p in gap[0]["enforcementLayers"]),
+            sorted(PARITY_LAYERS),
+        )
+        for h in self.rec["holds"]:
+            self.assertIn(h["decision"], HOLD_VERBS, h["id"])
+        self.assertEqual([h["round"] for h in self.rec["holds"]], list(HOLD_ROUNDS))
+        answered = [n for n in self.rec["needsHuman"] if n.get("answer", "").strip()]
+        self.assertEqual(len(answered), len(self.rec["needsHuman"]))
+        self.assertEqual(len(answered), 37)
+        counts = self.rec["counts"]
+        verbs = [d["decision"] for d in self.new]
+        self.assertEqual(counts["needsHumanAnswered"], 37)
+        self.assertEqual(counts["accepted"], verbs.count("accept"))
+        self.assertEqual(counts["downgraded"], verbs.count("downgrade"))
+        self.assertEqual(counts["rejected"], verbs.count("reject"))
+        self.assertEqual(counts["deferred"], verbs.count("defer"))
+        self.assertEqual(counts["presented"], len(self.rec["decisions"]))
+        self.assertEqual(counts["priorSharpened"], 4)
+        self.assertEqual(counts["holdsClosedByAlternative"], len(self.rec["holds"]))
+        self.assertTrue(self.rec["returned"])
+        self.assertEqual(self.rec["decision"], "ratified")
+        self.assertEqual(self.rec["handoffConfirmation"]["decision"], "confirm")
+
+    def test_backlog_carries_the_ratified_line_the_decision_columns_and_the_marker(
+        self,
+    ) -> None:
+        counts = self.rec["counts"]
+        head = self.section.split("\n**Station.**", 1)[0]
+        if self.rec["decision"] == "ratified":
+            self.assertIn(
+                f"**Ratified {GATE_DATE}** — owner gate; baseline `{self.baseline()[:8]}`",
+                head,
+            )
+        else:
+            self.assertNotIn("**Ratified ", head)
+        wave = self.section.split("#### Wave-5 dispositions", 1)[1].split("\n#### ", 1)[
+            0
+        ]
+        header = next(ln for ln in wave.splitlines() if ln.startswith("| ID | Wave |"))
+        self.assertTrue(header.rstrip().endswith("| Decision |"))
+        rows = table_rows(wave, "| CD-")
+        self.assertEqual([r[0] for r in rows], ["CD-025", "CD-029", "CD-002", "CD-009"])
+        for cells in rows:
+            self.assertIn("ratified (R0a-wave5)", cells[-1], cells[0])
+        self.assertIn("C (reviewer: B)", next(r for r in rows if r[0] == "CD-002")[-1])
+        part_i = self.section.split("#### Part-I cross-references", 1)[1].split(
+            "\n#### ", 1
+        )[0]
+        i5_header = next(
+            ln for ln in part_i.splitlines() if ln.startswith("| I.5 row |")
+        )
+        self.assertTrue(i5_header.rstrip().endswith("| Owner decision |"))
+        i5_rows = table_rows(part_i, "| I.5-")
+        self.assertEqual(len(i5_rows), 8)
+        for cells in i5_rows:
+            self.assertEqual(cells[-1], "ratified (R0b-i5)", cells[0])
+        self.assertIn(f"released {GATE_DATE}", part_i)
+        marker = re.search(
+            rf"^\*\*Gate: RETURNED {GATE_DATE}\*\* — baseline `{self.baseline()[:8]}`; "
+            r"accepted (\d+), amended (\d+), downgraded (\d+), rejected (\d+), deferred (\d+), overridden (\d+)",
+            self.owner_gate,
+            re.M,
+        )
+        self.assertIsNotNone(marker, "Gate: RETURNED marker missing or malformed")
+        assert marker is not None
+        self.assertEqual(
+            [int(marker.group(i)) for i in range(1, 7)],
+            [
+                counts[k]
+                for k in (
+                    "accepted",
+                    "amended",
+                    "downgraded",
+                    "rejected",
+                    "deferred",
+                    "overridden",
+                )
+            ],
+        )
+        for d in self.new:
+            self.assertEqual(
+                self.owner_gate.count(f"| {d['id']} | {d['decision']} |"), 1, d["id"]
+            )
+            if RANK[d["newSeverity"]] < RANK[d["reviewerSeverity"]]:
+                self.assertIn(
+                    f"| {d['id']} | {d['decision']} | {d['newSeverity']} (reviewer: {d['reviewerSeverity']}) |",
+                    self.owner_gate,
+                )
+            else:
+                self.assertNotIn(
+                    f"| {d['id']} | {d['decision']} | {d['newSeverity']} (reviewer:",
+                    self.owner_gate,
+                )
+            if d["decision"] == "defer":
+                row = next(
+                    ln
+                    for ln in self.owner_gate.splitlines()
+                    if ln.startswith(f"| {d['id']} | defer |")
+                )
+                self.assertIn("trigger: ", row)
+        self.assertIn("**Cleared by this gate (do not re-raise):**", self.owner_gate)
+        self.assertIn("no id promoted", self.owner_gate)
+        for p in self.prior:
+            self.assertEqual(
+                self.owner_gate.count(
+                    f"| {p['id']} | {p['wave']} | sharpen | ratified |"
+                ),
+                1,
+                p["id"],
+            )
+
+    def test_owner_decisions_sit_beneath_the_alignment_field(self) -> None:
+        with_directions = [d for d in self.new if d["directions"]]
+        self.assertGreaterEqual(len(with_directions), 15)
+        for d in with_directions:
+            block = self.block(d["id"])
+            align_at = block.index("- **Alignment:**")
+            for direction in d["directions"]:
+                line = f"- **Owner decision ({GATE_DATE}, {direction['round']}):** {direction['choice']}"
+                self.assertIn(line, block, d["id"])
+                self.assertGreater(block.index(line), align_at, d["id"])
+        deferred = [d for d in self.new if d["decision"] == "defer"]
+        self.assertEqual([d["id"] for d in deferred], ["OD-043"])
+        block = self.block("OD-043")
+        self.assertIn(
+            f"- **Owner decision ({GATE_DATE}, R2-sevC → R5-nh-34):** defer — trigger: ",
+            block,
+        )
+
+    def test_held_variants_closed_and_nothing_overridden(self) -> None:
+        self.assertEqual(self.cal["conflicts"], [])
+        held = {
+            r["id"]
+            for r in self.cal["reusedIds"] + self.cal["assigned"]
+            if r.get("alignmentHint") == "conflicts"
+        }
+        self.assertEqual(held, set())
+        variants = [
+            (d["id"], v["variant"])
+            for d in self.wave["dispositions"]
+            for v in d.get("conflicts") or []
+        ]
+        self.assertEqual(
+            [(h["priorId"], h["variant"]) for h in self.rec["holds"]], variants
+        )
+        for h in self.rec["holds"]:
+            self.assertEqual(h["decision"], "take-the-alternative")
+            self.assertFalse(h["idPromoted"])
+        self.assertEqual(
+            [d for d in self.rec["decisions"] if d.get("overrideRationale")], []
+        )
+        for h in self.align["holds"]:
+            self.assertTrue(h["status"].startswith("CLOSED"))
+
+    def test_queues_and_handoffs_reflect_the_ratified_state(self) -> None:
+        kept = {
+            d["id"]
+            for d in self.new
+            if (d.get("perfQueue") or {}).get("effect") == "kept"
+        }
+        self.assertEqual({q["id"] for q in self.perf["queue"]}, kept)
+        self.assertEqual(self.perf["gate"]["rowsStruck"], [])
+        self.assertEqual(sorted(self.perf["gate"]["rowsKept"]), sorted(kept))
+        for q in self.perf["queue"]:
+            self.assertEqual(q["status"], "UNMEASURED")
+            self.assertIn(q["layout"], LAYOUTS)
+        td_kept = {
+            d["id"]
+            for d in self.new
+            if (d.get("tdQueue") or {}).get("effect") == "kept"
+        }
+        self.assertEqual({q["id"] for q in self.td["queue"]}, td_kept)
+        self.assertEqual(self.td["gate"]["rowsStruck"], [])
+        self.assertEqual(sorted(self.td["gate"]["rowsKept"]), sorted(td_kept))
+        decided = {d["id"] for d in self.rec["decisions"]}
+        self.assertTrue({r["id"] for r in self.align["rows"]} <= decided)
+        for rid in ("CD-089", "CD-091", "CD-095", "CD-025", "CD-029", "I.3-7 fragment"):
+            self.assertIn(rid, {r["id"] for r in self.align["rows"]})
+        self.assertEqual(self.align["i5Handoff"], "released")
+        self.assertEqual(
+            self.owner_gate.count("Owner gate"), 0
+        )  # the queue notes live in the Queued-out block, not the gate block
+        queued_out = self.section.split("#### Queued out", 1)[1].split("\n#### ", 1)[0]
+        self.assertEqual(queued_out.count(f"Owner gate {GATE_DATE}"), 2)
+        self.assertIn(f"Released at the owner gate {GATE_DATE}", queued_out)
+        hits = [m.group(0) for rx in GATE_TIMING for m in rx.finditer(self.gate)]
+        self.assertEqual(hits, [])
+
+    def test_cd_002_downgrade_is_written_in_place(self) -> None:
+        self.assertEqual(
+            self.register.count(
+                "**CD-002 · Sev C · bad-abstraction · effort S–M · confidence high**"
+            ),
+            1,
+        )
+        self.assertNotIn("**CD-002 · Sev B ·", self.register)
+        entry = self.register.split(
+            "**CD-002 · Sev C · bad-abstraction · effort S–M · confidence high**", 1
+        )[1].split("\n\n", 1)[0]
+        self.assertIn(f"**Status ({GATE_DATE}):** downgraded B → C", entry)
+        self.assertIn(
+            "| CD-002 | 4 | sharpen | ratified | C (reviewer: B) |", self.owner_gate
+        )
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_no_tracked_file_under_an_evaluated_surface_is_modified(self) -> None:
         out = subprocess.run(

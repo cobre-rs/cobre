@@ -1,0 +1,334 @@
+{
+  "station": "cli-python",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "gateDate": "2026-09-18",
+  "targetEpic": "E9 alignment",
+  "rule": "every advances-* hint is provisional until the alignment epic adjudicates against the L0-L4 target layering; a `conflicts` hold enters only when overridden",
+  "rows": [
+    {
+      "id": "CD-089",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.5",
+      "severity": "B",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": [
+        {
+          "round": "R5-nh-1",
+          "choice": "Keep per-front-end presentation",
+          "rationale": "the shared owner returns the phase-plan value only; each front end keeps its own no-op rendering (stderr line / zeroed RunSummary); CD-089's surviving claim stays as calibrated; no API change"
+        }
+      ]
+    },
+    {
+      "id": "CD-090",
+      "kind": "new-entry",
+      "alignmentHint": "neutral",
+      "partIRef": "I.5",
+      "severity": "B",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": []
+    },
+    {
+      "id": "CD-091",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.5",
+      "severity": "B",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": [
+        {
+          "round": "R5-nh-5",
+          "choice": "Retire it; one cobre-io vocabulary, noted in the CHANGELOG",
+          "rationale": "CaseValidationError is retired when CD-091's shared kind map lands; the change is called out in the CHANGELOG as a --json contract change; no alias kept"
+        },
+        {
+          "round": "R5-nh-6",
+          "choice": "cobre-io (L2) owns the kind map",
+          "rationale": "the L2 destination rule generalizes to shared front-end contract data owned by the type's crate: the LoadError → kind map lives in cobre-io beside LoadError; CD-091's fix shape stands"
+        }
+      ]
+    },
+    {
+      "id": "CD-092",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.5",
+      "severity": "C",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": []
+    },
+    {
+      "id": "CD-094",
+      "kind": "new-entry",
+      "alignmentHint": "neutral",
+      "partIRef": "I.5",
+      "severity": "C",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": []
+    },
+    {
+      "id": "CD-095",
+      "kind": "new-entry",
+      "alignmentHint": "advances-0a",
+      "partIRef": null,
+      "severity": "B",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": []
+    },
+    {
+      "id": "TD-062",
+      "kind": "new-entry",
+      "alignmentHint": "neutral",
+      "partIRef": "I.5",
+      "severity": "C",
+      "gateDecision": "accept",
+      "deferTrigger": null,
+      "directions": [
+        {
+          "round": "R5-nh-26",
+          "choice": "Front-end assertion covering both call sites",
+          "rationale": "the assertion becomes a CLI-vs-Python parity assertion over the two delta_to_stats_row call sites; TD-062 is a move plus one new assertion"
+        }
+      ]
+    },
+    {
+      "id": "CD-025",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.5",
+      "severity": "B",
+      "gateDecision": "ratify-as-presented",
+      "fixShapeOwner": "cobre-io (L2)",
+      "directions": [
+        {
+          "round": "R5-nh-2",
+          "choice": "cobre-sddp home for the folds; writes + guards to L2",
+          "rationale": "the engine-typed folds (delta_to_stats_row / SolverStatsDelta, the five row folds, the CD-090 totals fold) live in cobre-sddp beside their input types; CD-025's L2 entry point owns only the writes and their guards; CD-090's cobre-sddp home is confirmed outside the writer boundary (not the held L3 writer case)"
+        },
+        {
+          "round": "R5-nh-13",
+          "choice": "Keep the serial shape",
+          "rationale": "the guarantee and the stderr ordering stand; the dismissal stands; no 2x2 perf row"
+        },
+        {
+          "round": "R5-nh-18",
+          "choice": "Wait for CD-025's shared emit list",
+          "rationale": "no interim pytest additions; the shared cobre-io call-site list removes the duplicated condition and the parity golden gates it there"
+        }
+      ]
+    },
+    {
+      "id": "CD-029",
+      "kind": "prior-disposition",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.5",
+      "severity": "B",
+      "gateDecision": "ratify-as-presented",
+      "fixShapeOwner": "cobre-sddp PrepPhase (L3)",
+      "directions": [
+        {
+          "round": "R5-nh-4",
+          "choice": "Fourth prep_phase_metadata row (engine-owned phase)",
+          "rationale": "the folded PrepPhase fourth phase supplies the kind/phase string through prep_phase_metadata; the binding literal is retired when the fold lands; both front ends read the same vocabulary"
+        },
+        {
+          "round": "R5-nh-7",
+          "choice": "Hold; CD-029's fold absorbs it",
+          "rationale": "no standalone patch; the call chain is touched once when the boundary check folds into PrepPhase and resolves the requirements as a phase input"
+        },
+        {
+          "round": "R5-nh-20",
+          "choice": "Yes: emit the object and add a --json reject test",
+          "rationale": "the boundary reject emits the documented single error object (phase string per the vocabulary answer above) and a new reject test in --json mode pins it; lands with CD-029's fold"
+        }
+      ]
+    },
+    {
+      "id": "I.3-7 fragment",
+      "kind": "partI-fragment",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.3-7",
+      "path": [
+        "crates/cobre-cli/src/commands/run/setup.rs:112 BroadcastConfig::from_config(&config)? (run path, inside load_case_and_config :78)",
+        "crates/cobre-cli/src/commands/broadcast.rs:143 pub(crate) fn from_config",
+        "crates/cobre-cli/src/commands/broadcast.rs:144 StudyParams::from_config(config) — the SDDP call"
+      ],
+      "secondPath": [
+        "crates/cobre-cli/src/commands/validate.rs:384 StudyParams::from_config(&config) (direct)",
+        "crates/cobre-cli/src/commands/validate.rs:234 StudySetup::new_with_boundary_requirements → crates/cobre-sddp/src/setup/mod.rs:371 (def; delegated from new at :356) → :378"
+      ],
+      "crossRef": "stations/sddp/partI-handoff.json → entries[partIRef=I.3-7] owns the params.rs half (CD-004, study-block admission-gate carrier); this fragment is the front-end half (who calls the conversion, and through which projection)",
+      "gateDecision": "ratify-as-presented"
+    }
+  ],
+  "holds": [
+    {
+      "id": "CD-025/cobre-sddp-home",
+      "priorId": "CD-025",
+      "variant": "cobre-sddp home (orchestration at L3)",
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-025-cobre-sddp-home): The hold closes: no L3 home for output orchestration; CD-025's L2 entry point is the direction; no id promoted for the variant.",
+      "condition": "Part IV.1 — L2 cobre-io owns shared output orchestration; an engine owning the front ends' output policy means the second engine (cobre-direct, V.1) would route its outputs through a sibling engine — trigger 2 of the layering brief §3 (engine-to-engine dependency) — or duplicate the list again"
+    },
+    {
+      "id": "CD-025/cli-local-helper",
+      "priorId": "CD-025",
+      "variant": "cobre-cli-local helper (keeps the double-mirror)",
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-025-cli-local-helper): The hold closes: no cli-local orchestration helper; the hand-mirror is removed by the L2 entry point; no id promoted.",
+      "condition": "Part IV.1 — L2 cobre-io owns 'shared output orchestration'; forbidden at L2: 'an engine-specific output tree hard-wired in the CLI instead of orchestrated here'; a helper in cobre-cli is unreachable from cobre-python, so the hand-mirror and the parity hard rule survive unchanged"
+    },
+    {
+      "id": "CD-029/cobre-io-home",
+      "priorId": "CD-029",
+      "variant": "cobre-io home for the boundary reconciliation",
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-029-cobre-io-home): Confirms cobre-sddp PrepPhase (L3) as the fold destination; the cobre-io variant stays closed; the ticket's 'cobre-io owner for both' premise is recorded as superseded.",
+      "condition": "Part IV.1 — L2 forbids engine dispatch; the reconciliation is typed on cobre_sddp::StudySetup and calls cobre-sddp's policy loader, so an L2 home inverts the layering (cobre-io depending on an engine crate)"
+    },
+    {
+      "id": "CD-029/two-front-end-copies",
+      "priorId": "CD-029",
+      "variant": "keep two front-end copies (cli-local fold into run_boundary_check, Python keeps reconcile_boundary_policy)",
+      "status": "CLOSED by its alternative at the owner gate (R4-hold-CD-029-two-front-end-copies): The hold closes: the two front-end copies collapse into the engine-owned phase; no cli-local fold; no id promoted.",
+      "condition": "Part IV.1 / III.7 — the hand-mirrored call-site list is the duplication mechanism the roadmap names for outputs; the same shape on the validation path keeps two owners of engine logic in L4"
+    }
+  ],
+  "partI": {
+    "I.5": "8 sub-claims + the I.3-7 fragment ratified at R0b-i5 and released at R6-handoffs (2026-09-18); see partI-handoff.json",
+    "I.3-7": "the BroadcastConfig fragment — CD-004's twin (sddp station, ratified 2026-09-18); OD-043 deferred to CD-004 for the wire-mirror placement"
+  },
+  "needsHumanForE9": [
+    {
+      "n": 1,
+      "round": "R5-nh-1",
+      "id": "CD-089",
+      "members": [
+        [
+          "defender",
+          "S6a-architecture-00",
+          0
+        ],
+        [
+          "attacker",
+          1
+        ]
+      ],
+      "memberLabels": [
+        "S6a-architecture-00 (confirmed)",
+        "attacker/architecture S6a E01"
+      ],
+      "question": "Under the single phase-plan owner (CD-089), do the no-op arm's two behaviours converge — the CLI writes 'Training disabled, simulation disabled' to stderr, the bindings return a zeroed RunSummary (converged false, iterations 0, lower_bound 0.0)? Both are public surface and neither writes a file, so the file-set parity test cannot decide it.",
+      "answer": "Keep per-front-end presentation",
+      "recommended": true,
+      "recordedAs": "the shared owner returns the phase-plan value only; each front end keeps its own no-op rendering (stderr line / zeroed RunSummary); CD-089's surviving claim stays as calibrated; no API change"
+    },
+    {
+      "n": 2,
+      "round": "R5-nh-2",
+      "id": "CD-025",
+      "members": [
+        [
+          "defender",
+          "S6a-architecture-01",
+          0
+        ],
+        [
+          "attacker",
+          2
+        ],
+        [
+          "defender",
+          "S6a-architecture-02",
+          0
+        ],
+        [
+          "defender",
+          "S6a-architecture-05",
+          0
+        ]
+      ],
+      "memberLabels": [
+        "S6a-architecture-01 (confirmed)",
+        "attacker/architecture S6a E02",
+        "S6a-architecture-02 (confirmed)",
+        "S6a-architecture-05 (confirmed)"
+      ],
+      "question": "Where do the cobre-sddp-typed folds live once the writes move to cobre-io (CD-025)? delta_to_stats_row / SolverStatsDelta (outputs.rs:29, :35), the five training row folds (outputs.rs:32-38) and the solver-stats totals fold (CD-090) take engine-declared inputs, so an L2 home would make cobre-io depend on an engine crate. Confirm a cobre-sddp (L3) home for the folds beside their input types, with only the writes + guards moving to L2 (CD-090 sits outside the writer boundary).",
+      "answer": "cobre-sddp home for the folds; writes + guards to L2",
+      "recommended": true,
+      "recordedAs": "the engine-typed folds (delta_to_stats_row / SolverStatsDelta, the five row folds, the CD-090 totals fold) live in cobre-sddp beside their input types; CD-025's L2 entry point owns only the writes and their guards; CD-090's cobre-sddp home is confirmed outside the writer boundary (not the held L3 writer case)"
+    },
+    {
+      "n": 3,
+      "round": "R5-nh-3",
+      "id": "—",
+      "members": [
+        [
+          "defender",
+          "S6a-architecture-04",
+          0
+        ],
+        [
+          "attacker",
+          3
+        ]
+      ],
+      "memberLabels": [
+        "S6a-architecture-04 (dismissed)",
+        "attacker/architecture S6a E03"
+      ],
+      "question": "StudySetup::from_broadcast_params (cobre-sddp's sole construction core, entered by both front ends) carries a transport-flavoured name. File a rename against the station that owns cobre-sddp's public API, or leave it to the setup-layer redesign the mirror :563 entry already triggers?",
+      "answer": "Leave it to the setup-layer redesign (CD-004)",
+      "recommended": true,
+      "recordedAs": "no rename item; the constructor is renamed when CD-004's single Config projection re-shapes the setup entry; informational for E9"
+    },
+    {
+      "n": 6,
+      "round": "R5-nh-6",
+      "id": "CD-091",
+      "members": [
+        [
+          "defender",
+          "S6b-architecture-02",
+          1
+        ],
+        [
+          "attacker",
+          7
+        ]
+      ],
+      "memberLabels": [
+        "S6b-architecture-02 (confirmed)",
+        "attacker/architecture S6b E07"
+      ],
+      "question": "Where does the shared LoadError → stable-kind classification live? cobre-io (L2) owns LoadError and both front ends depend on it, but the station's L2 destination rule is written for output orchestration. Confirm that L2 also binds shared front-end contract data (an error-classification map), or name another owner.",
+      "answer": "cobre-io (L2) owns the kind map",
+      "recommended": true,
+      "recordedAs": "the L2 destination rule generalizes to shared front-end contract data owned by the type's crate: the LoadError → kind map lives in cobre-io beside LoadError; CD-091's fix shape stands"
+    },
+    {
+      "n": 33,
+      "round": "R5-nh-33",
+      "id": "—",
+      "members": [
+        [
+          "attacker",
+          9
+        ]
+      ],
+      "memberLabels": [
+        "attacker/architecture S6c E09"
+      ],
+      "question": "Under the Phase-0a Engine seam, does cobre.Study become generic over the engine (its setup field moving behind the enum), or stay the SDDP study with a dispatching constructor above it? The choice decides whether cobre.Study is a Python API break and where the typed admission gate for an unsupported engine-plus-option combination lives.",
+      "answer": "Dispatching constructor above it; no Python API break (E9 default)",
+      "recommended": true,
+      "recordedAs": "cobre.Study stays the SDDP study; an engine-dispatching constructor sits above it and owns the admission gate; recorded as the default the alignment epic designs against"
+    }
+  ],
+  "i5Handoff": "released"
+}

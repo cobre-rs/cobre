@@ -1,0 +1,22 @@
+deck	reduzido
+source	/home/rogerio/git/cobre-bridge/example/cobre_reduzido
+staged	plans/architecture-debt-audit/measurements/_case/deck
+files	28
+bytes	3557152
+sha256_before	6d062200a1c71f699f3f9c4b40c935249ddaa384962aa775ffe53d2b0cf5683e
+sha256_after	6d062200a1c71f699f3f9c4b40c935249ddaa384962aa775ffe53d2b0cf5683e
+sha256_staged	6d062200a1c71f699f3f9c4b40c935249ddaa384962aa775ffe53d2b0cf5683e
+digest_method	cd <deck> && find . -type f | LC_ALL=C sort | sha256sum per file | sha256sum (relative paths; perf-run.sh deck_checksum embeds absolute paths and compares one directory against itself)
+staged_at	2026-09-20T08:31:19-03:00
+
+deck	mar-26-enumerated
+source	/home/rogerio/git/cobre-bridge/example/cobre-mar-26-rv2-reduced
+staged	plans/architecture-debt-audit/measurements/_case/deck-enumerated
+files	91
+bytes	354295019
+sha256_before	03a940400a3fbb73d35b3c2cd44a260d0ba9e230ecbbf35f66c720151afb61c1
+sha256_after	03a940400a3fbb73d35b3c2cd44a260d0ba9e230ecbbf35f66c720151afb61c1
+sha256_staged	03a940400a3fbb73d35b3c2cd44a260d0ba9e230ecbbf35f66c720151afb61c1
+digest_method	cd <deck> && find . -type f | LC_ALL=C sort | sha256sum per file | sha256sum (relative paths; perf-run.sh deck_checksum embeds absolute paths and compares one directory against itself)
+staged_at	2026-09-20T08:31:20-03:00
+

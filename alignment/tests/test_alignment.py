@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -1102,6 +1103,201 @@ class AlignmentLedgerTests(unittest.TestCase):
                 self.assertEqual(r[k], live[k], f"{r['entryId']}.{k}")
         self.assertEqual(built["decidedCounts"], self.ledger["decidedCounts"])
         self.assertEqual(self.mod.render_docket(built), self.docket)
+
+
+VERIFIER = ALIGN / "verify-alignment.sh"
+VERIFICATION = ALIGN / "verification.md"
+LP_INVENTORY = sc.AUDIT / "measurements" / "lp-inventory.json"
+ROADMAP_CITE_RE = re.compile(
+    r"beyond-sddp-generalization\.md|target-layering|target layering|Part (IV|V)\b"
+)
+HEREDOC_RE = re.compile(r"<<'PY'\n(.*?)\nPY\n", re.S)
+
+
+class AlignmentFieldTests(unittest.TestCase):
+    """E09-4: every register entry carries a decided, cited Alignment; the lp/ universe is classified once."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.register = bp.read_register(sc.BACKLOG)
+        cls.ledger = sc.load_json(LEDGER)
+        cls.cls_ = sc.load_json(LP_CLASSIFICATION)
+        cls.proof = sc.load_json(LP_PROOF)
+        cls.inventory = sc.load_json(LP_INVENTORY)
+        cls.docket = DOCKET.read_text(encoding="utf-8")
+
+    def test_every_register_entry_has_a_vocabulary_alignment_with_a_roadmap_citation(
+        self,
+    ) -> None:
+        entries = [
+            e
+            for name in (*STATIONS, ALIGNMENT_SECTION)
+            for e in bp.iter_entries(bp.find_section(self.register, name))
+        ]
+        self.assertGreaterEqual(len(entries), 243 + 9)
+        for e in entries:
+            value = e.fields.get("Alignment", "")
+            self.assertIn(value.split("(", 1)[0].strip(), ALIGNMENT_VOCAB, e.id)
+            self.assertRegex(value, ROADMAP_CITE_RE, f"{e.id}: no roadmap citation")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "fields-check.py"),
+                "--require",
+                "Alignment",
+                "--all",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("0 incomplete", proc.stdout)
+
+    def test_every_inventory_module_is_classified_exactly_once_and_class_sums_match(
+        self,
+    ) -> None:
+        listed = sorted(f["path"] for f in self.inventory["files"])
+        rows = self.cls_["rows"]
+        self.assertEqual(sorted(r["module"] for r in rows), listed)
+        self.assertEqual(len({r["module"] for r in rows}), len(rows))
+        classes = {"engine-neutral", "sddp-geometry", "mixed", "test-sibling"}
+        by_class: dict[str, int] = {}
+        for r in rows:
+            self.assertIn(r["class"], classes, r["module"])
+            by_class[r["class"]] = by_class.get(r["class"], 0) + r["nonTestLoc"]
+        t = self.cls_["totals"]
+        self.assertEqual(by_class["engine-neutral"], t["engineNeutralLoc"])
+        self.assertEqual(by_class["sddp-geometry"], t["sddpGeometryLoc"])
+        self.assertEqual(by_class["mixed"], t["mixedLoc"])
+        self.assertEqual(by_class.get("test-sibling", 0), 0)
+        self.assertEqual(sum(by_class.values()), t["corpusNonTestLoc"])
+        self.assertEqual(t["corpusNonTestLoc"], self.proof["totals"]["nonTestLoc"])
+        inventory_total = self.inventory["totals"]["non_test_lines"]
+        self.assertNotEqual(inventory_total, t["corpusNonTestLoc"])
+        self.assertTrue(
+            any(
+                f"{inventory_total:,}" in d and "loc-stats" in d
+                for d in self.cls_["deviations"]
+            ),
+            "the inventory's loc-stats total must be recorded as a deviation with its rule",
+        )
+        self.assertEqual(
+            self.inventory["totals"]["total_lines"], self.proof["totals"]["grossLoc"]
+        )
+
+    def test_measured_share_is_recorded_against_the_roadmap_estimate(self) -> None:
+        t = self.cls_["totals"]
+        corpus = t["corpusNonTestLoc"]
+        self.assertEqual(t["roadmapBand"], [round(corpus / 5), round(corpus / 4)])
+        lo, hi = t["mixedNeutralHalf"]
+        self.assertEqual(
+            t["measuredBand"], [t["engineNeutralLoc"] + lo, t["engineNeutralLoc"] + hi]
+        )
+        self.assertIn(t["verdict"], {"agreement", "amended"})
+        md = LP_TABLE.read_text(encoding="utf-8")
+        self.assertRegex(md, r"fifth|quarter|IV\.2")
+        if t["verdict"] == "amended":
+            self.assertRegex(t["amendedFigure"], r"\d{4}-\d{2}-\d{2}")
+            self.assertIn("amended", md)
+
+    def test_every_conflicts_entry_is_held_and_docketed(self) -> None:
+        conflicts = [
+            r["entryId"] for r in self.ledger["ledger"] if r["decided"] == "conflicts"
+        ]
+        self.assertEqual(sorted(self.ledger["held"]), sorted(conflicts))
+        self.assertEqual(
+            sorted(self.ledger["handoffs"]["ownerGate"]["held"]), sorted(conflicts)
+        )
+        for r in self.ledger["ledger"]:
+            self.assertEqual(bool(r["held"]), r["decided"] == "conflicts", r["entryId"])
+        for eid in conflicts:
+            self.assertEqual(self.docket.count(f"### {eid} - HELD"), 1)
+        if not conflicts:
+            self.assertIn("**None held.**", self.docket)
+
+
+class AlignmentVerifierTests(unittest.TestCase):
+    """E09-4: verify-alignment.sh is lint-clean, imports the shared parser and slicer, passes, and its report is stable."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.script = VERIFIER.read_text(encoding="utf-8")
+
+    @unittest.skipUnless(shutil.which("shellcheck"), "shellcheck not installed")
+    def test_shellcheck_passes(self) -> None:
+        proc = subprocess.run(
+            ["shellcheck", str(VERIFIER)], capture_output=True, text=True
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_every_embedded_python_block_compiles(self) -> None:
+        blocks = HEREDOC_RE.findall(self.script)
+        self.assertGreaterEqual(len(blocks), 6)
+        for i, block in enumerate(blocks):
+            compile(block, f"verify-alignment.sh<<PY#{i}", "exec")
+
+    def test_imports_the_shared_parser_and_the_slicer_rather_than_reimplementing(
+        self,
+    ) -> None:
+        self.assertIn(
+            "from lib.backlog_parse import ENTRY_RE, find_section, read_register",
+            self.script,
+        )
+        self.assertIn("bp.parse_baseline(bp.read_register", self.script)
+        self.assertIn("bp.iter_entries(section)", self.script)
+        self.assertIn(
+            'spec_from_file_location("slicer", "plans/architecture-debt-audit/alignment/lp-nontest-slice.py")',
+            self.script,
+        )
+        self.assertIn("slicer.nontest_slice(", self.script)
+        self.assertIn("slicer.vocabulary_hits(", self.script)
+        self.assertIn("slicer.naive_first_marker_loc(", self.script)
+        self.assertNotIn(
+            "verify-station.sh",
+            self.script.split("Deliberately does NOT call", 1)[1].split("\n", 3)[3],
+        )
+        self.assertNotRegex(self.script, r"re\.compile\(r\"\^\\\*\\\*")
+
+    def test_verifier_passes_and_regenerates_the_committed_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = pathlib.Path(tmp) / "verification.md"
+            proc = subprocess.run(
+                ["bash", str(VERIFIER), "--report", str(report)],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "VERIFY_ALIGNMENT_NO_TESTS": "1"},
+            )
+            self.assertEqual(
+                proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-2000:]
+            )
+            self.assertIn("verify-alignment: PASS", proc.stdout)
+            for name in (
+                "anchors",
+                "re-raise",
+                "fields (section)",
+                "Part-I dispositions",
+                "lp/ rows vs find",
+                "LOC recount",
+                "grep proof",
+                "Alignment presence",
+                "ledger integrity",
+                "read-only",
+            ):
+                self.assertIn(f"\n--- {name}\n", proc.stdout)
+            generated = report.read_text(encoding="utf-8").splitlines()
+        committed = VERIFICATION.read_text(encoding="utf-8").splitlines()
+
+        def rows(lines: list[str]) -> list[str]:
+            return [ln for ln in lines if not ln.startswith("| alignment tests |")]
+
+        # The tests row is the one line that legitimately differs between a run that includes
+        # this module and the nested run this test makes; the verifier's exit code owns it.
+        self.assertEqual(rows(generated), rows(committed))
+        self.assertTrue(any(ln.startswith("| alignment tests |") for ln in committed))
+        self.assertIn("Held for the owner gate: none", "\n".join(committed))
+        self.assertIn("**Overall:** PASS.", "\n".join(committed))
 
 
 if __name__ == "__main__":

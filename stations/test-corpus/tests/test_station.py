@@ -1654,9 +1654,16 @@ class CalibrationTests(TestCorpusCase):
             "_No confirmed finding under this lens at the baseline",
             self.block("#### Performance (PD)"),
         )
-        self.assertIn(
-            "_(pending — filled by the gate ticket)_",
-            self.block("#### Owner gate — decisions"),
+        owner_gate = self.block("#### Owner gate — decisions")
+        self.assertEqual(
+            ("_(pending — filled by the gate ticket)_" in owner_gate)
+            + bool(
+                re.search(
+                    r"^Ratified \d{4}-\d{2}-\d{2} in the main session", owner_gate, re.M
+                )
+            ),
+            1,
+            "the owner-gate block is either the calibration placeholder or the gate's record",
         )
         self.assertIn(f"- **Baseline:** `{self.baseline()}`", self.section)
 
@@ -1967,6 +1974,273 @@ class CleanTreeTests(unittest.TestCase):
             check=True,
         ).stdout
         self.assertEqual(out, "")
+
+
+GATE_DECISION_RE = re.compile(
+    r"^\*\*Decision: (ratified|returned)\*\* — (\d{4}-\d{2}-\d{2}), main session, baseline `([0-9a-f]{40})`",
+    re.M,
+)
+GATE_PARTS = (
+    "## 1. Presentation",
+    "## 2. Round plan",
+    "## 3. Decision record",
+    "## 4. Handoffs after the gate",
+)
+RETURNED_MARKER_RE = re.compile(
+    r"^\*\*Gate: RETURNED (\d{4}-\d{2}-\d{2})\*\* — baseline `([0-9a-f]{8})`; "
+    r"accepted (\d+), downgraded (\d+), rejected (\d+), deferred (\d+), merged (\d+); "
+    r"seeds: (\d+) folds ratified, (\d+) retired, (\d+) held, (\d+) fix-shape refusals; "
+    r"(\d+) target gaps as roadmap items; (\d+) needs-human answered\.",
+    re.M,
+)
+RATIFIED_HEADER_RE = re.compile(
+    r"^\*\*Ratified (\d{4}-\d{2}-\d{2})\*\* — owner gate; baseline `([0-9a-f]{8})`; "
+    r"accepted (\d+), downgraded (\d+), rejected (\d+), deferred (\d+), merged (\d+); "
+    r"seeds (\d+) folds / (\d+) retired / (\d+) fix-shape refusals; "
+    r"(\d+) target gaps as roadmap items; (\d+) needs-human answered\.$",
+    re.M,
+)
+OWNER_BULLET_RE = re.compile(
+    r"^- \*\*Owner decision \((\d{4}-\d{2}-\d{2}), ([^)]+)\):\*\* (.+)$", re.M
+)
+DECISION_ROW_RE = re.compile(
+    r"^\| ((?:CD|PD|OD|TD)-\d{3}) \| (accept|downgrade|reject|defer)( → Cleared)? \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]*) \| ([^|]*) \|$",
+    re.M,
+)
+PLACEHOLDERS = (
+    "_(owner gate pending — the **Ratified** line is written by the gate ticket)_",
+    "_(pending — filled by the gate ticket)_",
+)
+
+
+class GateTests(TestCorpusCase):
+    """E08-7: gate.md's single Decision line; when ratified the register carries the dated
+    header, the RETURNED marker with counts that agree with calibration.json, one owner
+    bullet per (entry, round) beneath Alignment, the retired seeds cleared, the TD class open."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cal = sc.load_json(cls.station_dir() / "calibration.json")
+        verdicts = sc.load_json(cls.station_dir() / "verdicts.json")["verdicts"]
+        cls.nh_items = sum(len(v.get("_needsHuman") or []) for v in verdicts.values())
+        cls.gate = (cls.station_dir() / "gate.md").read_text(encoding="utf-8")
+        cls.register = sc.BACKLOG.read_text(encoding="utf-8")
+        start = cls.register.index("\n### " + CAL_SECTION_TITLE + "\n")
+        end = cls.register.find("\n## ", start + 1)
+        cls.section = cls.register[start:end]
+        og = cls.section.index("\n#### Owner gate — decisions\n")
+        nxt = cls.section.find("\n#### ", og + 1)
+        cls.owner_block = cls.section[og:nxt]
+        decisions = GATE_DECISION_RE.findall(cls.gate)
+        cls.decision = decisions[0] if len(decisions) == 1 else None
+        cls.ratified = bool(cls.decision) and cls.decision[0] == "ratified"
+
+    def entry_block(self, fid: str) -> str:
+        head = re.search(rf"^\*\*{fid} · Sev [ABC] ·", self.section, re.M)
+        assert head, fid
+        nxt = re.compile(r"^\*\*(?:CD|PD|OD|TD)-\d{3} · Sev |^#### ", re.M).search(
+            self.section, head.end()
+        )
+        return self.section[head.start() : nxt.start() if nxt else len(self.section)]
+
+    def marker(self) -> re.Match[str]:
+        hits = list(RETURNED_MARKER_RE.finditer(self.owner_block))
+        self.assertEqual(
+            len(hits), 1, "exactly one RETURNED marker under the owner-gate heading"
+        )
+        return hits[0]
+
+    def test_gate_md_carries_one_decision_line_and_the_four_parts_in_order(
+        self,
+    ) -> None:
+        self.assertIsNotNone(self.decision, "gate.md carries exactly one Decision line")
+        assert self.decision is not None
+        verdict, date, baseline = self.decision
+        self.assertIn(verdict, {"ratified", "returned"})
+        self.assertEqual(baseline, self.baseline())
+        positions = [self.gate.index("\n" + part + "\n") for part in GATE_PARTS]
+        self.assertEqual(positions, sorted(positions))
+        markers = RETURNED_MARKER_RE.findall(self.gate)
+        if self.ratified:
+            self.assertEqual(len(markers), 1)
+            self.assertEqual(markers[0][0], date)
+            self.assertIn("**Ratified measurement definitions.**", self.owner_block)
+        else:
+            self.assertEqual(markers, [])
+
+    def test_register_header_and_marker_follow_the_decision(self) -> None:
+        headers = RATIFIED_HEADER_RE.findall(self.section)
+        if not self.ratified:
+            self.assertEqual(headers, [])
+            self.assertEqual(RETURNED_MARKER_RE.findall(self.owner_block), [])
+            for text in PLACEHOLDERS:
+                self.assertIn(text, self.section)
+            return
+        assert self.decision is not None
+        for text in PLACEHOLDERS:
+            self.assertNotIn(text, self.section)
+        self.assertEqual(len(headers), 1, "one dated Ratified header per station")
+        self.assertEqual(headers[0][0], self.decision[1])
+        self.assertEqual(headers[0][1], self.baseline()[:8])
+        marker = self.marker()
+        self.assertEqual(marker.group(1), self.decision[1])
+        self.assertEqual(marker.group(2), self.baseline()[:8])
+        head = headers[0]
+        self.assertEqual(
+            (head[2], head[3], head[4], head[5], head[6]), marker.groups()[2:7]
+        )
+        self.assertEqual(
+            (head[7], head[8], head[9]),
+            (marker.group(8), marker.group(9), marker.group(11)),
+        )
+        self.assertEqual((head[10], head[11]), (marker.group(12), marker.group(13)))
+        self.assertEqual(
+            self.gate.count(marker.group(0)),
+            1,
+            "gate.md and the register carry the same marker",
+        )
+
+    def test_marker_counts_agree_with_calibration(self) -> None:
+        if not self.ratified:
+            self.skipTest("gate returned, no marker")
+        m = self.marker()
+        accepted, downgraded, rejected, deferred, merged = (
+            int(m.group(i)) for i in range(3, 8)
+        )
+        folds, retired, held, refused, gaps, answered = (
+            int(m.group(i)) for i in range(8, 14)
+        )
+        self.assertEqual(
+            accepted + downgraded + rejected + deferred, len(self.cal["assigned"])
+        )
+        self.assertEqual(merged, len(self.cal["dupOf"]))
+        self.assertEqual(retired + held, len(self.cal["retireProposed"]))
+        self.assertEqual(refused, len(self.cal["fixShapeRefused"]))
+        self.assertEqual(gaps, len(self.cal["targetGaps"]))
+        confirmed = sum(
+            1 for s in self.cal["seeds"] if s["stationDisposition"] == "delta-confirmed"
+        )
+        self.assertLessEqual(folds, confirmed)
+        self.assertEqual(
+            answered, self.nh_items, "every defender _needsHuman item answered"
+        )
+        self.assertIn(
+            f"**Needs-human answers ({answered}/{self.nh_items}):**", self.owner_block
+        )
+        record = self.gate[self.gate.index("### 3.6") : self.gate.index("### 3.7")]
+        self.assertEqual(
+            sum(1 for ln in record.splitlines() if re.match(r"\| \d+ \|", ln)),
+            self.nh_items,
+        )
+
+    def test_decision_table_one_row_per_minted_entry_in_calibration_order(self) -> None:
+        if not self.ratified:
+            self.skipTest("gate returned, no decision table")
+        rows = DECISION_ROW_RE.findall(self.owner_block)
+        self.assertEqual([r[0] for r in rows], [a["id"] for a in self.cal["assigned"]])
+        cleared = self.owner_block[self.owner_block.index("**Cleared by this gate") :]
+        cleared = cleared[: cleared.index("\n")]
+        for row, rec in zip(rows, self.cal["assigned"]):
+            (
+                fid,
+                decision,
+                cleared_tag,
+                sev,
+                kind,
+                _definition,
+                alignment,
+                _why,
+                trigger,
+            ) = row
+            self.assertEqual(kind.strip(), rec["claimKind"], fid)
+            self.assertEqual(alignment.strip(), rec["alignmentHint"], fid)
+            if decision == "accept":
+                self.assertTrue(sev.strip().startswith(rec["severity"]), fid)
+            self.assertEqual(
+                "(reviewer:" in sev,
+                rec["reviewerRating"] != sev.strip().split(" ", 1)[0],
+                f"{fid}: the reviewer's rating is preserved exactly when it differs",
+            )
+            self.assertEqual(bool(cleared_tag), decision == "reject", fid)
+            if decision == "reject":
+                self.assertIn(fid, cleared)
+            if decision == "defer":
+                self.assertNotEqual(
+                    trigger.strip(), "-", f"{fid}: a defer names its trigger"
+                )
+
+    def test_one_owner_bullet_per_entry_and_round_beneath_alignment(self) -> None:
+        if not self.ratified:
+            self.skipTest("gate returned, no owner bullets")
+        assert self.decision is not None
+        rows = {r[0]: r for r in DECISION_ROW_RE.findall(self.owner_block)}
+        for rec in self.cal["assigned"]:
+            block = self.entry_block(rec["id"])
+            align = re.search(r"^- \*\*Alignment:\*\*[^\n]*\n", block, re.M)
+            assert align, rec["id"]
+            self.assertTrue(
+                block[align.end() :].startswith("- **Owner decision ("),
+                f"{rec['id']}: the owner's rationale sits directly beneath Alignment",
+            )
+            bullets = OWNER_BULLET_RE.findall(block)
+            self.assertTrue(bullets, rec["id"])
+            rounds = [b[1] for b in bullets]
+            self.assertEqual(
+                len(rounds), len(set(rounds)), f"{rec['id']}: one bullet per round"
+            )
+            self.assertEqual(
+                rounds[0], "R3-sevB" if rec["severity"] == "B" else "R4-sevC", rec["id"]
+            )
+            self.assertEqual({b[0] for b in bullets}, {self.decision[1]})
+            rationale = rows[rec["id"]][7]
+            for label in rounds[1:]:
+                self.assertEqual(
+                    rationale.count(f"{label}: "), 1, f"{rec['id']}: {label} named once"
+                )
+                self.assertIn(label, self.gate, "the round is in gate.md's record")
+
+    def test_retired_seeds_are_cleared_and_never_reminted(self) -> None:
+        if not self.ratified:
+            self.skipTest("gate returned, no Cleared moves")
+        held = int(self.marker().group(10))
+        cleared = self.owner_block[self.owner_block.index("**Cleared by this gate") :]
+        cleared = cleared[: cleared.index("\n")]
+        minted = {h[0] for h in HEADING_ID_RE.findall(self.section)}
+        proposed = [r["seedId"] for r in self.cal["retireProposed"]]
+        retired = [fid for fid in proposed if f"{fid} — retired" in cleared]
+        self.assertEqual(len(proposed) - len(retired), held)
+        for fid in proposed:
+            self.assertNotIn(fid, minted, f"{fid}: a retired seed is never re-minted")
+            self.assertIn(
+                fid, self.gate[self.gate.index("### 3.3") : self.gate.index("### 3.4")]
+            )
+
+    def test_td_class_is_declared_open_in_the_register(self) -> None:
+        self.assertIn(
+            "`TD-NNN` (Test-suite Debt)",
+            self.register[: self.register.index("\n### ")],
+        )
+        if not self.ratified:
+            self.skipTest(
+                "gate returned, the class stays as the crate stations left it"
+            )
+        top = max(
+            int(a["id"].split("-")[1])
+            for a in self.cal["assigned"]
+            if a["class"] == "TD"
+        )
+        marker = self.marker()
+        line_end = self.owner_block.find("\n", marker.end())
+        self.assertIn(
+            f"TD class open: TD-001..TD-{top:03d} at this gate.",
+            self.owner_block[marker.start() : line_end],
+        )
+
+    def test_owner_block_offers_no_coverage_reducing_verb(self) -> None:
+        hits = [s for s, negated in _sentence_hits(self.owner_block) if not negated]
+        self.assertEqual(
+            hits, [], "no un-negated delete/skip/disable/re-baseline sentence"
+        )
 
 
 if __name__ == "__main__":

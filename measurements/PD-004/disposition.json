@@ -1,0 +1,55 @@
+{
+  "claimRef": "PD-004",
+  "claimType": "single-process",
+  "layout": "2t",
+  "case": "mar-26-enumerated",
+  "baselineSha": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "ticketBaselineSha": "a136840d",
+  "profiledSymbol": "cobre_sddp::training::backward_pass_state::BackwardPassState::run_enumerated_backward",
+  "anchor": "crates/cobre-sddp/src/training/backward_pass_state.rs:919-931",
+  "medianSeconds": 32.607,
+  "spreadSeconds": 15.799,
+  "timedRuns": [
+    46.822,
+    31.023,
+    32.607
+  ],
+  "phaseBreakdown": {
+    "trainingSeconds": 30.001,
+    "simulationSeconds": 1.946,
+    "forwardSolveSeconds": 30.484762752999995,
+    "backwardSolveSeconds": 2.7122270490000036
+  },
+  "runEnumeratedBackwardInclusivePct": 2.98,
+  "allocSiteSamplePct": 0.139,
+  "topSymbols": [
+    {
+      "symbol": "assessMatrix",
+      "pct": 35.0
+    },
+    {
+      "symbol": "HighsSparseMatrix::createRowwisePartitioned",
+      "pct": 9.8
+    },
+    {
+      "symbol": "__memmove_avx_unaligned_erms",
+      "pct": 6.3
+    },
+    {
+      "symbol": "HighsSparseMatrix::priceByColumn",
+      "pct": 6.2
+    }
+  ],
+  "verdict": "not-material",
+  "unmeasuredReason": null,
+  "materialityRule": ">=3% of the median phase wall OR an allocation site holding >=1% of user-space samples",
+  "materialityFinding": "the Vec + SolverStatsDelta::clone allocation the claim names holds 0.139% of user-space samples; run_enumerated_backward's 2.98% inclusive is HiGHS LP-solve work under run_backward_node_replicated, not the allocation; below both thresholds",
+  "fixShape": null,
+  "fixShapePromoted": false,
+  "fixShapeNote": "not-material: no fix-shape promoted; the original 'fixing only the enumerated path diverges it from the identical-shaped sampled path' premise is preserved as recorded, not re-argued",
+  "byteNeutral": null,
+  "alignment": "neutral",
+  "alignmentSource": "sddp station (register do-not-touch entry)",
+  "kernelFramesAttributed": false,
+  "_needsHuman": []
+}

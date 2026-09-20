@@ -1,0 +1,13 @@
+taskset
+-c
+0,2
+/home/rogerio/git/cobre/target/profiling/cobre
+run
+/tmp/perf-run-PD-004-3XGA1i/deck
+--output
+/tmp/perf-run-PD-004-3XGA1i/out
+--threads
+2
+--comm-backend
+local
+--quiet

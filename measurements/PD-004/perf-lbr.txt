@@ -1,0 +1,48 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cpu_core/cycles/Pu'
+# Event count (approx.): 247492767172
+#
+# Overhead  Command  Shared Object        Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+# ........  .......  ...................  ..........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    34.79%  cobre    cobre                [.] assessMatrix(HighsLogOptions const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, int, int, bool, std::vector<int, std::allocator<int> >&, std::vector<int, std::allocator<int> >&, std::vector<int, std::allocator<int> >&, std::vector<double, std::allocator<double> >&, double, double)
+     9.85%  cobre    cobre                [.] HighsSparseMatrix::createRowwisePartitioned(HighsSparseMatrix const&, signed char const*)
+     6.36%  cobre    libc.so.6            [.] __memmove_avx_unaligned_erms
+     6.17%  cobre    cobre                [.] HighsSparseMatrix::priceByColumn(bool, HVectorBase<double>&, HVectorBase<double> const&, int) const
+     3.69%  cobre    cobre                [.] HighsLinearSumBounds::update(int&, HighsCDouble&, int, double, double) const
+     3.56%  cobre    cobre                [.] HighsSparseMatrix::collectAj(HVectorBase<double>&, int, double) const
+     3.19%  cobre    libc.so.6            [.] __memset_avx2_unaligned_erms
+     2.94%  cobre    cobre                [.] int highs_splay<int, presolve::HPresolve::unlink(int)::{lambda(int)#1}&, presolve::HPresolve::unlink(int)::{lambda(int)#2}&, presolve::HPresolve::unlink(int)::{lambda(int)#3}&>(int const&, int, presolve::HPresolve::unlink(int)::{lambda(int)#1}&, presolve::HPresolve::unlink(int)::{lambda(int)#2}&, presolve::HPresolve::unlink(int)::{lambda(int)#3}&) [clone .isra.0]
+     2.77%  cobre    cobre                [.] getPrimalDualGlpsolErrors(HighsOptions const&, HighsLp const&, std::vector<double, std::allocator<double> > const&, HighsSolution const&, HighsPrimalDualErrors&)
+     2.14%  cobre    cobre                [.] solveHyper(int, int const*, int const*, double const*, int const*, int const*, int const*, double const*, HVectorBase<double>*)
+     1.65%  cobre    cobre                [.] HighsSparseMatrix::hasLargeValue(double)
+     1.62%  cobre    cobre                [.] HSimplexNla::debugCheckData(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) const
+     1.51%  cobre    cobre                [.] presolve::HPresolve::getRowPositions(int, std::vector<int, std::allocator<int> >&) const
+     1.44%  cobre    cobre                [.] HFactor::buildFinish()
+     1.44%  cobre    cobre                [.] assessExcessiveObjectiveBoundScaling(HighsLogOptions, HighsModel const&, HighsUserScaleData&)
+     1.28%  cobre    cobre                [.] presolve::HPresolve::updateColImpliedBounds(int)
+     0.92%  cobre    cobre                [.] HFactor::buildSimple()
+     0.74%  cobre    cobre                [.] HFactor::ftranU(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.65%  cobre    cobre                [.] HVectorBase<double>::reIndex()
+     0.61%  cobre    cobre                [.] presolve::HPresolve::unlink(int)
+     0.59%  cobre    cobre                [.] HEkkDualRHS::chooseNormal(int*)
+     0.58%  cobre    cobre                [.] presolve::HPresolve::link(int)
+     0.56%  cobre    [unknown]            [k] 0xffffffffb2001988
+     0.46%  cobre    cobre                [.] HighsLinearSumBounds::add(int, int, double)
+     0.46%  cobre    cobre                [.] HighsSparseMatrix::priceByRowWithSwitch(bool, HVectorBase<double>&, HVectorBase<double> const&, double, int, double, int) const
+     0.42%  cobre    cobre                [.] HEkkDualRHS::updatePrimal(HVectorBase<double>*, double)
+     0.40%  cobre    cobre                [.] HighsSparseMatrix::numNz() const
+     0.40%  cobre    cobre                [.] HEkkDualRow::choosePossible()
+     0.39%  cobre    cobre                [.] HFactor::updateFT(HVectorBase<double>*, HVectorBase<double>*, int)
+     0.36%  cobre    cobre                [.] HEkkDualRow::chooseMakepack(HVectorBase<double> const*, int)
+     0.36%  cobre    cobre                [.] presolve::HPresolve::checkUpdateColImpliedBounds(int, double*, double*) const
+     0.33%  cobre    cobre                [.] HighsSparseMatrix::isColwise() const
+
+
+#
+# (Tip: Boolean options have negative forms, e.g.: perf report --no-children)
+#

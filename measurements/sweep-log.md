@@ -75,3 +75,25 @@ D-timing-assertion (cli-python PD-049 claim quotes 12.5 s)	exit=1	written=no	PD-
 E-no-allowance (PD-047 without --accept-derived)	exit=1	written=no	PD-047: stated layout 4t contradicts claimType single-process / requires ['enumerated'] (derived 2t)
 B-detail	PD-020 written with status anchor-missing, listed in bounced (reason line-past-eof), schedulable 31 of 32, no measurements/PD-020/ directory created; C behaves identically with reason path-missing
 conclusion	a stated/derived layout contradiction and a timing assertion abort without writing claim-table.json; an unresolvable anchor is kept as evidence, excluded from the schedulable set and listed for its station
+
+## PD-004 preflight (2026-09-20, register pin 077dbe2c)
+
+anchors	run_enumerated_backward at crates/cobre-sddp/src/training/backward_pass_state.rs:721; stage_stats Vec<(usize, Vec<StageWorkerOpeningDelta>)> + delta.clone() at :919-931; sibling run_sampled_backward at :531 with its Vec at :632; StageWorkerOpeningDelta alias at crates/cobre-sddp/src/training/backward/mod.rs:92; SolverStatsDelta at crates/cobre-sddp/src/solver_stats.rs:15; Traversal::resolve at crates/cobre-sddp/src/setup/node_graph.rs:1384 (the ticket quotes :1386 at the scaffold pin); dispatch Traversal::Enumerated -> run_enumerated_backward at backward_pass_state.rs:508 — all resolved via git show at the register pin
+binary	target/profiling/cobre not stripped, .debug_line present (build id de4953977d7744db4709abfd6ff9dee49381a399)
+bound	Protocol bound (enumerated): 30.434 s == measurements/CAL-ENUM/median.txt; timeout 3x = 92 s; measured, not UNMEASURED timeout-3x
+traversal	staged deck measurements/_case/deck-enumerated/config.json training.selection.method = enumerated -> Traversal::resolve(is_enumerated = true) -> the Traversal::Enumerated arm at backward_pass_state.rs:508; an unexercised-path verdict on this deck would be a finding about the dispatch, not a deck mismatch
+claim_table_row	PD-004: single-process, requires enumerated, layout 2t, case mar-26-enumerated, profiledSymbol run_enumerated_backward, status queued
+register_lines	PD-004 entry BACKLOG.md:1316 (the ticket quotes :1255/:1696), do-not-touch list :1942 (ticket :1881), PD-005 entry :1499, Wave-2 PD-005 topology-precompute bullet :2097
+harness	perf-run.sh --perf records the FIRST timed run (perf record -F 99 -g --call-graph dwarf) and writes perf.txt via perf report --stdio --no-children; perf.data lives in the scratch dir the harness deletes on exit (no perf.data digest survives); runs are --quiet so the phase split comes from one separate un-timed run whose output is kept
+
+## PD-004 measurement (2026-09-20)
+
+layout	2t (--threads 2 --comm-backend local, taskset -c 0,2) on the enumerated deck
+runs	warmup 32.514 s; timed 46.822 (perf-instrumented run-1) / 31.023 / 32.607; median 32.607 s, min 31.023 s
+phase_split	training 30.0 s / simulation 1.9 s (forward-solve 30.5 s, backward-solve 2.7 s, 18 iterations)
+attribution	LBR call graph: run_enumerated_backward inclusive 2.98% (all HiGHS LP-solve under run_backward_node_replicated, 0 self); alloc site 0.139%; the DWARF recording perf-run.sh captured did not unwind on this binary (4939/5710 single-frame), so measurements/PD-004/perf.txt is a self view + an appended LBR-inclusive supplement
+verdict	not-material (alloc 0.139% < 1% sample-share; < 3% phase-wall on the claimed cost)
+fix_shape	none promoted; the symmetric-fold premise preserved as recorded, not re-argued
+pd005	residual re-confirmed by absence (nested_ub_recursion/NestedUbTopology/walk_leaf_to_root = 0 samples); closed, not re-opened
+do_not_touch	BACKLOG.md do-not-touch line amended: PD-004 parenthetical now reads not-material with the profile path; CD-008/PD-001/reserved-seam census byte-identical
+deviations	register pin 077dbe2c measured (not the ticket's scaffold pin a136840d); the block template quotes 4t but PD-004 is 2t on the enumerated deck; no perf.data digest or flamegraph SVG survives (scratch dir deleted; no renderer on PATH) — the perf-run.sh artifact set (cmd/runs/median/env/perf/run-N) is authoritative

@@ -1320,6 +1320,25 @@ call, not `mem::take`-recycled. NOT a regression — the pre-existing `run_sampl
 identical shape; folding both onto a recycled buffer is the fix if measured to matter.
 **→ DEFERRED (2026-08-18).** Left as-is: fixing only the enumerated path would diverge it from the
 identical-shaped sampled path; a symmetric fold is a follow-up if a profile shows it matters.
+**→ MEASURED (2026-09-20, baseline `077dbe2c`; the tickets quote the scaffold pin `a136840d`).**
+Case `cobre-mar-26-rv2-reduced` (the enumerated deck — the sampled deck routes through
+`run_sampled_backward` and never reaches this arm), layout **2t**
+(`taskset -c 0,2 cobre run <scratch> --threads 2 --comm-backend local`, owner-limited to two
+workers), 1 warm-up + 3 timed runs. Median **32.607 s** (min 31.023 s un-instrumented; the 46.822 s
+run carries perf-record overhead); phase split training **30.0 s** / simulation **1.9 s**
+(forward-solve 30.5 s, backward-solve 2.7 s over 18 iterations). `run_enumerated_backward` holds
+**2.98%** of user-space samples inclusive, but every one of those is HiGHS LP-solve work under
+`run_backward_node_replicated` (`solveHyper`, `HEkkDualRHS`, …), with **0** self samples; the
+`Vec<(usize, Vec<StageWorkerOpeningDelta>)>` + `SolverStatsDelta::clone()` allocation the claim names
+holds **0.139%** of user-space samples (8 of 5769). Top self symbols are all HiGHS
+(`assessMatrix` 35%, `createRowwisePartitioned` 9.8%); no kernel frames attributed
+(`perf_event_paranoid=2`). Attribution used an LBR call graph because the profiling binary's DWARF
+unwind collapsed under perf on this host. **Verdict: not-material** — the allocation site is below
+the 1%-sample-share and the 3%-phase-wall thresholds, confirming this entry's own
+`low(matters)`. No fix-shape is promoted: the original 'fixing only the enumerated path diverges it
+from the identical-shaped sampled path' premise is preserved as recorded, not re-argued. Timing
+evidence only; no golden or determinism outcome is drawn from these runs. Run log:
+`plans/architecture-debt-audit/measurements/PD-004/`.
 
 ### Reconciliation total (2026-08-18)
 
@@ -1939,8 +1958,9 @@ Wave 3 deliberately precedes Wave 4: the frame rides the existing three carriers
 struct** (CD-039's own prescription), so the later carrier collapse relocates one field
 instead of N scalars; the GNL deadline drives the frame, nothing drives the redesign's date.
 
-**Do-not-touch list (unchanged):** CD-008 (retracted), PD-001 (refuted), PD-004 (deferred
-pending a profile), the sanctioned reserved-seam census. **Resume protocol unchanged:**
+**Do-not-touch list (PD-004 amended 2026-09-20):** CD-008 (retracted), PD-001 (refuted), PD-004
+(**not-material** at baseline `077dbe2c`; profile: `plans/architecture-debt-audit/measurements/PD-004/`),
+the sanctioned reserved-seam census. **Resume protocol unchanged:**
 findings are snapshots — re-verify each against the then-current tree before acting.
 
 ### Wave 0 — executed (2026-08-22, branch `chore/arch-debt-wave-0` off `b80d9e62`)
@@ -2099,6 +2119,11 @@ deliberate register-gated deferral, not a residual).
   `Traversal::Enumerated` lean); `nested_ub_recursion` reads it and fills only the per-iteration
   realized costs. Byte-neutral (representative-path cost lookup preserves the idempotent per-node
   value); the per-iteration `children: Vec<Vec<NodePos>>` rebuild is gone.
+  **→ Re-confirmed by absence (2026-09-20, perf sweep, baseline `077dbe2c`).** On the enumerated
+  deck's 2t recording `EnumeratedPlan::from_parts` appears (1 sample) but `nested_ub_recursion`,
+  `NestedUbTopology` and `walk_leaf_to_root` carry zero samples: the per-iteration rebuild is absent
+  from the hot path, consistent with this closure. Noted residual only; PD-005 stays closed, not
+  re-opened. Profile: `plans/architecture-debt-audit/measurements/PD-005/`.
 - **Wave-2 CD-032 sub-item (a)** (walk-dedup) — the leaf→root walk is a single free fn
   `walk_leaf_to_root`; `EnumeratedPlan::walk_path` + `NestedUbTopology::new` both drive off it.
 - **Wave-2 CD-032 sub-item (b)** (counts/displs) — `cobre_comm::{per_rank_counts, prefix_displs}`
@@ -7836,6 +7861,16 @@ Station queues read: core-io 8, stochastic 7, solver-comm 3, sddp 10 (its PD-004
 | PD-051 | Only Policy::cut_matrix (crates/cobre-python/src/study.rs:226-231) carries the per-element PyFloat materialisation on an array whose element count is not deck-bounded — active cuts times state dimension, paid per stage, with no buffer-based alternative — while the two reshape_f64 callers read deck-bounded parquet blocks and the extra opening_tree Vec copy is conceded as immaterial. | `cut_matrix` | single-process | 4t | `crates/cobre-python/src/results.rs::reshape_f64` | cobre-python study.rs · Policy::cut_matrix (per-element PyFloat over active cuts × state dimension, per stage) | cli-python |
 | PD-004 | `training/backward_pass_state.rs:919-931` `run_enumerated_backward` builds a fresh `Vec<(usize, Vec<StageWorkerOpeningDelta>)>` + a per-stage `SolverStatsDelta::clone()` every `run()` call, not `mem::take`-recycled. NOT a regression — the pre-existing `run_sampled_backward` has the identical shape; folding both onto a recycled buffer is the fix if measured to matter. | `run_enumerated_backward` | single-process | 2t | `crates/cobre-sddp/src/training/backward_pass_state.rs:919` | crates/cobre-sddp/src/training/backward_pass_state.rs::run_enumerated_backward | sddp |
 | PD-005-residual | `nested_ub_recursion` (`stats_aggregation.rs:239-296`) runs once per iteration on the forward path and allocates ALL working state fresh: three `vec![…; n_nodes]`, `children` (one inner Vec per non-root node), `roots`, `order` + sort, `value`, two child buffers — although only `node_cost` changes between iterations; `children`/`node_stage`/`node_prob`/`roots`/`order` are pure functions of the `EnumeratedPlan`, resolvable once at training start. Each interior node's `evaluate_risk` additionally builds a fresh `RiskMeasureScratch` per call while the `_into` scratch form exists, is public, and is unused here — the scratch struct's own doc says its purpose is "the allocation is paid once". The adjacent session comment records the opposite (correct) decision for the sibling path-weights quantity. Fix: precompute topology alongside `EnumeratedPlan` (or on `IterationScratch`), thread a `RiskMeasureScratch`, call `compute_cvar_weights_from_costs_into`. Folds naturally into CD-032's `ForwardBound::NestedRisk` promotion. | `nested_ub_recursion` | single-process | 2t | `crates/cobre-sddp/src/training/forward/stats_aggregation.rs::nested_ub_recursion`; `crates/cobre-sddp/src/setup/node_graph.rs::NestedUbTopology` | crates/cobre-sddp/src/training/forward/stats_aggregation.rs::nested_ub_recursion (once per iteration on the forward path) | sddp |
+
+### Measured outcomes (2026-09-20, baseline `077dbe2c`)
+
+| ID | Layout | Case | Median | Verdict | Basis | Run log |
+|----|--------|------|--------|---------|-------|---------|
+| PD-004 | 2t | mar-26-enumerated | 32.607 s (min 31.023 s) | not-material | `run_enumerated_backward` inclusive 2.98% is HiGHS LP-solve under `run_backward_node_replicated`; the Vec + `SolverStatsDelta::clone` alloc site holds 0.139% of user-space samples, below the 1%-sample-share and 3%-phase-wall bars | `measurements/PD-004/` |
+| PD-005-residual | 2t | mar-26-enumerated | (read off PD-004's recording) | closed, re-confirmed by absence | `nested_ub_recursion` / `NestedUbTopology` / `walk_leaf_to_root` carry zero samples; the once-per-plan `EnumeratedPlan::from_parts` appears (1 sample), consistent with the 2026-08-22 Wave-2 closure | `measurements/PD-005/` |
+
+The remaining 30 rows stay `measured: false` in `measurements/claim-table.json`; later sweep tickets fill them. No finding id or Alignment tag changes here.
+
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — reconciliation
 
 ### Tier-1 fix wave (2026-09-11) — validated at `1baeeadb`, fixed on `fix/quality-tier1` + `fix/quality-tier1-followups`

@@ -1410,10 +1410,15 @@ _STATION_ORDER = [
 ]
 
 
+_EPIC_SECTIONS = ("generalization-alignment", "performance-sweep", "unified-roadmap")
+
+
 def register_before_station(register: str, own_section: str, slug: str) -> str:
-    """The register as it stood when this station minted: its own section and every LATER crate-station section removed (the alignment / perf / reconciliation / roadmap blocks predate the stations and stay)."""
+    """The register as it stood when this station minted: its own section, every LATER crate-station section and the epic blocks written after all stations (the alignment ledger names every id) removed."""
     prior = register.replace(own_section, "")
-    for later in _STATION_ORDER[_STATION_ORDER.index(slug) + 1 :]:
+    for later in _STATION_ORDER[_STATION_ORDER.index(slug) + 1 :] + list(
+        _EPIC_SECTIONS
+    ):
         marker = f"## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — {later}"
         if marker in prior:
             block = prior.split(marker, 1)[1].split("\n## ", 1)[0]
@@ -1692,13 +1697,14 @@ class CalibrationTests(sc.StationCase):
         for row in self.assigned:
             block = self.block(row["id"])
             m = re.search(
-                r"^- \*\*Alignment:\*\* (\S+) \(provisional; Epic 9 adjudicates .*beyond-sddp-generalization\.md",
+                r"^- \*\*Alignment:\*\* (\S+) \((?:provisional; Epic 9 adjudicates .*beyond-sddp-generalization\.md"
+                r"|.*; station hint: (\S+), retagged \d{4}-\d{2}-\d{2} by alignment/alignment-ledger\.json\))",
                 block,
                 re.M,
             )
             self.assertIsNotNone(m, row["id"])
             assert m is not None
-            self.assertEqual(m.group(1), row["alignmentHint"])
+            self.assertEqual(m.group(2) or m.group(1), row["alignmentHint"])
             self.assertIn(f"- **Baseline:** `{header_baseline()}`", block)
             self.assertRegex(row["alignmentCites"], r"Part (IV|V)")
 

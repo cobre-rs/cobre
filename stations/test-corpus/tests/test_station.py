@@ -1318,10 +1318,15 @@ _STATION_ORDER = [
 ]
 
 
+_EPIC_SECTIONS = ("generalization-alignment", "performance-sweep", "unified-roadmap")
+
+
 def register_before_station(register: str, own_section: str, slug: str) -> str:
-    """The register as it stood when this station minted: its own section and every LATER crate-station section removed."""
+    """The register as it stood when this station minted: its own section, every LATER crate-station section and the epic blocks written after all stations (the alignment ledger names every id) removed."""
     prior = register.replace(own_section, "")
-    for later in _STATION_ORDER[_STATION_ORDER.index(slug) + 1 :]:
+    for later in _STATION_ORDER[_STATION_ORDER.index(slug) + 1 :] + list(
+        _EPIC_SECTIONS
+    ):
         marker = f"## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — {later}"
         if marker in prior:
             block = prior.split(marker, 1)[1].split("\n## ", 1)[0]

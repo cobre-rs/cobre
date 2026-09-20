@@ -6,10 +6,12 @@ station handoff under its primary name (partI-handoff.json) or its alias
 (alignment-queue.json), seeds one row per Part-I item (I.3 items 1-8 and I.5) with the
 roadmap's verbatim claim text, re-resolves every anchor at the pin (and at the
 superseded scaffold pin the ticket text quotes, so the drift is recorded rather than
-silently corrected), allocates fresh CD ids from max(existing)+1 over the whole
-register, and renders the table fragment the adjudication ticket splices into the
-register. Every ingest failure lands in `ingestRejects` and makes the run exit 1; a
-short table never passes as a complete one. Writes only under alignment/.
+silently corrected), allocates fresh CD ids from max(existing)+1 over the register
+minus the alignment section's own entries (so a regeneration after the adjudication
+ticket splices them in reuses the ids it minted), and renders the table fragment the
+adjudication ticket splices into the register. Every ingest failure lands in
+`ingestRejects` and makes the run exit 1; a short table never passes as a complete one.
+Writes only under alignment/.
 
 Usage: consolidate_part_i.py [--stations-dir DIR] [--out-dir DIR] [--no-self-check]
 Exit: 0 clean, 1 ingest reject(s) or a failing self-check, 2 register unreadable.
@@ -183,8 +185,16 @@ STATION_ITEMS = {
 }
 
 
-def next_free_cd(register_text: str) -> int:
-    ids = [int(m) for m in re.findall(r"\bCD-(\d{3})\b", register_text)]
+def next_free_cd(register_lines: list[str]) -> int:
+    """max(existing CD id)+1 over the register minus the alignment section's own entries,
+    so a regeneration after the adjudication ticket splices them in reuses the ids it minted."""
+    lines = list(register_lines)
+    try:
+        own = bp.find_section(lines, "generalization-alignment")
+        lines = lines[: own.start] + lines[own.end :]
+    except bp.SectionNotFound:
+        pass
+    ids = [int(m) for m in re.findall(r"\bCD-(\d{3})\b", "\n".join(lines))]
     return max(ids) + 1
 
 
@@ -982,10 +992,9 @@ def item8_field_dispositions(handoff: dict) -> list[dict[str, Any]]:
 def build(stations_dir: pathlib.Path) -> tuple[dict[str, Any], int]:
     register_lines = bp.read_register(REGISTER)
     pin = bp.parse_baseline(register_lines)
-    register_text = "\n".join(register_lines)
     handoffs, generated_from, rejects = load_handoffs(stations_dir)
     claims = roadmap_items()
-    first_free = next_free_cd(register_text)
+    first_free = next_free_cd(register_lines)
     allocated: list[str] = []
     rows: list[dict[str, Any]] = []
     rejected_items = {r["item"] for r in rejects}

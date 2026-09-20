@@ -1322,9 +1322,17 @@ class CalibrationTests(sc.StationCase):
             block = self.entry_block(r["id"])
             line = re.search(r"^- \*\*Alignment:\*\* (.+)$", block, re.M)
             self.assertIsNotNone(line, r["id"])
-            self.assertTrue(
-                line.group(1).startswith(r["alignmentHint"] + " ("), r["id"]
+            retag = re.search(
+                r"; station hint: (\S+), retagged \d{4}-\d{2}-\d{2} by alignment/alignment-ledger\.json\)$",
+                line.group(1),
             )
+            if retag:
+                self.assertEqual(retag.group(1), r["alignmentHint"], r["id"])
+                self.assertIn(line.group(1).split(" (", 1)[0], ALIGN_VOCAB, r["id"])
+            else:
+                self.assertTrue(
+                    line.group(1).startswith(r["alignmentHint"] + " ("), r["id"]
+                )
             self.assertTrue(
                 "Part " in line.group(1) or "advances no phase" in line.group(1),
                 r["id"],

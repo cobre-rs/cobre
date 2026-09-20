@@ -210,9 +210,10 @@ class PartIDispositionTests(unittest.TestCase):
             self.assertEqual(bool(r.get("reRaiseOf")), "Re-raise-of" in e.fields, e.id)
 
     def test_ids_sit_above_the_register_ceiling(self) -> None:
+        own = bp.find_section(self.register_lines, ALIGNMENT_SECTION)
+        others = self.register_lines[: own.start] + self.register_lines[own.end :]
         register_ids = {
-            int(m)
-            for m in re.findall(r"\bCD-(\d{3})\b", "\n".join(self.register_lines))
+            int(m) for m in re.findall(r"\bCD-(\d{3})\b", "\n".join(others))
         }
         first = int(self.env["idBlock"]["firstFree"].split("-")[1])
         self.assertEqual(first, max(register_ids) + 1)
@@ -650,17 +651,17 @@ class LpClassificationTests(unittest.TestCase):
         lines = self.section.lines
         heading = next(
             (
-                l
-                for l in lines
-                if l.startswith("#### lp/ kernel boundary (measured at baseline")
+                ln
+                for ln in lines
+                if ln.startswith("#### lp/ kernel boundary (measured at baseline")
             ),
             None,
         )
         self.assertIsNotNone(heading)
-        register_rows = [l for l in lines if LP_ROW_RE.match(l)]
-        table_rows = [l for l in self.table.splitlines() if LP_ROW_RE.match(l)]
+        register_rows = [ln for ln in lines if LP_ROW_RE.match(ln)]
+        table_rows = [ln for ln in self.table.splitlines() if LP_ROW_RE.match(ln)]
         self.assertEqual(register_rows, table_rows)
-        self.assertTrue(any(l.startswith("**Totals.**") for l in lines))
+        self.assertTrue(any(ln.startswith("**Totals.**") for ln in lines))
         for tool, extra in (
             ("check-anchors.py", ()),
             ("fields-check.py", ("--require", "Alignment")),
@@ -683,6 +684,424 @@ class LpClassificationTests(unittest.TestCase):
                 self.assertEqual(
                     (out / name).read_bytes(), (ALIGN / name).read_bytes(), name
                 )
+
+
+ADJUDICATOR = ALIGN / "adjudicate.py"
+LEDGER = ALIGN / "alignment-ledger.json"
+DOCKET = ALIGN / "conflicts-docket.md"
+PRE_IMAGE = ALIGN / "backlog.pre-retag.md"
+STATIONS = (
+    "core-io",
+    "stochastic",
+    "solver-comm",
+    "sddp",
+    "cli-python",
+    "build-ci",
+    "test-corpus",
+)
+ALIGNMENT_VOCAB = {"advances-0a", "advances-0b", "advances-1", "neutral", "conflicts"}
+
+
+def load_adjudicator():
+    spec = importlib.util.spec_from_file_location("adjudicate", ADJUDICATOR)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("alignment/adjudicate.py not importable")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class AlignmentLedgerTests(unittest.TestCase):
+    """E09-3: one decided Alignment per register entry, proved bullet-local, rule-caught conflicts."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_adjudicator()
+        cls.ledger = sc.load_json(LEDGER)
+        cls.rows = cls.ledger["ledger"]
+        cls.by_id = {r["entryId"]: r for r in cls.rows}
+        cls.register = bp.read_register(sc.BACKLOG)
+        cls.section = bp.find_section(cls.register, ALIGNMENT_SECTION)
+        cls.section_text = "\n".join(cls.register[cls.section.start : cls.section.end])
+        cls.pre_image = PRE_IMAGE.read_text(encoding="utf-8").splitlines()
+        cls.docket = DOCKET.read_text(encoding="utf-8")
+        cls.substrate = cls.mod.substrate_tokens()
+
+    def synthetic(self, entry_id: str, station: str, hint: str, fix: str) -> dict:
+        return {
+            "entryId": entry_id,
+            "station": station,
+            "class": entry_id.split("-")[0],
+            "registerLine": 0,
+            "heading": f"**{entry_id} · synthetic**",
+            "fixShape": fix,
+            "hint": hint,
+            "hintSource": "calibration.json",
+            "alternativeFixShape": None,
+            "needsHuman": None,
+        }
+
+    def test_universe_is_the_register_entry_set_with_full_calibration_coverage(
+        self,
+    ) -> None:
+        ids: list[str] = []
+        for st in STATIONS:
+            ids += [e.id for e in bp.iter_entries(bp.find_section(self.register, st))]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate id inside the stations")
+        self.assertEqual(sorted(ids), sorted(self.by_id))
+        self.assertEqual(len(self.rows), 243)
+        cov = self.ledger["coverage"]
+        self.assertIn("registerOnly", cov)
+        self.assertIn("calibrationOnly", cov)
+        self.assertEqual(cov["registerOnly"], [])
+        self.assertEqual(cov["calibrationOnly"], [])
+        for st in STATIONS:
+            cal = sc.load_json(sc.AUDIT / "stations" / st / "calibration.json")
+            for a in cal["assigned"]:
+                self.assertIn(a["id"], self.by_id, f"{st} calibration row {a['id']}")
+                self.assertEqual(self.by_id[a["id"]]["station"], st)
+        self.assertEqual(self.ledger["baseline"], bp.parse_baseline(self.register))
+
+    def test_hint_reader_accepts_both_shapes_and_the_calibration_value_wins(
+        self,
+    ) -> None:
+        cov = self.ledger["coverage"]
+        self.assertEqual(
+            set(cov["stationsWithoutAlignmentQueue"]),
+            {"core-io", "solver-comm", "build-ci", "test-corpus"},
+        )
+        for st in STATIONS:
+            self.assertGreater(cov["perStation"][st], 0)
+        for r in self.rows:
+            self.assertIn(r["hintSource"], {"calibration.json", "alignment-queue.json"})
+            self.assertIn(r["hint"], ALIGNMENT_VOCAB)
+        self.assertIsInstance(cov["hintDisagreements"], list)
+        with tempfile.TemporaryDirectory() as tmp:
+            stations = pathlib.Path(tmp) / "stations"
+            for st in STATIONS:
+                (stations / st).mkdir(parents=True)
+                for name in ("calibration.json", "alignment-queue.json"):
+                    src = sc.AUDIT / "stations" / st / name
+                    if src.exists():
+                        shutil.copy(src, stations / st / name)
+            queue = stations / "sddp" / "alignment-queue.json"
+            q = json.loads(queue.read_text(encoding="utf-8"))
+            victim = next(r for r in q["rows"] if r["id"] in self.by_id)
+            victim["alignmentHint"] = "conflicts"
+            queue.write_text(json.dumps(q), encoding="utf-8")
+            with mock.patch.object(self.mod, "STATIONS_DIR", stations):
+                built = self.mod.build_ledger(sc.BACKLOG)
+            row = next(r for r in built["ledger"] if r["entryId"] == victim["id"])
+            self.assertEqual(row["hint"], self.by_id[victim["id"]]["hint"])
+            self.assertEqual(row["hintSource"], "calibration.json")
+            self.assertEqual(
+                [d["id"] for d in built["coverage"]["hintDisagreements"]],
+                [victim["id"]],
+            )
+            self.assertEqual(len(built["ledger"]), 243)
+
+    def test_every_row_is_decided_with_a_rationale_and_a_roadmap_citation(
+        self,
+    ) -> None:
+        self.assertEqual(self.ledger["selfCheck"]["problems"], [])
+        for r in self.rows:
+            self.assertIn(r["decided"], ALIGNMENT_VOCAB, r["entryId"])
+            self.assertGreaterEqual(len(r["rationale"]), 40, r["entryId"])
+            self.assertRegex(r["cites"], r"Part (IV|V)", r["entryId"])
+            if r["hint"] != r["decided"]:
+                self.assertEqual(r["settledBy"], "hand", r["entryId"])
+                self.assertTrue(r["retagged"], r["entryId"])
+            else:
+                self.assertFalse(r["retagged"], r["entryId"])
+            if r["machineDecision"] == "conflicts" and r["decided"] != "conflicts":
+                self.assertEqual(r["settledBy"], "hand", r["entryId"])
+        counts = self.ledger["decidedCounts"]
+        self.assertEqual(sum(counts.values()), len(self.rows))
+        self.assertEqual(
+            sorted(r["entryId"] for r in self.ledger["retagged"]),
+            sorted(r["entryId"] for r in self.rows if r["retagged"]),
+        )
+        for pid, d in self.mod.PART_I_DECISIONS.items():
+            self.assertIn(d["decided"], ALIGNMENT_VOCAB, pid)
+            self.assertRegex(d["cites"], r"Part (IV|V)", pid)
+
+    def test_output_helper_hoisted_into_cobre_cli_is_caught_by_rule(self) -> None:
+        row = self.synthetic(
+            "CD-900",
+            "cli-python",
+            "advances-0a",
+            "Hoist the shared output writers into a cobre-cli-local helper module so the training "
+            "and simulation output mirror lives in one place under cobre-cli. Both front ends then "
+            "call the helper.",
+        )
+        hits = self.mod.guardrail_violations(row, row["fixShape"], None, self.substrate)
+        self.assertIn("output-orchestration-not-at-L2", [h["id"] for h in hits])
+        self.mod.decide_row(row, self.substrate)
+        self.assertEqual(row["decided"], "conflicts")
+        self.assertEqual(row["guardrailViolated"], "output-orchestration-not-at-L2")
+        self.assertIn("Part IV.1", row["cites"])
+        self.assertIn("Part V.1", row["cites"])
+        self.assertIn("cobre-io entry point", row["alternativeFixShape"])
+        self.assertIn(
+            "crates/cobre-cli/src/commands/run/outputs.rs", row["alternativeFixShape"]
+        )
+        self.assertIn("crates/cobre-python/src/run.rs", row["alternativeFixShape"])
+        self.assertTrue(row["held"])
+        self.assertTrue(row["retagged"])
+        problems = self.mod.self_check({"ledger": [row]})
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("without a hand-written decision", problems[0])
+        row["settledBy"] = "hand"
+        self.assertEqual(self.mod.self_check({"ledger": [row]}), [])
+        live = self.by_id["CD-059"]
+        self.assertEqual(
+            live["guardrailHits"], [], "the L2-side owner shape is not a hoist"
+        )
+
+    def test_gate_substrate_removal_is_caught_by_rule_and_byte_neutrality_bars_are_not(
+        self,
+    ) -> None:
+        row = self.synthetic(
+            "TD-900",
+            "test-corpus",
+            "neutral",
+            "Delete the parity_hash_highs and parity_hash_clp golden mods in "
+            "crates/cobre-sddp/tests/parity.rs together with common/parity_hash.rs; the "
+            "invariance-shuffle workflow already covers order invariance.",
+        )
+        self.mod.decide_row(row, self.substrate)
+        self.assertEqual(row["decided"], "conflicts")
+        self.assertEqual(row["guardrailViolated"], "phase-0a-gate-substrate-removal")
+        self.assertIn("bit-for-bit", row["cites"])
+        self.assertIn("Part V.1", row["cites"])
+        self.assertIn("keeping the golden", row["alternativeFixShape"])
+        self.assertTrue(row["held"])
+        for eid in ("TD-045", "OD-037", "OD-038", "CD-089", "CD-091", "CD-095"):
+            self.assertEqual(
+                self.by_id[eid]["guardrailHits"],
+                [],
+                f"{eid} names parity only as a bar",
+            )
+        reviewed = {h["entryId"]: h for h in self.ledger["guardrailHitsReviewed"]}
+        self.assertIn("OD-030", reviewed)
+        self.assertEqual(
+            reviewed["OD-030"]["guardrail"], "phase-0a-gate-substrate-removal"
+        )
+        self.assertEqual(self.by_id["OD-030"]["settledBy"], "hand")
+        self.assertEqual(self.by_id["OD-030"]["decided"], "neutral")
+        self.assertEqual(
+            self.ledger["held"], [r["entryId"] for r in self.rows if r["held"]]
+        )
+
+    def test_conflicts_without_an_alternative_or_a_question_fails_the_pass(
+        self,
+    ) -> None:
+        base = {
+            "entryId": "CD-901",
+            "decided": "conflicts",
+            "rationale": "x" * 40,
+            "cites": "Part IV.1",
+            "hint": "conflicts",
+            "settledBy": "hand",
+            "machineDecision": "conflicts",
+            "guardrailViolated": "engine-concept-in-L0/L1",
+            "held": True,
+            "alternativeFixShape": None,
+            "needsHuman": None,
+        }
+        self.assertTrue(
+            any("alternative" in p for p in self.mod.self_check({"ledger": [base]}))
+        )
+        repaired = {**base, "needsHuman": "which layer owns the resolver?"}
+        self.assertEqual(self.mod.self_check({"ledger": [repaired]}), [])
+        downgraded = {
+            **base,
+            "decided": "neutral",
+            "held": False,
+            "settledBy": "machine",
+        }
+        self.assertTrue(
+            any(
+                "dropped without a hand decision" in p
+                for p in self.mod.self_check({"ledger": [downgraded]})
+            )
+        )
+
+    def test_retag_is_bullet_local_and_proved_against_the_pre_image(self) -> None:
+        post = self.register
+        cut = self.section.start
+        pre_head = self.pre_image[:cut]
+        post_head = post[:cut]
+        self.assertEqual(
+            len(pre_head),
+            len(post_head),
+            "a line was added or removed outside the section",
+        )
+        changed = [
+            (i + 1, a, b) for i, (a, b) in enumerate(zip(pre_head, post_head)) if a != b
+        ]
+        retagged = {r["entryId"]: r for r in self.rows if r["retagged"]}
+        self.assertEqual(len(changed), len(retagged))
+        self.assertEqual(len(retagged), 12)
+        seen: set[str] = set()
+        for lineno, before, after in changed:
+            self.assertRegex(before, r"^\s*- \*\*Alignment:\*\* ")
+            self.assertRegex(after, r"^\s*- \*\*Alignment:\*\* ")
+            owner = next(
+                m.group("id")
+                for ln in reversed(post[:lineno])
+                if (m := bp.ENTRY_RE.match(ln))
+            )
+            self.assertIn(owner, retagged)
+            row = retagged[owner]
+            self.assertTrue(after.startswith(f"- **Alignment:** {row['decided']} ("))
+            self.assertIn(f"station hint: {row['hint']}, retagged 2026-09-19", after)
+            self.assertNotIn("(" + row["hint"], after.split("station hint")[0][:40])
+            seen.add(owner)
+        self.assertEqual(seen, set(retagged))
+        self.assertEqual(self.pre_image[cut:], self.pre_image[cut:])
+        proof = self.ledger["retagProof"]
+        self.assertTrue(proof["everyRemovedLineIsAnAlignmentBullet"])
+        self.assertTrue(proof["countsMatch"])
+        self.assertEqual(proof["removedLines"], 12)
+
+    def test_docket_lists_each_held_row_once_and_none_is_actionable(self) -> None:
+        held = [r for r in self.rows if r["held"]]
+        for r in held:
+            self.assertEqual(self.docket.count(f"### {r['entryId']} - HELD"), 1)
+            self.assertIn(r["fixShape"][:80], self.docket)
+            self.assertIn("**Cost of overriding.**", self.docket)
+            self.assertIn("**Decision.** [ ]", self.docket)
+            self.assertIn(f"**{r['entryId']}** — retagged", self.section_text)
+        if not held:
+            self.assertIn("**None held.**", self.docket)
+            self.assertIn(
+                "None: no station entry's recorded fix-shape violates",
+                self.section_text,
+            )
+        self.assertIn("### output-orchestration-not-at-L2", self.docket)
+        self.assertIn("### phase-0a-gate-substrate-removal", self.docket)
+        conflicts_h4 = self.section_text.split(
+            "#### Conflicts held for owner override", 1
+        )[1]
+        self.assertNotRegex(conflicts_h4, r"\bactionable\b(?!\.)(?! set)")
+        tables = bp.parse_tables(self.section)
+        ledger_table = next(t for t in tables if "Decided" in t[0])
+        self.assertEqual(len(ledger_table), len(self.rows))
+        for row in ledger_table:
+            live = self.by_id[row["Entry"]]
+            self.assertEqual(row["Held"], "yes" if live["held"] else "no")
+            self.assertEqual(row["Decided"], live["decided"])
+            self.assertEqual(row["Hint"], live["hint"])
+        self.assertEqual(
+            self.ledger["handoffs"]["ownerGate"]["held"], [r["entryId"] for r in held]
+        )
+
+    def test_rendered_section_matches_its_sources_and_the_checkers_pass(self) -> None:
+        tables = bp.parse_tables(self.section)
+        part_i = next(t for t in tables if "Disposition" in t[0])
+        self.assertEqual(len(part_i), 9)
+        self.assertEqual(tuple(row["#"] for row in part_i), ITEMS)
+        envelope = sc.load_json(ENVELOPE)
+        for row, disp in zip(part_i, envelope["dispositions"], strict=True):
+            self.assertEqual(row["Disposition"], disp["disposition"])
+            self.assertEqual(
+                row["Register id / Cleared"].split(" ")[0],
+                disp["registerId"] or "Cleared",
+            )
+            self.assertEqual(
+                row["Alignment"],
+                self.mod.PART_I_DECISIONS.get(disp["registerId"] or "", {}).get(
+                    "decided", disp["alignment"]
+                ),
+            )
+        ledger_table = next(t for t in tables if "Decided" in t[0])
+        self.assertEqual(len(ledger_table), len(self.rows))
+        self.assertIn("fifth-to-a-quarter", self.section_text)
+        self.assertRegex(
+            self.section_text, r"\*\*amended \(dated 2026-09-19|: agreement\."
+        )
+        self.assertIn("alignment/lp-classification.md", self.section_text)
+        self.assertIn("precedence", self.section_text)
+        self.assertIn("Part IV.1", self.section_text)
+        spliced = [e.id for e in bp.iter_entries(self.section)]
+        self.assertEqual(spliced, sorted(self.mod.PART_I_DECISIONS))
+        for e in bp.iter_entries(self.section):
+            self.assertIn("adjudicated 2026-09-19", e.fields["Alignment"])
+            self.assertTrue(
+                e.fields["Alignment"].startswith(
+                    self.mod.PART_I_DECISIONS[e.id]["decided"]
+                )
+            )
+        for tool, extra in (
+            ("check-anchors.py", []),
+            ("check-reraise.py", []),
+            ("fields-check.py", []),
+        ):
+            proc = subprocess.run(
+                [sys.executable, str(sc.TOOLS / tool), *extra, ALIGNMENT_SECTION],
+                cwd=sc.REPO,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, f"{tool}: {proc.stdout}{proc.stderr}")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(sc.TOOLS / "fields-check.py"),
+                "--require",
+                "Alignment",
+                "--all",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(self.ledger["verification"]["passed"])
+        status = git(
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            "crates",
+            "docs",
+            "scripts",
+            ".github",
+            "schemas",
+            "Cargo.toml",
+        ).stdout.strip()
+        self.assertEqual(status, "")
+
+    def test_late_entry_rule_is_published_and_append_is_idempotent(self) -> None:
+        self.assertIn("append", self.ledger["lateEntryRule"])
+        self.assertIn("append", self.ledger["handoffs"]["lateEntryRule"])
+        copy = json.loads(json.dumps(self.ledger))
+        added = self.mod.append_section(copy, sc.BACKLOG, "sddp")
+        self.assertEqual(added, 0)
+        self.assertEqual(len(copy["ledger"]), len(self.rows))
+        self.assertEqual(self.mod.self_check(copy), [])
+
+    def test_regeneration_is_deterministic(self) -> None:
+        built = self.mod.decide_pass(self.mod.build_ledger(sc.BACKLOG))
+        self.assertEqual(built["selfCheck"]["problems"], [])
+        keys = (
+            "hint",
+            "hintSource",
+            "decided",
+            "rationale",
+            "cites",
+            "retagged",
+            "held",
+            "settledBy",
+            "machineDecision",
+        )
+        for r in built["ledger"]:
+            live = self.by_id[r["entryId"]]
+            for k in keys:
+                self.assertEqual(r[k], live[k], f"{r['entryId']}.{k}")
+        self.assertEqual(built["decidedCounts"], self.ledger["decidedCounts"])
+        self.assertEqual(self.mod.render_docket(built), self.docket)
 
 
 if __name__ == "__main__":

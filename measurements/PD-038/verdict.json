@@ -1,0 +1,31 @@
+{
+  "claimRef": "PD-038",
+  "claimType": "single-process",
+  "layout": "4t",
+  "case": "reduzido (shared 4t recording SWEEP-4T)",
+  "baselineSha": "077dbe2c",
+  "medianSeconds": 226.175,
+  "phaseWallSeconds": 137.053,
+  "denominator": "trainingWallSeconds",
+  "attributedSymbol": "fill_col_state_patches",
+  "symbolStatus": "resolved",
+  "selfPct": 0.01,
+  "topSymbols": [
+    {
+      "symbol": "cobre_sddp::lp::builder::patch::PatchBuffer::fill_col_state_patches",
+      "pct": 0.01
+    }
+  ],
+  "kernelFramesDropped": 1,
+  "materialityRule": ">=1% user-space samples OR >=3% of the training phase wall",
+  "materialityFinding": "0.010% of user-space samples at `fill_col_state_patches`",
+  "verdict": "not-material",
+  "unmeasuredReason": null,
+  "fixShape": "unchanged; byte-neutral by construction, asserts no golden or determinism outcome from these timing runs; not promoted (not-material)",
+  "byteNeutral": true,
+  "alignment": "neutral",
+  "originStation": "sddp",
+  "recordingSource": "measurements/SWEEP-4T/ (shared)",
+  "runLog": "plans/architecture-debt-audit/measurements/PD-038/",
+  "_needsHuman": []
+}

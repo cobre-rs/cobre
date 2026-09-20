@@ -1,0 +1,3 @@
+# PD-051 attributed symbol `reshape_f64` is absent from the CLI binary.
+# cobre-python symbol (cut_matrix/reshape_f64) absent from the CLI binary; the CLI run never enters the Python cut-matrix projection. Needs a Python-driven profile.
+# No user-space samples possible from a `cobre run` profile; verdict case-infeasible.

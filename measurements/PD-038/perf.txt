@@ -1,0 +1,3 @@
+# PD-038: self-% for `fill_col_state_patches` read from the shared 4t profile measurements/SWEEP-4T/perf.txt
+# self_pct=0.0100%  verdict=not-material  (kernel frames dropped: 1)
+     0.01%  cobre    cobre                [.] cobre_sddp::lp::builder::patch::PatchBuffer::fill_col_state_patches

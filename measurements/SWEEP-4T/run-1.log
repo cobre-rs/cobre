@@ -1,0 +1,2 @@
+[ perf record: Woken up 2514 times to write data ]
+[ perf record: Captured and wrote 629.225 MB /tmp/perf-run-SWEEP-4T-JcpFWX/perf.data (78187 samples) ]

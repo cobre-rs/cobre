@@ -1,0 +1,19 @@
+{
+  "id": "PD-047",
+  "source": "untimed replay metadata.json (excluded from the median); cobre has no summary subcommand",
+  "trainingWallSeconds": 29.34,
+  "forwardPhaseWallSeconds": 29.601524786,
+  "backwardPhaseWallSeconds": 2.6794827840000073,
+  "setupWallSeconds": 0.018989,
+  "setupBreakdown": {
+    "load_seconds": 0.006959171,
+    "stochastic_fit_seconds": 0.000375246,
+    "production_fit_seconds": 0.003946901,
+    "evaporation_fit_seconds": 0.000102737,
+    "broadcast_seconds": 0.007604783
+  },
+  "simulationWallSeconds": 1.902,
+  "totalLpSolves": 144,
+  "parallelism": 2,
+  "denominatorUsed": "trainingWallSeconds (dominant phase; the hot backward/forward loop runs inside it)"
+}

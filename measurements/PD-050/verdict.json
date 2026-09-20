@@ -1,0 +1,24 @@
+{
+  "claimRef": "PD-050",
+  "claimType": "single-process",
+  "layout": "4t",
+  "case": "reduzido (attempted)",
+  "baselineSha": "077dbe2c",
+  "attributedSymbol": "read_parquet_partition_into",
+  "symbolStatus": "absent-from-cli-binary",
+  "verdict": "unmeasured",
+  "unmeasuredReason": "case-infeasible",
+  "evidence": "cobre-python symbol (read_parquet_partition_into) absent from the CLI binary; the `cobre run` harness never enters the Python parquet reader. Needs a Python-driven profile.",
+  "medianSeconds": null,
+  "selfPct": null,
+  "topSymbols": [],
+  "kernelFramesDropped": null,
+  "fixShape": "unchanged; preserved as recorded (not re-argued at this pass)",
+  "byteNeutral": true,
+  "alignment": "neutral",
+  "originStation": "cli-python",
+  "runLog": "plans/architecture-debt-audit/measurements/PD-050/",
+  "_needsHuman": [
+    "case-infeasible on the CLI+HiGHS harness \u2014 commission a Python-driven (cobre-python) profile to measure this claim?"
+  ]
+}

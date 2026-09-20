@@ -1,0 +1,24 @@
+{
+  "claimRef": "PD-049",
+  "claimType": "single-process",
+  "layout": "4t",
+  "case": "reduzido (attempted)",
+  "baselineSha": "077dbe2c",
+  "attributedSymbol": "load_convergence",
+  "symbolStatus": "absent-from-cli-binary",
+  "verdict": "unmeasured",
+  "unmeasuredReason": "case-infeasible",
+  "evidence": "cobre-python is a separate maturin cdylib excluded from the workspace; its symbols are not linked into the `cobre` CLI binary and `cobre run` never loads the Python bindings. Profiling load_policy needs a Python-driven workload the perf-run.sh harness cannot express.",
+  "medianSeconds": null,
+  "selfPct": null,
+  "topSymbols": [],
+  "kernelFramesDropped": null,
+  "fixShape": "unchanged; preserved as recorded (not re-argued at this pass)",
+  "byteNeutral": true,
+  "alignment": "neutral",
+  "originStation": "cli-python",
+  "runLog": "plans/architecture-debt-audit/measurements/PD-049/",
+  "_needsHuman": [
+    "case-infeasible on the CLI+HiGHS harness \u2014 commission a Python-driven (cobre-python) profile to measure this claim?"
+  ]
+}

@@ -187,5 +187,172 @@ class PD004ProfileTests(unittest.TestCase):
         )
 
 
+SWEEP4T = MEAS / "SWEEP-4T"
+CLAIM_TABLE = MEAS / "claim-table.json"
+WORK4T = MEAS / "_4t"
+BOUND_4T = float((MEAS / "CAL" / "median.txt").read_text().strip())
+CASE_INFEASIBLE_IDS = {"PD-032", "PD-033", "PD-034", "PD-049", "PD-050", "PD-051"}
+
+
+def _timed_walls(runs_tsv: pathlib.Path) -> tuple[list[float], int]:
+    rows = [
+        ln.split("\t")
+        for ln in runs_tsv.read_text(encoding="utf-8").splitlines()
+        if ln.strip()
+    ]
+    warmups = sum(1 for r in rows if r[1] == "warmup")
+    timed = sorted(float(r[2]) for r in rows if r[1] == "timed")
+    return timed, warmups
+
+
+class Layout4tTests(unittest.TestCase):
+    """E10-3: the single-process 4t sweep (shared SWEEP-4T recording) + the 2t PD-047 recording.
+
+    Deviations from the step-8 prose, recorded rather than silently met: (a) the owner approved
+    ONE shared 4t recording (measurements/SWEEP-4T) for all 27 4t claims instead of 27 per-ID
+    sweeps of the identical deck/layout, so per-claim run directories carry a verdict.json + a
+    perf.txt excerpt citing the shared recording, not their own runs.tsv/median; (b) perf-run.sh
+    deletes its scratch on exit, so no perf.data digest survives — the deliverable is the perf.txt
+    report; (c) the measured pin is the register pin 077dbe2c, not the scaffold pin a136840d;
+    (d) six claims (CLP-backend PD-032/033/034, cobre-python PD-049/050/051) are UNMEASURED /
+    case-infeasible because their symbols are absent from the pinned HiGHS CLI binary.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.table = sc.load_json(CLAIM_TABLE)
+        cls.rows_4t = [
+            r for r in cls.table["rows"] if r["layout"] == "4t" and not r.get("parked")
+        ]
+        cls.pd047 = next(r for r in cls.table["rows"] if r["id"] == "PD-047")
+
+    def _env(self, d: pathlib.Path) -> dict[str, str]:
+        return dict(
+            ln.split("\t", 1)
+            for ln in (d / "env.txt").read_text(encoding="utf-8").splitlines()
+            if "\t" in ln
+        )
+
+    def test_shared_4t_recording_is_one_warmup_plus_three_timed_under_bound(
+        self,
+    ) -> None:
+        timed, warmups = _timed_walls(SWEEP4T / "runs.tsv")
+        self.assertEqual(warmups, 1)
+        self.assertEqual(len(timed), 3)
+        recorded = float((SWEEP4T / "median.txt").read_text().split()[0])
+        self.assertAlmostEqual(recorded, timed[1], places=3)
+        for w in timed:
+            self.assertLessEqual(
+                w, 3 * BOUND_4T, "a timed wall exceeded 3x the 4t protocol bound"
+            )
+        env = self._env(SWEEP4T)
+        self.assertTrue(env["deck"].endswith("cobre_reduzido"))
+        self.assertEqual(env["threads"], "4")
+        self.assertEqual(env["taskset_mask"], "0,2,4,6")
+        for cpu in env["taskset_mask"].split(","):
+            self.assertNotIn(int(cpu), range(16, 20), "an E-core entered a timed run")
+        self.assertEqual(env["cargo_profile"], "profiling")
+        self.assertRegex(env["baseline_sha"], r"^077dbe2c")
+        self.assertRegex(
+            (SWEEP4T / "perf.txt").read_text(), r"Overhead|Samples|%\s+cobre"
+        )
+
+    def test_pd047_2t_recording_shape(self) -> None:
+        d = MEAS / "PD-047"
+        timed, warmups = _timed_walls(d / "runs.tsv")
+        self.assertEqual(warmups, 1)
+        self.assertEqual(len(timed), 3)
+        env = self._env(d)
+        self.assertTrue(env["deck"].endswith("cobre-mar-26-rv2-reduced"))
+        self.assertEqual(env["threads"], "2")
+        self.assertEqual(env["taskset_mask"], "0,2")
+        self.assertTrue((d / "perf.txt").is_file())
+
+    def test_every_measured_claim_has_a_verdict_in_the_allowed_set(self) -> None:
+        for row in [*self.rows_4t, self.pd047]:
+            v = sc.load_json(MEAS / row["id"] / "verdict.json")
+            self.assertIn(v["verdict"], VERDICTS, row["id"])
+            if v["verdict"] == "unmeasured":
+                self.assertIn(v["unmeasuredReason"], UNMEASURED_REASONS, row["id"])
+                self.assertIsNone(v.get("medianSeconds"), row["id"])
+            else:
+                self.assertIsNotNone(v.get("selfPct"), row["id"])
+            self.assertTrue(v["byteNeutral"], row["id"])
+            self.assertEqual(v["alignment"], "neutral", row["id"])
+            self.assertTrue((MEAS / row["id"] / "perf.txt").is_file(), row["id"])
+
+    def test_case_infeasible_claims_carry_evidence_and_needs_human(self) -> None:
+        for cid in CASE_INFEASIBLE_IDS:
+            v = sc.load_json(MEAS / cid / "verdict.json")
+            self.assertEqual(v["verdict"], "unmeasured", cid)
+            self.assertEqual(v["unmeasuredReason"], "case-infeasible", cid)
+            self.assertTrue(v["evidence"].strip(), cid)
+            self.assertTrue(v["_needsHuman"], cid)
+            self.assertIsNone(v["medianSeconds"], cid)
+
+    def test_material_verdict_would_cite_its_threshold_and_drop_kernel_frames(
+        self,
+    ) -> None:
+        # no 4t claim measured material on this LP-solve-bound deck; assert the discipline holds
+        for row in self.rows_4t:
+            v = sc.load_json(MEAS / row["id"] / "verdict.json")
+            if v["verdict"] == "unmeasured":
+                continue
+            self.assertRegex(v["materialityRule"], r"1%.*samples|3%.*phase wall")
+            self.assertIsInstance(v["kernelFramesDropped"], int)
+            if v["verdict"] == "material":
+                self.assertTrue(v["byteNeutral"])
+
+    def test_claim_table_4t_rows_and_pd047_flipped_others_untouched(self) -> None:
+        for row in self.table["rows"]:
+            if row["id"] in {
+                "PD-008",
+                "PD-017",
+            }:  # collective 2x2, left for that ticket
+                self.assertFalse(row.get("measured"), row["id"])
+            elif row.get("parked"):  # PD-004 / PD-005-residual
+                continue
+            elif row["layout"] == "4t" or row["id"] == "PD-047":
+                self.assertTrue(row.get("measured"), row["id"])
+                self.assertIn(
+                    row.get("verdict"), {"material", "not-material", "unmeasured"}
+                )
+
+    def test_handoff_worklist_symbolcheck_and_unmeasured_exist(self) -> None:
+        handoff = sc.load_json(WORK4T / "handoff.json")
+        measured_ids = {r["id"] for r in self.rows_4t} | {"PD-047"}
+        self.assertEqual({c["id"] for c in handoff["claims"]}, measured_ids)
+        self.assertTrue((WORK4T / "worklist.json").is_file())
+        self.assertTrue((WORK4T / "symbol-check.tsv").is_file())
+        unmeasured = (WORK4T / "unmeasured.md").read_text()
+        for cid in CASE_INFEASIBLE_IDS:
+            self.assertIn(cid, unmeasured)
+
+    def test_read_only_worktree_beyond_the_plan_tree(self) -> None:
+        dirty = subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+                "--",
+                "crates",
+                "docs",
+                "scripts",
+                ".github",
+                "schemas",
+                "Cargo.toml",
+                "Cargo.lock",
+            ],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        self.assertEqual(
+            dirty, "", f"tracked source touched by a read-only sweep: {dirty}"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

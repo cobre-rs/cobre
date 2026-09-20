@@ -1,0 +1,18 @@
+# PD-023: self-% for `fill` read from the shared 4t profile measurements/SWEEP-4T/perf.txt
+# self_pct=0.0000%  verdict=not-material  (kernel frames dropped: 1)
+     0.89%  cobre    cobre                [.] std::vector<double, std::allocator<double> >::_M_fill_assign(unsigned long, double const&)
+     0.45%  cobre    cobre                [.] std::vector<int, std::allocator<int> >::_M_fill_assign(unsigned long, int const&)
+     0.01%  cobre    cobre                [.] cobre_sddp::solve::stage_solve::fill_unscaled
+     0.01%  cobre    cobre                [.] std::vector<double, std::allocator<double> >::_M_fill_append(unsigned long, double const&)
+     0.01%  cobre    cobre                [.] cobre_sddp::lp::builder::patch::PatchBuffer::fill_col_state_patches
+     0.00%  cobre    cobre                [.] std::set<int, std::less<int>, std::allocator<int> >* std::__do_uninit_fill_n<std::set<int, std::less<int>, std::allocator<int> >*, unsigned long, std::set<int, std::less<int>, std::allocator<int> > >(std::set<int, std::less<int>, std::allocator<int> >*, unsigned long, std::set<int, std::less<int>, std::allocator<int> > const&)
+     0.00%  cobre    cobre                [.] cobre_sddp::solve::stage_solve::fill_unscaled_dual
+     0.00%  cobre    cobre                [.] std::vector<signed char, std::allocator<signed char> >::_M_fill_assign(unsigned long, signed char const&)
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::commitment_reconcile::fill_bound_relaxations
+     0.00%  cobre    cobre                [.] std::vector<HighsBasisStatus, std::allocator<HighsBasisStatus> >::_M_fill_append(unsigned long, HighsBasisStatus const&)
+     0.00%  cobre    cobre                [.] std::vector<char, std::allocator<char> >::_M_fill_assign(unsigned long, char const&)
+     0.00%  cobre    cobre                [.] cobre_stochastic::sampling::out_of_sample::fill_uncorrelated
+     0.00%  cobre    cobre                [.] cobre_sddp::training::backward::duals_extraction::fill_state_duals
+     0.00%  cobre    cobre                [.] std::vector<std::_Rb_tree_const_iterator<std::pair<int, int> >, std::allocator<std::_Rb_tree_const_iterator<std::pair<int, int> > > >::_M_fill_assign(unsigned long, std::_Rb_tree_const_iterator<std::pair<int, int> > const&)
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::patch::PatchBuffer::fill_forward_patches
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::columns::fill_stage_columns

@@ -7745,6 +7745,47 @@ Companion table with the reading-level rationale per module: alignment/lp-classi
 
 None: no station entry's recorded fix-shape violates a Part IV.1 guardrail at `077dbe2c` (1 rule hit reviewed and dismissed by hand; full docket and the two expected conflict-class templates in alignment/conflicts-docket.md). No held row is actionable.
 
+### ★ OWNER GATE: generalization alignment (2026-09-20, baseline `077dbe2c`; the tickets' scaffold pin `a136840d`)
+
+Decisions taken in the main session over the digest in alignment/gate.md (round plan §2, decision record §3). No fix is executed here and no tracked source file is written; the dated Part-I and IV.2 write-back into the roadmap belongs to the reconciliation epic.
+
+**Part-I dispositions ratified (9 of 9).** 8 accepted as recorded, 1 kept as a justified re-raise, 0 amended, 0 retired, 0 deferred. The sharpens carry their minted ids (CD-119, CD-121, CD-122, CD-123, CD-125, CD-127), the keeps CD-120 and CD-126; item 6 (CD-124) stands as a justified re-raise with its `Re-raise-of:` line (the genericity-gate exemption is withdrawn at the pin, `EXCLUDED_FILES=()` at scripts/ci/check-infra-genericity.sh:74, while the cut-shaped coupling survives); item 5 (`training_event.rs` in cobre-core) was dispositioned directly from the tree because no station owned it.
+
+| # | Item | Decision | Disposition | Phase | Alignment | ID |
+| - | ---- | -------- | ----------- | ----- | --------- | -- |
+| 1 | System stores the stochastic input model as first-class fields | accept | sharpen | 1 | advances-1 | CD-119 |
+| 2 | Stage bakes in stochastic and risk configuration | accept | keep | 1 | advances-1 | CD-120 |
+| 3 | PolicyGraph is framed around forward/backward traversal, discount rates and cyclic convergence | accept | sharpen | 1 | neutral | CD-121 |
+| 4 | InitialConditions is SDDP-warm-start-shaped | accept | sharpen | 1 | advances-1 | CD-122 |
+| 5 | training_event.rs lives in cobre-core | accept | sharpen | 1 | advances-1 | CD-123 |
+| 6 | cobre-io's policy checkpoint format is literally cut-records | keep-reraise | sharpen | 1 | advances-1 | CD-124 |
+| 7 | The config type is SDDP-shaped | accept | sharpen | 0a | advances-0a | CD-125 |
+| 8 | The leakage reaches one layer below cobre-core: StageTemplate | accept | keep | 1 | advances-1 | CD-126 |
+| I.5 | The CLI and orchestration coupling | accept | sharpen | 0a | advances-0a | CD-127 |
+
+**lp/ kernel boundary.** 30 modules classified (8 engine-neutral, 11 mixed, 6 sddp-geometry, 5 test-sibling); measured engine-neutral non-test share 931 + mixed half 3,939-5,610 = 4,870-6,541 of 11,701 (42-56%) against the roadmap's fifth-to-a-quarter band (2,340-2,925; the tickets' 2,335-2,919 of 11,675 at the scaffold pin). Decision: **amend-estimate** — Record the dated replacement figure (42-56% measured 2026-09-19 at 077dbe2c) for the reconciliation epic to write back into Part IV.2; the rewrite caveat is carried. The extraction-is-priced-as-a-rewrite caveat is carried: the neutral share does not make the carve cheaper.
+
+**Alignment ledger.** 243 entries decided (7 advances-0a, 1 advances-0b, 6 advances-1, 229 neutral); ratified as the register's single Alignment authority, including the 12 retags below (the superseded station hint stays inline on each bullet). No entry is held: no fix-shape violates a Part IV.1 guardrail, so no override was requested and the actionable set handed to the roadmap epic is every advances-* row.
+
+| Entry | Station | Station hint | Decided | Owner decision |
+| ----- | ------- | ------------ | ------- | -------------- |
+| CD-045 | core-io | advances-1 | neutral | accept |
+| OD-016 | core-io | advances-1 | neutral | accept |
+| OD-020 | core-io | advances-0a | neutral | accept |
+| TD-001 | core-io | advances-1 | neutral | accept |
+| CD-082 | sddp | advances-0a | neutral | accept |
+| TD-045 | sddp | advances-1 | neutral | accept |
+| CD-085 | sddp | advances-0b | neutral | accept |
+| OD-037 | sddp | advances-0b | neutral | accept |
+| OD-038 | sddp | advances-0b | neutral | accept |
+| CD-087 | sddp | advances-0b | neutral | accept |
+| CD-092 | cli-python | advances-0a | neutral | accept |
+| CD-099 | build-ci | advances-1 | advances-0b | accept |
+
+**Cleared by this gate (do not re-raise):** none — no disposition was retired or rejected and no hold was rejected.
+
+**Gate: RETURNED 2026-09-20** — baseline `077dbe2c` (scaffold pin `a136840d`); accepted 9, amended 0, overridden 0, rejected 0, deferred 0, held 0; 9 Part-I items ratified (1 as a justified re-raise); lp/ share amend-estimate (dated 2026-09 figure to the reconciliation epic); 243 ledger entries ratified incl. 12 retags; 0 needs-human. Reconciliation epic unblocked.
+
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — performance-sweep
 
 _(no entries yet)_

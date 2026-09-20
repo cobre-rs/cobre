@@ -1300,5 +1300,222 @@ class AlignmentVerifierTests(unittest.TestCase):
         self.assertIn("**Overall:** PASS.", "\n".join(committed))
 
 
+GATE = ALIGN / "gate.md"
+GATE_ROADMAP = sc.REPO / "plans" / "generalizing" / "beyond-sddp-generalization.md"
+PART_I_DECISIONS_OK = {
+    "accept",
+    "amend",
+    "retire",
+    "defer",
+    "keep-reraise",
+    "re-sanction",
+}
+HOLD_DECISIONS_OK = {"take-alternative", "override", "reject", "defer"}
+
+
+def gate_guard(rec: dict) -> list[str]:
+    """The marker guard: every reason the RETURNED marker must be refused, mirrored from the gate builder."""
+    problems: list[str] = []
+    if len(rec["partIDecisions"]) != 9:
+        problems.append(
+            f"expected nine Part-I decisions, got {len(rec['partIDecisions'])}"
+        )
+    for d in rec["partIDecisions"]:
+        if d["decision"] not in PART_I_DECISIONS_OK:
+            problems.append(f"item {d['item']}: decision {d['decision']!r}")
+        if d["decision"] == "defer" and not d.get("deferTrigger"):
+            problems.append(f"item {d['item']}: defer without a trigger")
+        if d["disposition"] == "retire" and not d.get("closedBy"):
+            problems.append(f"item {d['item']}: retire without closedBy")
+    lp = rec["lpShare"]
+    if lp["decision"] == "amend-estimate" and not re.search(
+        r"\d{4}-\d{2}-\d{2}", lp.get("amendedFigure") or ""
+    ):
+        problems.append("amend-estimate without a dated replacement figure")
+    if lp["decision"] == "defer" and not lp.get("deferTrigger"):
+        problems.append("lpShare defer without a trigger")
+    for a in rec["alignmentDecisions"]:
+        if a["decided"] == "conflicts":
+            if a["ownerDecision"] not in HOLD_DECISIONS_OK:
+                problems.append(f"{a['entryId']}: conflicts hold undecided")
+            if a["ownerDecision"] == "override" and not a.get("overrideRationale"):
+                problems.append(f"{a['entryId']}: override without rationale")
+            if a["ownerDecision"] == "defer" and not a.get("deferTrigger"):
+                problems.append(f"{a['entryId']}: deferred hold without a trigger")
+    problems += [
+        f"needs-human unanswered: {n.get('question')}"
+        for n in rec["needsHuman"]
+        if not n.get("answer")
+    ]
+    return problems
+
+
+class AlignmentGateTests(unittest.TestCase):
+    """E09-5: the owner gate's digest, round plan, decision record, marker guard and register H3."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.gate = GATE.read_text(encoding="utf-8")
+        m = re.search(r"```json\n(\{.*?\})\n```", cls.gate, re.S)
+        assert m is not None, "gate.md carries no JSON decision record"
+        cls.rec = json.loads(m.group(1))
+        cls.register = bp.read_register(sc.BACKLOG)
+        cls.section = bp.find_section(cls.register, ALIGNMENT_SECTION)
+        cls.section_text = "\n".join(cls.section.lines)
+        cls.ledger = sc.load_json(LEDGER)
+        cls.decision_lines = [
+            ln for ln in cls.gate.splitlines() if ln.startswith("**Decision: ")
+        ]
+
+    def test_single_decision_line_valued_ratified_or_returned(self) -> None:
+        self.assertEqual(len(self.decision_lines), 1, self.decision_lines)
+        m = re.match(r"\*\*Decision: (ratified|returned)\*\*", self.decision_lines[0])
+        self.assertIsNotNone(m, self.decision_lines[0])
+        assert m is not None
+        self.assertEqual(m.group(1) == "ratified", self.rec["returned"])
+
+    def test_digest_carries_nine_rows_the_lp_totals_the_rollup_the_holds_and_needs_human(
+        self,
+    ) -> None:
+        part_i = self.gate.split("### 1.1", 1)[1].split("### 1.2", 1)[0]
+        rows = [ln for ln in part_i.splitlines() if re.match(r"^\| (\d|I\.5) \|", ln)]
+        self.assertEqual([r.split("|")[1].strip() for r in rows], list(ITEMS))
+        self.assertIn("Modules classified: 30", self.gate)
+        self.assertRegex(self.gate, r"fifth to a quarter")
+        self.assertIn("| **total** | 243 |", self.gate)
+        self.assertIn("### 1.4 Holds (conflicts)", self.gate)
+        self.assertIn("### 1.5 Needs-human roll-up", self.gate)
+        verification = self.gate.split("### 1.6", 1)[1].split("## 2.", 1)[0]
+        self.assertGreaterEqual(verification.count("| PASS |"), 10)
+        self.assertNotIn("| FAIL |", verification)
+
+    def test_every_conflicts_entry_has_its_own_round_with_an_override_option(
+        self,
+    ) -> None:
+        plan = self.gate.split("## 2. Round plan", 1)[1].split("## 3.", 1)[0]
+        rounds = [ln for ln in plan.splitlines() if ln.startswith("| R")]
+        holds = [
+            r["entryId"] for r in self.ledger["ledger"] if r["decided"] == "conflicts"
+        ]
+        hold_rounds = [
+            ln
+            for ln in plan.splitlines()
+            if "conflicts-hold" in ln and ln.startswith("| R")
+        ]
+        self.assertEqual(len(hold_rounds), len(holds))
+        for eid in holds:
+            self.assertTrue(any(eid in ln for ln in hold_rounds), eid)
+            batch = [ln for ln in rounds if "batch" in ln and eid in ln]
+            self.assertEqual(batch, [], f"{eid} folded into a batch round")
+        template = [ln for ln in plan.splitlines() if "conflicts-hold" in ln]
+        self.assertTrue(template)
+        for ln in template:
+            self.assertIn("override with rationale", ln)
+        self.assertEqual(self.rec["conflictsRounds"], [])
+        for a in self.rec["alignmentDecisions"]:
+            if a["decided"] == "conflicts":
+                self.assertIn(a["ownerDecision"], HOLD_DECISIONS_OK, a["entryId"])
+                if a["ownerDecision"] != "override":
+                    self.assertTrue(a["held"], a["entryId"])
+
+    def test_ratified_record_is_complete_and_the_register_carries_the_marker(
+        self,
+    ) -> None:
+        if not self.rec["returned"]:
+            self.assertNotIn("**Gate: RETURNED", self.section_text)
+            self.skipTest("gate not ratified; marker correctly absent")
+        self.assertEqual(gate_guard(self.rec), [])
+        self.assertEqual([d["item"] for d in self.rec["partIDecisions"]], list(ITEMS))
+        for d in self.rec["partIDecisions"]:
+            self.assertIn(d["decision"], PART_I_DECISIONS_OK, d["item"])
+            self.assertTrue(d["rationale"], d["item"])
+        self.assertEqual(
+            len(self.rec["alignmentDecisions"]), len(self.ledger["ledger"])
+        )
+        h3 = self.section_text.split("### ★ OWNER GATE: generalization alignment", 1)
+        self.assertEqual(len(h3), 2, "owner-gate H3 missing from the section")
+        gate_block = h3[1]
+        self.assertIn("**Part-I dispositions ratified (9 of 9).**", gate_block)
+        self.assertIn("**lp/ kernel boundary.**", gate_block)
+        self.assertRegex(
+            gate_block, r"measured engine-neutral non-test share [\d,]+ \+ mixed half"
+        )
+        self.assertRegex(
+            gate_block,
+            r"(?m)^\*\*Gate: RETURNED \d{4}-\d{2}-\d{2}\*\* — baseline `077dbe2c` \(scaffold pin `a136840d`\); accepted \d+, amended \d+, overridden \d+, rejected \d+, deferred \d+, held \d+",
+        )
+        self.assertEqual(gate_block.count("**Gate: RETURNED"), 1)
+        for a in self.rec["alignmentDecisions"]:
+            if a["ownerDecision"] == "take-alternative":
+                entry = next(
+                    e
+                    for st in STATIONS
+                    for e in bp.iter_entries(bp.find_section(self.register, st))
+                    if e.id == a["entryId"]
+                )
+                self.assertNotEqual(
+                    entry.fields["Alignment"].split("(", 1)[0].strip(), "conflicts"
+                )
+        self.assertTrue(self.ledger["ownerGate"]["returned"])
+        self.assertEqual(self.ledger["ownerGate"]["decision"], "ratified")
+        self.assertEqual(self.ledger["ownerGate"]["held"], self.ledger["held"])
+
+    def test_lp_share_decision_carries_the_caveat_and_the_roadmap_is_untouched(
+        self,
+    ) -> None:
+        lp = self.rec["lpShare"]
+        self.assertIn(
+            lp["decision"],
+            {"accept-measured", "amend-estimate", "reclassify-rows", "defer"},
+        )
+        self.assertTrue(lp["rewriteCaveatCarried"])
+        self.assertTrue(lp["rowsThatDroveIt"])
+        if lp["decision"] == "amend-estimate":
+            self.assertRegex(lp["amendedFigure"], r"\d{4}-\d{2}-\d{2}")
+        self.assertEqual(
+            lp["roadmapBand"], sc.load_json(LP_CLASSIFICATION)["totals"]["roadmapBand"]
+        )
+        import hashlib
+
+        self.assertEqual(
+            hashlib.sha256(GATE_ROADMAP.read_bytes()).hexdigest(),
+            self.rec["roadmapSha256Before"],
+            "the gate must not edit plans/generalizing",
+        )
+        self.assertIn("priced as a rewrite", self.gate)
+
+    def test_marker_guard_refuses_untriggered_defers_undecided_holds_and_open_questions(
+        self,
+    ) -> None:
+        base = json.loads(json.dumps(self.rec))
+        self.assertEqual(gate_guard(base), [])
+        broken = json.loads(json.dumps(base))
+        broken["partIDecisions"][0].update(decision="defer", deferTrigger="")
+        self.assertTrue(any("defer without a trigger" in p for p in gate_guard(broken)))
+        broken = json.loads(json.dumps(base))
+        broken["alignmentDecisions"][0].update(
+            decided="conflicts", ownerDecision="accept"
+        )
+        self.assertTrue(any("hold undecided" in p for p in gate_guard(broken)))
+        broken = json.loads(json.dumps(base))
+        broken["needsHuman"].append({"from": "x", "question": "open?", "answer": ""})
+        self.assertTrue(any("needs-human unanswered" in p for p in gate_guard(broken)))
+        broken = json.loads(json.dumps(base))
+        broken["lpShare"].update(decision="amend-estimate", amendedFigure="soon")
+        self.assertTrue(
+            any("dated replacement figure" in p for p in gate_guard(broken))
+        )
+        broken = json.loads(json.dumps(base))
+        broken["partIDecisions"].pop()
+        self.assertTrue(any("nine Part-I" in p for p in gate_guard(broken)))
+        broken = json.loads(json.dumps(base))
+        broken["alignmentDecisions"][0].update(
+            decided="conflicts", ownerDecision="override", overrideRationale=""
+        )
+        self.assertTrue(
+            any("override without rationale" in p for p in gate_guard(broken))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

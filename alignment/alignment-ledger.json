@@ -6707,8 +6707,52 @@
       "held": [],
       "needsHuman": [],
       "docket": "plans/architecture-debt-audit/alignment/conflicts-docket.md",
-      "retagged": 12
+      "retagged": 12,
+      "status": "RETURNED 2026-09-20: ratified; held [], overrides []"
     },
     "lateEntryRule": "entries recorded after this pass (the perf sweep's measurement blocks and the reconciliation epic's Wave 4-7 dispositions) are adjudicated by re-running `alignment/adjudicate.py append --section <name>` over the new section; the rubric is the script, not this one-time reading"
+  },
+  "ownerGate": {
+    "gateDate": "2026-09-20",
+    "decision": "ratified",
+    "digest": "alignment/gate.md",
+    "partI": {
+      "1": "accept",
+      "2": "accept",
+      "3": "accept",
+      "4": "accept",
+      "5": "accept",
+      "6": "keep-reraise",
+      "7": "accept",
+      "8": "accept",
+      "I.5": "accept"
+    },
+    "lpShare": {
+      "decision": "amend-estimate",
+      "amendedFigure": "the fifth-to-a-quarter estimate (2340-2925 of 11701) is superseded by the measured 4870-6541 (42-56%) at 077dbe2c on 2026-09-19; it undercounts the plain equipment column/row/entry fills and the generic-constraint lowering, which alone exceed it; extraction stays priced as a rewrite (IV.2) because every neutral fill is anchored after the θ-anchored state region today"
+    },
+    "ledger": {
+      "default": "accept",
+      "perEntryOverrides": {},
+      "retagsRatified": [
+        "CD-045",
+        "OD-016",
+        "OD-020",
+        "TD-001",
+        "CD-082",
+        "TD-045",
+        "CD-085",
+        "OD-037",
+        "OD-038",
+        "CD-087",
+        "CD-092",
+        "CD-099"
+      ]
+    },
+    "held": [],
+    "overrides": [],
+    "clearedMoved": [],
+    "needsHumanAnswered": 0,
+    "returned": true
   }
 }

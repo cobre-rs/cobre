@@ -1,0 +1,1031 @@
+{
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "baselineSource": "plans/architecture-debt-audit/BACKLOG.md header (lib.backlog_parse.parse_baseline)",
+  "ticketBaseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "universe": {
+    "modules": 30,
+    "inventory": "plans/architecture-debt-audit/measurements/lp-inventory.json",
+    "drift": []
+  },
+  "rubric": {
+    "engine-neutral": "clean word-boundary slice AND a reading showing only entity indexing, block/cursor primitives, plain equipment columns and rows, generic-constraint lowering or FPHA planes; every substring-only hit carries an argued dismissal",
+    "sddp-geometry": "state-space columns, cost-to-go anchoring, cut projection, anticipated rings, noise patching — stays in the L3 engine; a zero-hit never overrides the reading (builder/patch.rs)",
+    "mixed": "both, with a function-level split note; neutralHalf = [neutral spans with zero word-boundary hits, neutral spans + vocabulary-free shared spans + a vocabulary-free preamble]",
+    "test-sibling": "tests.rs / test_support.rs: zero non-test lines by rule"
+  },
+  "rows": [
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/columns.rs",
+      "class": "mixed",
+      "nonTestLoc": 1315,
+      "anchor": "crates/cobre-sddp/src/lp/builder/columns.rs::fill_stage_columns (:25)",
+      "anchorSymbol": "fill_stage_columns",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/columns.rs",
+      "anchorLine": 25,
+      "grepResult": "12 word-boundary hits (substring 24)",
+      "grepPass": {
+        "substring": 24,
+        "wordBoundary": 12
+      },
+      "camelCaseGeometryLines": 5,
+      "dismissal": null,
+      "reading": "column fills: turbine, spillage, diversion, thermal, line, deficit, FPHA, evaporation, slack, NCS, pumping, contract and filling columns are plain equipment columns; storage (the state region), AR-lag, transit-bucket, anticipated slot/state, theta, inflow-slack and z_inflow columns are state-space geometry",
+      "splitNote": "move the `fill_<equipment>_columns` family and `GroupBoundLookup` (neutral emission that is anchored after the state region today and would be re-parameterized off the θ-anchored layout on extraction (IV.2)); `fill_storage_columns`, `fill_ar_lag_columns`, `fill_transit_bucket_columns`, `fill_anticipated_*_columns`, `fill_theta_column`, `fill_inflow_slack_columns` and `fill_z_inflow_columns` stay; `ColumnBufs` and `fill_stage_columns` are shared",
+      "neutralHalf": [
+        815,
+        1053
+      ],
+      "partition": {
+        "preambleLines": 17,
+        "neutralLines": 981,
+        "neutralLinesTouchingVocabulary": 166,
+        "sharedLines": 55,
+        "geometryLines": 262,
+        "neutral": [
+          "GroupBoundLookup",
+          "GroupBoundLookup::new",
+          "GroupBoundLookup::max_turbined",
+          "GroupBoundLookup::max_generation",
+          "GroupBoundLookup::min_turbined",
+          "GroupBoundLookup::min_generation",
+          "cell_max_turbined",
+          "cell_min_turbined",
+          "fill_turbine_columns",
+          "fill_spillage_columns",
+          "fill_diversion_columns",
+          "fill_thermal_columns",
+          "fill_line_columns",
+          "fill_deficit_and_excess_columns",
+          "cell_max_generation",
+          "cell_min_generation",
+          "fill_fpha_generation_columns",
+          "fill_evaporation_columns",
+          "fill_withdrawal_slack_columns",
+          "BlockSlackFamily",
+          "CellSlackFamily",
+          "fill_operational_slack_columns",
+          "fill_block_family",
+          "fill_cell_block_family",
+          "fill_ncs_columns",
+          "fill_pumping_columns",
+          "fill_contract_columns",
+          "fill_filling_target_columns",
+          "fill_filled_min_storage_floor_columns"
+        ],
+        "shared": [
+          "ColumnBufs",
+          "fill_stage_columns"
+        ],
+        "geometry": [
+          "fill_storage_columns",
+          "fill_transit_bucket_columns",
+          "fill_anticipated_slot_columns",
+          "fill_ar_lag_columns",
+          "fill_anticipated_state_columns",
+          "fill_theta_column",
+          "fill_anticipated_columns",
+          "fill_inflow_slack_columns",
+          "fill_z_inflow_columns"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs",
+      "class": "sddp-geometry",
+      "nonTestLoc": 243,
+      "anchor": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs::reconcile_commitment (:71)",
+      "anchorSymbol": "reconcile_commitment",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs",
+      "anchorLine": 71,
+      "grepResult": "2 word-boundary hits (substring 4)",
+      "grepPass": {
+        "substring": 4,
+        "wordBoundary": 2
+      },
+      "camelCaseGeometryLines": 4,
+      "dismissal": null,
+      "reading": "reconciles a pinned anticipated-commitment ring slot against the delivery-stage bounds through StateSpace and StageGeometry",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/commitment_reconcile/tests.rs",
+      "class": "test-sibling",
+      "nonTestLoc": 0,
+      "anchor": "crates/cobre-sddp/src/lp/builder/commitment_reconcile/tests.rs:1",
+      "anchorSymbol": null,
+      "grepResult": "n/a (sibling test file)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "dismissal": null,
+      "reading": "sibling test file: zero non-test lines by rule",
+      "splitNote": null,
+      "neutralHalf": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/delivery_ring.rs",
+      "class": "sddp-geometry",
+      "nonTestLoc": 299,
+      "anchor": "crates/cobre-sddp/src/lp/builder/delivery_ring.rs::DeliveryRing (:26)",
+      "anchorSymbol": "DeliveryRing",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/delivery_ring.rs",
+      "anchorLine": 26,
+      "grepResult": "19 word-boundary hits (substring 21)",
+      "grepPass": {
+        "substring": 21,
+        "wordBoundary": 19
+      },
+      "camelCaseGeometryLines": 5,
+      "dismissal": null,
+      "reading": "the lagged-delivery ring skeleton (Markov-1 slot per stage) shared by the travel-time bucket ring and the anticipated-thermal ring — state geometry borrowed from StateSpace",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/entries.rs",
+      "class": "mixed",
+      "nonTestLoc": 1686,
+      "anchor": "crates/cobre-sddp/src/lp/builder/entries.rs::fill_load_balance_entries (:1046)",
+      "anchorSymbol": "fill_load_balance_entries",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/entries.rs",
+      "anchorLine": 1046,
+      "grepResult": "28 word-boundary hits (substring 39)",
+      "grepPass": {
+        "substring": 39,
+        "wordBoundary": 28
+      },
+      "camelCaseGeometryLines": 17,
+      "dismissal": null,
+      "reading": "CSC entry fills: the water-balance, arc-release, filling, pumping, load-balance, FPHA, evaporation, generic-constraint, NCS and operational-violation entries are equipment/physics rows; the anticipated ring, transit-bucket ring and z_inflow entries are state geometry",
+      "splitNote": "seam by row family, not by block mode: move `fill_load_balance_entries`, `fill_fpha_entries`, `fill_evaporation_entries`, `fill_generic_constraint_entries`, `fill_ncs_load_balance_entries`, `fill_operational_violation_entries`, `fill_pumping_water_entries`, the filling entries and `assemble_csc`, with the water-balance family (the two block-mode water fills, the arc-release fills, `resolve_chrono_arrival_density`, `fill_prefilling_shortcircuit`) moving only after its transit-bucket deposits are re-parameterized — the parallel-versus-chronological pair is a retracted, deliberate-by-design pair of formulations and is NOT the seam; `anticipated_ring`, `fill_anticipated_*_entries`, `transit_bucket_ring`, `fill_transit_bucket_definition_entries`, `plant_transit_bucket_range` and `fill_z_inflow_entries` stay (the transit-bucket topology is a ratified reserved seam, cited as sanctioned, not a carve candidate); `fill_state_and_water_entries` and `build_stage_matrix_entries` are shared orchestrators",
+      "neutralHalf": [
+        768,
+        1335
+      ],
+      "partition": {
+        "preambleLines": 25,
+        "neutralLines": 1306,
+        "neutralLinesTouchingVocabulary": 538,
+        "sharedLines": 53,
+        "geometryLines": 302,
+        "neutral": [
+          "is_prefilling",
+          "resolve_shortcircuit_target",
+          "fill_parallel_water_entries",
+          "push_plant_release",
+          "fill_arc_release_block_entries",
+          "fill_chronological_water_entries",
+          "fill_arc_release_chrono_block_entries",
+          "resolve_chrono_arrival_density",
+          "fill_prefilling_shortcircuit",
+          "fill_filling_target_entries",
+          "fill_filled_min_storage_floor_entries",
+          "fill_pumping_water_entries",
+          "fill_load_balance_entries",
+          "fill_fpha_entries",
+          "fill_evaporation_entries",
+          "LpMatrixBuffers",
+          "fill_generic_constraint_entries",
+          "fill_ncs_load_balance_entries",
+          "fill_operational_violation_entries",
+          "assemble_csc"
+        ],
+        "shared": [
+          "fill_state_and_water_entries",
+          "build_stage_matrix_entries"
+        ],
+        "geometry": [
+          "anticipated_ring",
+          "fill_anticipated_fishing_entries",
+          "fill_anticipated_state_out_def_entries",
+          "fill_anticipated_slot_definition_entries",
+          "transit_bucket_plant_ranges",
+          "transit_bucket_ring",
+          "fill_transit_bucket_definition_entries",
+          "plant_transit_bucket_range",
+          "fill_z_inflow_entries"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 100,
+      "anchor": "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs::for_each_fpha_plane (:44)",
+      "anchorSymbol": "for_each_fpha_plane",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs",
+      "anchorLine": 44,
+      "grepResult": "zero word-boundary hits; 1 substring-only (substring 1 / word 0)",
+      "grepPass": {
+        "substring": 1,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 0,
+      "dismissal": "the only substring hit is `load-bearing` in the doc comment on the row-block nesting — line 33: load-bearing -> ring",
+      "reading": "the FPHA plane visitor over a stage's hydro cells",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/layout.rs",
+      "class": "mixed",
+      "nonTestLoc": 1962,
+      "anchor": "crates/cobre-sddp/src/lp/builder/layout.rs::StageLayout (:557)",
+      "anchorSymbol": "StageLayout",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/layout.rs",
+      "anchorLine": 557,
+      "grepResult": "26 word-boundary hits (substring 46)",
+      "grepPass": {
+        "substring": 46,
+        "wordBoundary": 26
+      },
+      "camelCaseGeometryLines": 24,
+      "dismissal": null,
+      "reading": "StageLayout allocates both regions: the equipment column/row chains, slack families, generic-constraint rows and their accessors are neutral; AnticipatedLayout, the anticipated/transit-bucket row-position builders and the state-region accessors (col_theta, col_storage_in_start, col_inflow_lags_start, col_z_inflow_start, col_anticipated_state_start, n_state, anticipated_decision) are geometry",
+      "splitNote": "move `EquipmentColumns`, `SlackColumns`, `ConstraintRows`, `OperViolationRanges`, `GenericConstraintLayout`, `FillingLayout`, the `identify_*_hydros` / `build_evap_indices` / `allocate_generic_slack_cols` / `enumerate_generic_constraint_rows` builders, `StageProductionRole` and the equipment accessors; `AnticipatedLayout`, `build_transit_bucket_row_pos`, `build_anticipated_*_row_pos` and the state-region accessors stay; `TemplateBuildCtx`, `StageLayout` itself, `StageLayout::new`, `geometry` and `resolver_geom` are shared and would split",
+      "neutralHalf": [
+        852,
+        1043
+      ],
+      "partition": {
+        "preambleLines": 34,
+        "neutralLines": 903,
+        "neutralLinesTouchingVocabulary": 51,
+        "sharedLines": 677,
+        "geometryLines": 348,
+        "neutral": [
+          "ResolvedTables",
+          "EquipmentColumns",
+          "OperViolationRanges",
+          "SlackColumns",
+          "ConstraintRows",
+          "FillingLayout",
+          "GenericConstraintLayout",
+          "build_evap_indices",
+          "hydro_phase",
+          "identify_fpha_hydros",
+          "identify_evap_hydros",
+          "identify_filling_target_hydros",
+          "identify_filled_min_storage_floor_hydros",
+          "allocate_generic_slack_cols",
+          "expression_collapses_to_stage_level",
+          "resolve_affine",
+          "fold_endpoint",
+          "bound_affine_is_block_varying",
+          "enumerate_generic_constraint_rows",
+          "StageProductionRole",
+          "StageLayout::block_col",
+          "StageLayout::block_grid",
+          "StageLayout::turbine_col",
+          "StageLayout::spillage_col",
+          "StageLayout::diversion_col",
+          "StageLayout::generation_col",
+          "StageLayout::fpha_local_first_cell",
+          "StageLayout::stage_production_role",
+          "StageLayout::line_fwd_col",
+          "StageLayout::line_rev_col",
+          "StageLayout::outflow_below_col",
+          "StageLayout::outflow_above_col",
+          "StageLayout::turbine_below_col",
+          "StageLayout::generation_below_col",
+          "StageLayout::evap_triple_base",
+          "StageLayout::evap_flow_col",
+          "StageLayout::evap_f_plus_col",
+          "StageLayout::evap_f_minus_col",
+          "StageLayout::deficit_col",
+          "StageLayout::storage_boundary_grid",
+          "StageLayout::block_storage_col",
+          "StageLayout::row_fpha_start",
+          "StageLayout::row_evap_start",
+          "StageLayout::filling_target",
+          "StageLayout::filling_target_col",
+          "StageLayout::filled_min_storage_floor",
+          "StageLayout::filled_min_storage_floor_col"
+        ],
+        "shared": [
+          "TemplateBuildCtx",
+          "OperViolationRanges::new",
+          "StageLayout",
+          "StageLayout::new",
+          "StageLayout::geometry",
+          "StageLayout::resolver_geom"
+        ],
+        "geometry": [
+          "AnticipatedLayout",
+          "build_transit_bucket_row_pos",
+          "build_anticipated_slot_row_pos",
+          "build_anticipated_decision_row_pos",
+          "build_anticipated_fishing_row_pos",
+          "StageLayout::col_theta",
+          "StageLayout::col_storage_in_start",
+          "StageLayout::col_inflow_lags_start",
+          "StageLayout::col_z_inflow_start",
+          "StageLayout::col_anticipated_state_start",
+          "StageLayout::n_state",
+          "StageLayout::anticipated_decision"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/layout/tests.rs",
+      "class": "test-sibling",
+      "nonTestLoc": 0,
+      "anchor": "crates/cobre-sddp/src/lp/builder/layout/tests.rs:1",
+      "anchorSymbol": null,
+      "grepResult": "n/a (sibling test file)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "dismissal": null,
+      "reading": "sibling test file: zero non-test lines by rule",
+      "splitNote": null,
+      "neutralHalf": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/mod.rs",
+      "class": "mixed",
+      "nonTestLoc": 155,
+      "anchor": "crates/cobre-sddp/src/lp/builder/mod.rs::GenericConstraintRowEntry (:131)",
+      "anchorSymbol": "GenericConstraintRowEntry",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/mod.rs",
+      "anchorLine": 131,
+      "grepResult": "1 word-boundary hit (substring 4)",
+      "grepPass": {
+        "substring": 4,
+        "wordBoundary": 1
+      },
+      "camelCaseGeometryLines": 3,
+      "dismissal": null,
+      "reading": "module root: the per-solve patch sequence and state-pinning narrative is geometry; the shared physics constants (M3S_TO_HM3, the evaporation column offsets) and GenericConstraintRowEntry are neutral; the `mod` and re-export lines split with their targets",
+      "splitNote": "move the shared constants and `GenericConstraintRowEntry` with the neutral substrate; the patch-buffer/state-pinning narrative and the `PatchBuffer`, `BoundRelaxations`, `DeliveryRing` re-exports stay; the `mod` lines and the scaling re-export split with their targets",
+      "neutralHalf": [
+        76,
+        91
+      ],
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/patch.rs",
+      "class": "sddp-geometry",
+      "nonTestLoc": 413,
+      "anchor": "crates/cobre-sddp/src/lp/builder/patch.rs::PatchBuffer (:24)",
+      "anchorSymbol": "PatchBuffer",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/patch.rs",
+      "anchorLine": 24,
+      "grepResult": "zero-hit (substring 0 / word 0)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 8,
+      "dismissal": "the zero-hit on both passes over 413 non-test lines is not a neutral signal: the snake_case vocabulary cannot see the 8 CamelCase `StateSpace`/`StateDim` lines, so a zero-hit is never on its own a class-1 proof",
+      "reading": "PatchBuffer owns the column-bound state region: fill_col_state_patches walks StateSpace::state_to_lp_incoming_column over every state-vector index and fill_forward_patches rewrites the stochastic row bounds before each solve",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/rows.rs",
+      "class": "mixed",
+      "nonTestLoc": 588,
+      "anchor": "crates/cobre-sddp/src/lp/builder/rows.rs::fill_stage_rows (:13)",
+      "anchorSymbol": "fill_stage_rows",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/rows.rs",
+      "anchorLine": 13,
+      "grepResult": "zero word-boundary hits; 3 substring-only (substring 3 / word 0)",
+      "grepPass": {
+        "substring": 3,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 0,
+      "dismissal": null,
+      "reading": "row-bound fills: the water-balance, filling, load-balance, FPHA, evaporation and operational-violation rows are equipment rows; the anticipated fishing/state-out/slot rows, the transit-bucket definition rows and the z_inflow rows are ring and noise geometry; the three substring hits (`mirroring`, `maturing`) are prose",
+      "splitNote": "move `fill_water_balance_rows` / `fill_parallel_water_rows` / `fill_chronological_water_rows`, `fill_filling_target_rows`, `fill_filled_min_storage_floor_rows`, `fill_load_balance_rows`, `fill_fpha_rows`, `fill_evaporation_rows` and `fill_operational_violation_rows`; `fill_anticipated_*_rows`, `fill_transit_bucket_definition_rows` and `fill_z_inflow_rows` stay; `fill_stage_rows` (the orchestrator) and `fill_zero_equality_rows` are shared",
+      "neutralHalf": [
+        384,
+        464
+      ],
+      "partition": {
+        "preambleLines": 12,
+        "neutralLines": 384,
+        "neutralLinesTouchingVocabulary": 0,
+        "sharedLines": 68,
+        "geometryLines": 124,
+        "neutral": [
+          "fill_water_balance_rows",
+          "fill_parallel_water_rows",
+          "fill_chronological_water_rows",
+          "fill_filling_target_rows",
+          "fill_filled_min_storage_floor_rows",
+          "fill_load_balance_rows",
+          "fill_fpha_rows",
+          "fill_evaporation_rows",
+          "fill_operational_violation_rows"
+        ],
+        "shared": [
+          "fill_stage_rows",
+          "fill_zero_equality_rows"
+        ],
+        "geometry": [
+          "fill_transit_bucket_definition_rows",
+          "fill_z_inflow_rows",
+          "fill_anticipated_fishing_rows",
+          "fill_anticipated_state_out_def_rows",
+          "fill_anticipated_slot_definition_rows"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/scaling.rs",
+      "class": "mixed",
+      "nonTestLoc": 265,
+      "anchor": "crates/cobre-sddp/src/lp/builder/scaling.rs::compute_col_scale (:19)",
+      "anchorSymbol": "compute_col_scale",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/scaling.rs",
+      "anchorLine": 19,
+      "grepResult": "9 word-boundary hits (substring 11)",
+      "grepPass": {
+        "substring": 11,
+        "wordBoundary": 9
+      },
+      "camelCaseGeometryLines": 3,
+      "dismissal": null,
+      "reading": "geometric-mean LP prescaling is engine-neutral conditioning; the bucket and commitment-hold unscaling and the noise pre-scaling are ring and noise geometry, and apply_col_scale asserts coverage through theta",
+      "splitNote": "move `compute_col_scale`, `compute_row_scale`, `apply_row_scale` and `apply_col_scale` (once its theta coverage assertion is re-parameterized); `apply_bucket_col_scale`, `apply_commitment_hold_col_scale_unscale` and `compute_noise_scale` stay",
+      "neutralHalf": [
+        100,
+        166
+      ],
+      "partition": {
+        "preambleLines": 18,
+        "neutralLines": 148,
+        "neutralLinesTouchingVocabulary": 48,
+        "sharedLines": 0,
+        "geometryLines": 99,
+        "neutral": [
+          "compute_col_scale",
+          "apply_col_scale",
+          "compute_row_scale",
+          "apply_row_scale"
+        ],
+        "shared": [],
+        "geometry": [
+          "apply_bucket_col_scale",
+          "apply_commitment_hold_col_scale_unscale",
+          "compute_noise_scale"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/template.rs",
+      "class": "mixed",
+      "nonTestLoc": 1327,
+      "anchor": "crates/cobre-sddp/src/lp/builder/template.rs::build_stage_templates (:723)",
+      "anchorSymbol": "build_stage_templates",
+      "anchorPath": "crates/cobre-sddp/src/lp/builder/template.rs",
+      "anchorLine": 723,
+      "grepResult": "8 word-boundary hits (substring 23)",
+      "grepPass": {
+        "substring": 23,
+        "wordBoundary": 8
+      },
+      "camelCaseGeometryLines": 7,
+      "dismissal": null,
+      "reading": "the stage-template factory IV.2 names: discount factors, pre-baked noise (models_from_normal / load_models_from_normal), build_single_stage_template and build_stage_templates are SDDP-shaped; collect_load_bus_indices, StageBuildOutput and block_storage_col are neutral; StageGeometry, build_template_build_ctx and assemble_stage_templates_output are shared",
+      "splitNote": "move `collect_load_bus_indices`, `StageBuildOutput` and `StageGeometry::block_storage_col`; `StageTemplates` (discount factors), `build_single_stage_template`, `models_from_normal`, `load_models_from_normal`, `build_stage_templates`, `build_stage_templates_resolving_layout` and `build_filling_v_target` stay; `StageGeometry`, `build_template_build_ctx` and `assemble_stage_templates_output` are shared and would split",
+      "neutralHalf": [
+        63,
+        483
+      ],
+      "partition": {
+        "preambleLines": 35,
+        "neutralLines": 63,
+        "neutralLinesTouchingVocabulary": 0,
+        "sharedLines": 519,
+        "geometryLines": 710,
+        "neutral": [
+          "StageGeometry::block_storage_col",
+          "StageBuildOutput",
+          "collect_load_bus_indices"
+        ],
+        "shared": [
+          "StageGeometry",
+          "build_template_build_ctx",
+          "assemble_stage_templates_output"
+        ],
+        "geometry": [
+          "StageTemplates",
+          "StageTemplates::empty",
+          "StageTemplates::discount_factors",
+          "StageTemplates::cumulative_discount_factors",
+          "StageTemplates::set_discount_factors",
+          "build_single_stage_template",
+          "models_from_normal",
+          "load_models_from_normal",
+          "build_stage_templates",
+          "build_stage_templates_resolving_layout",
+          "build_filling_v_target"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/template/tests.rs",
+      "class": "test-sibling",
+      "nonTestLoc": 0,
+      "anchor": "crates/cobre-sddp/src/lp/builder/template/tests.rs:1",
+      "anchorSymbol": null,
+      "grepResult": "n/a (sibling test file)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "dismissal": null,
+      "reading": "sibling test file: zero non-test lines by rule",
+      "splitNote": null,
+      "neutralHalf": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/builder/test_support.rs",
+      "class": "test-sibling",
+      "nonTestLoc": 0,
+      "anchor": "crates/cobre-sddp/src/lp/builder/test_support.rs:1",
+      "anchorSymbol": null,
+      "grepResult": "n/a (sibling test file)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "dismissal": null,
+      "reading": "sibling test file: zero non-test lines by rule",
+      "splitNote": null,
+      "neutralHalf": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/generic_constraints.rs",
+      "class": "mixed",
+      "nonTestLoc": 985,
+      "anchor": "crates/cobre-sddp/src/lp/generic_constraints.rs::resolve_variable_ref (:195)",
+      "anchorSymbol": "resolve_variable_ref",
+      "anchorPath": "crates/cobre-sddp/src/lp/generic_constraints.rs",
+      "anchorLine": 195,
+      "grepResult": "2 word-boundary hits (substring 8)",
+      "grepPass": {
+        "substring": 8,
+        "wordBoundary": 2
+      },
+      "camelCaseGeometryLines": 4,
+      "dismissal": null,
+      "reading": "generic-constraint lowering onto the indexed column layout is neutral emission, except the role-(a) state region reached through GenericResolverGeom's StateSpace handle (resolve_hydro_storage, resolve_hydro_inflow, resolve_anticipated_decision); the two word-boundary hits are the doc's cut-path paragraph on that role split",
+      "splitNote": "move `resolve_variable_ref` and every role-(b) equipment resolver (turbine cells, storage boundary, evaporation, outflow, generation, line exchange, bus deficit, pumping, contracts, block variables); `resolve_hydro_storage`, `resolve_hydro_inflow` and `resolve_anticipated_decision` stay with the engine behind a state-column callback; `GenericResolverGeom` is the shared view that splits into two",
+      "neutralHalf": [
+        764,
+        823
+      ],
+      "partition": {
+        "preambleLines": 46,
+        "neutralLines": 764,
+        "neutralLinesTouchingVocabulary": 0,
+        "sharedLines": 59,
+        "geometryLines": 116,
+        "neutral": [
+          "GenericResolverGeom::block_grid",
+          "GenericResolverGeom::block_storage_col",
+          "EntityPositionMaps",
+          "CascadeRefs",
+          "PumpingRefs",
+          "ContractRefs",
+          "resolve_variable_ref",
+          "variable_ref_is_block_independent",
+          "expression_is_block_independent",
+          "resolve_turbine_cells",
+          "resolve_hydro_storage_boundary",
+          "resolve_hydro_evaporation",
+          "resolve_hydro_outflow",
+          "resolve_hydro_generation",
+          "resolve_line_exchange",
+          "resolve_bus_deficit",
+          "resolve_pumping_column",
+          "contract_family_slot",
+          "resolve_contract_column",
+          "resolve_block_variable",
+          "ElementKind",
+          "block_col_range"
+        ],
+        "shared": [
+          "GenericResolverGeom"
+        ],
+        "geometry": [
+          "resolve_hydro_storage",
+          "resolve_hydro_inflow",
+          "resolve_anticipated_decision"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/generic_constraints/tests.rs",
+      "class": "test-sibling",
+      "nonTestLoc": 0,
+      "anchor": "crates/cobre-sddp/src/lp/generic_constraints/tests.rs:1",
+      "anchorSymbol": null,
+      "grepResult": "n/a (sibling test file)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "dismissal": null,
+      "reading": "sibling test file: zero non-test lines by rule",
+      "splitNote": null,
+      "neutralHalf": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs",
+      "class": "sddp-geometry",
+      "nonTestLoc": 112,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs::is_anticipated_decision_active_for_delivery (:90)",
+      "anchorSymbol": "is_anticipated_decision_active_for_delivery",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs",
+      "anchorLine": 90,
+      "grepResult": "zero word-boundary hits; 2 substring-only (substring 2 / word 0)",
+      "grepPass": {
+        "substring": 2,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 10,
+      "dismissal": null,
+      "reading": "anticipated-decision horizon and commissioning-window gating keyed on StateSpace's lead stages and resolution (anticipated ring geometry); the two substring hits (`load-bearing`, `maturing`) are prose and irrelevant to the class",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/block_grid.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 126,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/block_grid.rs::BlockGrid (:36)",
+      "anchorSymbol": "BlockGrid",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/block_grid.rs",
+      "anchorLine": 36,
+      "grepResult": "zero word-boundary hits; 1 substring-only (substring 1 / word 0)",
+      "grepPass": {
+        "substring": 1,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 0,
+      "dismissal": "the only substring hit is the English participle `mirroring` in the module doc — line 23: mirroring -> ring",
+      "reading": "the block-major stride primitive shared by every fill path",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+      "class": "sddp-geometry",
+      "nonTestLoc": 292,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs::CutStateProjection (:39)",
+      "anchorSymbol": "CutStateProjection",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs",
+      "anchorLine": 39,
+      "grepResult": "28 word-boundary hits (substring 33)",
+      "grepPass": {
+        "substring": 33,
+        "wordBoundary": 28
+      },
+      "camelCaseGeometryLines": 45,
+      "dismissal": null,
+      "reading": "storage-scoped projection of StateSpace onto the enabled cut-state dimensions (cut storage, subgradient extraction, cut rendering)",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/entity_index.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 293,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/entity_index.rs::HydroSys (:83)",
+      "anchorSymbol": "HydroSys",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/entity_index.rs",
+      "anchorLine": 83,
+      "grepResult": "zero-hit (substring 0 / word 0)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 5,
+      "dismissal": null,
+      "reading": "typed system/local entity index vocabulary carrying no arithmetic; AnticipatedLocal is a local-list position, not ring geometry",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/hydro_cell.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 204,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/hydro_cell.rs::HydroCellIndex (:33)",
+      "anchorSymbol": "HydroCellIndex",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/hydro_cell.rs",
+      "anchorLine": 33,
+      "grepResult": "zero word-boundary hits; 2 substring-only (substring 2 / word 0)",
+      "grepPass": {
+        "substring": 2,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 0,
+      "dismissal": "the substring hits are the participles `filtering`, `renumbering` and `reordering` in doc comments — line 15: filtering -> ring; line 63: renumbering -> ring, reordering -> ring",
+      "reading": "the study-scope partition of hydro unit groups into bus cells (entity indexing)",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/index.rs",
+      "class": "mixed",
+      "nonTestLoc": 247,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/index.rs::Col (:30)",
+      "anchorSymbol": "Col",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/index.rs",
+      "anchorLine": 30,
+      "grepResult": "8 word-boundary hits (substring 8)",
+      "grepPass": {
+        "substring": 8,
+        "wordBoundary": 8
+      },
+      "camelCaseGeometryLines": 23,
+      "dismissal": null,
+      "reading": "typed address vocabulary: Col, Row, BlockIdx and Boundary are LP-address newtypes any engine needs; StateDim, CutSlot, InCol and OutCol are state-vector and cut-render vocabulary",
+      "splitNote": "move `Col`, `Row`, `BlockIdx` and `Boundary` (plus `Boundary::from_index`) to the neutral substrate; `StateDim`, `CutSlot`, `InCol` and `OutCol` stay with the engine; the module doc's cut-path paragraphs go with them",
+      "neutralHalf": [
+        95,
+        115
+      ],
+      "partition": {
+        "preambleLines": 29,
+        "neutralLines": 115,
+        "neutralLinesTouchingVocabulary": 20,
+        "sharedLines": 0,
+        "geometryLines": 103,
+        "neutral": [
+          "Col",
+          "Col::new",
+          "Col::get",
+          "Row",
+          "Row::new",
+          "Row::get",
+          "BlockIdx",
+          "BlockIdx::new",
+          "BlockIdx::get",
+          "Boundary",
+          "Boundary::from_index"
+        ],
+        "shared": [],
+        "geometry": [
+          "StateDim",
+          "StateDim::new",
+          "StateDim::get",
+          "CutSlot",
+          "CutSlot::new",
+          "CutSlot::get",
+          "InCol",
+          "InCol::new",
+          "InCol::get",
+          "OutCol",
+          "OutCol::new",
+          "OutCol::get"
+        ]
+      },
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/layout.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 40,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/layout.rs::EvaporationIndices (:17)",
+      "anchorSymbol": "EvaporationIndices",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/layout.rs",
+      "anchorLine": 17,
+      "grepResult": "zero-hit (substring 0 / word 0)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 1,
+      "dismissal": null,
+      "reading": "per-stage evaporation column/row and FPHA row-block satellites; the one CamelCase line is a doc pointer to StateSpace",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/mod.rs",
+      "class": "mixed",
+      "nonTestLoc": 125,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/block_grid.rs::BlockGrid (:36)",
+      "anchorSymbol": "BlockGrid",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/block_grid.rs",
+      "anchorLine": 36,
+      "grepResult": "10 word-boundary hits (substring 13)",
+      "grepPass": {
+        "substring": 13,
+        "wordBoundary": 10
+      },
+      "camelCaseGeometryLines": 23,
+      "dismissal": null,
+      "reading": "module root: a column-layout narrative owned by StateSpace plus the `mod` and re-export lines of both the neutral primitives and the geometry types",
+      "splitNote": "the `mod`/`pub use` lines for block_grid, entity_index, hydro_cell, layout, range_cursor, storage_boundary_grid and study_dimensions (and the Col/Row/BlockIdx/Boundary half of the `index` re-export) move with the neutral substrate; the state_space, cut_state_projection and anticipated_gate lines and the state-layout narrative stay",
+      "neutralHalf": [
+        18,
+        29
+      ],
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/range_cursor.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 41,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/range_cursor.rs::RangeCursor (:23)",
+      "anchorSymbol": "RangeCursor",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/range_cursor.rs",
+      "anchorLine": 23,
+      "grepResult": "zero word-boundary hits; 1 substring-only (substring 1 / word 0)",
+      "grepPass": {
+        "substring": 1,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 2,
+      "dismissal": "the only substring hit is `consecutive` in the module doc, which contains `cut` — line 10: consecutive -> cut",
+      "reading": "the running offset allocator; its two CamelCase lines are doc pointers to StateSpace::new as one of its two callers",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+      "class": "sddp-geometry",
+      "nonTestLoc": 729,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/state_space.rs::StateSpace (:50)",
+      "anchorSymbol": "StateSpace",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/state_space.rs",
+      "anchorLine": 50,
+      "grepResult": "34 word-boundary hits (substring 40)",
+      "grepPass": {
+        "substring": 40,
+        "wordBoundary": 34
+      },
+      "camelCaseGeometryLines": 85,
+      "dismissal": null,
+      "reading": "the stage-invariant state-vector layout and its incoming/outgoing LP-column resolvers — the SDDP state region itself",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/storage_boundary_grid.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 77,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/storage_boundary_grid.rs::StorageBoundaryGrid (:22)",
+      "anchorSymbol": "StorageBoundaryGrid",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/storage_boundary_grid.rs",
+      "anchorLine": 22,
+      "grepResult": "zero-hit (substring 0 / word 0)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 2,
+      "dismissal": null,
+      "reading": "block/cursor primitive for the chronological storage-boundary column formula; it takes StateSpace column bases as inputs (neutral emission that is anchored after the state region today and would be re-parameterized off the θ-anchored layout on extraction (IV.2))",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/indexer/study_dimensions.rs",
+      "class": "engine-neutral",
+      "nonTestLoc": 50,
+      "anchor": "crates/cobre-sddp/src/lp/indexer/study_dimensions.rs::StudyDimensions (:27)",
+      "anchorSymbol": "StudyDimensions",
+      "anchorPath": "crates/cobre-sddp/src/lp/indexer/study_dimensions.rs",
+      "anchorLine": 27,
+      "grepResult": "zero-hit (substring 0 / word 0)",
+      "grepPass": {
+        "substring": 0,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 2,
+      "dismissal": null,
+      "reading": "the study-invariant non-state LP shape (entity counts, presence flags, the anticipated-thermal identity list); its two CamelCase lines are the doc's ownership split against StateSpace, not geometry",
+      "splitNote": null,
+      "neutralHalf": null,
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    },
+    {
+      "module": "crates/cobre-sddp/src/lp/mod.rs",
+      "class": "mixed",
+      "nonTestLoc": 27,
+      "anchor": "crates/cobre-sddp/src/lp/generic_constraints.rs::resolve_variable_ref (:195)",
+      "anchorSymbol": "resolve_variable_ref",
+      "anchorPath": "crates/cobre-sddp/src/lp/generic_constraints.rs",
+      "anchorLine": 195,
+      "grepResult": "zero word-boundary hits; 1 substring-only (substring 1 / word 0)",
+      "grepPass": {
+        "substring": 1,
+        "wordBoundary": 0
+      },
+      "camelCaseGeometryLines": 2,
+      "dismissal": null,
+      "reading": "directory-module root: three `mod` lines and a doc that narrates the state-pinning column-bound contract (geometry) beside the generic-constraint lowering (neutral); the only substring hit is `lowering`",
+      "splitNote": "the `mod generic_constraints` line and its sentence move with the neutral substrate; the state-pinning and template-factory sentences stay",
+      "neutralHalf": [
+        4,
+        8
+      ],
+      "partition": null,
+      "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c"
+    }
+  ],
+  "totals": {
+    "corpusNonTestLoc": 11701,
+    "productionModules": 25,
+    "siblingTestFiles": 5,
+    "classCounts": {
+      "engine-neutral": 8,
+      "sddp-geometry": 6,
+      "mixed": 11,
+      "test-sibling": 5
+    },
+    "engineNeutralLoc": 931,
+    "sddpGeometryLoc": 2088,
+    "mixedLoc": 8682,
+    "mixedNeutralHalf": [
+      3939,
+      5610
+    ],
+    "measuredBand": [
+      4870,
+      6541
+    ],
+    "measuredShare": [
+      0.416,
+      0.559
+    ],
+    "roadmapBand": [
+      2340,
+      2925
+    ],
+    "roadmapBandBasis": "plans/generalizing/beyond-sddp-generalization.md:1352 ('a fifth to a quarter') over the measured corpus of 11701",
+    "ticketBand": [
+      2335,
+      2919
+    ],
+    "ticketBandBasis": "the ticket's 2,336-2,919 over its 11,675 corpus at a136840d",
+    "verdict": "amended",
+    "amendedFigure": "the fifth-to-a-quarter estimate (2340-2925 of 11701) is superseded by the measured 4870-6541 (42-56%) at 077dbe2c on 2026-09-19; it undercounts the plain equipment column/row/entry fills and the generic-constraint lowering, which alone exceed it; extraction stays priced as a rewrite (IV.2) because every neutral fill is anchored after the θ-anchored state region today",
+    "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+    "ticketBaseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+    "ticketBaselineTotals": {
+      "grossLoc": 44374,
+      "nonTestLoc": 11685,
+      "naiveFirstMarkerLoc": 11396
+    }
+  },
+  "deviations": [
+    "The ticket pins a136840d; the register header pins 077dbe2c, so every row is measured at the register pin; the same file set (30 modules) exists at both pins and the ticket's per-module figures (block_grid 126, anticipated_gate 112, patch.rs 413 with 8 CamelCase lines, naive 11,396, gross 44,374) reproduce exactly at a136840d.",
+    "The ticket's corpus total of 11,675 does not reproduce from its stated slice rule: the rule yields 11685 at a136840d and 11701 at 077dbe2c (columns.rs +2, entries.rs +14 since the scaffold pin). The 10-line gap is consistent with the ticket snippet's handling of `#[cfg(test)] mod tests;`, which scans forward to the next `{` and would swallow builder/mod.rs's re-export block as test code; this slicer ends a statement item at its `;`, as the rule's own words require.",
+    "The sddp station's measurements/lp-inventory.json (non_test_lines 11,655) follows scripts/loc-stats.sh, which also excludes `#[cfg(any(test, feature = \"test-support\"))]` items; the ticket's rule keeps them (builder/mod.rs 155 vs 145, builder/template.rs 1327 vs 1293, lp/mod.rs 27 vs 25). The inventory is used for the module universe only.",
+    "plans/ is tracked, so the artifacts are committed rather than gitignored."
+  ]
+}

@@ -471,5 +471,219 @@ class ConsolidatorTests(unittest.TestCase):
             )
 
 
+SLICER = ALIGN / "lp-nontest-slice.py"
+LP_CLASSIFICATION = ALIGN / "lp-classification.json"
+LP_TABLE = ALIGN / "lp-classification.md"
+LP_PROOF = ALIGN / "lp-grep-proof.json"
+LP_ROOT = "crates/cobre-sddp/src/lp"
+ALIGNMENT_SECTION = "generalization-alignment"
+LP_CLASSES = {"engine-neutral", "sddp-geometry", "mixed", "test-sibling"}
+LP_ROW_RE = re.compile(
+    r"^\| `(?P<module>crates/cobre-sddp/src/lp/[^`]+\.rs)` \| (?P<klass>[^|]+?) \| (?P<loc>\d+) \| "
+)
+RETRACTED_PAIR = ("fill_parallel_water_entries", "fill_chronological_water_entries")
+
+
+def load_slicer():
+    spec = importlib.util.spec_from_file_location("lp_nontest_slice", SLICER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("alignment/lp-nontest-slice.py not importable")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class LpClassificationTests(unittest.TestCase):
+    """E09-2: the 30-row lp/ classification, its grep proof and its register subsection at the pin."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_slicer()
+        cls.cls_ = sc.load_json(LP_CLASSIFICATION)
+        cls.proof = sc.load_json(LP_PROOF)
+        cls.rows = cls.cls_["rows"]
+        cls.by_module = {r["module"]: r for r in cls.rows}
+        cls.table = LP_TABLE.read_text(encoding="utf-8")
+        cls.pin = bp.parse_baseline(bp.read_register(sc.BACKLOG))
+        cls.tree = sorted(
+            p
+            for p in git(
+                "ls-tree", "-r", "--name-only", cls.pin, "--", LP_ROOT
+            ).stdout.split()
+            if p.endswith(".rs")
+        )
+        cls.register = bp.read_register(sc.BACKLOG)
+        cls.section = bp.find_section(cls.register, ALIGNMENT_SECTION)
+
+    def run_checker(self, tool: str, *extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(sc.TOOLS / tool), *extra, ALIGNMENT_SECTION],
+            cwd=sc.REPO,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_thirty_rows_are_exactly_the_tree_at_the_pin(self) -> None:
+        self.assertEqual(self.cls_["baseline"], self.pin)
+        self.assertEqual(len(self.tree), 30)
+        self.assertEqual([r["module"] for r in self.rows], self.tree)
+        self.assertEqual(self.cls_["universe"]["drift"], [])
+        siblings = [r for r in self.rows if r["class"] == "test-sibling"]
+        self.assertEqual(len(siblings), 5)
+        for r in siblings:
+            self.assertTrue(r["module"].endswith(("/tests.rs", "/test_support.rs")))
+            self.assertEqual(r["nonTestLoc"], 0)
+        for r in self.rows:
+            self.assertIn(r["class"], LP_CLASSES, r["module"])
+            self.assertTrue(r["anchor"] and r["grepResult"], r["module"])
+            self.assertIsInstance(r["nonTestLoc"], int)
+
+    def test_non_test_loc_is_recomputed_through_the_brace_aware_slicer(self) -> None:
+        total = naive = 0
+        for r in self.rows:
+            s = self.mod.module_slice(self.pin, r["module"])
+            self.assertEqual(s["nonTestLoc"], r["nonTestLoc"], r["module"])
+            total += s["nonTestLoc"]
+            naive += s["naiveFirstMarkerLoc"]
+        self.assertEqual(total, self.cls_["totals"]["corpusNonTestLoc"])
+        self.assertNotEqual(
+            total, naive, "the trap-aware rule must differ from first-marker truncation"
+        )
+        bg = self.proof["modules"][f"{LP_ROOT}/indexer/block_grid.rs"]
+        self.assertEqual(
+            (bg["nonTestLoc"], bg["excludedRanges"][0][0], bg["naiveFirstMarkerLoc"]),
+            (126, 127, 20),
+        )
+        ag = self.proof["modules"][f"{LP_ROOT}/indexer/anticipated_gate.rs"]
+        self.assertEqual(
+            (ag["nonTestLoc"], ag["excludedRanges"], ag["naiveFirstMarkerLoc"]),
+            (112, [[51, 81], [144, 368]], 50),
+        )
+
+    def test_grep_proof_re_derives_and_is_not_vacuous(self) -> None:
+        any_word_hit = False
+        for r in self.rows:
+            p = self.proof["modules"][r["module"]]
+            s = self.mod.module_slice(self.pin, r["module"])
+            hits = self.mod.vocabulary_hits(s["kept"])
+            self.assertEqual(
+                len(hits["substringHits"]), len(p["substringHits"]), r["module"]
+            )
+            self.assertEqual(
+                len(hits["wordBoundaryHits"]), len(p["wordBoundaryHits"]), r["module"]
+            )
+            any_word_hit |= bool(p["wordBoundaryHits"])
+            if r["class"] == "engine-neutral":
+                self.assertEqual(
+                    p["wordBoundaryHits"],
+                    [],
+                    f"{r['module']}: a neutral row has no word-boundary hit",
+                )
+                for line_no, _ in p["falsePositiveQueue"]:
+                    self.assertIn(
+                        f"line {line_no}:",
+                        r["dismissal"] or "",
+                        f"{r['module']}: dismissal quotes line {line_no}",
+                    )
+        self.assertTrue(
+            any_word_hit, "a typo in the vocabulary would green the whole table"
+        )
+        rc = self.proof["modules"][f"{LP_ROOT}/indexer/range_cursor.rs"]
+        self.assertEqual([h[0] for h in rc["substringHits"]], [10])
+        patch = self.by_module[f"{LP_ROOT}/builder/patch.rs"]
+        self.assertEqual(patch["class"], "sddp-geometry")
+        self.assertEqual(patch["grepPass"], {"substring": 0, "wordBoundary": 0})
+        self.assertEqual(patch["camelCaseGeometryLines"], 8)
+        self.assertIn("CamelCase", patch["dismissal"])
+
+    def test_mixed_rows_name_a_function_seam_and_entries_avoids_the_retracted_pair(
+        self,
+    ) -> None:
+        for r in self.rows:
+            if r["class"] != "mixed":
+                self.assertIsNone(r["neutralHalf"], r["module"])
+                continue
+            self.assertTrue(r["splitNote"], r["module"])
+            lo, hi = r["neutralHalf"]
+            self.assertTrue(0 <= lo <= hi <= r["nonTestLoc"], r["module"])
+        entries = self.by_module[f"{LP_ROOT}/builder/entries.rs"]
+        for name in RETRACTED_PAIR:
+            self.assertNotIn(name, entries["splitNote"])
+            self.assertNotIn(name, self.table)
+        proc = self.run_checker("check-reraise.py")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_totals_and_the_roadmap_band(self) -> None:
+        t = self.cls_["totals"]
+        neutral = sum(
+            r["nonTestLoc"] for r in self.rows if r["class"] == "engine-neutral"
+        )
+        lo = sum(r["neutralHalf"][0] for r in self.rows if r["class"] == "mixed")
+        hi = sum(r["neutralHalf"][1] for r in self.rows if r["class"] == "mixed")
+        corpus = t["corpusNonTestLoc"]
+        self.assertEqual(t["engineNeutralLoc"], neutral)
+        self.assertEqual(t["mixedNeutralHalf"], [lo, hi])
+        self.assertEqual(t["measuredBand"], [neutral + lo, neutral + hi])
+        self.assertEqual(t["roadmapBand"], [round(corpus / 5), round(corpus / 4)])
+        overlap = (
+            t["measuredBand"][1] >= t["roadmapBand"][0]
+            and t["measuredBand"][0] <= t["roadmapBand"][1]
+        )
+        self.assertEqual(t["verdict"], "agreement" if overlap else "amended")
+        if t["verdict"] == "amended":
+            self.assertIn(self.pin[:8], t["amendedFigure"])
+            self.assertRegex(t["amendedFigure"], r"\d{4}-\d{2}-\d{2}")
+
+    def test_markdown_rows_mirror_the_json(self) -> None:
+        parsed = [
+            (m.group("module"), m.group("klass"), int(m.group("loc")))
+            for ln in self.table.splitlines()
+            if (m := LP_ROW_RE.match(ln))
+        ]
+        self.assertEqual(
+            parsed, [(r["module"], r["class"], r["nonTestLoc"]) for r in self.rows]
+        )
+
+    def test_register_subsection_carries_the_same_table_and_the_checkers_pass(
+        self,
+    ) -> None:
+        lines = self.section.lines
+        heading = next(
+            (
+                l
+                for l in lines
+                if l.startswith("#### lp/ kernel boundary (measured at baseline")
+            ),
+            None,
+        )
+        self.assertIsNotNone(heading)
+        register_rows = [l for l in lines if LP_ROW_RE.match(l)]
+        table_rows = [l for l in self.table.splitlines() if LP_ROW_RE.match(l)]
+        self.assertEqual(register_rows, table_rows)
+        self.assertTrue(any(l.startswith("**Totals.**") for l in lines))
+        for tool, extra in (
+            ("check-anchors.py", ()),
+            ("fields-check.py", ("--require", "Alignment")),
+        ):
+            proc = self.run_checker(tool, *extra)
+            self.assertEqual(proc.returncode, 0, f"{tool}: {proc.stdout}{proc.stderr}")
+
+    def test_regeneration_is_byte_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            out = pathlib.Path(raw)
+            code = self.mod.main(
+                ["classify", "--baseline", self.pin, "--out-dir", str(out)]
+            )
+            self.assertEqual(code, 0)
+            for name in (
+                "lp-classification.json",
+                "lp-classification.md",
+                "lp-grep-proof.json",
+            ):
+                self.assertEqual(
+                    (out / name).read_bytes(), (ALIGN / name).read_bytes(), name
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

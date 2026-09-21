@@ -1,0 +1,13 @@
+{
+  "station": "test-corpus",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "producedAt": "2026-09-19",
+  "resolutionRule": "The test-corpus station owns no Part-I row: the generalization roadmap's Part-I findings (I.3-1 .. I.3-8, I.5) are all production-layer leakage claims adjudicated by the crate stations (I.3-6 by build-ci, whose partI-handoff.json carries the claim-stale verdict). This file exists so the shared tools/verify-station.sh runs verbatim for slug test-corpus; with no rows the genericity check asserts the gate alone (scripts/ci/check-infra-genericity.sh exits 0 and EXCLUDED_FILES=() still holds), which is the same reading the stochastic station recorded.",
+  "notOwned": {
+    "I.3-6 infra-genericity exemption parenthetical": "owned by the build-ci station (stations/build-ci/partI-handoff.json, stationVerdict claim-stale; disposition is Epic 9's)",
+    "StubComm / Rank0Of2 harness home (§5.8)": "not a Part-I row; adjudicated at this station as a §5 target on both its doc and tree sides (verdicts.json test-bloat-30 / test-bloat-43) and handed to the owner gate"
+  },
+  "dispositions": [],
+  "entries": [],
+  "alignmentHandoff": "every minted row and every folded seed delta at this station is Alignment neutral (calibration.json#assigned[].alignmentHint); the Phase-0a hand-off is gate-substrate.json, an informational file with no finding and no id"
+}

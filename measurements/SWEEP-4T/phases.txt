@@ -1,0 +1,139 @@
+# phase split for SWEEP-4T: source = untimed replay of cmd.txt argv into a retained output dir
+# (cobre has no 'summary' subcommand; the walls come from the run's own metadata.json)
+=== training/metadata.json ===
+{
+  "cobre_version": "0.15.0",
+  "hostname": "fedora",
+  "solver": "highs",
+  "solver_version": "1.13.1",
+  "started_at": "2026-09-20T12:43:04Z",
+  "completed_at": "2026-09-20T12:45:21Z",
+  "duration_seconds": 137.053,
+  "status": "complete",
+  "configuration": {
+    "seed": null,
+    "max_iterations": 5,
+    "forward_passes": 4,
+    "stopping_mode": "any",
+    "policy_mode": "fresh"
+  },
+  "problem_dimensions": {
+    "num_stages": 113,
+    "num_hydros": 157,
+    "num_thermals": 158,
+    "num_buses": 5,
+    "num_lines": 6
+  },
+  "iterations": {
+    "completed": 5,
+    "converged_at": null
+  },
+  "convergence": {
+    "achieved": false,
+    "final_gap_percent": -11.681675242559997,
+    "termination_reason": "iteration_limit"
+  },
+  "row_pool": {
+    "total_generated": 2240,
+    "total_active": 761,
+    "peak_active": 1195,
+    "cuts_active": 761,
+    "rows_in_lp_total": 0,
+    "rows_in_lp_solve_count": 0,
+    "rows_in_lp_max": 0,
+    "total_loaded": 0
+  },
+  "bounds": {
+    "final_lower_bound": 361349957902.5459,
+    "final_upper_bound": 319138229331.2432,
+    "final_upper_bound_std": 63271136834.63558,
+    "final_upper_bound_kind": "statistical"
+  },
+  "solve_stats": {
+    "total_lp_solves": 8995,
+    "first_try": 8989,
+    "retried": 6,
+    "failed": 0,
+    "forward_solve_seconds": 147.2237344689999,
+    "backward_solve_seconds": 304.8258363119999,
+    "parallelism": 4
+  },
+  "setup": {
+    "load_seconds": 0.107005128,
+    "stochastic_fit_seconds": 1.285143232,
+    "production_fit_seconds": 0.016034042,
+    "evaporation_fit_seconds": 0.000343647,
+    "broadcast_seconds": 0.25735881
+  },
+  "production_fit_deviation": {
+    "n_entries": 559,
+    "mean_abs": 2.3482498922689357,
+    "max_abs": 249.5146443731819,
+    "worst_relative": 0.02243285737992123,
+    "worst_entry": {
+      "entity_id": 26,
+      "stage_id": 0,
+      "relative": 0.02243285737992123,
+      "mean_abs": 2.9873699996635774,
+      "max_abs": 10.353601213753961
+    }
+  },
+  "distribution": {
+    "backend": "local",
+    "world_size": 1,
+    "ranks_participated": 1,
+    "num_hosts": 1,
+    "threads_per_rank": 4,
+    "hosts": [
+      {
+        "hostname": "fedora",
+        "ranks": [
+          0
+        ]
+      }
+    ]
+  }
+}
+=== simulation/metadata.json ===
+{
+  "cobre_version": "0.15.0",
+  "hostname": "fedora",
+  "solver": "highs",
+  "solver_version": "1.13.1",
+  "started_at": "2026-09-20T12:45:21Z",
+  "completed_at": "2026-09-20T12:46:47Z",
+  "duration_seconds": 85.97,
+  "status": "complete",
+  "scenarios": {
+    "total": 50,
+    "completed": 50,
+    "failed": 0
+  },
+  "cost": {
+    "mean_cost": 314652412460.4941,
+    "std_cost": 144788399976.43738
+  },
+  "solve_stats": {
+    "total_lp_solves": 5650,
+    "first_try": 5648,
+    "retried": 2,
+    "failed": 0,
+    "solve_seconds": 323.51626802000015,
+    "parallelism": 4
+  },
+  "distribution": {
+    "backend": "local",
+    "world_size": 1,
+    "ranks_participated": 1,
+    "num_hosts": 1,
+    "threads_per_rank": 4,
+    "hosts": [
+      {
+        "hostname": "fedora",
+        "ranks": [
+          0
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+taskset
+-c
+0,2,4,6
+/home/rogerio/git/cobre/target/profiling/cobre
+run
+/tmp/perf-run-SWEEP-4T-JcpFWX/deck
+--output
+/tmp/perf-run-SWEEP-4T-JcpFWX/out
+--threads
+4
+--comm-backend
+local
+--quiet

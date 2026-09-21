@@ -1,0 +1,4008 @@
+{
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "vocabulary": "state_space|cost_to_go|theta|cut|ring",
+  "sliceRule": "a line whose stripped form starts with `#[cfg(test)]` opens a test boundary; the attributed item is dropped by brace balance (or through its `;` for a statement item) and production lines after it are kept; the same token inside a `//!` doc comment is prose; sibling tests.rs / test_support.rs count zero; `#[cfg(any(test, feature = \"test-support\"))]` items are production (the ticket's rule), unlike the sddp station's loc-stats rule",
+  "universe": {
+    "modules": 30,
+    "inventory": "plans/architecture-debt-audit/measurements/lp-inventory.json",
+    "drift": []
+  },
+  "totals": {
+    "grossLoc": 44682,
+    "nonTestLoc": 11701,
+    "naiveFirstMarkerLoc": 11411
+  },
+  "modules": {
+    "crates/cobre-sddp/src/lp/builder/columns.rs": {
+      "grossLoc": 9319,
+      "nonTestLoc": 1315,
+      "excludedRanges": [
+        [
+          1305,
+          1822
+        ],
+        [
+          1824,
+          2230
+        ],
+        [
+          2232,
+          3378
+        ],
+        [
+          3380,
+          4322
+        ],
+        [
+          4324,
+          4854
+        ],
+        [
+          4856,
+          5277
+        ],
+        [
+          5279,
+          5598
+        ],
+        [
+          5600,
+          6020
+        ],
+        [
+          6022,
+          6752
+        ],
+        [
+          6754,
+          7812
+        ],
+        [
+          7814,
+          9027
+        ],
+        [
+          9029,
+          9319
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 1304,
+      "substringHits": [
+        [
+          46,
+          "    fill_theta_column(layout, bufs);"
+        ],
+        [
+          91,
+          "        // disappears at `Operating`, restoring the hard floor."
+        ],
+        [
+          130,
+          "        let ring = super::entries::transit_bucket_ring(state, range.clone());"
+        ],
+        [
+          131,
+          "        ring.freeze_masked_columns("
+        ],
+        [
+          144,
+          "/// otherwise (mirroring [`fill_transit_bucket_columns`]; a plant's own"
+        ],
+        [
+          149,
+          "    let ring = super::entries::anticipated_ring(layout);"
+        ],
+        [
+          150,
+          "    ring.freeze_masked_columns("
+        ],
+        [
+          180,
+          "/// Theta column: bounded below by zero so iteration-1 LPs with empty cut pools"
+        ],
+        [
+          182,
+          "fn fill_theta_column(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {"
+        ],
+        [
+          183,
+          "    bufs.col_lower[layout.col_theta()] = 0.0;"
+        ],
+        [
+          184,
+          "    bufs.col_upper[layout.col_theta()] = f64::INFINITY;"
+        ],
+        [
+          185,
+          "    bufs.objective[layout.col_theta()] = 1.0;"
+        ],
+        [
+          265,
+          "/// Both terms of the closing `sum.min(fold(hb...))` are load-bearing, not a"
+        ],
+        [
+          267,
+          "/// lowering `hydro_bounds` override — the no-raising rule's own prescribed"
+        ],
+        [
+          268,
+          "/// remedy for a mid-horizon capacity cut — is silently discarded. Drop the"
+        ],
+        [
+          572,
+          "/// `ctx.delivery_cumulative_discount_factors` vectors and deposit into ring"
+        ],
+        [
+          573,
+          "/// slot `ring_index(delivery_stage) mod k_max`, the ring's modular delivery-target"
+        ],
+        [
+          586,
+          "/// every non-theta entry by `COST_SCALE_FACTOR`."
+        ],
+        [
+          597,
+          "    let ring = super::entries::anticipated_ring(layout);"
+        ],
+        [
+          619,
+          "        let state_out_col = ring.out_col(slot, local_idx);"
+        ],
+        [
+          765,
+          "/// Both terms of `sum.min(hb.max_generation_mw)` are load-bearing — the same"
+        ],
+        [
+          767,
+          "/// and a lowering `hydro_bounds` override is silently discarded; drop the"
+        ],
+        [
+          806,
+          "/// `identify_fpha_hydros` excludes a filling hydro from `fpha_hydro_indices` during"
+        ],
+        [
+          1238,
+          "/// written UNSCALED (the caller divides non-theta entries by `COST_SCALE_FACTOR`)."
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          130,
+          "        let ring = super::entries::transit_bucket_ring(state, range.clone());"
+        ],
+        [
+          131,
+          "        ring.freeze_masked_columns("
+        ],
+        [
+          149,
+          "    let ring = super::entries::anticipated_ring(layout);"
+        ],
+        [
+          150,
+          "    ring.freeze_masked_columns("
+        ],
+        [
+          180,
+          "/// Theta column: bounded below by zero so iteration-1 LPs with empty cut pools"
+        ],
+        [
+          268,
+          "/// remedy for a mid-horizon capacity cut — is silently discarded. Drop the"
+        ],
+        [
+          572,
+          "/// `ctx.delivery_cumulative_discount_factors` vectors and deposit into ring"
+        ],
+        [
+          573,
+          "/// slot `ring_index(delivery_stage) mod k_max`, the ring's modular delivery-target"
+        ],
+        [
+          586,
+          "/// every non-theta entry by `COST_SCALE_FACTOR`."
+        ],
+        [
+          597,
+          "    let ring = super::entries::anticipated_ring(layout);"
+        ],
+        [
+          619,
+          "        let state_out_col = ring.out_col(slot, local_idx);"
+        ],
+        [
+          1238,
+          "/// written UNSCALED (the caller divides non-theta entries by `COST_SCALE_FACTOR`)."
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          46,
+          "fill_theta_column -> theta"
+        ],
+        [
+          91,
+          "restoring -> ring"
+        ],
+        [
+          144,
+          "mirroring -> ring"
+        ],
+        [
+          182,
+          "fill_theta_column -> theta"
+        ],
+        [
+          183,
+          "col_theta -> theta"
+        ],
+        [
+          184,
+          "col_theta -> theta"
+        ],
+        [
+          185,
+          "col_theta -> theta"
+        ],
+        [
+          265,
+          "load-bearing -> ring"
+        ],
+        [
+          267,
+          "lowering -> ring"
+        ],
+        [
+          765,
+          "load-bearing -> ring"
+        ],
+        [
+          767,
+          "lowering -> ring"
+        ],
+        [
+          806,
+          "during -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          8,
+          "    AnticipatedLocal, BlockIdx, Boundary, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal,"
+        ],
+        [
+          574,
+          "/// mapping [`crate::indexer::StateSpace::commitment_hold_in_study_offset`]"
+        ],
+        [
+          608,
+          "            anticipated_resolution_for(layout.state, AnticipatedLocal::new(local_idx), n_stages);"
+        ],
+        [
+          623,
+          "            AnticipatedLocal::new(local_idx),"
+        ],
+        [
+          650,
+          "                    .anticipated_bound(AnticipatedLocal::new(local_idx), delivery_stage - n_stages)"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/commitment_reconcile.rs": {
+      "grossLoc": 245,
+      "nonTestLoc": 243,
+      "excludedRanges": [
+        [
+          244,
+          245
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 243,
+      "substringHits": [
+        [
+          4,
+          "//! A carried commitment is a basic ring-slot column's solver-computed value —"
+        ],
+        [
+          9,
+          "//! (`apply_commitment_hold_col_scale_unscale`): unscaling removes the ring"
+        ],
+        [
+          68,
+          "/// its own round-trip shifts it. Comparing against the raw value would leave a"
+        ],
+        [
+          148,
+          "    /// State this solve pins; the maturing commitment sits at this stage's"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          4,
+          "//! A carried commitment is a basic ring-slot column's solver-computed value —"
+        ],
+        [
+          9,
+          "//! (`apply_commitment_hold_col_scale_unscale`): unscaling removes the ring"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          68,
+          "Comparing -> ring"
+        ],
+        [
+          148,
+          "maturing -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          19,
+          "use crate::indexer::{AnticipatedLocal, StateSpace, anticipated_resolution_for};"
+        ],
+        [
+          147,
+          "    pub state_layout: &'a StateSpace,"
+        ],
+        [
+          149,
+          "    /// modular hold slot ([`StateSpace::commitment_hold_in_study_offset`])."
+        ],
+        [
+          199,
+          "            AnticipatedLocal::new(local),"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/commitment_reconcile/tests.rs": {
+      "grossLoc": 250,
+      "nonTestLoc": 0,
+      "excludedRanges": [
+        [
+          1,
+          250
+        ]
+      ],
+      "sliceMethod": "sibling-test-file",
+      "naiveFirstMarkerLoc": 0,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/builder/delivery_ring.rs": {
+      "grossLoc": 567,
+      "nonTestLoc": 299,
+      "excludedRanges": [
+        [
+          300,
+          567
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 299,
+      "substringHits": [
+        [
+          1,
+          "//! Generic lagged-delivery ring primitive shared by the travel-time"
+        ],
+        [
+          2,
+          "//! water-bucket ring and the anticipated-thermal ring: a borrowed outgoing"
+        ],
+        [
+          5,
+          "//! paired row-cap/column-freeze masking. The two rings differ in how each"
+        ],
+        [
+          7,
+          "//! both differences live at each ring's own call site, never a second"
+        ],
+        [
+          13,
+          "//! block-mode-coupled per-lag deposit fill stays at each ring's own call"
+        ],
+        [
+          20,
+          "/// A lagged-delivery ring over one dense, slot-major/lane-minor state-column"
+        ],
+        [
+          31,
+          "    /// Parallel delivery lanes (plants) sharing this ring."
+        ],
+        [
+          38,
+          "    /// Constructs a ring over the borrowed out/in state blocks."
+        ],
+        [
+          72,
+          "    /// Outgoing-block column for ring position `(slot, lane)` — the single"
+        ],
+        [
+          73,
+          "    /// owner of the ring's addressing arithmetic."
+        ],
+        [
+          93,
+          "    /// Incoming-block column for ring position `(slot, lane)`; see"
+        ],
+        [
+          131,
+          "    /// Emits the ring's interior shift-row CSC entries: `out[slot] +1`, and"
+        ],
+        [
+          132,
+          "    /// `in[slot+1] −1` when a deeper ring position exists for the same lane"
+        ],
+        [
+          174,
+          "    /// Emits the ring's interior carry-row CSC entries: `out[slot] +1` and"
+        ],
+        [
+          216,
+          "    /// Freezes every masked ring position (`row_pos[i] == None`) to `[0, 0]`"
+        ],
+        [
+          219,
+          "    /// discharges the row half for. `reachable_bound` is the ring's open"
+        ],
+        [
+          223,
+          "    /// rescaled to share the freeze between rings."
+        ],
+        [
+          253,
+          "    /// Pins the ring's outgoing column at `(slot, lane)` to `decision_col`"
+        ],
+        [
+          255,
+          "    /// anticipated ring's deposit. The water ring's block-mode-coupled"
+        ],
+        [
+          271,
+          "    /// `lag == 0` is the same-stage share, never a ring slot), returned as a"
+        ],
+        [
+          283,
+          "            \"lag must be >= 1; lag 0 is the same-stage share, never a ring slot\""
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          1,
+          "//! Generic lagged-delivery ring primitive shared by the travel-time"
+        ],
+        [
+          2,
+          "//! water-bucket ring and the anticipated-thermal ring: a borrowed outgoing"
+        ],
+        [
+          7,
+          "//! both differences live at each ring's own call site, never a second"
+        ],
+        [
+          13,
+          "//! block-mode-coupled per-lag deposit fill stays at each ring's own call"
+        ],
+        [
+          20,
+          "/// A lagged-delivery ring over one dense, slot-major/lane-minor state-column"
+        ],
+        [
+          31,
+          "    /// Parallel delivery lanes (plants) sharing this ring."
+        ],
+        [
+          38,
+          "    /// Constructs a ring over the borrowed out/in state blocks."
+        ],
+        [
+          72,
+          "    /// Outgoing-block column for ring position `(slot, lane)` — the single"
+        ],
+        [
+          73,
+          "    /// owner of the ring's addressing arithmetic."
+        ],
+        [
+          93,
+          "    /// Incoming-block column for ring position `(slot, lane)`; see"
+        ],
+        [
+          131,
+          "    /// Emits the ring's interior shift-row CSC entries: `out[slot] +1`, and"
+        ],
+        [
+          132,
+          "    /// `in[slot+1] −1` when a deeper ring position exists for the same lane"
+        ],
+        [
+          174,
+          "    /// Emits the ring's interior carry-row CSC entries: `out[slot] +1` and"
+        ],
+        [
+          216,
+          "    /// Freezes every masked ring position (`row_pos[i] == None`) to `[0, 0]`"
+        ],
+        [
+          219,
+          "    /// discharges the row half for. `reachable_bound` is the ring's open"
+        ],
+        [
+          253,
+          "    /// Pins the ring's outgoing column at `(slot, lane)` to `decision_col`"
+        ],
+        [
+          255,
+          "    /// anticipated ring's deposit. The water ring's block-mode-coupled"
+        ],
+        [
+          271,
+          "    /// `lag == 0` is the same-stage share, never a ring slot), returned as a"
+        ],
+        [
+          283,
+          "            \"lag must be >= 1; lag 0 is the same-stage share, never a ring slot\""
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          5,
+          "rings -> ring"
+        ],
+        [
+          223,
+          "rings -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          10,
+          "//! [`StateSpace`](crate::indexer::StateSpace) remains the sole owner of the"
+        ],
+        [
+          11,
+          "//! out/in state-index ranges: a [`DeliveryRing`] borrows them for one"
+        ],
+        [
+          23,
+          "/// [`StateSpace`](crate::indexer::StateSpace) — never a private copy of the"
+        ],
+        [
+          26,
+          "pub struct DeliveryRing {"
+        ],
+        [
+          37,
+          "impl DeliveryRing {"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/entries.rs": {
+      "grossLoc": 10093,
+      "nonTestLoc": 1686,
+      "excludedRanges": [
+        [
+          1680,
+          1710
+        ],
+        [
+          1716,
+          2240
+        ],
+        [
+          2242,
+          3508
+        ],
+        [
+          3510,
+          10093
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 1679,
+      "substringHits": [
+        [
+          12,
+          "use super::delivery_ring::DeliveryRing;"
+        ],
+        [
+          21,
+          "/// The in-study commitment-hold ring (`n_lanes = n_anticipated`,"
+        ],
+        [
+          26,
+          "pub(super) fn anticipated_ring(layout: &StageLayout) -> DeliveryRing {"
+        ],
+        [
+          47,
+          "/// latch for the next delivery sharing the same modular residue whenever a"
+        ],
+        [
+          53,
+          "/// the latch — sums per-block thermal energy against the maturing slot's"
+        ],
+        [
+          60,
+          "/// `stage_idx >= n_stages`), where [`PointResolution::ring_index`] is the"
+        ],
+        [
+          72,
+          "    let ring = anticipated_ring(layout);"
+        ],
+        [
+          91,
+          "        // ring."
+        ],
+        [
+          106,
+          "        let col_state = ring.in_col(slot, local_idx);"
+        ],
+        [
+          116,
+          "/// Encode the commitment-hold ring's delivery-decision LATCH row"
+        ],
+        [
+          120,
+          "/// ([`PointResolution::ring_index`] owns the delivery-axis → ring-axis map),"
+        ],
+        [
+          134,
+          "    let ring = anticipated_ring(layout);"
+        ],
+        [
+          159,
+          "        let r = point.ring_index(delivery_stage);"
+        ],
+        [
+          163,
+          "             inside the excised fixed post-horizon window — never a ring member, so a \\"
+        ],
+        [
+          168,
+          "        ring.emit_deposit(slot, local_idx, row, col_decision, col_entries);"
+        ],
+        [
+          181,
+          "/// travel-time ring keeps `emit_shift_rows` unchanged; its physics genuinely"
+        ],
+        [
+          183,
+          "/// not-yet-due in-flight slot; the commitment maturing THIS stage is always"
+        ],
+        [
+          192,
+          "    let ring = anticipated_ring(layout);"
+        ],
+        [
+          193,
+          "    let n_reachable = ring.emit_carry_rows("
+        ],
+        [
+          270,
+          "    // Mode-independent: the bucket ring-shift never depends on block_mode, so it runs"
+        ],
+        [
+          309,
+          "            // `β_h` stale-nonzero — a wrong cut that still compiles."
+        ],
+        [
+          319,
+          "        // The maturing-now bucket `b_1^in`: a SINGLE entry — the confluence sum over"
+        ],
+        [
+          322,
+          "            let ring = transit_bucket_ring(layout.state, range);"
+        ],
+        [
+          323,
+          "            col_entries[ring.in_col(0, 0)].push((row, -1.0));"
+        ],
+        [
+          410,
+          "pub(super) fn transit_bucket_ring(state: &StateSpace, range: Range<usize>) -> DeliveryRing {"
+        ],
+        [
+          420,
+          "/// Fill the travel-time bucket-definition ring-shift rows via"
+        ],
+        [
+          433,
+          "        let ring = transit_bucket_ring(state, range.clone());"
+        ],
+        [
+          434,
+          "        ring.emit_shift_rows("
+        ],
+        [
+          518,
+          "    let ring = transit_bucket_ring(layout.state, range.clone());"
+        ],
+        [
+          524,
+          "        let slot = range.start + ring.slot_target(0, d);"
+        ],
+        [
+          570,
+          "/// coupling left on a frozen row makes `β_h` stale-nonzero — a wrong cut that compiles),"
+        ],
+        [
+          603,
+          "        // The incoming maturing bucket `b_1^in` delivers over this stage's blocks by the"
+        ],
+        [
+          612,
+          "            let ring = transit_bucket_ring(layout.state, range);"
+        ],
+        [
+          613,
+          "            let col_first_slot_in = ring.in_col(0, 0);"
+        ],
+        [
+          783,
+          "    let ring = transit_bucket_ring(layout.state, range.clone());"
+        ],
+        [
+          789,
+          "        let slot = range.start + ring.slot_target(0, d);"
+        ],
+        [
+          815,
+          "/// Resolve this stage's incoming maturing bucket `arrival_density` (fixed-delivery-density"
+        ],
+        [
+          889,
+          "/// invalid cut."
+        ],
+        [
+          977,
+          "/// Same cut-validity contract as [`fill_filling_target_entries`]: never hand-extract this"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          21,
+          "/// The in-study commitment-hold ring (`n_lanes = n_anticipated`,"
+        ],
+        [
+          72,
+          "    let ring = anticipated_ring(layout);"
+        ],
+        [
+          91,
+          "        // ring."
+        ],
+        [
+          106,
+          "        let col_state = ring.in_col(slot, local_idx);"
+        ],
+        [
+          116,
+          "/// Encode the commitment-hold ring's delivery-decision LATCH row"
+        ],
+        [
+          120,
+          "/// ([`PointResolution::ring_index`] owns the delivery-axis → ring-axis map),"
+        ],
+        [
+          134,
+          "    let ring = anticipated_ring(layout);"
+        ],
+        [
+          163,
+          "             inside the excised fixed post-horizon window — never a ring member, so a \\"
+        ],
+        [
+          168,
+          "        ring.emit_deposit(slot, local_idx, row, col_decision, col_entries);"
+        ],
+        [
+          181,
+          "/// travel-time ring keeps `emit_shift_rows` unchanged; its physics genuinely"
+        ],
+        [
+          192,
+          "    let ring = anticipated_ring(layout);"
+        ],
+        [
+          193,
+          "    let n_reachable = ring.emit_carry_rows("
+        ],
+        [
+          270,
+          "    // Mode-independent: the bucket ring-shift never depends on block_mode, so it runs"
+        ],
+        [
+          309,
+          "            // `β_h` stale-nonzero — a wrong cut that still compiles."
+        ],
+        [
+          322,
+          "            let ring = transit_bucket_ring(layout.state, range);"
+        ],
+        [
+          323,
+          "            col_entries[ring.in_col(0, 0)].push((row, -1.0));"
+        ],
+        [
+          420,
+          "/// Fill the travel-time bucket-definition ring-shift rows via"
+        ],
+        [
+          433,
+          "        let ring = transit_bucket_ring(state, range.clone());"
+        ],
+        [
+          434,
+          "        ring.emit_shift_rows("
+        ],
+        [
+          518,
+          "    let ring = transit_bucket_ring(layout.state, range.clone());"
+        ],
+        [
+          524,
+          "        let slot = range.start + ring.slot_target(0, d);"
+        ],
+        [
+          570,
+          "/// coupling left on a frozen row makes `β_h` stale-nonzero — a wrong cut that compiles),"
+        ],
+        [
+          612,
+          "            let ring = transit_bucket_ring(layout.state, range);"
+        ],
+        [
+          613,
+          "            let col_first_slot_in = ring.in_col(0, 0);"
+        ],
+        [
+          783,
+          "    let ring = transit_bucket_ring(layout.state, range.clone());"
+        ],
+        [
+          789,
+          "        let slot = range.start + ring.slot_target(0, d);"
+        ],
+        [
+          889,
+          "/// invalid cut."
+        ],
+        [
+          977,
+          "/// Same cut-validity contract as [`fill_filling_target_entries`]: never hand-extract this"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          12,
+          "delivery_ring -> ring"
+        ],
+        [
+          26,
+          "anticipated_ring -> ring"
+        ],
+        [
+          47,
+          "sharing -> ring"
+        ],
+        [
+          53,
+          "maturing -> ring"
+        ],
+        [
+          60,
+          "ring_index -> ring"
+        ],
+        [
+          159,
+          "ring_index -> ring"
+        ],
+        [
+          183,
+          "maturing -> ring"
+        ],
+        [
+          319,
+          "maturing-now -> ring"
+        ],
+        [
+          410,
+          "transit_bucket_ring -> ring"
+        ],
+        [
+          603,
+          "maturing -> ring"
+        ],
+        [
+          815,
+          "maturing -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          7,
+          "    AnticipatedLocal, BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys,"
+        ],
+        [
+          8,
+          "    StateSpace, anticipated_resolution_for,"
+        ],
+        [
+          12,
+          "use super::delivery_ring::DeliveryRing;"
+        ],
+        [
+          24,
+          "/// construction. Borrows the merged [`StateSpace::commit_out`]/"
+        ],
+        [
+          25,
+          "/// [`StateSpace::commit_in`] region."
+        ],
+        [
+          26,
+          "pub(super) fn anticipated_ring(layout: &StageLayout) -> DeliveryRing {"
+        ],
+        [
+          29,
+          "    DeliveryRing::new("
+        ],
+        [
+          57,
+          "/// [`crate::indexer::StateSpace::commitment_hold_in_study_offset`])."
+        ],
+        [
+          138,
+          "            anticipated_resolution_for(layout.state, AnticipatedLocal::new(local_idx), n_stages);"
+        ],
+        [
+          178,
+          "/// `slot^out − slot^in = 0`) via [`DeliveryRing::emit_carry_rows`] — the"
+        ],
+        [
+          180,
+          "/// [`DeliveryRing::emit_shift_rows`] for the anticipated family (the water"
+        ],
+        [
+          394,
+          "pub(super) fn transit_bucket_plant_ranges(state: &StateSpace) -> Vec<Range<usize>> {"
+        ],
+        [
+          407,
+          "/// One plant's [`DeliveryRing`] (`n_lanes = 1`) over its LOCAL bucket sub-`range`"
+        ],
+        [
+          410,
+          "pub(super) fn transit_bucket_ring(state: &StateSpace, range: Range<usize>) -> DeliveryRing {"
+        ],
+        [
+          412,
+          "    DeliveryRing::new("
+        ],
+        [
+          421,
+          "/// [`DeliveryRing::emit_shift_rows`], once per downstream plant. A masked-out bucket"
+        ],
+        [
+          553,
+          "fn plant_transit_bucket_range(state: &StateSpace, plant_idx: usize) -> Option<Range<usize>> {"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/fpha_cursor.rs": {
+      "grossLoc": 100,
+      "nonTestLoc": 100,
+      "excludedRanges": [],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 100,
+      "substringHits": [
+        [
+          33,
+          "/// its own contiguous `n_blks * n_planes` row block. This nesting is load-bearing"
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          33,
+          "load-bearing -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/builder/layout.rs": {
+      "grossLoc": 2090,
+      "nonTestLoc": 1962,
+      "excludedRanges": [
+        [
+          1962,
+          1963
+        ],
+        [
+          1965,
+          2090
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 1961,
+      "substringHits": [
+        [
+          53,
+          "/// System-level context shared across all stages during template construction."
+        ],
+        [
+          206,
+          "/// Column/row offsets for one stage's in-study anticipated-ring layout"
+        ],
+        [
+          217,
+          "    /// column block (the `A * k_max` in-study anticipated-ring slots,"
+        ],
+        [
+          219,
+          "    /// the offset is stage-invariant — keeping the global stage-0 cut map on the"
+        ],
+        [
+          225,
+          "    /// delivery stage's commissioning window), pinning that decision's ring"
+        ],
+        [
+          226,
+          "    /// slot (`ring_index(delivery_stage) mod k_max`) to its decision column. Immediately"
+        ],
+        [
+          255,
+          "    /// matures through the ring at all). Length `n_anticipated`."
+        ],
+        [
+          259,
+          "    /// [`super::delivery_ring::DeliveryRing::emit_carry_rows`]): every"
+        ],
+        [
+          261,
+          "    /// (`ring_index(delivery_target) mod k_max`). The commitment maturing THIS stage is"
+        ],
+        [
+          270,
+          "    /// For each GLOBAL in-study commitment-hold slot (`(ring_index(m) mod k_max) *"
+        ],
+        [
+          410,
+          "    /// contiguously in that order: reordering these eight `alloc` calls would"
+        ],
+        [
+          437,
+          "/// pairing is not split across this struct and [`ConstraintRows`])."
+        ],
+        [
+          517,
+          "    /// after the operational-violation rows, in the pre-cut region. Empty at every"
+        ],
+        [
+          519,
+          "    /// `>= num_rows` aliases the append-only cut rows (slot-identity warm-start"
+        ],
+        [
+          520,
+          "    /// matches cut rows from `num_rows`) and corrupts every cut."
+        ],
+        [
+          533,
+          "    /// hydro); sibling to `filling_target` in the pre-cut region. Same"
+        ],
+        [
+          556,
+          "/// (`theta + 1`), so the two regions meet there with no overlap."
+        ],
+        [
+          572,
+          "    /// Anticipated-state ring-buffer width: `n_anticipated * k_max`."
+        ],
+        [
+          577,
+          "    /// In-study anticipated-ring column/row offsets (see [`AnticipatedLayout`])."
+        ],
+        [
+          672,
+          "/// n_anticipated + plant`, modular slot-major/plant-minor — mirroring"
+        ],
+        [
+          684,
+          "/// maturing EXACTLY this stage (`m == stage_idx`) is the single governing"
+        ],
+        [
+          691,
+          "/// identity, so this is exactly the ring's strictly-future window, contiguous"
+        ],
+        [
+          697,
+          "/// excises part of the ring: `m mod k_max` is injective only over a"
+        ],
+        [
+          719,
+          "        // `depth in 0..k_max` enumerates exactly `k_max` consecutive ring-axis"
+        ],
+        [
+          749,
+          "/// when `n_anticipated == 0 || k_max == 0`, mirroring"
+        ],
+        [
+          751,
+          "/// in-flight delivery, so an empty ring can hold none. Returns the"
+        ],
+        [
+          777,
+          "             ring's deposit-row fill\""
+        ],
+        [
+          796,
+          "/// delivery maturing this stage is a `K = 0` self-delivery"
+        ],
+        [
+          800,
+          "/// fishes this stage: every plant with a delivery maturing this stage gets"
+        ],
+        [
+          806,
+          "/// (`(Vec::new(), 0)`) when `n_anticipated == 0 || k_max == 0`, mirroring"
+        ],
+        [
+          809,
+          "/// pre-study-only plant reach a fishing row on an empty ring."
+        ],
+        [
+          919,
+          "/// and hence the reservoir surface does not exist). Evaporation is **kept** during"
+        ],
+        [
+          1255,
+          "        // stride). Adjacency between consecutive families is structural, never a"
+        ],
+        [
+          1297,
+          "        // through `RangeCursor::alloc`, mirroring `col` above."
+        ],
+        [
+          1353,
+          "        // n_dual_relevant is 0 — state pinning uses column bounds, so the cut path"
+        ],
+        [
+          1357,
+          "        // σ_fill then σ^{v-} rows, in the pre-cut region after the"
+        ],
+        [
+          1359,
+          "        // row at index `>= num_rows` aliases the append-only cut rows (slot-identity"
+        ],
+        [
+          1360,
+          "        // warm-start matches cut rows from `num_rows`) and corrupts every cut."
+        ],
+        [
+          1391,
+          "        // deliveries only; the maturing-this-stage carry (when the single"
+        ],
+        [
+          1436,
+          "        // NOT `thermal_end + n_anticipated`, so the global stage-0 cut map"
+        ],
+        [
+          1439,
+          "        // `0..0` only when the in-study anticipated ring is empty,"
+        ],
+        [
+          1440,
+          "        // mirroring the same `0..0`-vs-cursor-position fallback"
+        ],
+        [
+          1744,
+          "    /// Theta (future-cost) column; reads `self.state.theta`."
+        ],
+        [
+          1747,
+          "    pub(crate) fn col_theta(&self) -> usize {"
+        ],
+        [
+          1748,
+          "        self.state.theta"
+        ],
+        [
+          1882,
+          "            theta_col: self.col_theta(),"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          206,
+          "/// Column/row offsets for one stage's in-study anticipated-ring layout"
+        ],
+        [
+          217,
+          "    /// column block (the `A * k_max` in-study anticipated-ring slots,"
+        ],
+        [
+          219,
+          "    /// the offset is stage-invariant — keeping the global stage-0 cut map on the"
+        ],
+        [
+          225,
+          "    /// delivery stage's commissioning window), pinning that decision's ring"
+        ],
+        [
+          255,
+          "    /// matures through the ring at all). Length `n_anticipated`."
+        ],
+        [
+          517,
+          "    /// after the operational-violation rows, in the pre-cut region. Empty at every"
+        ],
+        [
+          519,
+          "    /// `>= num_rows` aliases the append-only cut rows (slot-identity warm-start"
+        ],
+        [
+          520,
+          "    /// matches cut rows from `num_rows`) and corrupts every cut."
+        ],
+        [
+          533,
+          "    /// hydro); sibling to `filling_target` in the pre-cut region. Same"
+        ],
+        [
+          556,
+          "/// (`theta + 1`), so the two regions meet there with no overlap."
+        ],
+        [
+          572,
+          "    /// Anticipated-state ring-buffer width: `n_anticipated * k_max`."
+        ],
+        [
+          577,
+          "    /// In-study anticipated-ring column/row offsets (see [`AnticipatedLayout`])."
+        ],
+        [
+          691,
+          "/// identity, so this is exactly the ring's strictly-future window, contiguous"
+        ],
+        [
+          697,
+          "/// excises part of the ring: `m mod k_max` is injective only over a"
+        ],
+        [
+          719,
+          "        // `depth in 0..k_max` enumerates exactly `k_max` consecutive ring-axis"
+        ],
+        [
+          751,
+          "/// in-flight delivery, so an empty ring can hold none. Returns the"
+        ],
+        [
+          777,
+          "             ring's deposit-row fill\""
+        ],
+        [
+          809,
+          "/// pre-study-only plant reach a fishing row on an empty ring."
+        ],
+        [
+          1353,
+          "        // n_dual_relevant is 0 — state pinning uses column bounds, so the cut path"
+        ],
+        [
+          1357,
+          "        // σ_fill then σ^{v-} rows, in the pre-cut region after the"
+        ],
+        [
+          1359,
+          "        // row at index `>= num_rows` aliases the append-only cut rows (slot-identity"
+        ],
+        [
+          1360,
+          "        // warm-start matches cut rows from `num_rows`) and corrupts every cut."
+        ],
+        [
+          1436,
+          "        // NOT `thermal_end + n_anticipated`, so the global stage-0 cut map"
+        ],
+        [
+          1439,
+          "        // `0..0` only when the in-study anticipated ring is empty,"
+        ],
+        [
+          1744,
+          "    /// Theta (future-cost) column; reads `self.state.theta`."
+        ],
+        [
+          1748,
+          "        self.state.theta"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          53,
+          "during -> ring"
+        ],
+        [
+          226,
+          "ring_index -> ring"
+        ],
+        [
+          259,
+          "delivery_ring -> ring"
+        ],
+        [
+          261,
+          "maturing -> ring, ring_index -> ring"
+        ],
+        [
+          270,
+          "ring_index -> ring"
+        ],
+        [
+          410,
+          "reordering -> ring"
+        ],
+        [
+          437,
+          "pairing -> ring"
+        ],
+        [
+          672,
+          "mirroring -> ring"
+        ],
+        [
+          684,
+          "maturing -> ring"
+        ],
+        [
+          749,
+          "mirroring -> ring"
+        ],
+        [
+          796,
+          "maturing -> ring"
+        ],
+        [
+          800,
+          "maturing -> ring"
+        ],
+        [
+          806,
+          "mirroring -> ring"
+        ],
+        [
+          919,
+          "during -> ring"
+        ],
+        [
+          1255,
+          "consecutive -> cut"
+        ],
+        [
+          1297,
+          "mirroring -> ring"
+        ],
+        [
+          1391,
+          "maturing-this-stage -> ring"
+        ],
+        [
+          1440,
+          "mirroring -> ring"
+        ],
+        [
+          1747,
+          "col_theta -> theta"
+        ],
+        [
+          1882,
+          "col_theta -> theta, theta_col -> theta"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          18,
+          "    AnticipatedLocal, BlockGrid, BlockIdx, Boundary, EvapLocal, EvaporationIndices, FphaCellLocal,"
+        ],
+        [
+          19,
+          "    FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, RangeCursor, StateSpace,"
+        ],
+        [
+          129,
+          "    /// `StateSpace` this build receives already carries."
+        ],
+        [
+          208,
+          "/// [`StateSpace::commit_out`]/[`StateSpace::commit_in`]. There is no separate"
+        ],
+        [
+          211,
+          "pub(crate) struct AnticipatedLayout {"
+        ],
+        [
+          216,
+          "    /// Start of the merged [`StateSpace::commit_out`]/[`StateSpace::commit_in`]"
+        ],
+        [
+          218,
+          "    /// slot-major/plant-minor). Sourced from `StateSpace::commit_out.start`, so"
+        ],
+        [
+          259,
+          "    /// [`super::delivery_ring::DeliveryRing::emit_carry_rows`]): every"
+        ],
+        [
+          272,
+          "    /// [`StateSpace::commitment_hold_in_study_offset`]'s own addressing), this"
+        ],
+        [
+          285,
+          "/// the handle's [`StateSpace::control_region_start`]."
+        ],
+        [
+          553,
+          "/// [`StateSpace::control_region_start`]. The stage-invariant role-(a) state"
+        ],
+        [
+          560,
+          "    /// dependency is one-directional (geometry → `StateSpace`), never the reverse."
+        ],
+        [
+          561,
+          "    pub(crate) state: &'a StateSpace,"
+        ],
+        [
+          577,
+          "    /// In-study anticipated-ring column/row offsets (see [`AnticipatedLayout`])."
+        ],
+        [
+          578,
+          "    pub(crate) anticipated: AnticipatedLayout,"
+        ],
+        [
+          701,
+          "    state: &StateSpace,"
+        ],
+        [
+          712,
+          "        .map(|plant| anticipated_resolution_for(state, AnticipatedLocal::new(plant), n_stages))"
+        ],
+        [
+          754,
+          "    state: &StateSpace,"
+        ],
+        [
+          769,
+          "        let plant = AnticipatedLocal::new(plant);"
+        ],
+        [
+          818,
+          "    state: &StateSpace,"
+        ],
+        [
+          830,
+          "        if anticipated_resolution_for(state, AnticipatedLocal::new(plant), n_stages)"
+        ],
+        [
+          1211,
+          "        state: &'a StateSpace,"
+        ],
+        [
+          1447,
+          "        let anticipated = AnticipatedLayout {"
+        ],
+        [
+          1742,
+          "    // ── Role-(a) accessors (read through the borrowed StateSpace handle) ─────────"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/layout/tests.rs": {
+      "grossLoc": 3565,
+      "nonTestLoc": 0,
+      "excludedRanges": [
+        [
+          1,
+          3565
+        ]
+      ],
+      "sliceMethod": "sibling-test-file",
+      "naiveFirstMarkerLoc": 0,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/builder/mod.rs": {
+      "grossLoc": 157,
+      "nonTestLoc": 155,
+      "excludedRanges": [
+        [
+          54,
+          55
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 53,
+      "substringHits": [
+        [
+          10,
+          "//! The column/row geometry — regions, ordering, offset arithmetic — is owned per"
+        ],
+        [
+          19,
+          "//! backward-pass cut-subgradient extraction resolve the same column via"
+        ],
+        [
+          45,
+          "pub(crate) mod delivery_ring;"
+        ],
+        [
+          60,
+          "pub use delivery_ring::DeliveryRing;"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          19,
+          "//! backward-pass cut-subgradient extraction resolve the same column via"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          10,
+          "ordering -> ring"
+        ],
+        [
+          45,
+          "delivery_ring -> ring"
+        ],
+        [
+          60,
+          "delivery_ring -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          11,
+          "//! stage by `StageLayout` (state-vector region on [`crate::indexer::StateSpace`],"
+        ],
+        [
+          20,
+          "//! [`crate::indexer::StateSpace::state_to_lp_incoming_column`]."
+        ],
+        [
+          60,
+          "pub use delivery_ring::DeliveryRing;"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/patch.rs": {
+      "grossLoc": 1168,
+      "nonTestLoc": 413,
+      "excludedRanges": [
+        [
+          414,
+          1168
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 413,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": [
+        [
+          2,
+          "use crate::indexer::{BlockGrid, BlockIdx, StateDim, StateSpace};"
+        ],
+        [
+          14,
+          "/// `StateSpace::n_state` counts, since `fill_col_state_patches` writes one"
+        ],
+        [
+          20,
+          "/// [`StateSpace::state_to_lp_incoming_column`] over every state-vector index,"
+        ],
+        [
+          181,
+          "        layout: &StateSpace,"
+        ],
+        [
+          215,
+          "    /// [`StateSpace::state_to_lp_incoming_column`] over every state-vector index"
+        ],
+        [
+          235,
+          "    /// [`state_to_lp_incoming_column`]: StateSpace::state_to_lp_incoming_column"
+        ],
+        [
+          245,
+          "        state_layout: &StateSpace,"
+        ],
+        [
+          259,
+          "                .state_to_lp_incoming_column(StateDim::new(j))"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/rows.rs": {
+      "grossLoc": 588,
+      "nonTestLoc": 588,
+      "excludedRanges": [],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 588,
+      "substringHits": [
+        [
+          64,
+          "/// row bounds `τ_k·(base − withdrawal)` (block-major, mirroring the entries side);"
+        ],
+        [
+          146,
+          "/// target's block rows, mirroring the entries side."
+        ],
+        [
+          510,
+          "/// self-delivery, or no maturing delivery, excludes a plant's row this"
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          64,
+          "mirroring -> ring"
+        ],
+        [
+          146,
+          "mirroring -> ring"
+        ],
+        [
+          510,
+          "maturing -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/builder/scaling.rs": {
+      "grossLoc": 770,
+      "nonTestLoc": 265,
+      "excludedRanges": [
+        [
+          266,
+          770
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 265,
+      "substringHits": [
+        [
+          87,
+          "/// Panics if `col_scale` does not cover every state column including `theta` —"
+        ],
+        [
+          88,
+          "/// the `col_scale.len() > theta_col` contract every render/patch call site"
+        ],
+        [
+          96,
+          "        col_scale.len() > state_layout.theta,"
+        ],
+        [
+          97,
+          "        \"col_scale must cover every state column including theta ({}); got len {}\","
+        ],
+        [
+          98,
+          "        state_layout.theta,"
+        ],
+        [
+          111,
+          "/// pin-then-read — the in-study ring's deposit/fishing coupling, the"
+        ],
+        [
+          120,
+          "/// Panics if `col_scale` does not cover every state column including `theta` —"
+        ],
+        [
+          121,
+          "/// the `col_scale.len() > theta_col` contract every render/patch call site"
+        ],
+        [
+          128,
+          "        col_scale.len() > state_layout.theta,"
+        ],
+        [
+          129,
+          "        \"col_scale must cover every state column including theta ({}); got len {}\","
+        ],
+        [
+          130,
+          "        state_layout.theta,"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          87,
+          "/// Panics if `col_scale` does not cover every state column including `theta` —"
+        ],
+        [
+          96,
+          "        col_scale.len() > state_layout.theta,"
+        ],
+        [
+          97,
+          "        \"col_scale must cover every state column including theta ({}); got len {}\","
+        ],
+        [
+          98,
+          "        state_layout.theta,"
+        ],
+        [
+          111,
+          "/// pin-then-read — the in-study ring's deposit/fishing coupling, the"
+        ],
+        [
+          120,
+          "/// Panics if `col_scale` does not cover every state column including `theta` —"
+        ],
+        [
+          128,
+          "        col_scale.len() > state_layout.theta,"
+        ],
+        [
+          129,
+          "        \"col_scale must cover every state column including theta ({}); got len {}\","
+        ],
+        [
+          130,
+          "        state_layout.theta,"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          88,
+          "theta_col -> theta"
+        ],
+        [
+          121,
+          "theta_col -> theta"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          10,
+          "use crate::indexer::StateSpace;"
+        ],
+        [
+          94,
+          "pub(crate) fn apply_bucket_col_scale(col_scale: &mut [f64], state_layout: &StateSpace) {"
+        ],
+        [
+          125,
+          "    state_layout: &StateSpace,"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/template.rs": {
+      "grossLoc": 1329,
+      "nonTestLoc": 1327,
+      "excludedRanges": [
+        [
+          1328,
+          1329
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 1327,
+      "substringHits": [
+        [
+          60,
+          "    /// [`ResolvedParameters::cost_scale_factor`]). Every non-theta objective"
+        ],
+        [
+          118,
+          "    /// `n_blks`-striped bases/lengths that misread any stage with a differing"
+        ],
+        [
+          136,
+          "    /// overrides. Applied to the theta objective coefficient."
+        ],
+        [
+          214,
+          "/// differing block count the stage-0 base/length addresses the WRONG primal"
+        ],
+        [
+          224,
+          "    /// `StageLayout::col_theta`, which accounts for the commitment-hold region's"
+        ],
+        [
+          229,
+          "    pub theta_col: usize,"
+        ],
+        [
+          231,
+          "    /// `theta + 1` and stage-invariant, but `turbine.end` is `n_blks`-dependent,"
+        ],
+        [
+          306,
+          "    // carrier mirroring the `filling_target` seam."
+        ],
+        [
+          322,
+          "    /// bases plus the interior control-region anchor mirroring"
+        ],
+        [
+          425,
+          "    // Theta must NOT be divided: the Benders cuts already enforce"
+        ],
+        [
+          426,
+          "    // `theta >= Q_successor / K`, so theta holds the SCALED future cost. Dividing"
+        ],
+        [
+          427,
+          "    // it too would make the LP `stage_cost/K + (1/K)*theta`, which recovers"
+        ],
+        [
+          428,
+          "    // `stage_cost + future_cost/K` at the boundary — wrong. `layout.col_theta()`"
+        ],
+        [
+          429,
+          "    // reads the correct index even when `n_anticipated > 0` shifts theta."
+        ],
+        [
+          430,
+          "    let theta_col = layout.col_theta();"
+        ],
+        [
+          433,
+          "        if i != theta_col {"
+        ],
+        [
+          546,
+          "/// `External`, seasonal-derived otherwise) — mirroring inflow's"
+        ],
+        [
+          608,
+          "///   structural row contributes to cut gradients; the cut path reads `view.reduced_costs`)"
+        ],
+        [
+          623,
+          "/// incoming-storage, theta, turbine, and spillage columns carry zero or small"
+        ],
+        [
+          692,
+          "///     name: \"B1\".to_string(),"
+        ],
+        [
+          939,
+          "// from `StateSpace` into the shared `TemplateBuildCtx` (mirroring the existing"
+        ],
+        [
+          1092,
+          "    // back through it rather than re-filtering `system.thermals()` a second time."
+        ],
+        [
+          1240,
+          "// cold path while obscuring the transpose inputs."
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          60,
+          "    /// [`ResolvedParameters::cost_scale_factor`]). Every non-theta objective"
+        ],
+        [
+          136,
+          "    /// overrides. Applied to the theta objective coefficient."
+        ],
+        [
+          231,
+          "    /// `theta + 1` and stage-invariant, but `turbine.end` is `n_blks`-dependent,"
+        ],
+        [
+          426,
+          "    // `theta >= Q_successor / K`, so theta holds the SCALED future cost. Dividing"
+        ],
+        [
+          427,
+          "    // it too would make the LP `stage_cost/K + (1/K)*theta`, which recovers"
+        ],
+        [
+          429,
+          "    // reads the correct index even when `n_anticipated > 0` shifts theta."
+        ],
+        [
+          608,
+          "///   structural row contributes to cut gradients; the cut path reads `view.reduced_costs`)"
+        ],
+        [
+          623,
+          "/// incoming-storage, theta, turbine, and spillage columns carry zero or small"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          118,
+          "differing -> ring"
+        ],
+        [
+          214,
+          "differing -> ring"
+        ],
+        [
+          224,
+          "col_theta -> theta"
+        ],
+        [
+          229,
+          "theta_col -> theta"
+        ],
+        [
+          306,
+          "mirroring -> ring"
+        ],
+        [
+          322,
+          "mirroring -> ring"
+        ],
+        [
+          425,
+          "cuts -> cut"
+        ],
+        [
+          428,
+          "col_theta -> theta"
+        ],
+        [
+          430,
+          "col_theta -> theta, theta_col -> theta"
+        ],
+        [
+          433,
+          "theta_col -> theta"
+        ],
+        [
+          546,
+          "mirroring -> ring"
+        ],
+        [
+          692,
+          "to_string -> ring"
+        ],
+        [
+          939,
+          "mirroring -> ring"
+        ],
+        [
+          1092,
+          "re-filtering -> ring"
+        ],
+        [
+          1240,
+          "obscuring -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          24,
+          "    Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,"
+        ],
+        [
+          398,
+          "    state: &StateSpace,"
+        ],
+        [
+          685,
+          "/// use cobre_sddp::indexer::{HydroCellIndex, StateSpace};"
+        ],
+        [
+          704,
+          "/// let state_layout = StateSpace::new(0, 0, 0, Vec::new(), 0, 0, Vec::new(), &[]);"
+        ],
+        [
+          731,
+          "    state_layout: &StateSpace,"
+        ],
+        [
+          818,
+          "/// `StateSpace`/`per_stage_mask` directly through [`build_stage_templates`]"
+        ],
+        [
+          939,
+          "// from `StateSpace` into the shared `TemplateBuildCtx` (mirroring the existing"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/builder/template/tests.rs": {
+      "grossLoc": 5356,
+      "nonTestLoc": 0,
+      "excludedRanges": [
+        [
+          1,
+          5356
+        ]
+      ],
+      "sliceMethod": "sibling-test-file",
+      "naiveFirstMarkerLoc": 0,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/builder/test_support.rs": {
+      "grossLoc": 179,
+      "nonTestLoc": 0,
+      "excludedRanges": [
+        [
+          1,
+          179
+        ]
+      ],
+      "sliceMethod": "sibling-test-file",
+      "naiveFirstMarkerLoc": 0,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/generic_constraints.rs": {
+      "grossLoc": 987,
+      "nonTestLoc": 985,
+      "excludedRanges": [
+        [
+          986,
+          987
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 985,
+      "substringHits": [
+        [
+          38,
+          "/// ## Role split (the load-bearing distinction for the cut path)"
+        ],
+        [
+          42,
+          "///   generic constraint's storage/inflow column landing on the same column the cut"
+        ],
+        [
+          139,
+          "    /// iterates it in a fixed, input-ordering-independent sequence."
+        ],
+        [
+          549,
+          "/// ordered at build time, so emitted pairs are input-ordering-independent with no"
+        ],
+        [
+          552,
+          "/// The `z_inflow.is_empty()` guard is load-bearing: `z_inflow` is empty when"
+        ],
+        [
+          872,
+          "/// fill and the resolver must agree on it; sharing this one derivation keeps them"
+        ],
+        [
+          900,
+          "/// `contract_type` — a referential-validation gap), mirroring the pumping precedent."
+        ],
+        [
+          965,
+          "/// point pairing a family with its `StageLayout` range, so a wrong arm mapping (e.g."
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          38,
+          "/// ## Role split (the load-bearing distinction for the cut path)"
+        ],
+        [
+          42,
+          "///   generic constraint's storage/inflow column landing on the same column the cut"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          139,
+          "input-ordering-independent -> ring"
+        ],
+        [
+          549,
+          "input-ordering-independent -> ring"
+        ],
+        [
+          552,
+          "load-bearing -> ring"
+        ],
+        [
+          872,
+          "sharing -> ring"
+        ],
+        [
+          900,
+          "mirroring -> ring"
+        ],
+        [
+          965,
+          "pairing -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          7,
+          "//! state region through its [`StateSpace`] handle, role-(b) equipment ranges"
+        ],
+        [
+          31,
+          "    BlockGrid, BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace,"
+        ],
+        [
+          40,
+          "/// - **Role (a)** — `state`: storage and z-inflow columns, owned by [`StateSpace`]."
+        ],
+        [
+          49,
+          "    pub state: &'a StateSpace,"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/generic_constraints/tests.rs": {
+      "grossLoc": 2951,
+      "nonTestLoc": 0,
+      "excludedRanges": [
+        [
+          1,
+          2951
+        ]
+      ],
+      "sliceMethod": "sibling-test-file",
+      "naiveFirstMarkerLoc": 0,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/indexer/anticipated_gate.rs": {
+      "grossLoc": 368,
+      "nonTestLoc": 112,
+      "excludedRanges": [
+        [
+          51,
+          81
+        ],
+        [
+          144,
+          368
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 50,
+      "substringHits": [
+        [
+          40,
+          "///    decision stage `t`, is separately load-bearing: a pre-entry decision"
+        ],
+        [
+          83,
+          "/// Whether plant `local_idx`'s commitment maturing at an EXPLICIT"
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          40,
+          "load-bearing -> ring"
+        ],
+        [
+          83,
+          "maturing -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          4,
+          "//! These are free functions, not [`StateSpace`] methods — the type owns"
+        ],
+        [
+          7,
+          "//! function takes `state: &StateSpace` for uniformity with its siblings,"
+        ],
+        [
+          8,
+          "//! reading the two fields [`StateSpace::anticipated_lead_stages`] (`pub`)"
+        ],
+        [
+          14,
+          "use super::{AnticipatedLocal, StateSpace};"
+        ],
+        [
+          91,
+          "    _state: &StateSpace,"
+        ],
+        [
+          92,
+          "    local_idx: AnticipatedLocal,"
+        ],
+        [
+          119,
+          "/// [`StateSpace::anticipated_resolution`] is attached (production always"
+        ],
+        [
+          121,
+          "/// the plant's constant [`StateSpace::anticipated_lead_stages`] — the"
+        ],
+        [
+          125,
+          "    state: &StateSpace,"
+        ],
+        [
+          126,
+          "    local_idx: AnticipatedLocal,"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/block_grid.rs": {
+      "grossLoc": 198,
+      "nonTestLoc": 126,
+      "excludedRanges": [
+        [
+          127,
+          198
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 20,
+      "substringHits": [
+        [
+          23,
+          "//! `BlockGrid`-routed accessor, and doc comments mirroring the layout formula."
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          23,
+          "mirroring -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs": {
+      "grossLoc": 994,
+      "nonTestLoc": 292,
+      "excludedRanges": [
+        [
+          292,
+          806
+        ],
+        [
+          808,
+          994
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 291,
+      "substringHits": [
+        [
+          1,
+          "//! Storage-scoped projection of the global [`StateSpace`] onto the cut-state"
+        ],
+        [
+          2,
+          "//! dimensions a stage enables, for cut storage, subgradient extraction (incoming"
+        ],
+        [
+          3,
+          "//! columns), and cut rendering (outgoing columns)."
+        ],
+        [
+          9,
+          "/// A storage-scoped view of the global state vector exposing only the cut-state"
+        ],
+        [
+          25,
+          "/// walks. The forbidden alternative is reordering dimensions (e.g. anticipated"
+        ],
+        [
+          26,
+          "/// before buckets), landing a cut coefficient on the wrong LP column and"
+        ],
+        [
+          34,
+          "/// slots, because dual extraction and DCS scoring read every enabled dimension."
+        ],
+        [
+          36,
+          "/// matching the global `nonzero_state_indices`), because a cut row emits no entry"
+        ],
+        [
+          40,
+          "    /// Global state-vector [`StateDim`] per cut slot — the projection's own"
+        ],
+        [
+          44,
+          "    /// LP incoming column per cut slot (extraction hot path)."
+        ],
+        [
+          47,
+          "    /// LP outgoing column per cut slot (DCS scoring); parallel to"
+        ],
+        [
+          61,
+          "    /// Project the global [`StateSpace`] onto the cut-state dimensions"
+        ],
+        [
+          102,
+          "            if region.cut_enabled(state_config) {"
+        ],
+        [
+          127,
+          "    /// Count of enabled cut-state dimensions:"
+        ],
+        [
+          135,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to the global [`StateDim`] it"
+        ],
+        [
+          155,
+          "            \"cut slot {j} out of bounds (n_slots = {})\","
+        ],
+        [
+          161,
+          "    /// Dot this pool's projected cut `coefficients` (length [`Self::n_slots`])"
+        ],
+        [
+          163,
+          "    /// [`StateSpace::n_state`](super::StateSpace::n_state)), gathering each"
+        ],
+        [
+          190,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to its LP incoming-state column,"
+        ],
+        [
+          195,
+          "    /// can substitute for the [`CutSlot`] `s`: state-dimension and cut-slot-space"
+        ],
+        [
+          204,
+          "    /// let cut = CutStateProjection::new("
+        ],
+        [
+          208,
+          "    /// let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot"
+        ],
+        [
+          216,
+          "    /// let cut = CutStateProjection::new("
+        ],
+        [
+          220,
+          "    /// let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot"
+        ],
+        [
+          232,
+          "            \"cut slot {j} out of bounds (n_slots = {})\","
+        ],
+        [
+          238,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to its LP **outgoing**-state"
+        ],
+        [
+          239,
+          "    /// column — the column its coefficient is dotted against in DCS scoring,"
+        ],
+        [
+          256,
+          "            \"cut slot {j} out of bounds (n_slots = {})\","
+        ],
+        [
+          262,
+          "    /// Iterate the cut-row render pairs `(cut_slot, outgoing_lp_column)` for this"
+        ],
+        [
+          266,
+          "    /// `cut_slot` indexes a stored cut's `coefficients` slice (length"
+        ],
+        [
+          267,
+          "    /// [`Self::n_slots`]); `outgoing_lp_column` is where the cut-row builder places"
+        ],
+        [
+          282,
+          "    /// Count of cut-row render entries (nonzero-subset, padding dropped) — the"
+        ],
+        [
+          283,
+          "    /// per-cut non-zero state-coefficient count a builder emits before the theta"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          1,
+          "//! Storage-scoped projection of the global [`StateSpace`] onto the cut-state"
+        ],
+        [
+          2,
+          "//! dimensions a stage enables, for cut storage, subgradient extraction (incoming"
+        ],
+        [
+          3,
+          "//! columns), and cut rendering (outgoing columns)."
+        ],
+        [
+          9,
+          "/// A storage-scoped view of the global state vector exposing only the cut-state"
+        ],
+        [
+          26,
+          "/// before buckets), landing a cut coefficient on the wrong LP column and"
+        ],
+        [
+          36,
+          "/// matching the global `nonzero_state_indices`), because a cut row emits no entry"
+        ],
+        [
+          40,
+          "    /// Global state-vector [`StateDim`] per cut slot — the projection's own"
+        ],
+        [
+          44,
+          "    /// LP incoming column per cut slot (extraction hot path)."
+        ],
+        [
+          47,
+          "    /// LP outgoing column per cut slot (DCS scoring); parallel to"
+        ],
+        [
+          61,
+          "    /// Project the global [`StateSpace`] onto the cut-state dimensions"
+        ],
+        [
+          127,
+          "    /// Count of enabled cut-state dimensions:"
+        ],
+        [
+          135,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to the global [`StateDim`] it"
+        ],
+        [
+          155,
+          "            \"cut slot {j} out of bounds (n_slots = {})\","
+        ],
+        [
+          161,
+          "    /// Dot this pool's projected cut `coefficients` (length [`Self::n_slots`])"
+        ],
+        [
+          190,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to its LP incoming-state column,"
+        ],
+        [
+          195,
+          "    /// can substitute for the [`CutSlot`] `s`: state-dimension and cut-slot-space"
+        ],
+        [
+          204,
+          "    /// let cut = CutStateProjection::new("
+        ],
+        [
+          208,
+          "    /// let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot"
+        ],
+        [
+          216,
+          "    /// let cut = CutStateProjection::new("
+        ],
+        [
+          220,
+          "    /// let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot"
+        ],
+        [
+          232,
+          "            \"cut slot {j} out of bounds (n_slots = {})\","
+        ],
+        [
+          238,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to its LP **outgoing**-state"
+        ],
+        [
+          256,
+          "            \"cut slot {j} out of bounds (n_slots = {})\","
+        ],
+        [
+          262,
+          "    /// Iterate the cut-row render pairs `(cut_slot, outgoing_lp_column)` for this"
+        ],
+        [
+          266,
+          "    /// `cut_slot` indexes a stored cut's `coefficients` slice (length"
+        ],
+        [
+          267,
+          "    /// [`Self::n_slots`]); `outgoing_lp_column` is where the cut-row builder places"
+        ],
+        [
+          282,
+          "    /// Count of cut-row render entries (nonzero-subset, padding dropped) — the"
+        ],
+        [
+          283,
+          "    /// per-cut non-zero state-coefficient count a builder emits before the theta"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          25,
+          "reordering -> ring"
+        ],
+        [
+          34,
+          "scoring -> ring"
+        ],
+        [
+          102,
+          "cut_enabled -> cut"
+        ],
+        [
+          163,
+          "gathering -> ring"
+        ],
+        [
+          239,
+          "scoring -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          1,
+          "//! Storage-scoped projection of the global [`StateSpace`] onto the cut-state"
+        ],
+        [
+          7,
+          "use super::{CutSlot, InCol, OutCol, REGION_ORDER, StateDim, StateSpace};"
+        ],
+        [
+          13,
+          "/// A projection **of** a [`StateSpace`], not a sibling layout: it delegates all"
+        ],
+        [
+          19,
+          "/// [`Self::n_slots`] equals [`StateSpace::n_state`],"
+        ],
+        [
+          24,
+          "/// anticipated order — the single owner [`StateSpace::set_nonzero_mask`] also"
+        ],
+        [
+          39,
+          "pub struct CutStateProjection {"
+        ],
+        [
+          40,
+          "    /// Global state-vector [`StateDim`] per cut slot — the projection's own"
+        ],
+        [
+          42,
+          "    global_state_indices: Vec<StateDim>,"
+        ],
+        [
+          45,
+          "    incoming_columns: Vec<InCol>,"
+        ],
+        [
+          49,
+          "    outgoing_columns: Vec<OutCol>,"
+        ],
+        [
+          53,
+          "    render_coeff_indices: Vec<CutSlot>,"
+        ],
+        [
+          57,
+          "    render_columns: Vec<OutCol>,"
+        ],
+        [
+          60,
+          "impl CutStateProjection {"
+        ],
+        [
+          61,
+          "    /// Project the global [`StateSpace`] onto the cut-state dimensions"
+        ],
+        [
+          65,
+          "    /// `StateSpace`'s `state_dim_range`, the sole owner of the boundary"
+        ],
+        [
+          72,
+          "    /// use cobre_sddp::indexer::{InCol, StateDim, StateSpace};"
+        ],
+        [
+          74,
+          "    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);"
+        ],
+        [
+          75,
+          "    /// let outgoing = global.lp_column_for_state(StateDim::new(0));"
+        ],
+        [
+          76,
+          "    /// let mut incoming_columns: Vec<InCol> = Vec::new();"
+        ],
+        [
+          80,
+          "    pub fn new(global: &StateSpace, state_config: StageStateConfig) -> Self {"
+        ],
+        [
+          87,
+          "        let mut push_dim = |g: StateDim| {"
+        ],
+        [
+          96,
+          "                render_coeff_indices.push(CutSlot::new(reduced_j));"
+        ],
+        [
+          104,
+          "                    push_dim(StateDim::new(g));"
+        ],
+        [
+          135,
+          "    /// Map a cut slot `s ∈ [0, n_slots())` to the global [`StateDim`] it"
+        ],
+        [
+          136,
+          "    /// projects — the gather index for reading a `StateDim`-packed trial-state"
+        ],
+        [
+          141,
+          "    /// `storage:false` pool begins at the first inflow-lag [`StateDim`]). Index a"
+        ],
+        [
+          142,
+          "    /// `StateDim`-packed archive through this, never [`Self::outgoing_column`],"
+        ],
+        [
+          143,
+          "    /// which remaps inflow-lag slots off the [`StateDim`] axis (to `z_inflow`,"
+        ],
+        [
+          151,
+          "    pub fn global_state_index(&self, s: CutSlot) -> StateDim {"
+        ],
+        [
+          163,
+          "    /// [`StateSpace::n_state`](super::StateSpace::n_state)), gathering each"
+        ],
+        [
+          186,
+          "            .map(|(j, &c)| c * x_hat[self.global_state_index(CutSlot::new(j)).get()])"
+        ],
+        [
+          194,
+          "    /// Neither the global [`StateDim`] nor the outgoing-column role [`OutCol`]"
+        ],
+        [
+          195,
+          "    /// can substitute for the [`CutSlot`] `s`: state-dimension and cut-slot-space"
+        ],
+        [
+          201,
+          "    /// use cobre_sddp::indexer::{CutStateProjection, StateDim, StateSpace};"
+        ],
+        [
+          203,
+          "    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);"
+        ],
+        [
+          204,
+          "    /// let cut = CutStateProjection::new("
+        ],
+        [
+          208,
+          "    /// let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot"
+        ],
+        [
+          213,
+          "    /// use cobre_sddp::indexer::{CutStateProjection, OutCol, StateSpace};"
+        ],
+        [
+          215,
+          "    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);"
+        ],
+        [
+          216,
+          "    /// let cut = CutStateProjection::new("
+        ],
+        [
+          220,
+          "    /// let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot"
+        ],
+        [
+          228,
+          "    pub fn incoming_column(&self, s: CutSlot) -> InCol {"
+        ],
+        [
+          243,
+          "    /// The per-pool analogue of [`StateSpace::lp_column_for_state`], spanning the"
+        ],
+        [
+          252,
+          "    pub fn outgoing_column(&self, s: CutSlot) -> OutCol {"
+        ],
+        [
+          275,
+          "    pub fn render_pairs(&self) -> impl ExactSizeIterator<Item = (CutSlot, OutCol)> + '_ {"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/entity_index.rs": {
+      "grossLoc": 387,
+      "nonTestLoc": 293,
+      "excludedRanges": [
+        [
+          294,
+          387
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 293,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": [
+        [
+          10,
+          "//! [`FloorLocal`], and [`AnticipatedLocal`] each carry a position within their"
+        ],
+        [
+          51,
+          "//! use cobre_sddp::indexer::{AnticipatedLocal, ThermalSys};"
+        ],
+        [
+          53,
+          "//! let _wrong: ThermalSys = AnticipatedLocal::new(0);"
+        ],
+        [
+          276,
+          "pub struct AnticipatedLocal(usize);"
+        ],
+        [
+          278,
+          "impl AnticipatedLocal {"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/hydro_cell.rs": {
+      "grossLoc": 457,
+      "nonTestLoc": 204,
+      "excludedRanges": [
+        [
+          205,
+          457
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 204,
+      "substringHits": [
+        [
+          15,
+          "//! a *range*, not the single-valued `Option` a filtering local index (e.g."
+        ],
+        [
+          63,
+          "    /// so renumbering a plant's group ids or reordering their declaration"
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          15,
+          "filtering -> ring"
+        ],
+        [
+          63,
+          "renumbering -> ring, reordering -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": []
+    },
+    "crates/cobre-sddp/src/lp/indexer/index.rs": {
+      "grossLoc": 326,
+      "nonTestLoc": 247,
+      "excludedRanges": [
+        [
+          248,
+          326
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 247,
+      "substringHits": [
+        [
+          10,
+          "//! a silently wrong cut coefficient — on the paths that consume the typed"
+        ],
+        [
+          11,
+          "//! resolvers (the cut pin/extract/render hot path, simulation extraction, and"
+        ],
+        [
+          14,
+          "//! are sealed; [`CutSlot`] indexes the enabled cut-state"
+        ],
+        [
+          105,
+          "/// Index into a stage's enabled cut-state subset — distinct from"
+        ],
+        [
+          113,
+          "    /// Wrap a raw cut-slot index."
+        ],
+        [
+          120,
+          "    /// Extract the raw cut-slot index."
+        ],
+        [
+          173,
+          "/// An outgoing-state LP column — the forward-pass/DCS cut-row render target."
+        ],
+        [
+          176,
+          "/// `cut::row::push_scaled_coefficient`'s `col: OutCol` parameter) rejects the"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          10,
+          "//! a silently wrong cut coefficient — on the paths that consume the typed"
+        ],
+        [
+          11,
+          "//! resolvers (the cut pin/extract/render hot path, simulation extraction, and"
+        ],
+        [
+          14,
+          "//! are sealed; [`CutSlot`] indexes the enabled cut-state"
+        ],
+        [
+          105,
+          "/// Index into a stage's enabled cut-state subset — distinct from"
+        ],
+        [
+          113,
+          "    /// Wrap a raw cut-slot index."
+        ],
+        [
+          120,
+          "    /// Extract the raw cut-slot index."
+        ],
+        [
+          173,
+          "/// An outgoing-state LP column — the forward-pass/DCS cut-row render target."
+        ],
+        [
+          176,
+          "/// `cut::row::push_scaled_coefficient`'s `col: OutCol` parameter) rejects the"
+        ]
+      ],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": [
+        [
+          7,
+          "//! [`Row`], and [`StateDim`] make each concern its own type; [`InCol`]/[`OutCol`]"
+        ],
+        [
+          13,
+          "//! `StateSpace`'s public ranges sits outside that guarantee until the ranges"
+        ],
+        [
+          14,
+          "//! are sealed; [`CutSlot`] indexes the enabled cut-state"
+        ],
+        [
+          15,
+          "//! subset a projection reindexes into, distinct from [`StateDim`]; [`BlockIdx`]"
+        ],
+        [
+          21,
+          "//! `DeliveryRing`) — these types only gate which `usize` crosses which"
+        ],
+        [
+          73,
+          "/// A raw `StateDim` cannot stand in for the [`OutCol`] a resolver returns:"
+        ],
+        [
+          76,
+          "/// use cobre_sddp::indexer::{OutCol, StateDim};"
+        ],
+        [
+          78,
+          "/// let dim = StateDim::new(0);"
+        ],
+        [
+          79,
+          "/// let _unresolved: OutCol = dim; // StateDim substituted for a resolved OutCol"
+        ],
+        [
+          87,
+          "pub struct StateDim(usize);"
+        ],
+        [
+          89,
+          "impl StateDim {"
+        ],
+        [
+          106,
+          "/// [`StateDim`], the global state-vector dimension: under a non-identity"
+        ],
+        [
+          110,
+          "pub struct CutSlot(usize);"
+        ],
+        [
+          112,
+          "impl CutSlot {"
+        ],
+        [
+          132,
+          "pub struct InCol(usize);"
+        ],
+        [
+          134,
+          "impl InCol {"
+        ],
+        [
+          175,
+          "/// An [`InCol`] cannot stand in for it: the render path (e.g."
+        ],
+        [
+          176,
+          "/// `cut::row::push_scaled_coefficient`'s `col: OutCol` parameter) rejects the"
+        ],
+        [
+          180,
+          "/// use cobre_sddp::indexer::{InCol, OutCol};"
+        ],
+        [
+          182,
+          "/// fn render(_outgoing: OutCol) {}"
+        ],
+        [
+          184,
+          "/// render(InCol::new(3)); // render path handed an InCol, not the OutCol it requires"
+        ],
+        [
+          188,
+          "pub struct OutCol(usize);"
+        ],
+        [
+          190,
+          "impl OutCol {"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/layout.rs": {
+      "grossLoc": 72,
+      "nonTestLoc": 40,
+      "excludedRanges": [
+        [
+          41,
+          72
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 40,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": [
+        [
+          8,
+          "//! state-vector concern lives on [`StateSpace`](super::StateSpace) and the"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/mod.rs": {
+      "grossLoc": 125,
+      "nonTestLoc": 125,
+      "excludedRanges": [],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 125,
+      "substringHits": [
+        [
+          12,
+          "//! travel-time buckets, the anticipated ring's outgoing and incoming blocks,"
+        ],
+        [
+          13,
+          "//! `z_inflow`, `theta`) are owned entirely by [`StateSpace`] — see its own"
+        ],
+        [
+          18,
+          "//! ranges that follow `theta` — allocated in that equipment -> slack ->"
+        ],
+        [
+          26,
+          "//! `anticipated_decision` then `line_fwd` directly — the anticipated ring's"
+        ],
+        [
+          30,
+          "//! equality row pins the plant's own newest ring slot to its"
+        ],
+        [
+          70,
+          "//! - `state_space` — the [`StateSpace`] type, the sole owner of the"
+        ],
+        [
+          80,
+          "//! - `cut_state_projection` — the [`CutStateProjection`] type, a storage-scoped"
+        ],
+        [
+          81,
+          "//!   projection of [`StateSpace`] exposing only the cut-state dimensions a"
+        ],
+        [
+          99,
+          "mod cut_state_projection;"
+        ],
+        [
+          105,
+          "mod state_space;"
+        ],
+        [
+          113,
+          "pub use cut_state_projection::CutStateProjection;"
+        ],
+        [
+          122,
+          "pub use state_space::StateSpace;"
+        ],
+        [
+          123,
+          "pub(crate) use state_space::{REGION_ORDER, StateRegion};"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          12,
+          "//! travel-time buckets, the anticipated ring's outgoing and incoming blocks,"
+        ],
+        [
+          13,
+          "//! `z_inflow`, `theta`) are owned entirely by [`StateSpace`] — see its own"
+        ],
+        [
+          18,
+          "//! ranges that follow `theta` — allocated in that equipment -> slack ->"
+        ],
+        [
+          26,
+          "//! `anticipated_decision` then `line_fwd` directly — the anticipated ring's"
+        ],
+        [
+          30,
+          "//! equality row pins the plant's own newest ring slot to its"
+        ],
+        [
+          70,
+          "//! - `state_space` — the [`StateSpace`] type, the sole owner of the"
+        ],
+        [
+          81,
+          "//!   projection of [`StateSpace`] exposing only the cut-state dimensions a"
+        ],
+        [
+          105,
+          "mod state_space;"
+        ],
+        [
+          122,
+          "pub use state_space::StateSpace;"
+        ],
+        [
+          123,
+          "pub(crate) use state_space::{REGION_ORDER, StateRegion};"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          80,
+          "cut_state_projection -> cut"
+        ],
+        [
+          99,
+          "cut_state_projection -> cut"
+        ],
+        [
+          113,
+          "cut_state_projection -> cut"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          3,
+          "//! The state-vector column layout is owned by [`StateSpace`]; the per-stage"
+        ],
+        [
+          13,
+          "//! `z_inflow`, `theta`) are owned entirely by [`StateSpace`] — see its own"
+        ],
+        [
+          27,
+          "//! outgoing slots (`StateSpace::commit_out`) do NOT live here:"
+        ],
+        [
+          28,
+          "//! they sit in the stage-invariant state region owned by [`StateSpace`], so"
+        ],
+        [
+          47,
+          "//!   `is_anticipated_decision_active`), taking `state: &`[`StateSpace`]"
+        ],
+        [
+          53,
+          "//! - `index` — the base typed vocabulary [`Col`]/[`Row`]/[`StateDim`] and the"
+        ],
+        [
+          54,
+          "//!   [`InCol`]/[`OutCol`] incoming/outgoing column-role split. Every"
+        ],
+        [
+          55,
+          "//!   `StateSpace`/`CutStateProjection` incoming and outgoing resolver, plus"
+        ],
+        [
+          56,
+          "//!   [`CutStateProjection::render_pairs`], resolves through it. [`BlockIdx`]"
+        ],
+        [
+          66,
+          "//!   and [`StateSpace`]'s stage-invariant state-vector chain."
+        ],
+        [
+          70,
+          "//! - `state_space` — the [`StateSpace`] type, the sole owner of the"
+        ],
+        [
+          73,
+          "//!   ([`StateSpace::state_to_lp_column`],"
+        ],
+        [
+          74,
+          "//!   [`StateSpace::state_to_lp_incoming_column`],"
+        ],
+        [
+          75,
+          "//!   [`StateSpace::lp_column_for_state`], [`StateSpace::set_nonzero_mask`]). It"
+        ],
+        [
+          80,
+          "//! - `cut_state_projection` — the [`CutStateProjection`] type, a storage-scoped"
+        ],
+        [
+          81,
+          "//!   projection of [`StateSpace`] exposing only the cut-state dimensions a"
+        ],
+        [
+          83,
+          "//!   delegating each column to [`StateSpace::state_to_lp_incoming_column`]."
+        ],
+        [
+          86,
+          "//!   [`FillingTargetLocal`]/[`FloorLocal`]/[`AnticipatedLocal`],"
+        ],
+        [
+          113,
+          "pub use cut_state_projection::CutStateProjection;"
+        ],
+        [
+          115,
+          "    AnticipatedLocal, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,"
+        ],
+        [
+          119,
+          "pub use index::{BlockIdx, Boundary, Col, CutSlot, InCol, OutCol, Row, StateDim};"
+        ],
+        [
+          122,
+          "pub use state_space::StateSpace;"
+        ],
+        [
+          123,
+          "pub(crate) use state_space::{REGION_ORDER, StateRegion};"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/range_cursor.rs": {
+      "grossLoc": 41,
+      "nonTestLoc": 41,
+      "excludedRanges": [],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 41,
+      "substringHits": [
+        [
+          10,
+          "/// re-threaded by hand and adjacency between consecutive families — the next"
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          10,
+          "consecutive -> cut"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          3,
+          "//! column/row chains and [`StateSpace::new`](super::StateSpace)'s"
+        ],
+        [
+          21,
+          "/// [`StateSpace::new`](super::StateSpace)) normalises it explicitly at the"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/state_space.rs": {
+      "grossLoc": 1823,
+      "nonTestLoc": 729,
+      "excludedRanges": [
+        [
+          730,
+          1823
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 729,
+      "substringHits": [
+        [
+          8,
+          "//! state vector to the LP columns a forward-pass cut row references."
+        ],
+        [
+          36,
+          "/// … + S                                       theta                 — future cost variable (scalar)"
+        ],
+        [
+          39,
+          "/// `S = A*k_max`: the commitment-hold region is the in-study anticipated-ring"
+        ],
+        [
+          45,
+          "/// keyed ring-axis-modular (delivery target `m`'s slot is `r(m) mod k_max`,"
+        ],
+        [
+          47,
+          "/// the whole region is always cut-enabled,"
+        ],
+        [
+          48,
+          "/// ignoring [`StageStateConfig`] (see [`StateRegion::cut_enabled`])."
+        ],
+        [
+          64,
+          "    /// anticipated-ring slots, slot-major/plant-minor (slot `k` for plant `i`"
+        ],
+        [
+          86,
+          "    /// maturing this stage is also read directly by [`crate::lp_builder`]'s"
+        ],
+        [
+          90,
+          "    /// Future cost variable (theta) column."
+        ],
+        [
+          91,
+          "    pub theta: usize,"
+        ],
+        [
+          93,
+          "    /// State-vector dimension used by cut storage and broadcast payloads —"
+        ],
+        [
+          135,
+          "    /// State dimensions whose cut coefficients can be nonzero (padded lag/ring"
+        ],
+        [
+          139,
+          "    /// Precomputed `state_to_lp_column(j)` for every `j ∈ [0, n_state)` (cut-row"
+        ],
+        [
+          154,
+          "    /// Merged in-study anticipated-ring + terminal post-horizon commitment"
+        ],
+        [
+          174,
+          "    /// Whether `region`'s state dimensions are cut-enabled under `config`: storage"
+        ],
+        [
+          178,
+          "    /// terminal pool included, so a loaded boundary cut's coefficient lands on"
+        ],
+        [
+          179,
+          "    /// the right column. Gating either on `config` shrinks the cut pool's"
+        ],
+        [
+          184,
+          "    pub(crate) fn cut_enabled(self, config: StageStateConfig) -> bool {"
+        ],
+        [
+          199,
+          "    /// may carry non-zero cut coefficients (see [`Self::set_nonzero_mask`] for"
+        ],
+        [
+          263,
+          "        let theta = cursor.pos();"
+        ],
+        [
+          272,
+          "            \"commit_out must span exactly the in-study anticipated-ring slots\""
+        ],
+        [
+          289,
+          "            theta,"
+        ],
+        [
+          314,
+          "    /// Panics if the delivery-anchored ring depth exceeds the sized `k_max`, or"
+        ],
+        [
+          319,
+          "            \"delivery-anchored ring depth {} exceeds the sized k_max {}\","
+        ],
+        [
+          344,
+          "    /// First column of the control region (`theta + 1`): the state region"
+        ],
+        [
+          345,
+          "    /// occupies `[0, theta]`, equipment columns follow from here."
+        ],
+        [
+          349,
+          "        self.theta + 1"
+        ],
+        [
+          382,
+          "    /// in-study anticipated-ring slots."
+        ],
+        [
+          438,
+          "    /// Map a state-vector index to the LP column it references in a cut."
+        ],
+        [
+          524,
+          "    /// `view.reduced_costs[col]` at them for the cut subgradient, one per"
+        ],
+        [
+          531,
+          "    /// for forward-pass cut-row construction: for storage it returns `j`"
+        ],
+        [
+          566,
+          "    /// delivery target `m`, keyed ring-axis-modular (`slot = r(m) mod"
+        ],
+        [
+          567,
+          "    /// k_max`, `PointResolution::ring_index` owns `r`) — `m mod k_max`"
+        ],
+        [
+          583,
+          "                let r = point.ring_index(m);"
+        ],
+        [
+          587,
+          "                     post-horizon window — never a ring member, so addressing it \\"
+        ],
+        [
+          652,
+          "    /// of lag slots that may carry non-zero cut coefficients for hydro `h`. It"
+        ],
+        [
+          655,
+          "    /// annual contributions on slots `order..max_par_order` reach the cut rows;"
+        ],
+        [
+          656,
+          "    /// `order(h)` would truncate them and produce over-estimating cuts (LB > UB"
+        ],
+        [
+          665,
+          "    /// padding whose cut coefficients are structurally zero (no decision"
+        ],
+        [
+          666,
+          "    /// writes them). Including padding over-estimates cut hyperplanes — the"
+        ]
+      ],
+      "wordBoundaryHits": [
+        [
+          8,
+          "//! state vector to the LP columns a forward-pass cut row references."
+        ],
+        [
+          36,
+          "/// … + S                                       theta                 — future cost variable (scalar)"
+        ],
+        [
+          39,
+          "/// `S = A*k_max`: the commitment-hold region is the in-study anticipated-ring"
+        ],
+        [
+          45,
+          "/// keyed ring-axis-modular (delivery target `m`'s slot is `r(m) mod k_max`,"
+        ],
+        [
+          47,
+          "/// the whole region is always cut-enabled,"
+        ],
+        [
+          64,
+          "    /// anticipated-ring slots, slot-major/plant-minor (slot `k` for plant `i`"
+        ],
+        [
+          90,
+          "    /// Future cost variable (theta) column."
+        ],
+        [
+          91,
+          "    pub theta: usize,"
+        ],
+        [
+          93,
+          "    /// State-vector dimension used by cut storage and broadcast payloads —"
+        ],
+        [
+          135,
+          "    /// State dimensions whose cut coefficients can be nonzero (padded lag/ring"
+        ],
+        [
+          139,
+          "    /// Precomputed `state_to_lp_column(j)` for every `j ∈ [0, n_state)` (cut-row"
+        ],
+        [
+          154,
+          "    /// Merged in-study anticipated-ring + terminal post-horizon commitment"
+        ],
+        [
+          174,
+          "    /// Whether `region`'s state dimensions are cut-enabled under `config`: storage"
+        ],
+        [
+          178,
+          "    /// terminal pool included, so a loaded boundary cut's coefficient lands on"
+        ],
+        [
+          179,
+          "    /// the right column. Gating either on `config` shrinks the cut pool's"
+        ],
+        [
+          199,
+          "    /// may carry non-zero cut coefficients (see [`Self::set_nonzero_mask`] for"
+        ],
+        [
+          263,
+          "        let theta = cursor.pos();"
+        ],
+        [
+          272,
+          "            \"commit_out must span exactly the in-study anticipated-ring slots\""
+        ],
+        [
+          289,
+          "            theta,"
+        ],
+        [
+          314,
+          "    /// Panics if the delivery-anchored ring depth exceeds the sized `k_max`, or"
+        ],
+        [
+          319,
+          "            \"delivery-anchored ring depth {} exceeds the sized k_max {}\","
+        ],
+        [
+          344,
+          "    /// First column of the control region (`theta + 1`): the state region"
+        ],
+        [
+          345,
+          "    /// occupies `[0, theta]`, equipment columns follow from here."
+        ],
+        [
+          349,
+          "        self.theta + 1"
+        ],
+        [
+          382,
+          "    /// in-study anticipated-ring slots."
+        ],
+        [
+          438,
+          "    /// Map a state-vector index to the LP column it references in a cut."
+        ],
+        [
+          524,
+          "    /// `view.reduced_costs[col]` at them for the cut subgradient, one per"
+        ],
+        [
+          531,
+          "    /// for forward-pass cut-row construction: for storage it returns `j`"
+        ],
+        [
+          566,
+          "    /// delivery target `m`, keyed ring-axis-modular (`slot = r(m) mod"
+        ],
+        [
+          587,
+          "                     post-horizon window — never a ring member, so addressing it \\"
+        ],
+        [
+          652,
+          "    /// of lag slots that may carry non-zero cut coefficients for hydro `h`. It"
+        ],
+        [
+          655,
+          "    /// annual contributions on slots `order..max_par_order` reach the cut rows;"
+        ],
+        [
+          665,
+          "    /// padding whose cut coefficients are structurally zero (no decision"
+        ],
+        [
+          666,
+          "    /// writes them). Including padding over-estimates cut hyperplanes — the"
+        ]
+      ],
+      "falsePositiveQueue": [
+        [
+          48,
+          "cut_enabled -> cut, ignoring -> ring"
+        ],
+        [
+          86,
+          "maturing -> ring"
+        ],
+        [
+          184,
+          "cut_enabled -> cut"
+        ],
+        [
+          567,
+          "ring_index -> ring"
+        ],
+        [
+          583,
+          "ring_index -> ring"
+        ],
+        [
+          656,
+          "cuts -> cut"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          4,
+          "//! [`StateSpace::state_to_lp_incoming_column`] is the single authoritative"
+        ],
+        [
+          7,
+          "//! index. The companion [`StateSpace::state_to_lp_column`] maps the outgoing"
+        ],
+        [
+          18,
+          "use super::{InCol, OutCol, RangeCursor, StateDim};"
+        ],
+        [
+          48,
+          "/// ignoring [`StageStateConfig`] (see [`StateRegion::cut_enabled`])."
+        ],
+        [
+          50,
+          "pub struct StateSpace {"
+        ],
+        [
+          74,
+          "    /// [`StateSpace::state_to_lp_incoming_column`]."
+        ],
+        [
+          78,
+          "    /// [`StateSpace::state_to_lp_incoming_column`]."
+        ],
+        [
+          85,
+          "    /// pinned via [`StateSpace::state_to_lp_incoming_column`]. The slot"
+        ],
+        [
+          96,
+          "    /// column via [`StateSpace::state_to_lp_incoming_column`]."
+        ],
+        [
+          137,
+          "    pub nonzero_state_indices: Vec<StateDim>,"
+        ],
+        [
+          141,
+          "    pub state_to_lp_column_map: Vec<OutCol>,"
+        ],
+        [
+          147,
+          "pub(crate) enum StateRegion {"
+        ],
+        [
+          148,
+          "    /// Outgoing storage volumes — [`StateSpace::state_dim_storage_range`]."
+        ],
+        [
+          150,
+          "    /// AR inflow lags — [`StateSpace::state_dim_lag_range`]."
+        ],
+        [
+          152,
+          "    /// Travel-time in-transit buckets — [`StateSpace::state_dim_bucket_range`]."
+        ],
+        [
+          155,
+          "    /// slots — [`StateSpace::state_dim_commitment_hold_range`]."
+        ],
+        [
+          160,
+          "/// state-region walk order. [`StateSpace::state_to_lp_column`],"
+        ],
+        [
+          161,
+          "/// [`StateSpace::state_to_lp_incoming_column`],"
+        ],
+        [
+          162,
+          "/// [`StateSpace::set_nonzero_mask`], and [`super::CutStateProjection::new`]"
+        ],
+        [
+          163,
+          "/// all dispatch over this array via [`StateSpace::state_dim_range`]; a"
+        ],
+        [
+          164,
+          "/// variant added to [`StateRegion`] fails to compile at any of those sites"
+        ],
+        [
+          166,
+          "pub(crate) const REGION_ORDER: [StateRegion; 4] = ["
+        ],
+        [
+          167,
+          "    StateRegion::Storage,"
+        ],
+        [
+          168,
+          "    StateRegion::Lag,"
+        ],
+        [
+          169,
+          "    StateRegion::Buckets,"
+        ],
+        [
+          170,
+          "    StateRegion::CommitmentHold,"
+        ],
+        [
+          173,
+          "impl StateRegion {"
+        ],
+        [
+          181,
+          "    /// dot ([`super::CutStateProjection::new`])."
+        ],
+        [
+          186,
+          "            StateRegion::Storage => config.storage,"
+        ],
+        [
+          187,
+          "            StateRegion::Lag => config.inflow_lags,"
+        ],
+        [
+          188,
+          "            StateRegion::Buckets | StateRegion::CommitmentHold => true,"
+        ],
+        [
+          193,
+          "impl StateSpace {"
+        ],
+        [
+          194,
+          "    /// Construct a finalized [`StateSpace`] from the state dimensions and the"
+        ],
+        [
+          355,
+          "    // `state_dim_range` dispatches each `StateRegion` to the accessor below,"
+        ],
+        [
+          396,
+          "    pub(crate) fn state_dim_range(&self, region: StateRegion) -> Range<usize> {"
+        ],
+        [
+          398,
+          "            StateRegion::Storage => self.state_dim_storage_range(),"
+        ],
+        [
+          399,
+          "            StateRegion::Lag => self.state_dim_lag_range(),"
+        ],
+        [
+          400,
+          "            StateRegion::Buckets => self.state_dim_bucket_range(),"
+        ],
+        [
+          401,
+          "            StateRegion::CommitmentHold => self.state_dim_commitment_hold_range(),"
+        ],
+        [
+          409,
+          "    pub(crate) fn incoming_block_start(&self, region: StateRegion) -> usize {"
+        ],
+        [
+          411,
+          "            StateRegion::Storage => self.storage_in.start,"
+        ],
+        [
+          412,
+          "            StateRegion::Lag => self.inflow_lags.start,"
+        ],
+        [
+          413,
+          "            StateRegion::Buckets => self.transit_buckets_in.start,"
+        ],
+        [
+          414,
+          "            StateRegion::CommitmentHold => self.commit_in.start,"
+        ],
+        [
+          418,
+          "    /// Classify `j` into its [`StateRegion`] and its offset within that"
+        ],
+        [
+          429,
+          "    pub(crate) fn classify(&self, j: StateDim) -> (StateRegion, usize) {"
+        ],
+        [
+          434,
+          "            .unwrap_or(StateRegion::CommitmentHold);"
+        ],
+        [
+          440,
+          "    /// Classifies `j` into its `StateRegion` via `REGION_ORDER` before any"
+        ],
+        [
+          449,
+          "    /// A bare `usize` cannot skip the [`StateDim`] wrap at this resolver"
+        ],
+        [
+          453,
+          "    /// use cobre_sddp::indexer::StateSpace;"
+        ],
+        [
+          455,
+          "    /// let state = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);"
+        ],
+        [
+          456,
+          "    /// let _col = state.state_to_lp_column(0); // bare usize handed where StateDim is required"
+        ],
+        [
+          459,
+          "    /// Nor can an already-resolved [`OutCol`] re-enter as the unresolved"
+        ],
+        [
+          463,
+          "    /// use cobre_sddp::indexer::{StateDim, StateSpace};"
+        ],
+        [
+          465,
+          "    /// let state = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);"
+        ],
+        [
+          466,
+          "    /// let col = state.state_to_lp_column(StateDim::new(0));"
+        ],
+        [
+          467,
+          "    /// let _reentered = state.state_to_lp_column(col); // OutCol handed where StateDim is required"
+        ],
+        [
+          471,
+          "    pub fn state_to_lp_column(&self, j: StateDim) -> OutCol {"
+        ],
+        [
+          474,
+          "        OutCol::new(match region {"
+        ],
+        [
+          475,
+          "            StateRegion::Storage | StateRegion::Buckets | StateRegion::CommitmentHold => j.get(),"
+        ],
+        [
+          476,
+          "            StateRegion::Lag => {"
+        ],
+        [
+          497,
+          "                .push(self.state_to_lp_column(StateDim::new(j)));"
+        ],
+        [
+          503,
+          "    /// [`Self::state_to_lp_column_map`], which [`StateSpace::new`] always"
+        ],
+        [
+          508,
+          "    pub fn lp_column_for_state(&self, j: StateDim) -> OutCol {"
+        ],
+        [
+          540,
+          "    pub fn state_to_lp_incoming_column(&self, j: StateDim) -> InCol {"
+        ],
+        [
+          542,
+          "        InCol::new(self.incoming_block_start(region) + offset)"
+        ],
+        [
+          546,
+          "    fn incoming_block_range(&self, region: StateRegion) -> Range<usize> {"
+        ],
+        [
+          555,
+          "    pub(crate) fn classify_incoming_column(&self, c: InCol) -> (StateRegion, usize) {"
+        ],
+        [
+          560,
+          "            .unwrap_or(StateRegion::CommitmentHold);"
+        ],
+        [
+          597,
+          "    fn storage_state_dim(&self, h: usize) -> StateDim {"
+        ],
+        [
+          599,
+          "        StateDim::new(self.state_dim_storage_range().start + h)"
+        ],
+        [
+          604,
+          "    pub(crate) fn storage_incoming_col(&self, h: usize) -> InCol {"
+        ],
+        [
+          610,
+          "    pub(crate) fn storage_outgoing_col(&self, h: usize) -> OutCol {"
+        ],
+        [
+          616,
+          "    pub(crate) fn lag_incoming_col(&self, lag: usize, h: usize) -> InCol {"
+        ],
+        [
+          619,
+          "        self.state_to_lp_incoming_column(StateDim::new(start + lag * self.hydro_count + h))"
+        ],
+        [
+          625,
+          "    pub(crate) fn bucket_incoming_col(&self, b: usize) -> InCol {"
+        ],
+        [
+          627,
+          "        self.state_to_lp_incoming_column(StateDim::new(self.state_dim_bucket_range().start + b))"
+        ],
+        [
+          632,
+          "    pub(crate) fn bucket_outgoing_col(&self, b: usize) -> OutCol {"
+        ],
+        [
+          634,
+          "        self.state_to_lp_column(StateDim::new(self.state_dim_bucket_range().start + b))"
+        ],
+        [
+          693,
+          "                StateRegion::Storage | StateRegion::Buckets => {"
+        ],
+        [
+          694,
+          "                    mask.extend(self.state_dim_range(region).map(StateDim::new));"
+        ],
+        [
+          696,
+          "                StateRegion::Lag => {"
+        ],
+        [
+          702,
+          "                                mask.push(StateDim::new(start + lag * self.hydro_count + h));"
+        ],
+        [
+          707,
+          "                StateRegion::CommitmentHold => {"
+        ],
+        [
+          713,
+          "                                mask.push(StateDim::new(start + slot * self.n_anticipated + plant));"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/storage_boundary_grid.rs": {
+      "grossLoc": 100,
+      "nonTestLoc": 77,
+      "excludedRanges": [
+        [
+          78,
+          100
+        ]
+      ],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 77,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": [
+        [
+          19,
+          "/// outgoing-state column bases (from [`StateSpace`](super::StateSpace)) and"
+        ],
+        [
+          34,
+          "    /// `StateSpace` (`storage_in.start`/`storage.start`), never a hard-coded"
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/indexer/study_dimensions.rs": {
+      "grossLoc": 50,
+      "nonTestLoc": 50,
+      "excludedRanges": [],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 50,
+      "substringHits": [],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [],
+      "camelCaseGeometryHits": [
+        [
+          13,
+          "///   [`StateSpace`](super::StateSpace): a count is either state-defining (→"
+        ],
+        [
+          14,
+          "///   `StateSpace`) or non-state study shape (→ here), never both."
+        ]
+      ]
+    },
+    "crates/cobre-sddp/src/lp/mod.rs": {
+      "grossLoc": 27,
+      "nonTestLoc": 27,
+      "excludedRanges": [],
+      "sliceMethod": "brace-aware",
+      "naiveFirstMarkerLoc": 27,
+      "substringHits": [
+        [
+          2,
+          "//! lowering, and the stage-template builder that together turn a loaded"
+        ]
+      ],
+      "wordBoundaryHits": [],
+      "falsePositiveQueue": [
+        [
+          2,
+          "lowering -> ring"
+        ]
+      ],
+      "camelCaseGeometryHits": [
+        [
+          8,
+          "//! - [`indexer`] — [`StateSpace`](indexer::StateSpace) owns the state-vector"
+        ],
+        [
+          11,
+          "//!   pinned via [`crate::indexer::StateSpace::state_to_lp_incoming_column`]"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "claimRef": "PD-051",
+  "claimType": "single-process",
+  "layout": "4t",
+  "case": "reduzido (attempted)",
+  "baselineSha": "077dbe2c",
+  "attributedSymbol": "reshape_f64",
+  "symbolStatus": "absent-from-cli-binary",
+  "verdict": "unmeasured",
+  "unmeasuredReason": "case-infeasible",
+  "evidence": "cobre-python symbol (cut_matrix/reshape_f64) absent from the CLI binary; the CLI run never enters the Python cut-matrix projection. Needs a Python-driven profile.",
+  "medianSeconds": null,
+  "selfPct": null,
+  "topSymbols": [],
+  "kernelFramesDropped": null,
+  "fixShape": "unchanged; preserved as recorded (not re-argued at this pass)",
+  "byteNeutral": true,
+  "alignment": "neutral",
+  "originStation": "cli-python",
+  "runLog": "plans/architecture-debt-audit/measurements/PD-051/",
+  "_needsHuman": [
+    "case-infeasible on the CLI+HiGHS harness \u2014 commission a Python-driven (cobre-python) profile to measure this claim?"
+  ]
+}

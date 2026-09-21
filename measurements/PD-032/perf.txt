@@ -1,0 +1,3 @@
+# PD-032 attributed symbol `cobre_clp_chg_bounds` is absent from the CLI binary.
+# CLP backend not compiled into the profiling binary (default feature = highs; nm shows no cobre_clp_chg_bounds/ClpSolver symbols; `cobre version` reports HiGHS 1.13.1). Measuring the CLP FFI needs a --features clp rebuild, a different binary than the sweep's pinned `cargo build --profile profiling --features mpi`.
+# No user-space samples possible from a `cobre run` profile; verdict case-infeasible.

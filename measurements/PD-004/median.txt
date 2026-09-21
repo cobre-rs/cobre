@@ -1,0 +1,11 @@
+median_s	32.607
+spread_s	15.799 (timed runs 31.023/32.607 un-instrumented, 46.822 carries perf-record overhead as run-1; min 31.023 = un-instrumented floor)
+phase_split	training 30.001 s / simulation 1.946 s (from the run's own metadata.json; forward_solve 30.5 s, backward_solve 2.7 s over 18 iterations)
+profiled_symbol	run_enumerated_backward (backward_pass_state.rs:721; the claim's alloc site :919-931)
+attribution_method	perf report on an LBR call graph; the harness DWARF recording did not unwind on this binary (4939/5710 single-frame chains) so its perf.txt is a self/leaf view only
+run_enumerated_backward_inclusive	2.98% of user-space samples — entirely LP solve under run_backward_node_replicated -> the HiGHS simplex (solveHyper/HEkkDualRHS/...); 0 self samples
+alloc_site_share	0.139% of user-space samples (8 of 5769) at the Vec + SolverStatsDelta::clone leaves under run_enumerated_backward — far below the 1% allocation-site threshold
+top_selfsymbols	assessMatrix 35.0%, HighsSparseMatrix::createRowwisePartitioned 9.8%, __memmove_avx 6.3%, priceByColumn 6.2% — all HiGHS, no kernel frames attributed (perf_event_paranoid=2)
+run_sampled_backward	0 samples — the enumerated deck never routes through the sampled arm (expected; the sibling site is unmeasured here by construction)
+verdict	not-material
+materiality_basis	alloc site 0.139% < 1% sample-share threshold; the run_enumerated_backward frame's 2.98% is LP-solve work, not the Vec/clone the claim names, so it is not >= 3% of a phase wall on the claimed cost

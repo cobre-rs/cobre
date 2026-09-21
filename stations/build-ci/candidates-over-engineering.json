@@ -1,0 +1,560 @@
+{
+  "station": "build-ci",
+  "stationLabel": "build-ci-docs",
+  "subStation": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "gatedAt": "2026-09-19",
+  "worker": "adversarial-attacker (Opus, read-only)",
+  "attempt": 1,
+  "candidates": [
+    {
+      "title": "The MPICH Cache/Build/Set step triple is copied byte-for-byte eight times inside ci.yml, with two near-variants in mpi-slurm.yml and release-mpi.yml and no composite action anywhere under .github/",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 43
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 49
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 87
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 130
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 180
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 316
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 377
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 468
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 522
+        },
+        {
+          "path": ".github/workflows/mpi-slurm.yml",
+          "line": 63
+        },
+        {
+          "path": ".github/workflows/release-mpi.yml",
+          "line": 75
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "check",
+        "step": "Build MPICH from source",
+        "line": 49
+      },
+      "evidence": {
+        "command": "for r in 81,106 124,149 174,199 310,335 371,396 462,487 516,541; do diff <(git show 077dbe2c:.github/workflows/ci.yml | sed -n '43,68p') <(git show 077dbe2c:.github/workflows/ci.yml | sed -n \"${r}p\") >/dev/null && echo \"IDENTICAL to 43-68: $r\"; done; git show 077dbe2c:.github/workflows/ci.yml | grep -n 'Build MPICH from source'; git ls-tree --name-only 077dbe2c .github/",
+        "output": "IDENTICAL to 43-68: 81,106\nIDENTICAL to 43-68: 124,149\nIDENTICAL to 43-68: 174,199\nIDENTICAL to 43-68: 310,335\nIDENTICAL to 43-68: 371,396\nIDENTICAL to 43-68: 462,487\nIDENTICAL to 43-68: 516,541\n--\n49:      - name: Build MPICH from source\n87:      - name: Build MPICH from source\n130:      - name: Build MPICH from source\n180:      - name: Build MPICH from source\n316:      - name: Build MPICH from source\n377:      - name: Build MPICH from source\n468:      - name: Build MPICH from source\n522:      - name: Build MPICH from source\n--\n.github/workflows",
+        "reading": "The diff of the canonical triple (:43-68, 26 lines: Cache MPICH with actions/cache@v5, Build MPICH from source, Set MPICH environment) against each of the other seven triples is empty seven times out of seven, so the eight copies are byte-identical, not merely similar. The eight Build steps sit at :49 :87 :130 :180 :316 :377 :468 :522, one in each of eight of the fourteen jobs (check :35, test :73, clippy :116, clp :166, schemas :302, docs :363, coverage :454, python :504). Two further consumers live outside ci.yml and are VARIANTS, not copies: mpi-slurm.yml:63 (triple :56-84) adds set -euo pipefail to the Set step at :81 and drops the LD_LIBRARY_PATH export that ci.yml:68 makes; release-mpi.yml:75 (triple :67-100) guards all three steps with matrix.mpi_source == 'source' at :68 :76 :96, carries a four-line ch3:nemesis runtime/ABI comment at :82-85, renames the third step Set MPICH environment (Linux) at :95, and also drops LD_LIBRARY_PATH. Ten consumers in total. git ls-tree of .github/ returns the single entry workflows, so no actions/ directory exists to hold a composite action today.",
+        "reading_note": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Extract the Cache/Build/Set triple into one composite action under a new .github/actions/ directory and have all ten sites use it. The action takes the MPICH version, an input for the matrix guard so release-mpi.yml can keep its matrix.mpi_source == 'source' condition without a second copy, and an input for the LD_LIBRARY_PATH export that the two out-of-file variants currently drop, so the one intentional difference between the ci.yml copies and the variants becomes a declared parameter instead of an undocumented divergence. This amends the existing workflows rather than adding a framework, and rule 6's one-consumer objection does not apply: the triple has ten present consumers, so the abstraction follows its consumers rather than anticipating them. The ch3:nemesis rationale comment that only release-mpi.yml carries moves into the action so every consumer inherits it.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "git grep -nEi 'mpich|composite action|workflow|\\.github' 077dbe2c -- docs/design/reserved-seams-and-deferred-debt.md returns only :62 :67 (a config-only stub) and :1265 :1270 (a test command); the mirror has no entry reserving workflow duplication, and the Cleared section (:1049-1070) covers none of this surface. ARCHITECTURE.md:108-125 and CLAUDE.md:33-38 concern reserved crates and unwired config, neither of which is a workflow step.",
+        "rule": "G-RESERVED: mirror at the pin, ARCHITECTURE.md Reserved crates :108-125, CLAUDE.md Hard Rules 'Unwired config is reserved, not dead'"
+      },
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 12,
+          "why": "env MPICH_VERSION 4.2.3 is the single value all eight copies interpolate; the duplication is in the steps, not the version"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 45,
+          "why": "actions/cache@v5 with key mpich-${{ env.MPICH_VERSION }}-${{ runner.os }}-${{ runner.arch }} is repeated identically at :83 :126 :176 :312 :373 :464 :518"
+        }
+      ]
+    },
+    {
+      "title": "The MPICH version literal 4.2.3 has three independent owners in the SLURM image path (workflow env, Dockerfile ARG default, pushed image tag) and no build-arg links them, so the tag can name a version the image was not built from",
+      "anchors": [
+        {
+          "path": "tests/slurm/Dockerfile.base",
+          "line": 42
+        },
+        {
+          "path": "tests/slurm/Dockerfile.base",
+          "line": 8
+        },
+        {
+          "path": "tests/slurm/Dockerfile",
+          "line": 15
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git grep -nE 'MPICH_VERSION|MPICH 4\\.2\\.3|slurm-mpich-base:' 077dbe2c -- '.github/workflows' 'tests/slurm'; git show 077dbe2c:.github/workflows/slurm-base-image.yml | grep -nE 'build-args|args:' || echo 'NO build-args passed'",
+        "output": "077dbe2c:.github/workflows/ci.yml:12:  MPICH_VERSION: \"4.2.3\"\n077dbe2c:.github/workflows/mpi-slurm.yml:33:  MPICH_VERSION: \"4.2.3\"\n077dbe2c:.github/workflows/mpi-slurm.yml:106:          docker pull ghcr.io/cobre-rs/slurm-mpich-base:${MPICH_VERSION}\n077dbe2c:.github/workflows/release-mpi.yml:32:  MPICH_VERSION: \"4.2.3\"\n077dbe2c:.github/workflows/slurm-base-image.yml:14:  MPICH_VERSION: \"4.2.3\"\n077dbe2c:.github/workflows/slurm-base-image.yml:41:            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.MPICH_VERSION }}\n077dbe2c:tests/slurm/Dockerfile:2:# 2-node SLURM + MPICH 4.2.3 cluster image for MPI integration testing.\n077dbe2c:tests/slurm/Dockerfile:5:# SLURM, MPICH 4.2.3, and pyarrow. This Dockerfile only adds the\n077dbe2c:tests/slurm/Dockerfile:15:ARG BASE_IMAGE=ghcr.io/cobre-rs/slurm-mpich-base:4.2.3\n077dbe2c:tests/slurm/Dockerfile.base:5:# Contains: Ubuntu 24.04, SLURM, MPICH 4.2.3 (ch4:ofi), pyarrow.\n077dbe2c:tests/slurm/Dockerfile.base:8:# Rebuild trigger: changes to this file or MPICH_VERSION in ci env.\n077dbe2c:tests/slurm/Dockerfile.base:39:# Build MPICH 4.2.3 from source with ch4:ofi device\n077dbe2c:tests/slurm/Dockerfile.base:42:ARG MPICH_VERSION=4.2.3\nNO build-args passed",
+        "reading": "One version value is hand-written in at least nine places across four workflows and two Dockerfiles, and three of them are independent OWNERS rather than consumers of a single source. slurm-base-image.yml builds tests/slurm/Dockerfile.base through docker/build-push-action@v7 (:35-44) and passes no build-args, so the version actually compiled is decided solely by the ARG default at Dockerfile.base:42, while the tag pushed at :41 is interpolated from that workflow's own env at :14. Nothing forces the two to agree, so bumping one and not the other publishes an image tagged 4.2.3 that contains a different MPICH. A third owner consumes the result: mpi-slurm.yml:106 pulls slurm-mpich-base:${MPICH_VERSION} resolved from its own env at :33, and tests/slurm/Dockerfile:15 pins the same tag again as a literal in its BASE_IMAGE default. The comment at Dockerfile.base:8 states the rebuild trigger is a change to that file or to MPICH_VERSION in the ci env, but slurm-base-image.yml's path filter (:5-8) watches only tests/slurm/Dockerfile.base and the workflow file itself, so a ci.yml version bump triggers no rebuild and no re-tag. The ch4:ofi device at Dockerfile.base:54 differs deliberately from the ch3:nemesis device the workflow copies configure, so this is a genuinely separate artifact and not a fourth copy of the candidate above.",
+        "reading_note": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the version one owner and make every other site derive from it. The base-image workflow passes the version to docker/build-push-action as a build-arg so the ARG default in Dockerfile.base stops being an independent decision, and the pushed tag and the built version then come from the same expression. The pinned literal in tests/slurm/Dockerfile's BASE_IMAGE default and the pull in mpi-slurm.yml both take the tag from that same value rather than repeating it. The prose rebuild-trigger claim at Dockerfile.base:8 is then either made true by adding the workflow path that carries the version to the base-image workflow's path filter, or corrected to describe the filter that exists. The composite action proposed for the MPICH step triple takes the version as an input for the same reason, so both fixes converge on one source rather than introducing a second mechanism.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "No mirror entry at the pin covers tests/slurm, the SLURM base image or the MPICH version literal (grep of docs/design/reserved-seams-and-deferred-debt.md at 077dbe2c for mpich, workflow and .github returns only :62 :67 :1265 :1270, none of them this surface); the Cleared section :1049-1070 does not mention it either.",
+        "rule": "G-RESERVED: mirror at the pin, ARCHITECTURE.md Reserved crates :108-125, CLAUDE.md Hard Rules 'Unwired config is reserved, not dead'"
+      },
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": ".github/workflows/slurm-base-image.yml",
+          "line": 14,
+          "why": "the env value that names the pushed tag; cited, not anchored, because the subject is the Dockerfile build input"
+        },
+        {
+          "path": ".github/workflows/slurm-base-image.yml",
+          "line": 41,
+          "why": "the tag expression, the only place the env value reaches the registry"
+        },
+        {
+          "path": ".github/workflows/mpi-slurm.yml",
+          "line": 106,
+          "why": "a third owner: pulls the base image by tag resolved from mpi-slurm.yml:33"
+        },
+        {
+          "path": "tests/slurm/Dockerfile.base",
+          "line": 54,
+          "why": "the ch4:ofi device that makes this a deliberately different build from the workflow copies' ch3:nemesis"
+        }
+      ]
+    },
+    {
+      "title": "Five comment and doc gates each hand-maintain their own copy of the crate-source scan-directory list, in two divergent shapes, and four of them do so while already sourcing the shared scan library that exists to hold exactly this kind of shared fact",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 56
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 57
+        },
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 48
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 57
+        },
+        {
+          "path": "scripts/ci/check-comment-banners.sh",
+          "line": 49
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 126
+        },
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 5
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-comment-refs.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Check comment references (un-rottable-ref gate)",
+        "line": 276
+      },
+      "evidence": {
+        "command": "for s in check-comment-banners.sh check-comment-line-refs.sh check-comment-refs.sh check-doc-placeholders.sh check-no-plan-leaks.sh; do n=$(git show 077dbe2c:scripts/ci/$s | awk '/SCAN_DIRS=\\(/{f=1;next} f&&/^\\)/{exit} f&&/crates\\//{c++} END{print c+0}'); src=$(git show 077dbe2c:scripts/ci/$s | grep -n 'lib/comment_scan.sh' | head -1); echo \"$s: $n crate dirs | sources: ${src:-NONE}\"; done",
+        "output": "check-comment-banners.sh: 10 crate dirs | sources: NONE\ncheck-comment-line-refs.sh: 10 crate dirs | sources: 42:# shellcheck source=scripts/ci/lib/comment_scan.sh\ncheck-comment-refs.sh: 10 crate dirs | sources: 50:# shellcheck source=scripts/ci/lib/comment_scan.sh\ncheck-doc-placeholders.sh: 10 crate dirs | sources: 48:# shellcheck source=scripts/ci/lib/comment_scan.sh\ncheck-no-plan-leaks.sh: 14 crate dirs | sources: 101:# shellcheck source=scripts/ci/lib/comment_scan.sh",
+        "reading": "Five separate SCAN_DIRS arrays enumerate crate source directories by hand: check-comment-banners.sh:49-60, check-comment-line-refs.sh:49-60, check-comment-refs.sh:57-68, check-doc-placeholders.sh:58-69 and check-no-plan-leaks.sh:126-141. Four of the five already source the shared library (the shellcheck directives at :42 :50 :48 :101, the source lines the census records at :43 :51 :49 :102), so the library is on their path and they still carry their own list; the fifth cannot source it by the library's own account (lib/comment_scan.sh:11-14 names check-comment-banners.sh a holdout because it tracks extern \"C\" suppression state line by line) and carries the same list anyway. The lists have already diverged into two shapes: four carry ten directories, check-no-plan-leaks.sh carries fourteen, adding four more crate source directories at :137-140. Three of the four ten-entry gates claim in prose to be copies of another: check-comment-line-refs.sh:48 says it mirrors check-comment-refs.sh SCAN_DIRS (true, both ten), while check-comment-refs.sh:56 and check-doc-placeholders.sh:57 both say they mirror check-no-plan-leaks.sh SCAN_DIRS, which is false at the pin because that gate's list is four entries longer. Two of the ten-entry gates are blocking (check-comment-refs.sh at ci.yml:276, check-doc-placeholders.sh at ci.yml:286) and two are advisory-by-design (check-comment-banners.sh at ci.yml:284, check-comment-line-refs.sh at ci.yml:280), so the divergence decides real gate coverage, not just advisory output. The library itself proves the pattern this list lacks: it owns the cfg(test) boundary regex as a single source of truth (:5-9) and carries an executed-mode drift guard (:36-65) that fails loudly if a holdout gate's copy of that regex drifts, and that guard is wired blocking at ci.yml:268. The one shared fact with five copies and no guard is the directory list. This candidate does not touch check-infra-genericity.sh, whose separate five-crate SCAN_DIRS (:62-68) is the genericity rule's two-site pairing and CD-061's anchor.",
+        "reading_note": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the crate-source directory list into scripts/ci/lib/comment_scan.sh, the shared library these gates already source, as one exported array beside the cfg(test) boundary it already owns, and have each gate consume it and then add or subtract the directories it deliberately differs on, so a difference has to be written down as a difference. Extend the library's existing executed-mode drift guard, already wired blocking at ci.yml:268, to assert that the holdout gate that cannot source the library still carries the same list, which is the mechanism the library already uses for the boundary regex. Delete the three prose mirror claims once they are no longer load-bearing, or correct the two that are false today. This is pull, don't push: the shared library already exists with four callers, so nothing new is introduced; standing up a second scan library or a gate framework for this would be the conflicts shape under trigger 4 and is not proposed.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 57
+        },
+        "script": {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 57
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 276
+        }
+      },
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "The mirror at the pin has no entry for the gate corpus, the scan-directory lists or scripts/ci generally (grep for scripts/ci, allowlist and workflow returns nothing on this surface; Cleared section :1049-1070 does not cover it). ARCHITECTURE.md:108-125 sanctions the reserved crates themselves, which is why this candidate is about the list that names their directories and never about the crates.",
+        "rule": "G-RESERVED: mirror at the pin, ARCHITECTURE.md Reserved crates :108-125, CLAUDE.md Hard Rules 'Unwired config is reserved, not dead'"
+      },
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 42,
+          "why": "the executed-mode drift guard that already enforces one shared fact across holdout gates, the pattern the directory list lacks"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 268,
+          "why": "the blocking step that runs the library's drift guard, so the guard pattern is already paid for"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 286,
+          "why": "check-doc-placeholders.sh is the second blocking gate carrying a ten-entry list with a false mirror claim"
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 137,
+          "why": "the four extra crate-source directories that make this gate's list the fourteen-entry shape"
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 62,
+          "why": "the genericity gate's separate five-crate SCAN_DIRS, explicitly excluded from this candidate's subject because CD-061 and the architecture lens own it"
+        }
+      ]
+    },
+    {
+      "title": "cobre-cli declares an empty slow-tests feature with no cfg consumer anywhere in the crate, justified by a workspace-consistency claim that three other members with feature tables falsify",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 55
+        },
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 57
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/Cargo.toml | sed -n '54,57p'; git grep -l 'slow-tests' 077dbe2c -- 'crates/*/src' 'crates/*/tests'; git grep -ln '\\[features\\]' 077dbe2c -- 'crates/*/Cargo.toml'",
+        "output": "54:mpi = [\"cobre-comm/mpi\"]\n55:## Opt-in to the slow test suite (no slow tests currently in this crate;\n56:## declaration reserved for workspace consistency).\n57:slow-tests = []\n--\ncrates/cobre-sddp (13 files under src/ and tests/, the only crate with cfg consumers)\n--\ncobre-core, cobre-solver, cobre-comm, cobre-stochastic, cobre-io, cobre-sddp, cobre-cli, cobre-python",
+        "reading": "The declaration at :57 is empty and the comment at :55-56 states both that the crate has no slow tests and that the declaration exists for workspace consistency. Neither half buys anything at the pin. No cfg(feature = \"slow-tests\") consumer exists outside cobre-sddp: grep over every crate's src and tests matches cobre-sddp alone, so enabling the feature on cobre-cli changes no compilation. The consistency claim is falsified by the workspace itself: only four of the thirteen members declare slow-tests (cli :57, io :19, stochastic :18, sddp :46) while cobre-core, cobre-solver and cobre-comm each have a [features] table and do not declare it, so the property the comment names is not a property the workspace has. The declaration is not load-bearing for any invocation in the tree either. CLAUDE.md:12 and ci.yml:32 pass slow-tests with --workspace, where cargo requires only that some selected member declare the name, and cobre-sddp does; every per-package invocation in the tree that passes the feature targets cobre-sddp (invariance-shuffle.yml:34 and :55, CONTRIBUTING.md:182 and :185 and :583 and :585), so no -p cobre-cli --features slow-tests call exists to break. The remaining effect is that ci.yml's hand-maintained per-crate feature census at :25 advertises slow-tests as a cobre-cli capability, which is how a no-op declaration turns into a claim readers act on.",
+        "reading_note": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the empty declaration and its comment from the manifest. Nothing in the tree needs it: the workspace-wide command in CLAUDE.md:12 and the NON_SOLVER_FEATURES string at ci.yml:32 keep resolving through cobre-sddp because cargo asks only that one selected member declare the feature under --workspace, and every per-package invocation that passes slow-tests names cobre-sddp. The hand-maintained feature census comment at ci.yml:25 loses its slow-tests attribution in the same change so the two stay consistent. If the owner instead wants the declaration kept as a deliberate seam, the proportionate change is the opposite direction and belongs to the owner, not to this station: replace the falsified consistency sentence with the actual reason and then declare the feature in the three members that have a feature table and lack it, so the stated invariant becomes true.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "No mirror entry at the pin reserves the slow-tests declarations (grep of docs/design/reserved-seams-and-deferred-debt.md at 077dbe2c for slow-tests and [features] returns nothing; the Cleared section :1049-1070 does not mention them). CLAUDE.md:33-38 reserves config sections that are loaded, validated and schema-exported without a consumer, which is a different artifact from a Cargo feature; CLAUDE.md:47 states what the feature does for the tests that use it and sanctions no empty declaration. ARCHITECTURE.md:108-125 covers reserved crates, not reserved features. The comment at :55-56 is the declaration's own self-justification, not a ratified seam, and the consistency it claims is falsified in the evidence above.",
+        "rule": "G-RESERVED: mirror at the pin, ARCHITECTURE.md Reserved crates :108-125, CLAUDE.md Hard Rules 'Unwired config is reserved, not dead' and the slow-tests rule at :47"
+      },
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-stochastic/Cargo.toml",
+          "line": 18,
+          "why": "a third identical no-op declaration carrying the same comment; the named probe covers two manifests, so this one is cited rather than raised separately"
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 40,
+          "why": "the only declaration with a substantive rationale and real cfg consumers, the counter-example that shows what a justified declaration looks like"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 25,
+          "why": "the hand-maintained feature census advertises slow-tests as a cobre-cli capability"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 32,
+          "why": "NON_SOLVER_FEATURES carries slow-tests workspace-wide; its rationale at :26 is entirely about the cobre-sddp sweep"
+        },
+        {
+          "path": "CLAUDE.md",
+          "line": 12,
+          "why": "the workspace test command that passes the feature, which resolves through cobre-sddp under --workspace"
+        },
+        {
+          "path": "CLAUDE.md",
+          "line": 47,
+          "why": "the hard rule naming the three slow test families, all of them cobre-sddp tests"
+        }
+      ]
+    },
+    {
+      "title": "cobre-io declares an empty slow-tests feature with no cfg consumer anywhere in the crate, justified by the same workspace-consistency claim the workspace falsifies",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/Cargo.toml",
+          "line": 17
+        },
+        {
+          "path": "crates/cobre-io/Cargo.toml",
+          "line": 19
+        }
+      ],
+      "enforcementStrength": "n-a",
+      "script": null,
+      "wiring": null,
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-io/Cargo.toml | sed -n '17,19p'; git grep -c 'slow-tests' 077dbe2c -- 'crates/cobre-io/src' 'crates/cobre-io/tests' || echo '0 consumers in cobre-io'",
+        "output": "17:## Opt-in to the slow test suite (no slow tests currently in this crate;\n18:## declaration reserved for workspace consistency).\n19:slow-tests = []\n--\n0 consumers in cobre-io",
+        "reading": "The same empty declaration and the same two-line comment appear in cobre-io at :17-19, and grep finds no slow-tests token anywhere under crates/cobre-io/src or crates/cobre-io/tests, so the feature gates nothing in this crate either. The consistency rationale fails here for the same reason it fails in cobre-cli: cobre-core, cobre-solver and cobre-comm each carry a [features] table without this feature, so four of thirteen members declaring it is not consistency. This is a distinct manifest from the cobre-cli instance and is raised separately as the named probe requires, but the cost and the fix are the same and the two should be dispositioned together. ci.yml:21 attributes slow-tests to cobre-io in the hand-maintained per-crate census, alongside schema and flatc-conformance which the crate really does consume, so the census gives a no-op declaration the same standing as a real one.",
+        "reading_note": null
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the empty declaration and its comment, and drop the slow-tests attribution from the cobre-io line of the feature census comment at ci.yml:21 in the same change. The workspace-wide invocation is unaffected for the reason given on the cobre-cli entry: under --workspace cargo needs only one selected member to declare the feature, and no per-package invocation in the tree passes slow-tests to cobre-io. If the owner prefers to keep the declarations, the same alternative applies: state the real reason and make the claimed consistency true across the members that have feature tables.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "citation": "Same pre-check as the cobre-cli instance: no mirror entry at the pin reserves the slow-tests declarations, CLAUDE.md:33-38 reserves unwired config sections rather than Cargo features, CLAUDE.md:47 describes the feature's purpose without sanctioning an empty declaration, and ARCHITECTURE.md:108-125 covers reserved crates only.",
+        "rule": "G-RESERVED: mirror at the pin, ARCHITECTURE.md Reserved crates :108-125, CLAUDE.md Hard Rules 'Unwired config is reserved, not dead' and the slow-tests rule at :47"
+      },
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-stochastic/Cargo.toml",
+          "line": 18,
+          "why": "the third instance of the identical no-op declaration"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 21,
+          "why": "the census line that lists slow-tests beside cobre-io's two real features"
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 46,
+          "why": "the declaration that the D-case sweep, FPHA plane-selection and forward-sampler convergence tests actually consume"
+        }
+      ]
+    },
+    {
+      "title": "The step named Publish all crates publishes eight of the thirteen workspace members from a hand-written ordered list, while the five members it omits carry crates.io-facing descriptions and no publish = false, and nothing reconciles the list with the manifest",
+      "anchors": [
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 36
+        },
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 80
+        },
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 105
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 12
+        },
+        {
+          "path": "crates/cobre-mcp/Cargo.toml",
+          "line": 3
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/publish.yml",
+        "job": "publish",
+        "step": "Publish all crates",
+        "line": 36
+      },
+      "evidence": {
+        "command": "diff <(git show 077dbe2c:Cargo.toml | sed -n '4,17p' | tr -d ' \",' | sort) <(git show 077dbe2c:.github/workflows/publish.yml | grep -oE '^ +publish cobre[a-z-]*' | awk '{print \"crates/\"$2}' | sort); git grep -n 'publish' 077dbe2c -- 'crates/cobre-mcp/Cargo.toml' 'crates/cobre-tui/Cargo.toml' 'crates/cobre-flow/Cargo.toml' 'crates/cobre-uc/Cargo.toml' 'crates/cobre-emt/Cargo.toml' || echo 'no publish key in any reserved manifest'",
+        "output": "6,7d4\n< crates/cobre-emt\n< crates/cobre-flow\n9d5\n< crates/cobre-mcp\n13,14d8\n< crates/cobre-tui\n< crates/cobre-uc\n--\nno publish key in any reserved manifest",
+        "reading": "Diffing the member list at Cargo.toml:4-17 against the crate names the publish step actually submits shows exactly five members present in the manifest and absent from the workflow, and they are the five reserved ones. The workflow's ordered list at :80 :84 :85 :86 :90 :94 :98 :103 is written by hand in dependency layers with prose comments, the step that runs it is named Publish all crates at :36, and it ends by echoing All crates published successfully at :105, so both the step name and the success message assert a set five members wider than the list. One omission is documented: an inline comment states that cobre-python goes to PyPI via maturin rather than crates.io, which matches its workspace exclusion at Cargo.toml:21-23. The five reserved members have no such note anywhere in the workflow, and grep finds no publish key in any of their manifests, so nothing in the manifests marks them unpublishable either. Their manifests point the other way: cobre-mcp/Cargo.toml:3 carries the description Reserved crate name. The Cobre MCP server is not yet implemented; depend on cobre-cli for command-line interaction with Cobre, which is prose written for a crates.io reader, and each reserved manifest inherits the workspace version. So the two artifacts disagree about intent and no guard forces the question: if the reserved names are meant to hold their place on the registry, the release never refreshes them; if they are not meant to be published, the manifests do not say so and only a hand-written list keeps them out. Either way, the day a reserved crate becomes real, the publish list stays silent and the release still reports success.",
+        "reading_note": null
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Make the intent explicit at one site and let the workflow derive from it rather than restate it. Either add publish = false to the five reserved manifests, which puts the decision next to the crate it describes and lets the workflow assert that every member is either in its ordered list or marked unpublishable, or add the five to the list at the layer that has no intra-workspace dependencies, which is where they belong since their dependency tables are empty. In both cases the reconciliation is a few lines inside the existing Publish all crates step comparing the member list against the list plus the opt-outs, so the workflow fails loudly instead of echoing success over a silent omission, and no new gate script or framework is introduced. The step name and the closing message are corrected to name the set that is actually published if any member stays out by design.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "sanctioned",
+        "citation": "ARCHITECTURE.md:108-125 declares the five crates reserved under the heading Reserved crates (not yet implemented), stating at :110-113 that reserved crate names hold skeleton stub files and that none currently builds any functionality or participates in the dependency graph, and CLAUDE.md:10 names them as reserved stubs. The mirror at the pin adds nothing on them.",
+        "rule": "G-RESERVED: the five stub crates are a ratified reservation, so this candidate is about the workspace COST of maintaining the reservation, specifically the unguarded hand-mirror of the member list in the release path, and never about deleting a reserved crate. No deletion is proposed and the reservation itself is recorded in positives."
+      },
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 103,
+          "why": "the last entry of the hand-written ordered list, immediately before the success echo"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 21,
+          "why": "the documented workspace exclusion that explains the one omission the workflow does account for"
+        },
+        {
+          "path": "crates/cobre-mcp/Cargo.toml",
+          "line": 15,
+          "why": "the reserved crate's [[bin]] target, the reason its publishability is not a purely cosmetic question"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "scripts/ci/allow-rationale-allowlist.txt is entry-free by design",
+      "why": "The file declares its own emptiness as the intended state and explains why: the pre-existing un-rationaled backlog was burned down, every production suppression now carries a Rationale comment, and the merge-base diff in check-allow-rationale.sh is therefore the sole guard with no escape hatch (:9-13). The format documentation at :17-21 keys exemptions by path::symbol rather than path:line precisely so a key cannot rot. Twenty-one lines, zero active entries. Proposing its deletion would re-raise a sanctioned decision; the correct action is to keep it empty.",
+      "sanctionedBy": "scripts/ci/allow-rationale-allowlist.txt:1 and :15"
+    },
+    {
+      "subject": "The five reserved stub members impose no measurable workspace cost worth raising, so no cost candidate is filed against them",
+      "why": "Examined and clean. Each reserved crate is a workspace-inherited manifest of eighteen to twenty-two lines with an empty [dependencies] table and [lints] workspace = true, and a source of one to six lines carrying the doc comment that satisfies missing_docs under RUSTFLAGS -Dwarnings, so the --workspace steps in the fourteen ci.yml jobs walk five empty compilation units with no dependency resolution behind them. cargo-deny resolves nothing extra because the dependency tables are empty. The reservation's real unguarded cost is the release-path hand-mirror, which is filed as its own candidate; the crates themselves are a ratified reservation and are not a finding.",
+      "sanctionedBy": "ARCHITECTURE.md:108-125 (heading at :108, bullets :115-125, the no-functionality statement at :110-113) and CLAUDE.md:10"
+    },
+    {
+      "subject": "cargo-dist cannot ship a reserved stub binary because the dist member selection names one package",
+      "why": "Examined and clean, and worth protecting. cobre-mcp declares a [[bin]] target at crates/cobre-mcp/Cargo.toml:15-17 whose source is six lines that print an error and exit non-zero, which would be a user-visible release artifact if the release tooling discovered binaries across the workspace. It cannot: dist-workspace.toml:2 scopes dist to a single package, crates/cobre-cli, so release.yml's dist build step at :143 can only ever produce the CLI. The scoping is the thing keeping a stub out of a release, so it should not be widened to the whole workspace without revisiting the reserved [[bin]].",
+      "sanctionedBy": "dist-workspace.toml:2 (cited, outside the sweep list) with crates/cobre-mcp/Cargo.toml:15-17 and .github/workflows/release.yml:143"
+    },
+    {
+      "subject": "scripts/ci/lib/comment_scan.sh owns one shared fact and guards it against drift",
+      "why": "Correct and worth protecting, and it is the model the scan-directory candidate asks to extend. The library holds the cfg(test) boundary regex as a single source of truth (:5-9, the awk at :21-26), documents the two gates that structurally cannot use the streaming helpers and why (:11-14), and carries a guard that runs only when the file is executed rather than sourced (:36-65) so the holdout gates pay no runtime cost while still being checked. That guard is wired blocking at ci.yml:268 as the cfg(test) boundary drift guard step. A duplicated fact with an executable guard and a written reason for every exception is the right shape; the gap is that the crate-directory list next to it has neither.",
+      "sanctionedBy": "gate-census.json row for scripts/ci/lib/comment_scan.sh (class blocking, wiring .github/workflows/ci.yml:268)"
+    },
+    {
+      "subject": "cobre-sddp's slow-tests declaration is the justified instance",
+      "why": "Examined and clean. crates/cobre-sddp/Cargo.toml:40-46 declares the feature with a rationale naming the specific long-running suites it gates, and it is the only crate with cfg consumers, matching CLAUDE.md:47's three named test families and every per-package invocation in the tree that passes the feature. It is the counter-example that makes the three no-op declarations legible as cost rather than convention, and it should not be swept up with them.",
+      "sanctionedBy": "CLAUDE.md:47 and crates/cobre-sddp/Cargo.toml:40-46"
+    },
+    {
+      "subject": "The cobre-python workspace exclusion states its own reason",
+      "why": "Examined and clean. Cargo.toml:18-20 explains the exclusion before the exclude table at :21-23, and publish.yml repeats the consequence where it matters by noting that the bindings go to PyPI via maturin rather than crates.io. This is the shape the publish-list candidate asks for on the reserved members: an omission that says why it is an omission.",
+      "sanctionedBy": "Cargo.toml:18-20 and :21-23"
+    },
+    {
+      "subject": "EXCLUDED_FILES=() in the genericity gate is an emptied exemption, not an unused hook",
+      "why": "Examined and clean. scripts/ci/check-infra-genericity.sh:70-73 records that the value-function-artifact format break retired the former output/policy exemption and that an entry may be added only with owner sign-off, so the empty array at :74 is the retirement rather than a vestige. Same shape as the entry-free allowlist: emptiness with a written reason and a sign-off gate.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh:70-73 and :74"
+    },
+    {
+      "subject": "The three advisory-by-design gates' terminal exit 0 is declared, not broken",
+      "why": "Examined and clean. Each advisory gate's ci.yml step carries an ADVISORY comment immediately above it and the script ends in exit 0 on purpose: check-comment-line-refs.sh (comment ci.yml:278-279, exit at :157), check-comment-banners.sh (ci.yml:282-283, exit at :174) and quality-report.sh (ci.yml:298-299, exit at :134). Advisory output with a written declaration is a design choice, so none of them is a finding, and check-comment-bloat.sh inherits that class transitively through quality-report.sh:132.",
+      "sanctionedBy": ".github/workflows/ci.yml:278-279, :282-283, :298-299 and the gate-census.json exit-0 anchors"
+    }
+  ],
+  "handoffs": [],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "Are the five reserved crate names meant to be re-published at every release so they keep holding their place on crates.io, given that their manifests carry crates.io-facing Reserved crate name descriptions and none sets publish = false, or is their absence from the publish list the intended policy that the manifests should be made to state?",
+    "Should the three empty slow-tests declarations be kept as a deliberate seam despite no mirror entry and a falsified consistency rationale, in which case the feature also belongs in the three members that have a feature table and lack it, or deleted as the candidates propose?",
+    "Is a first composite action under .github/actions/ acceptable, given the directory does not exist at the pin and the change would reshape the release-critical MPI workflows as well as ci.yml?",
+    "Routing, not a finding for this lens: scripts/ci/lib/comment_scan.sh:11-14 says two gates cannot use the streaming helpers and names check-comment-banners.sh and check-allow-rationale.sh, while its own drift-guard array at :46-50 carries three holdouts including quality-report.sh; the enumeration mismatch belongs to the drift lens if it is wanted."
+  ],
+  "outOfScope": [],
+  "coverage": {
+    "P1 MPICH triple": [
+      "The MPICH Cache/Build/Set step triple is copied byte-for-byte eight times inside ci.yml, with two near-variants in mpi-slurm.yml and release-mpi.yml and no composite action anywhere under .github/",
+      "The MPICH version literal 4.2.3 has three independent owners in the SLURM image path (workflow env, Dockerfile ARG default, pushed image tag) and no build-arg links them, so the tag can name a version the image was not built from"
+    ],
+    "P2 slow-tests": [
+      "cobre-cli declares an empty slow-tests feature with no cfg consumer anywhere in the crate, justified by a workspace-consistency claim that three other members with feature tables falsify",
+      "cobre-io declares an empty slow-tests feature with no cfg consumer anywhere in the crate, justified by the same workspace-consistency claim the workspace falsifies"
+    ],
+    "P3 reserved stubs": [
+      "(positive) The five reserved stub members impose no measurable workspace cost worth raising, so no cost candidate is filed against them",
+      "(positive) cargo-dist cannot ship a reserved stub binary because the dist member selection names one package"
+    ],
+    "P4 allowlist": [
+      "(positive) scripts/ci/allow-rationale-allowlist.txt is entry-free by design",
+      "(positive) EXCLUDED_FILES=() in the genericity gate is an emptied exemption, not an unused hook"
+    ],
+    "P5 gate-corpus shape": [
+      "Five comment and doc gates each hand-maintain their own copy of the crate-source scan-directory list, in two divergent shapes, and four of them do so while already sourcing the shared scan library that exists to hold exactly this kind of shared fact"
+    ]
+  },
+  "gate": {
+    "validator": "pass",
+    "validatorErrors": [],
+    "rejections": [],
+    "demotedAnchors": [],
+    "stamps": [],
+    "droppedKeys": [],
+    "headerFixes": [],
+    "gateNotes": [
+      {
+        "title": "Five comment and doc gates each hand-maintain their own copy of the crate-source scan-directory list",
+        "note": "mentions CD-061 without reRaiseOf — ingest decides sharpen vs new gate-half"
+      }
+    ]
+  }
+}

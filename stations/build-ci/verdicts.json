@@ -1,0 +1,2288 @@
+{
+  "station": "build-ci",
+  "stationLabel": "build-ci-docs",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "ingestedAt": "2026-09-19",
+  "candidateRefScheme": "<lens>-<nn>, nn = zero-based index among the lens file's candidates in file order",
+  "dispositionVocabulary": [
+    "defended",
+    "dup-of",
+    "anchor-missing",
+    "cleared-sanctioned",
+    "re-raise-rejected",
+    "conflicts-held",
+    "returned-for-sharpening"
+  ],
+  "stateVocabulary": [
+    "accepted",
+    "rejected-anchor",
+    "rejected-sanctioned-advisory",
+    "rejected-re-raise",
+    "rejected-defender",
+    "merged",
+    "held-conflicts",
+    "unresolved"
+  ],
+  "verdictVocabulary": [
+    "confirmed",
+    "dismissed",
+    "unresolved"
+  ],
+  "dismissalBasisVocabulary": [
+    "contract",
+    "cost-accepted-by-rule",
+    "deliberate-and-documented",
+    "premise-false-at-pin",
+    "sanctioned-advisory"
+  ],
+  "enforcementStrengthVocabulary": [
+    "advisory-by-design",
+    "blocking",
+    "not-a-gate",
+    "transitively-advisory",
+    "unwired"
+  ],
+  "sanctionedByClosedSet": [
+    "advisory-by-design exit 0 — check-comment-line-refs.sh:35",
+    "advisory-by-design exit 0 — check-comment-banners.sh:40",
+    "advisory-by-design exit 0 — check-comment-bloat.sh:39",
+    "advisory-by-design exit 0 — quality-report.sh:42",
+    "entry-free allowlist — scripts/ci/allow-rationale-allowlist.txt:1 and :15",
+    "reserved stub crates — CLAUDE.md:10, ARCHITECTURE.md:108-125, roadmap IV.1",
+    "Unwired config is reserved, not dead",
+    "cobre-python workspace exclusion — Cargo.toml:18-23",
+    "EXCLUDED_FILES=() retired exemption — check-infra-genericity.sh:70-74 and :38-44"
+  ],
+  "measurementRule": "performance verdicts carry UNMEASURED (informational station, no perf-sweep request); every other lens n/a",
+  "partIHandoff": "partI-handoff.json (I.3-6, claim-stale; no disposition, no Alignment)",
+  "counts": {
+    "received": 29,
+    "byDisposition": {
+      "defended": 28,
+      "dup-of": 1
+    },
+    "byState": {
+      "accepted": 24,
+      "rejected-defender": 4,
+      "merged": 1
+    },
+    "byVerdict": {
+      "confirmed": 24,
+      "dismissed": 4,
+      "-": 1
+    },
+    "byLens": {
+      "architecture": {
+        "accepted": 5,
+        "rejected-defender": 1
+      },
+      "over-engineering": {
+        "accepted": 6
+      },
+      "drift": {
+        "rejected-defender": 2,
+        "accepted": 8
+      },
+      "performance": {
+        "accepted": 5,
+        "merged": 1,
+        "rejected-defender": 1
+      }
+    },
+    "needsHuman": 20,
+    "conflicts": 0,
+    "sharpens": 2
+  },
+  "verdicts": {
+    "architecture-00": {
+      "candidateRef": "architecture-00",
+      "lens": "architecture",
+      "disposition": "defended",
+      "title": "The infra-genericity gate's crate list is a hand-kept literal in two unpaired places, so the rule's coverage cannot follow the target layering without a synchronized script-and-prose edit that nothing enforces",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 62
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 261
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "advances-1",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "architecture-01",
+        "drift-05"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'do not build a new gate framework or a new shared scan library for this … a new framework would be a one-consumer abstraction'",
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": true,
+        "sites": {
+          "prose": true,
+          "script": true,
+          "step": true
+        },
+        "result": "both-sites-named"
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "The infrastructure-crate set is hand-written at sites the gate never pairs: its own header at check-infra-genericity.sh:5-8, SCAN_DIRS at :62-68, and the hard-rule bullet at CLAUDE.md:39-41. No gate at the pin refuses a state where the crates scanned and the crates the rule names differ, even though comment_scan.sh:43-68 already performs that class of divergence check for the cfg(test) boundary as a blocking step at ci.yml:264-267. Conceded from the title: the curated literal list is correct and must not be derived from workspace membership, and the single-line amendment the layering brief L1 row prescribes does extend coverage to a future L1 crate. The residue is the absent divergence check between the gate's scanned set and the rule's named set, not the hand-kept list.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "**Single-source fan-out (cache coherency).** One authoritative fact cached into N audience docs that drift apart. _Rule:_ one owner per fact; every other doc is a shape-only pointer or a guard-pinned literal.",
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "advances-0b",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Both sites resolve at the pin and both are hand-kept. The gate names the infrastructure crate set twice inside its own file, as header prose at check-infra-genericity.sh:5-8 and as SCAN_DIRS paths at :62-68, and CLAUDE.md:39-41 names the same set in the hard rule the gate exists to enforce. Nothing at the pin compares the two owners. No script under scripts/ci reads CLAUDE.md, check-doc-paths.sh carries no crate names, and check_doc_voice.py walks lines only for hype and unpinned-number patterns, so a half-done amendment passes green. The repository already ships the exact pattern this gate lacks: comment_scan.sh:43-68 asserts that its holdout gates still carry the canonical cfg(test) boundary and exits nonzero on drift, wired as a blocking step at ci.yml:264-267 two steps below the genericity step at :261-262. So the missing divergence check is a repo-native shape, not a new framework, which is why the candidate stays inside the existing blocking gate and its single quality-scripts step and does not fire a conflicts trigger. The candidate's supporting grep claim is false at the pin, since that crate path appears in seven scripts under scripts/ci rather than one, but the conclusion it was offered for holds because none of those seven reads the rule prose. I strip the implication that the literal list is itself the defect. Infrastructure membership is a curated judgment and cannot be derived from the members list at Cargo.toml:3-17, which includes the engine crate cobre-sddp, the CLI and the reserved stubs. Deriving SCAN_DIRS from workspace membership would scan cobre-sddp and fail the gate on the engine's own vocabulary, so the enumerated literal is correct. Coverage can also follow the target layering by exactly the amendment the layering brief L1 row prescribes. What survives is only that the amendment must be remembered across two files with no gate refusing a state where they disagree.",
+      "needsHuman": [
+        "Owner must choose where the single owner of the infra-crate set sits: CLAUDE.md:39-41 keeps its enumeration pinned by a new divergence check in the gate, or the bullet becomes a shape-only pointer to the gate's list, since doc-integrity section 3 mode 1 admits either and the choice decides which site an amendment edits first."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "architecture-01": {
+      "candidateRef": "architecture-01",
+      "lens": "architecture",
+      "disposition": "defended",
+      "title": "The infra-genericity gate matches one engine's vocabulary rather than the engine-concept rule it enforces, so a sibling engine's nouns and an underscore-joined identifier both pass unflagged",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 79
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 10
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "advances-1",
+      "partIRef": null,
+      "reRaiseOf": "CD-061",
+      "priorId": "CD-061",
+      "priorRelation": "sharpens",
+      "relatedTo": null,
+      "relatedCandidates": [
+        "architecture-00",
+        "drift-05"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'neither needs a new gate, a new scan library, or a rename in cobre-solver'",
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": true,
+        "sites": {
+          "prose": true,
+          "script": true,
+          "step": true
+        },
+        "result": "both-sites-named"
+      },
+      "ingestNotes": [],
+      "verdict": "dismissed",
+      "survivingClaim": null,
+      "dismissalBasis": "deliberate-and-documented",
+      "basisCitation": "scripts/ci/check-infra-genericity.sh:15",
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Both limbs fail at the pin, and the gate-side delta is the one I judge. The script header does not merely offer three examples at :10-11; line :15 declares the pattern's scope outright as standalone cut / Cut (word boundary), so grep -E treating underscore as a word constituent is the stated semantics rather than an unnoticed hole, and the implementation note at :50-56 pins grep -E as the matching engine precisely because it honours those boundaries. The candidate's own fix shape disproves its load-bearing premise that the boundary protects only execution, cuts_active and cutting_edge: an underscore-separator boundary would make this blocking step at .github/workflows/ci.yml:261-262 fail at the pin on singular underscore-joined production identifiers inside the five scanned crates, among them cut_selection at crates/cobre-io/src/config/training.rs:41, time_cut_selection_ms at crates/cobre-io/src/output/mod.rs:122, cut_stats at crates/cobre-io/src/output/mod.rs:316, and the cut_selection_ms, cut_sync_ms and cut_batch_build_ms Parquet columns at crates/cobre-io/src/output/schemas.rs:411, :413 and :416 - exactly the timing and row-selection vocabulary the live entry records as requiring no rename. The boundary is therefore load-bearing for the passing state of a blocking gate, not slack left by an oversight. I did verify the cited evader as real and production-scoped: the FreezeScratch field at crates/cobre-solver/src/freeze.rs:22, used at :137, :138, :141 and :188, sits above the cfg(test) boundary at :244, and no production line in the five scanned crates matches the pattern at the pin, so the gate legitimately reports its clean state. On the second limb there is no subject at the baseline: no sibling engine exists, and the layering brief section 1 L1 row states the genericity rule extends to a new crate only by amending the CI grep's crate list, so an explicit amendment when an engine actually arrives is the declared extension mechanism; a pre-built registry of per-engine vocabularies is generality with no stated requirement behind it. The prose-versus-gate breadth question the title raises belongs to the sibling candidates on the crate list and on the three-token parenthetical, and the register-coverage question belongs to the live entry.",
+      "needsHuman": [
+        "Should the gate's token scope ever widen past standalone tokens, given that an underscore-separator boundary reds this blocking gate on the cobre-io timing and row-selection vocabulary the live entry ratified as needing no rename?",
+        "Should the widening the live entry calls for also name the cobre-solver FreezeScratch field site at crates/cobre-solver/src/freeze.rs:22, which sits outside the cobre-io Parquet and IterationRecord scope that entry summarizes?"
+      ],
+      "defenderRetries": 0,
+      "state": "rejected-defender"
+    },
+    "architecture-02": {
+      "candidateRef": "architecture-02",
+      "lens": "architecture",
+      "disposition": "defended",
+      "title": "No CI workflow runs on a pull request into develop, so every blocking gate first sees a develop change only after it has already merged",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 6
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 4
+        },
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 422
+        }
+      ],
+      "proposedSeverity": "A",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Narrower than the title: ci.yml alone carries the gap — its pull_request filter is [main] at :6-7 against a push filter of [main, develop] at :4-5, so no ci.yml job (the quality-scripts gates at :248-300 plus clippy :154, fmt :246, schemas :339, docs-examples :360) evaluates a develop-targeted change before it is merged. The claim does NOT extend to 'no CI workflow' — mpi-slurm.yml:5-6 names develop under pull_request and release.yml:42 / release-python.yml:26 have no base-branch filter, so all three run on a develop pull request — nor to fmt, plan-leaks and python-parity, which scripts/pre-commit evaluates pre-merge once the hook is installed; and the E4 widened diff window at check-allow-rationale.sh:368 is excluded, because ci.yml:287-289 documents the origin/main fallback as the push-event behaviour and its effect is over-scoping, not lost enforcement.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "The trigger asymmetry is real and reads exactly as the candidate says: ci.yml:4-5 gives push the branch set [main, develop] while ci.yml:6-7 gives pull_request only [main]. Every job in that file is unconditional (a grep for github.event_name over ci.yml returns no job-level condition; the only if: expressions are the MPICH cache-hit guards and the python matrix pins), so a change whose base is develop reaches the whole quality-scripts block at :248-300, clippy at :154, fmt at :246, check_schemas.sh at :339 and check-docs-examples.sh at :360 for the first time on the post-merge push, when the merge commit already carries the defect. That is the defensible residue. Two over-reaches in the title do not survive. First, the universal quantifier over workflows is false at the pin: mpi-slurm.yml:5-6 lists branches [main, develop] under pull_request, and release.yml:42 and release-python.yml:26 carry a pull_request trigger with no base-branch filter at all, so three of the eight workflows do fire on a pull request into develop. The census gates simply are not among their jobs. Second, three of the sixteen quality checks do have a pre-merge path independent of ci.yml: scripts/pre-commit runs cargo fmt --check, check-no-plan-leaks.sh and check_python_parity.py, and CONTRIBUTING.md:493 tells the contributor the hook runs the parity check automatically, so for those three the post-merge push is not the first evaluation once the hook is linked. The E4 compounding half is also stripped. The base resolution at check-allow-rationale.sh:368 and the diff window at :422 are as quoted, and on a push event BASE_REF is indeed empty so the default origin/main merge-base applies, but ci.yml:287-289 states that fallback as the intended push-event behaviour and the fetch-depth rationale at :256-257 provisions for it; the consequence is a wider scan window, which over-scopes rather than under-enforces, so it is not an enforcement gap. I found no repository text at the pin that states the develop pull_request exclusion as a deliberate choice: CONTRIBUTING.md:386 documents branching from main, which explains why the filter covers main, but develop never appears in its submission flow, and the develop cadence prose in docs/design/testing-architecture.md:499 sits under a section headed as a proposed standard and itself assumes the smoke and PR-fast tiers run on every push and every PR. Absent such a statement there is no deliberate-and-documented or cost-accepted-by-rule basis, and the fix shape stays an in-place amendment of the trigger list, which strengthens rather than weakens a gate.",
+      "needsHuman": [
+        "Owner call on the trigger list: extend ci.yml's pull_request filter to [main, develop], accepting a full ci.yml run on every develop pull request, or ratify post-merge detection on develop as the intended trade and record that rationale in the workflow or a design doc, since no text at the pin states it."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "architecture-03": {
+      "candidateRef": "architecture-03",
+      "lens": "architecture",
+      "disposition": "defended",
+      "title": "The invariance-shuffle workflow cannot compile the test target it dispatches, and the automatic suite skips the same tests, so the declaration-order-invariance shuffle matrix has no executable path in CI",
+      "anchors": [
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 34
+        },
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 55
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 55
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 114
+        }
+      ],
+      "proposedSeverity": "A",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": [
+        "TD-045 (L4717, cites invariance-shuffle.yml)",
+        "sddp gate NH9 (R6-nh-9) → E07"
+      ],
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Both invariance-shuffle.yml run lines (:34 and :55) omit cobre-sddp's own test-support feature, so the parity target they name fails to compile at the pin (lib.rs:46-47 gates pub mod test_support, which parity.rs:752-1461 uses unconditionally, and Cargo.toml:77 only enables cobre-core's like-named feature): the residue is that the FULL_SHUFFLE_PERMUTATIONS sweep behind the bare ignore at parity.rs:139-163 and its CLP twin at :298-322 has no working invocation in the tree, NOT that declaration-order invariance is unverified in CI, since the i = 0 permutation folded into each parity_hash_<case> test (parity.rs:28-32) runs on both backends via ci.yml:114 and ci.yml:233 under NON_SOLVER_FEATURES (ci.yml:32), which carries both slow-tests and test-support.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Verified at the pin. invariance-shuffle.yml:34 passes only slow-tests and :55 only clp plus slow-tests, while the parity target references cobre_sddp::test_support::fill_consistent_basis at crates/cobre-sddp/tests/parity.rs:894 from inside the ungated mod determinism opened at :752, with further unconditional uses at :1303, :1437 and :1461. crates/cobre-sddp/src/lib.rs:46-47 gates pub mod test_support on cfg(any(test, feature = \"test-support\")), and the library is compiled without cfg(test) when an integration test links it, so that module is absent unless the crate's own feature is named on the command line. crates/cobre-sddp/Cargo.toml:55 declares test-support = [\"cobre-core/test-support\"], and the dev-dependency at :77 enables cobre-core's like-named feature, a different package's, which does not turn on cobre-sddp's; no self dev-dependency exists in the manifest, so nothing enables it implicitly under -p cobre-sddp. Both dispatched jobs therefore fail while compiling the named target, before any shuffle test is selected, and neither step sets continue-on-error, so the failure would fail the dispatched run. The reason no automatic path surfaces it is that ci.yml:32 NON_SOLVER_FEATURES carries test-support and features unify workspace-wide by name, so ci.yml:114 and the CLP nextest step at ci.yml:233 compile the same target successfully. The two shuffle run lines are the only invocations in the tree that omit the feature, which is why this is an amend-in-place defect confined to those lines rather than a missing gate or a new framework. I narrow the consequence the title draws. parity.rs:28-32 records that each parity_hash_<case> test folds in the i = 0 permutation, and those tests carry the slow-tests cfg_attr form that both ci.yml:114 and ci.yml:233 enable, so single-permutation declaration-order invariance is verified automatically on both backends. What has no working invocation is the FULL_SHUFFLE_PERMUTATIONS sweep behind the bare ignore at parity.rs:139-163 and its CLP twin at :298-322, which cargo test cannot reach without --include-ignored. I also correct the candidate's scope: the bare-ignore shuffle set exists in both the highs-gated module and the clp-gated module, so the second run line is broken for its own copy of the set, not for the one the candidate anchored.",
+      "needsHuman": [
+        "Shuffle-matrix reachability is an owner call: restore the commented-out nightly schedule at invariance-shuffle.yml:5-7, or convert the bare-ignore shuffle tests to the crate's slow-tests cfg_attr form so the automatically triggered suite runs them and the dispatch workflow becomes a convenience.",
+        "Whether the compile-only guard against this class (a target-compiling step over the parity test binary under the shuffle feature set) is wanted at all, given that ci.yml:114 and :233 already compile that target under a feature set that works."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "architecture-04": {
+      "candidateRef": "architecture-04",
+      "lens": "architecture",
+      "disposition": "defended",
+      "title": "The CLI template mirror is guarded in one direction only: a file added to the canonical example deck but not to the embedded list leaves both guards green while cobre init ships an incomplete case",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/build.rs",
+          "symbol": "TEMPLATE_FILES"
+        },
+        {
+          "path": "scripts/ci/check-docs-examples.sh",
+          "line": 32
+        },
+        {
+          "path": "scripts/ci/check-docs-examples.sh",
+          "line": 113
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "No guard in the corpus compares the canonical examples/1dtoy/ file SET against either hand-maintained enumeration (build.rs TEMPLATE_FILES at :16, templates.rs DTOY1_FILES), so the single escaping edit is ADDING a presence-discovered optional input file to the canonical deck without changing any already-embedded file's bytes; canonical deletion is caught by the expect at templates.rs:210 and modification (including any addition that config.json references) by the assert_eq! at templates.rs:212, and check-docs-examples.sh:113 is conceded to meet its own declared CLI-output-shape contract rather than being a deficient mirror guard, with the resulting drift being divergence from the documented canonical deck rather than a broken or unrunnable init output.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Three hand-maintained lists describe the same deck at the pin, and two of the three edges between them are machine-enforced. build.rs fails the build when a TEMPLATE_FILES entry (:16 to :28) has no file under crates/cobre-cli/templates/1dtoy/, because fs::copy at build.rs:49 panics at :50; and include_bytes! over DTOY1_FILES fails to compile when an entry has no OUT_DIR copy, so enumeration-to-disk and enumeration-to-enumeration both hold. The edge the candidate names is genuinely open. test_1dtoy_embedded_files_match_canonical_source at templates.rs:204 iterates template.files, so its domain is the embedded set, and git ls-tree over examples/1dtoy/ and crates/cobre-cli/templates/1dtoy/ at the pin shows corresponding trees only because the two cardinalities happen to agree. Nothing in the corpus reads the canonical directory listing. I narrow on three over-reaches. First, check-docs-examples.sh:113 is not a template-mirror guard: its header at :1 to :8 and :20 to :23 declares it a CLI on-disk-output-shape gate, and the configured EXPECTED_INPUT_FILES=11 at :32 pins what cobre init WRITES, which is the embedded cardinality, so the gate meets its own stated contract and the defect is a missing assertion in the corpus rather than a deficient gate. Second, the escaping edit is narrower than any file addition: deleting a canonical file trips the std::fs::read expect at templates.rs:210, modifying one trips the assert_eq! at templates.rs:212, and an addition that is referenced from an already-embedded file trips that same byte compare on config.json. What escapes is specifically an additive input file the loader discovers by PRESENCE, which crates/cobre-io/src/validation/structural.rs:11 to :14 records without erroring, its InputFile registry listing many optional paths the 1dtoy deck does not carry. Third, shipping an incomplete case overstates the impact: the materialized deck remains the previous self-consistent deck and still runs, which is why the run half of the same gate stays green, so what diverges silently is the equivalence between what cobre init materializes and the canonical deck the docs point at. One correction to the candidate evidence: its grep output asserts that no script or workflow mentions examples/1dtoy, but ci.yml:578 names it in a step comment and the notebook step at ci.yml:581 executes the quickstart against that deck. That is a consumer, not a set comparison, so the load-bearing claim survives. The amend-in-place shape is feasible, since the script cd's to REPO_ROOT at :30 to :31 and already holds the template name at :33, and replacing a count literal with a set comparison strengthens the gate rather than loosening it, which rule 6b requires. One caveat on that shape: a strict set-EQUALITY assert would also forbid non-input files in a canonical deck, and examples/4ree/README.md shows the repo allows exactly that for a sibling deck.",
+      "needsHuman": [
+        "Is examples/1dtoy/ contractually EQUAL to what cobre init materializes, or a superset allowed to carry non-input files as examples/4ree/README.md does? The answer decides whether the missing assertion is set equality or one-way canonical-subset inclusion."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "architecture-05": {
+      "candidateRef": "architecture-05",
+      "lens": "architecture",
+      "disposition": "defended",
+      "title": "No clippy invocation in CI reaches the published Python bindings crate, so the lint bar the crate declares for itself, including the deny-level unwrap rule, is never evaluated",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 46
+        },
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 50
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 154
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 221
+        }
+      ],
+      "proposedSeverity": "A",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "advances-0a",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": [
+        "cli-python gate NH8 (R5-nh-8, queue=build-ci)",
+        "ROADMAP X4 (`doc = false` seed)"
+      ],
+      "relatedCandidates": [
+        "over-engineering-05"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Only the `[lints.clippy]` table at `crates/cobre-python/Cargo.toml:50-55`, including `unwrap_used = deny`, is evaluated by no step at the pin, and the gap is a documented-but-uncarried contributor obligation rather than an unrecognised blind spot: both clippy runs (`ci.yml:154`, `ci.yml:221`) are `--workspace` and the crate is excluded at `Cargo.toml:21-23`, while `CONTRIBUTING.md:216` already states that clippy for this crate needs `--manifest-path` because the workspace-wide invocations skip it, yet neither the contributor checklist at `CONTRIBUTING.md:386` nor the release checklist at `:602-604` carries that command and `scripts/pre-commit` runs no clippy. Excluded from the residue: the sibling `[lints.rust]` table at `:46-48`, which IS evaluated and blocking, because `RUSTFLAGS: -Dwarnings` at `ci.yml:11` escalates `missing_docs` in the two python-job steps that compile the crate (`:559` maturin develop, `:567` cargo test). Also excluded: any live violation, since the ten `.unwrap()` uses all sit under the `#[cfg(test)]` allow at `errors.rs:358-359`.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "`clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI",
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "advances-0a",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Verified exhaustively at the pin. A grep for clippy across `.github` and `scripts` returns only two invocations, `ci.yml:154` in the `clippy` job at `:116` and `ci.yml:221` in the `clp` job, both `--workspace --all-targets` with `-D warnings`, neither carrying `--manifest-path`; the single `--manifest-path` in the whole enforcement layer is the `cargo test` at `ci.yml:567`, and `scripts/pre-commit` contains no clippy at all. Because `Cargo.toml:21-23` excludes the crate, no step anywhere drives the clippy driver over it, so the `[lints.clippy]` table at `crates/cobre-python/Cargo.toml:50-55` (`all` and `pedantic` at warn, `unwrap_used` at deny, `expect_used` and `panic` at warn) is evaluated nowhere, while `CLAUDE.md:21` makes zero clippy warnings in CI non-negotiable per `:17` and `CLAUDE.md:19` places this crate inside the lint regime with exactly one named override, `unsafe_code`, rather than outside it. Three dismissal routes were tested and all fail. Sanctioned-advisory does not reach it: the sanctioned workspace exclusion at `Cargo.toml:18-23`, expanded at `ARCHITECTURE.md:241-245`, justifies non-membership by the interpreter requirement, yet the python job already has an interpreter and already compiles this exact manifest at `:559` and `:567`, so the sanction covers the exclusion and not the absence of a lint pass. Premise-false-at-pin fails because the grep is exhaustive. Deliberate-and-documented comes closest and still fails, and it is what forces the narrowing: `CONTRIBUTING.md:214-217` states that `cargo fmt` and `cargo clippy` for this crate need `--manifest-path` because the workspace-wide invocations skip it. That records the mechanical skip and assigns a manual remedy; it records no decision to leave the crate unlinted, and the two checklists that would operationalise it, the contributor steps at `:386` and the release steps at `:602-604`, list only the `--workspace` commands, so the documented obligation has no carrier. The residue is narrower than the title in two ways, both in the surviving claim. First, the sibling `[lints.rust]` table at `:46-48` is not part of it, since `RUSTFLAGS: -Dwarnings` is workflow-level env at `ci.yml:11` and `missing_docs` is therefore evaluated and blocking in both python-job compiles of the crate. Second, the gap is a documented-but-uncarried obligation, not an unrecognised blind spot. Enforcement strength is blocking because the anchored subject is the pair of clippy steps, which are exit-code-bearing under `-D warnings`; the defect is their scope, not their strength, and a negative grep is never evidence for unwired. No live breach exists at the pin: all ten `.unwrap()` occurrences sit in `crates/cobre-python/src/errors.rs`, under the `#[cfg(test)]` module whose allow is at `:359`, with the crate-level carve-out at `lib.rs:17`. The asymmetry the candidate names also holds: the `allow(clippy::...)` suppressions spread across eight files under `crates/cobre-python/src/` are already in scope of the blocking E4 rationale gate at `ci.yml:292`, whose pathspec `crates/*/src/*.rs` at `check-allow-rationale.sh:422` crosses directory separators by that script's own comment at `:419-421`, so a new suppression there must carry a written rationale for a lint no job runs. Fix shape in prose only: amend the existing python job with a manifest-scoped clippy pass beside the manifest-scoped test step, on the one entry already guarded by `if: matrix.python-version == '3.12'` at `:563`, inheriting that step's interpreter and its `--no-default-features --features highs` selection. That is amend-in-place, adds no gate framework and no one-consumer abstraction, so none of the layering brief section 3 triggers fires. This is the first adjudication of the inbound cli-python NH8 handoff and is argued from the tree.",
+      "needsHuman": [
+        "Should the manifest-scoped clippy pass live beside the existing manifest-scoped test step in the python job, inheriting its interpreter and backend selection on the single `3.12` matrix entry, or somewhere that does not need an interpreter present?",
+        "Does the documentation-warning bar apply to the bindings crate's rustdoc, given `doc = false` at `crates/cobre-python/Cargo.toml:18` and that the `--workspace` docs job at `ci.yml:399` cannot see the crate at all?",
+        "Once CI covers the crate, should the contributor checklist at `CONTRIBUTING.md:386` and the release checklist at `:602-604` also carry the manifest-scoped clippy command, or does automated coverage discharge the obligation `CONTRIBUTING.md:216` states?"
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "over-engineering-00": {
+      "candidateRef": "over-engineering-00",
+      "lens": "over-engineering",
+      "disposition": "defended",
+      "title": "The MPICH Cache/Build/Set step triple is copied byte-for-byte eight times inside ci.yml, with two near-variants in mpi-slurm.yml and release-mpi.yml and no composite action anywhere under .github/",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 43
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 49
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 87
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 130
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 180
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 316
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 377
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 468
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 522
+        },
+        {
+          "path": ".github/workflows/mpi-slurm.yml",
+          "line": 63
+        },
+        {
+          "path": ".github/workflows/release-mpi.yml",
+          "line": 75
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "performance-00",
+        "performance-02"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "exempt-many-consumers",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'this amends the existing workflows rather than adding a framework' (the composite action has ten consumers — exempt)",
+        "mpichConsumers": {
+          "ci.yml": 8,
+          "mpi-slurm.yml": 1,
+          "release-mpi.yml": 1,
+          "total": 10,
+          "githubActionsDir": false
+        },
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Inside ci.yml alone, the Cache/Build/Set MPICH triple at 43-68 recurs byte-identically in seven further jobs (81-106, 124-149, 174-199, 310-335, 371-396, 462-487, 516-541) with no in-file rationale, and that intra-file eightfold copy is the un-factored duplication; the mpi-slurm.yml (56-83) and release-mpi.yml (67-99) variants are excluded from the shared-abstraction target because each file documents the reason for its own shape at release-mpi.yml 65-66 and 1-19 and via the container image mpi-slurm.yml pins to MPICH_VERSION.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Every load-bearing fact holds at the pin. Reading ci.yml at 43-68 and comparing that region against 81-106, 124-149, 174-199, 310-335, 371-396, 462-487 and 516-541 yields no difference in all seven comparisons, so the Cache MPICH / Build MPICH from source / Set MPICH environment triple exists as eight byte-identical copies inside one file, one each in the check (35), test (73), clippy (116), clp (166), schemas (302), docs (363), coverage (454) and python (504) jobs. A tree listing of .github at the pin returns the single entry workflows, so no composite action exists today. Nothing in the eight regions states why the copies are inline, and the same file does record a deliberate non-duplication decision in prose at 361 for the docs job, so the silence around the triple is not a documented choice and no sanctioned item, rule or accepted-cost clause covers it. The triple is setup inside jobs that are themselves blocking, hence the blocking strength: the copies are the environment those blocking jobs need, not a gate of their own. Rule 8 exempts this subject from the one-consumer objection, so a shared action would follow present consumers rather than anticipate any, and nothing conflicts with the layering. I narrow on the candidate's out-of-file half. The two variants are not undocumented divergences. release-mpi.yml states at 65-66 that only headers and libmpi.so are needed at compile time because the user's own MPICH loads at runtime, which is exactly why its Set step at 95-99 omits the LD_LIBRARY_PATH export that ci.yml makes at 68; its header at 1-19 and the brew branch at 101-104 are the reason all three of its steps carry the matrix.mpi_source guard at 68, 76 and 96. mpi-slurm.yml (triple 56-83) runs its MPI inside the container image pinned to MPICH_VERSION, so the runner likewise needs no library path. Folding those two documented shapes into guard and library-path inputs of one shared action, as the fixShape proposes, converts reasons each file already explains into parameters and reshapes the release-critical path; that half is over-reach. The defensible residue is the eightfold identical copy inside ci.yml.",
+      "needsHuman": [
+        "Whether a first .github/actions/ directory is acceptable for the eight intra-ci.yml copies alone, since GitHub Actions workflows cannot share steps by YAML anchor, leaving a composite action or a checked-in setup script invoked by one step as the only two shapes."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "over-engineering-01": {
+      "candidateRef": "over-engineering-01",
+      "lens": "over-engineering",
+      "disposition": "defended",
+      "title": "The MPICH version literal 4.2.3 has three independent owners in the SLURM image path (workflow env, Dockerfile ARG default, pushed image tag) and no build-arg links them, so the tag can name a version the image was not built from",
+      "anchors": [
+        {
+          "path": "tests/slurm/Dockerfile.base",
+          "line": 42
+        },
+        {
+          "path": "tests/slurm/Dockerfile.base",
+          "line": 8
+        },
+        {
+          "path": "tests/slurm/Dockerfile",
+          "line": 15
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "exempt-many-consumers",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": {
+          "ci.yml": 8,
+          "mpi-slurm.yml": 1,
+          "release-mpi.yml": 1,
+          "total": 10,
+          "githubActionsDir": false
+        },
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "At the pin the base image has two unlinked version decisions, not three: the ARG default at tests/slurm/Dockerfile.base:42 fixes what is compiled and slurm-base-image.yml:14 fixes the tag pushed at :41, with no build-args key in the :35-44 build step joining them, so bumping either alone publishes an image whose tag misnames its MPICH; the pushed tag is not a separate owner because :41 interpolates :14. A separate third literal at tests/slurm/Dockerfile:15 decides what the cluster image builds FROM, because neither build block in tests/slurm/docker-compose.yml passes args, which is why the tag pulled at mpi-slurm.yml:106 is not the tag consumed.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Every load-bearing premise holds at the pin. The build-push step at slurm-base-image.yml:35-44 declares context, file, push, tags, cache-from and cache-to and no build-args key, and a grep for build-args over .github at the pin returns nothing at all, so the MPICH version actually compiled is decided solely by the ARG default at tests/slurm/Dockerfile.base:42 while the tag pushed at :41 interpolates env.MPICH_VERSION from :14. No expression joins them and no file under scripts/ mentions MPICH_VERSION, so nothing verifies that the published tag names the version inside the image; editing :42 alone still fires the path filter at :5-8 and republishes a differently built image under the unchanged tag. I narrow the title on two points. First, the workflow env and the pushed tag are not independent owners: :41 derives the tag from :14 by interpolation, so they are one decision and the title over-counts them as two. Second, tests/slurm/Dockerfile:15 is independent and the case for it is stronger than filed, because both build blocks in tests/slurm/docker-compose.yml declare only context and dockerfile with no args, so the BASE_IMAGE default literal decides what the cluster image builds FROM, and the tag that mpi-slurm.yml:106 pulls using its own env at :33 is therefore not the tag the compose build consumes. The subject is the Dockerfile ARG default and the published tag, an artifact-labelling pair with no census row, and slurm-base-image.yml publishes on push to main rather than gating a pull request, so the strength word is not-a-gate rather than a workflow class. Separately, the prose at Dockerfile.base:8 naming a ci env MPICH_VERSION change as a rebuild trigger is contradicted by the path filter at :5-8, which watches only that Dockerfile and the workflow file; that half is a drift-lens fact and is not part of this claim.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "over-engineering-02": {
+      "candidateRef": "over-engineering-02",
+      "lens": "over-engineering",
+      "disposition": "defended",
+      "title": "Five comment and doc gates each hand-maintain their own copy of the crate-source scan-directory list, in two divergent shapes, and four of them do so while already sourcing the shared scan library that exists to hold exactly this kind of shared fact",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 56
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 57
+        },
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 48
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 57
+        },
+        {
+          "path": "scripts/ci/check-comment-banners.sh",
+          "line": 49
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 126
+        },
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 5
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "performance-04"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "touches-sanctioned-anchor",
+        "touches": [
+          "scripts/ci/check-comment-line-refs.sh (advisory-by-design; header `# Exit code: ALWAYS 0` at :35)",
+          "scripts/ci/check-comment-banners.sh (advisory-by-design; header `# Exit code: ALWAYS 0` at :40)"
+        ]
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'standing up a second scan library or a gate framework for this would be the conflicts shape under trigger 4 and is not proposed'",
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "The residue is unguarded duplication plus two false comments, not the two shapes: the four identical ten-entry SCAN_DIRS copies at check-comment-refs.sh:57-68, check-comment-line-refs.sh:49-60, check-comment-banners.sh:49-60 and check-doc-placeholders.sh:58-69 are one fact that no guard in the tree pins, while three of those four gates already source lib/comment_scan.sh, which holds another shared fact under the blocking drift guard at ci.yml:268; and the mirror comments at check-comment-refs.sh:56 and check-doc-placeholders.sh:57 assert a relationship to check-no-plan-leaks.sh SCAN_DIRS that is false at the pin. Conceded and outside the residue: the fourteen-entry shape is deliberate and documented at check-no-plan-leaks.sh:122-125, and the four omitted directories hold only module-doc stub files, so no material gate-coverage gap survives.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Every load-bearing fact holds at the pin, so the duplication half survives, but two parts of the title do not. The four ten-entry arrays at check-comment-refs.sh:57-68, check-comment-line-refs.sh:49-60, check-comment-banners.sh:49-60 and check-doc-placeholders.sh:58-69 carry identical entries in identical order, and a grep for SCAN_DIRS across scripts, tests, workflows and crates at the pin returns only definitions and consumption loops: no assertion anywhere pins these copies to each other. The only shared-fact guard in the tree is the library's own cfg(test) boundary meta-check at lib/comment_scan.sh:42-66, wired blocking at ci.yml:268 under the step name 'cfg(test) boundary drift guard (shared scan lib)', so the mechanism the residue needs already exists and is already paid for, and the library's header at :5-9 states that it is the single source of truth for that one fact. Three of the four ten-entry copies sit in gates that already load the library, beside the shellcheck directives at check-comment-line-refs.sh:42, check-comment-refs.sh:50 and check-doc-placeholders.sh:49; check-comment-banners.sh is the holdout the library's header names at :11-12 because it tracks extern C suppression state line by line, which explains why it cannot use the streaming helpers but not why it hand-carries the directory list. Two comments are false at the pin: check-comment-refs.sh:56 and check-doc-placeholders.sh:57 each assert that the array mirrors check-no-plan-leaks.sh SCAN_DIRS while carrying ten of that gate's fourteen entries. What does not survive is the framing of the two shapes as the defect. check-no-plan-leaks.sh:122-125 states its wider scope deliberately, saying the umbrella crates/cobre/src and the reserved stub crates are scanned too, with the tests and benches directories glob-appended at :146-153, and the reserved stubs themselves are sanctioned, so a wider plan-leak scope is a documented choice rather than drift. The coverage consequence also does not survive as filed: the four directories the ten-entry gates omit hold crates/cobre/src/lib.rs, crates/cobre-flow/src/lib.rs, crates/cobre-uc/src/lib.rs and crates/cobre-emt/src/lib.rs, whose entire content at the pin is module doc lines, so the blocking gates skip no substantive comment surface today. The candidate's count is conservative rather than wrong: quality-report.sh:53-64 carries a sixth identical copy whose comment at :52 says it mirrors the comment and doc gates' SCAN_DIRS, and check-comment-banners.sh:48 also carries a mirror claim, so the pattern is broader than the filed five. Holding the list in the library that three of these gates already source, and widening the existing meta-check to cover the holdout copies, amends a library with existing callers rather than standing up a second scan library or a gate framework, so no pull-don't-push trigger fires and the hint stays neutral.",
+      "needsHuman": [
+        "Scope call for whoever holds the list: must a guard over the hoisted directory list also cover quality-report.sh:53-64, the sixth copy, given that the library's holdout array at :46-50 already tracks that script for the boundary regex while the header at :11-14 names only two holdouts?"
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "over-engineering-03": {
+      "candidateRef": "over-engineering-03",
+      "lens": "over-engineering",
+      "disposition": "defended",
+      "title": "cobre-cli declares an empty slow-tests feature with no cfg consumer anywhere in the crate, justified by a workspace-consistency claim that three other members with feature tables falsify",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 55
+        },
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 57
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "over-engineering-04"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "The empty slow-tests entry at crates/cobre-cli/Cargo.toml:57 is fully inert at the pin on all three axes I could test - zero cfg consumers inside the crate, no forwarding to any dependency unlike highs :49 / clp :52 / mpi :54, no build-script read at build.rs:30-52, and no invocation in the tree that would fail if it were absent - and the :55-56 rationale is false only in its workspace-wide reading, since cobre-core:15, cobre-solver:15 and cobre-comm:20 carry features tables without the name. Not surviving: the ci.yml:25 census row, which faithfully mirrors declared names and is not itself defective, and the existence of the three-crate convention, which crates/cobre-stochastic/README.md:81 and the verbatim twin comments at cobre-io:17-18 and cobre-stochastic:16-17 establish as real.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "- **`slow-tests` feature** — long-running tests (D-case sweep, FPHA plane-selection, forward-sampler convergence) are gated behind `#[cfg_attr(not(feature = \"slow-tests\"), ignore = ...)]`. Default `cargo test --workspace` skips them; pass `--features slow-tests` to include them.",
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "At the pin crates/cobre-cli/Cargo.toml:57 declares an empty slow-tests entry under the comment at :55-56, and I read three independent reasons it is inert. First, no cfg consumer: a grep for the feature name over every crate src and tests tree resolves to cobre-sddp alone (thirteen files: src/test_support.rs, src/training/backward/tests.rs and eleven tests binaries), with zero hits anywhere under crates/cobre-cli. Second, no forwarding: the sibling entries in the same table do forward (highs at :49 and clp at :52 into cobre-solver and cobre-sddp, mpi at :54 into cobre-comm) while the slow-tests entry forwards to nothing, and crates/cobre-cli/build.rs at :30-52 reads only CARGO_MANIFEST_DIR and OUT_DIR, so a grep for CARGO_FEATURE_SLOW returns nothing tree-wide; enabling the feature on this crate changes no compilation unit. Third, no invocation depends on it: every per-package call that passes the feature names cobre-sddp (.github/workflows/invariance-shuffle.yml:34 and :55, CONTRIBUTING.md:182, :185, :583, :585, .claude/rules/testing.md:99 and :101), and every workspace-wide call passes it under --workspace (ci.yml:71, :114, :154, :219, :221, :223, :233, :399, :497, CLAUDE.md:12, CONTRIBUTING.md:80 and :84, scripts/loc-stats.sh:153). The tree itself proves a selected member need not declare a name in that list: those same invocations select crates/cobre, which has no features table at all, plus the five reserved stubs, plus cobre-core whose table at :15 carries neither slow-tests nor mpi nor flatc-conformance, and the jobs pass. The comment's workspace-wide reading also does not hold: cobre-core:15, cobre-solver:15 and cobre-comm:20 each have a features table and an integration suite under tests and none declares the name. Two halves of the candidate I strip as over-reach. The census half: ci.yml:18-25 announces itself as the deduplicated union across crates of declared feature names, the row at :25 accurately mirrors what the manifest declares, and it asserts nothing about consumers, so it is a faithful mirror of the manifest rather than a second defect. The falsification half: the identical comment at crates/cobre-io/Cargo.toml:17-18 and crates/cobre-stochastic/Cargo.toml:16-17 and the mirror in crates/cobre-stochastic/README.md:81 show a real three-crate convention, so what fails is the generalization to the workspace, not the existence of a convention. No sanction covers the declaration: docs/design/testing-architecture.md:61 records the gated attributes as concentrated entirely in cobre-sddp and section 5.6 at :502-510 proposes moving the feature off the per-PR set subject to explicit ratification, so that doc reserves no cobre-cli consumer. cobre-sddp/Cargo.toml:40-46 is the counter-example with a substantive rationale and real consumers; the cobre-io twin travels as over-engineering-04 and is judged separately, so this verdict does not cover it.",
+      "needsHuman": [
+        "Owner call on direction, not on the fact: delete the inert cobre-cli declaration (and its cobre-io / cobre-stochastic twins), or keep the convention deliberately and then either restate the :55-56 rationale without the workspace-wide claim or extend the declaration to cobre-core:15, cobre-solver:15 and cobre-comm:20 so the stated property becomes true."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "over-engineering-04": {
+      "candidateRef": "over-engineering-04",
+      "lens": "over-engineering",
+      "disposition": "defended",
+      "title": "cobre-io declares an empty slow-tests feature with no cfg consumer anywhere in the crate, justified by the same workspace-consistency claim the workspace falsifies",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/Cargo.toml",
+          "line": 17
+        },
+        {
+          "path": "crates/cobre-io/Cargo.toml",
+          "line": 19
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "over-engineering-03"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "cobre-io/Cargo.toml:19 declares slow-tests with an empty body that gates nothing at the pin (no occurrence of the token under the crate's src or tests, no forwarding through the empty body, and every invocation carrying the name is --workspace where cobre-sddp/Cargo.toml:46 supplies it), so its removal changes no build or test selection. Narrowed on two points the title over-reaches: the ci.yml:21 census row is NOT a co-defect because ci.yml:16-18 declares the list to be the union of declared features, and the comment at :17-18 is over-stated in scope rather than falsified, since the three-manifest habit it appeals to does exist (cobre-cli:57, cobre-io:19, cobre-stochastic:18) and is written down at cobre-stochastic/README.md:81.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "- **`slow-tests` feature** — long-running tests (D-case sweep, FPHA plane-selection, forward-sampler convergence) are gated behind `#[cfg_attr(not(feature = \"slow-tests\"), ignore = ...)]`. Default `cargo test --workspace` skips them; pass `--features slow-tests` to include them.",
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Read at the pin. crates/cobre-io/Cargo.toml:15-33 carries a features table whose slow-tests entry at :19 has an empty body, and a per-file count of the token over the crates' Rust sources places every occurrence in cobre-sddp (src/test_support.rs, src/training/backward/tests.rs and eleven tests binaries from anticipated_core.rs through parity.rs) with none under cobre-io, so no cfg_attr in this crate reads the feature and the empty body forwards it to no dependency. Every site that passes the name is workspace-wide: ci.yml:71, :114, :154, :219, :221, :223, :233, :399 and :497 each expand NON_SOLVER_FEATURES against --workspace, where cobre-sddp/Cargo.toml:46 already supplies the name, and the only per-package cobre-io invocations in the tree (CONTRIBUTING.md:105, :108 and :512) use --all-features, which adapts to whatever the manifest declares. The declaration is therefore load-bearing at no site. Rule 5 places it outside the sanctioned set and marks its own comment the disputed self-justification, so I judged the rationale against the tree: of the seven members that carry a features table at all (the other six of the thirteen at Cargo.toml:3-16 have none), three have no slow-tests entry, namely cobre-core/Cargo.toml:15-27, cobre-solver/Cargo.toml:15-27 and cobre-comm/Cargo.toml:20-27, so no workspace-wide declaration convention exists for the comment at :17-18 to invoke. Two attacker over-reaches do not survive the read. First, the ci.yml census is not a co-defect: ci.yml:16-18 states in its own words that the list is the deduplicated union across crates, and the rows enumerate declared features, so listing slow-tests on the cobre-io row at :21 is accurate about the manifest and claims nothing about consumption. Second, the rationale is over-stated in scope rather than falsified: a real three-manifest convention does exist (cobre-cli/Cargo.toml:57, cobre-io/Cargo.toml:19, cobre-stochastic/Cargo.toml:18) and cobre-stochastic/README.md:81 records the same reservation in prose, so the word that fails is workspace, not the existence of a shared habit. What remains is an unconsumed feature entry whose stated reason no site in the tree verifies.",
+      "needsHuman": [
+        "Owner call on disposition, not on the fact: keep the three unconsumed slow-tests entries (cobre-cli:57, cobre-io:19, cobre-stochastic:18) as a declared convention, in which case the scope word in the cobre-io comment at :17-18 needs correcting and the three feature-table members that lack the entry decide whether the convention extends to them, or delete them; the same call governs sibling candidate over-engineering-03 and the cobre-stochastic instance, which is additionally documented at cobre-stochastic/README.md:81."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "over-engineering-05": {
+      "candidateRef": "over-engineering-05",
+      "lens": "over-engineering",
+      "disposition": "defended",
+      "title": "The step named Publish all crates publishes eight of the thirteen workspace members from a hand-written ordered list, while the five members it omits carry crates.io-facing descriptions and no publish = false, and nothing reconciles the list with the manifest",
+      "anchors": [
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 36
+        },
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 80
+        },
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 105
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 12
+        },
+        {
+          "path": "crates/cobre-mcp/Cargo.toml",
+          "line": 3
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "architecture-05"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'no new gate script or framework is introduced'",
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "The crates.io release set exists only as eight literal crate names in the publish step body at publish.yml:80-103, with no publish key in the root manifest or any crates/*/Cargo.toml at the pin and no step comparing that list against the thirteen members at Cargo.toml:4-17, so the exclusion of a workspace member is recorded nowhere and a newly added or promoted member is skipped while the step still exits zero; conceded as over-reach are the inference of publication intent from the reserved manifests description prose and the step-name and success-echo wording, which are cosmetic.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "I take the subject to be the release step itself, not the manifests, because the release set is declared inside that step and the step fails the job on any publish error (each call is guarded by exit 1 and the helper returns 1 with an error annotation), so the strength word is blocking; the five manifests are the counterpart site the step silently disagrees with. Every load-bearing fact holds at the pin and no dismissal basis is available. The step at publish.yml:36 is named Publish all crates, its body submits eight crates in dependency layers at :80, :84, :85, :86, :90, :94, :98 and :103, and it closes with the success echo at :105, while Cargo.toml:4-17 declares thirteen members, so cobre-mcp, cobre-tui, cobre-flow, cobre-uc and cobre-emt are excluded by absence from a hand-written list and by nothing else. A grep for a publish key over the root manifest and every crates/*/Cargo.toml at the pin returns nothing, so the opt-out cargo provides is unused and all five reserved manifests default to publishable; each declares readme, keywords and categories and inherits the workspace version at :4, which is registry metadata rather than a statement of exclusion. The single omission the workflow does account for is cobre-python, whose inline note at :102 pairs with the workspace exclusion comment at Cargo.toml:18-23, and that pairing is precisely what the five reserved members lack. The reserved-stub sanction reaches the crates existence (CLAUDE.md:10, ARCHITECTURE.md:108-125), not the release path, and ARCHITECTURE.md:110-114 says only that the stubs build no functionality and take no dependency edge, which explains why they get no layer in a dependency-ordered list but states no publish policy; a search of CONTRIBUTING.md, ARCHITECTURE.md, CLAUDE.md and docs/design at the pin finds no statement of one either, so deliberate-and-documented does not apply. No file under scripts/ci or .github/workflows compares the member list against the publish list, so the divergence is silent by construction: the step exits zero and echoes success over any member it never submitted, and the same hole swallows any member added later. I narrow on two points. The crates.io-facing description prose is metadata any published crate needs and is not evidence that publication is intended, so the intent half of the title is an inference, not a fact at the pin. The step name and the closing message are cosmetic wording rather than the defect. The residue is the unreconciled hand-mirror of the member list inside the release step plus the absent manifest opt-out. The fix shape stays inside the existing step and adds one manifest key, introducing no new gate script, crate or one-consumer seam, so none of the four conflicts triggers in the layering brief fires, and it advances no milestone phase.",
+      "needsHuman": [
+        "Owner policy call: are the five reserved crate names meant to be re-published at every release so they keep holding their place on crates.io (their manifests inherit the workspace version and set no publish key), or is their absence from the publish list the intended policy that the manifests should state with publish = false? The tree states neither, so the fix direction is an owner decision, not a reading."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-00": {
+      "candidateRef": "drift-00",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "docs/design/README.md declares a closed five-value status vocabulary and a delete-on-ship convention that three of its eight rows and two still-present docs contradict",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 4
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 24
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 26
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 27
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 31
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "drift-01",
+        "drift-02"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "dismissed",
+      "survivingClaim": null,
+      "dismissalBasis": "premise-false-at-pin",
+      "basisCitation": "docs/design/README.md:31-36",
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Both load-bearing premises fail against the README text at the pin. On closure, docs/design/README.md:4 says only 'Each doc carries a status at its top; this index is the map. Status vocabulary:' and the bullets at :6-16 define the terms they name; nothing at :4-16 says the list is exhaustive, nor that a doc's status must be one of the listed terms, so a status term the block leaves undefined is an incomplete definitional block rather than a contradiction of an assertion the document makes. On the convention, :31-32 gates removal on 'once its content lands in its authoritative home' and :34-36 fixes the ordering, 'When a proposal is implemented, fold any durable rationale into the home it describes, then remove the doc' — shipping is not the trigger, the fold is. Both retained docs declare the fold still pending in the very status string the candidate quotes (anticipated-fixed-post-horizon-commitments.md:3, external-scenarios-are-authoritative.md:3), and the first names the authoritative homes the fold targets at :7-8, so the directory sits in the intermediate state the convention's ordering prescribes, not a state the convention forbids. That same parenthetical, read with :34-36, already supplies both the meaning of the retained state and the condition that discharges it, which is exactly what the candidate's fix-shape wants a sixth vocabulary bullet to add. The title also overcounts the rows: :24 composes the in-vocabulary term Proposal with a scope qualifier, and testing-architecture.md:3 carries that string plus 'target standard, not yet implemented', which tracks the Proposal bullet at :12-13, so only :26 and :27 use a term the block leaves undefined. What survives is a doc-integrity section 2 observation, that the vocabulary block is an unguarded prose enumeration, and under the drift rule an unguarded enumeration the tree does not contradict is an observation, not drift. The index itself is accurate: each of the three disputed rows reproduces the status its doc carries.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "rejected-defender"
+    },
+    "drift-01": {
+      "candidateRef": "drift-01",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "docs/design/README.md calls itself the map of the directory while post-horizon-input-unification.md has no row in the table",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 4
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 18
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 27
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "drift-00",
+        "drift-02"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "The eight table rows at docs/design/README.md:20-27 omit exactly one of the nine design docs tracked beside the README at the pin, post-horizon-input-unification.md, whose own :3 status is the index's own Proposal value and which the maintenance convention at :29-36 requires to stay in the directory until it ships; the defensible residue is that one missing row contradicting the map claim at :4 and its two echoes at CLAUDE.md:129 and CONTRIBUTING.md:438, with the candidate's own directory figure of the README plus eight docs corrected to nine, and with no claim that the remaining eight rows or the vocabulary at :6-16 are defective.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "Maintenance convention: A proposal that ships is **deleted from this directory** once its content lands in its authoritative home",
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "At the pin docs/design/README.md:4 asserts that each doc carries a status at its top and that this index is the map, and two further docs route readers to that same file as the authority on the directory: CLAUDE.md:129 and CONTRIBUTING.md:438 both call docs/design/README.md the status index. The table rows at :20-27 name eight docs, while git ls-tree -r --name-only 077dbe2c docs/design tracks the README plus nine docs. The unlisted one is post-horizon-input-unification.md, 263 lines, and a git grep over the whole tree at the pin finds no reference to it at all; the only content hit for its title is its own heading at :1. Its status line at :3 reads Status: Proposal, not yet implemented, which is exactly the vocabulary entry the index defines for itself at :12-13, so the doc conforms and the gap sits in the index, not in the doc. That is a contradiction of the assertion at :4 rather than a stale figure or an imprecise phrase, for two reasons read at the baseline: nothing in the README scopes the map to a subset of the directory, and the maintenance convention at :29-36 removes a doc only once its content has landed in its authoritative home, so a not-yet-implemented Proposal is required to remain in the directory and therefore required to appear in any map of it. Nothing guards the coverage either: a search of scripts/ci, .github/workflows and scripts/pre-commit for docs/design returns no hit at the pin, so the index is hand-maintained. I narrow the candidate on its own arithmetic, since its evidence reads the directory as the README plus eight docs, one short of the nine tracked, and on scope, since the defect is one missing row against an otherwise accurate eight-row table rather than an index-wide failure. Per the drift rule the operative failure mode here is the single-source fan-out of doc-integrity section 3.1, not the unguarded-count observation of section 2, and that is why it confirms: the index does not merely carry an unpinned number, it makes a coverage claim the tree falsifies.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-02": {
+      "candidateRef": "drift-02",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "Two index rows disagree with the status the doc itself carries: one doc declares a status outside the vocabulary, the other carries no status line at all",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 4
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 23
+        },
+        {
+          "path": "docs/design/README.md",
+          "line": 25
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "drift-00",
+        "drift-01"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Exactly one doc in docs/design, anticipated-thermals-and-water-travel-time.md, carries no status marker at any line in the file, which contradicts the universal assertion at docs/design/README.md:4 while row :25 files it as Live spec. The backward-warm-start-channels.md half of the title does not survive: its own status prose at :10 satisfies the Decision record definition at README:8-9 clause by clause, and :4 requires only that a status be present, not that a doc restate the index column vocabulary.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "One half of this candidate is a true contradiction and the other over-reaches, so the verdict confirms narrowly. Confirmed half: docs/design/README.md:4 asserts that each doc carries a status at its top and that the index is the map of those statuses, and row :25 files anticipated-thermals-and-water-travel-time.md as Live spec. At the pin that file contains zero case-insensitive occurrences of the word status across the whole file, and zero blockquote-bold openers of the shape every sibling uses; its opening lines are the reference-explanation prose plus a primer pointer. So a reader who follows :4 to the doc finds no status marker anywhere, which is the tree contradicting the index assertion, not a count that merely reads stale. Every one of the other docs in the directory does carry a status at :3, and backward-warm-start-channels.md carries one at :10, so this is the single exception. Over-reaching half: row :23 files backward-warm-start-channels.md as Decision record while its own :10 opens Design evaluation. README:8-9 define Decision record as a settled evaluation recording what was measured, what was decided and what not to re-attempt, and state that it includes pre-registered experiments where noted. The doc status prose records one measured-and-closed channel and evaluates two open cluster-gated channels, and states the measured finding governs the rest, which satisfies that definition clause by clause; the row summary restates the same content. README:4 asserts the presence of a status, never that a doc status line must repeat the index column vocabulary, and enumerated-traversal-distribution.md:3 carries the same descriptive-prose shape under a Live spec row without the attacker flagging it. Non-vocabulary status prose is therefore a pattern at the pin rather than an exception: imprecise, uncontradicted, and out of scope here. The vocabulary-conformance question over the index rows themselves belongs to the sibling candidate drift-00 and is not double-counted. Docs subject, no gate wiring, no measurement.",
+      "needsHuman": [
+        "Whether a doc's own status line must use one of the five index vocabulary values or only be present is an owner call: at the pin two docs (enumerated-traversal-distribution.md:3 and backward-warm-start-channels.md:10) carry descriptive status prose instead of a vocabulary token, and docs/design/README.md:4 states only that a status exists, so the answer decides whether the dismissed half of this candidate is a defect at all."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-03": {
+      "candidateRef": "drift-03",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "ARCHITECTURE.md's crate map counts five dependencies for cobre-python while naming six on the same line, and its cobre-cli entry omits cobre-core",
+      "anchors": [
+        {
+          "path": "ARCHITECTURE.md",
+          "line": 95
+        },
+        {
+          "path": "ARCHITECTURE.md",
+          "line": 88
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "The word `five` at ARCHITECTURE.md:95 is false at the pin, contradicted by its own same-sentence parenthetical at :95-96 and by the six `cobre-*` path dependencies declared in crates/cobre-cli/Cargo.toml:21-26 and crates/cobre-python/Cargo.toml:22-27; the title's second half is stripped, because the cobre-cli wiring sentence at :87-88 is non-exhaustive narrative and the file states the cobre-core to cobre-cli edge at :158 and :185-187, so no tree fact contradicts it.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "never freeze a COUNT, VERSION, ENUMERATION, or run-snapshot NUMBER. Pin any literal that must appear with a guard, not by hand - otherwise state the invariant instead of the number (.claude/rules/doc-integrity.md section 2)",
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Counting from the manifests, not the prose: `crates/cobre-cli/Cargo.toml:21-26` declares six `cobre-*` path dependencies (`cobre-core`, `cobre-io`, `cobre-sddp`, `cobre-solver`, `cobre-comm`, `cobre-stochastic`) and `crates/cobre-python/Cargo.toml:22-27` declares the same six. `ARCHITECTURE.md:95` asserts `Depends on the same five crates as cobre-cli` and then, in the same sentence, its parenthetical at `:95-96` names six of them. That is a contradiction at the pin on three independent readings: against the bindings manifest, against the CLI manifest, and against the document's own adjacent enumeration. It is also contradicted inside the same file by the dependency-graph section, whose prose at `:185-187` states that `cobre-cli` and `cobre-python` depend directly on `cobre-core`, `cobre-io`, `cobre-solver`, `cobre-comm` and `cobre-stochastic` in addition to `cobre-sddp`, and whose mermaid block carries all six inbound edges for each entry point at `:158-163` and `:165-170`. No reading rescues the numeral: the parenthetical it introduces is itself the six-item list. This is drift under rule 10, not a merely unguarded count, because the tree and the same line disagree with what the document asserts. Nothing pins it: `scripts/ci/check-doc-paths.sh:10-11` names its scanned sources exactly as README.md, CONTRIBUTING.md and CLAUDE.md, and a grep for ARCHITECTURE at the pin across `scripts/`, `.github/` and `tools/` returns no hit, so no gate reads this line - which is why the numeral rotted silently in the section CLAUDE.md defers to as the authoritative crate map. The second half of the title does not survive. `ARCHITECTURE.md:87-88` says the binary `Wires cobre-io, cobre-stochastic, cobre-solver, cobre-comm, and cobre-sddp into a single executable`; that is a narrative wiring phrase in the entry-points bullet, not an exhaustive dependency enumeration, and the file states the cobre-core to cobre-cli edge where dependency completeness is actually owned - the graph preamble at `:130-132` declares that every edge shown is a direct path dependency declared in a crate's `[dependencies]`, and `core --> cli` is present at `:158`. The CLI does use the crate directly (fourteen `cobre_core::` references across nine files under `crates/cobre-cli/src/`), so the omission at `:87-88` is an imprecision the reader can resolve two sections down, not a claim the tree contradicts. Per rule 11 no fix is proposed here; the residue is the false numeral alone.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-04": {
+      "candidateRef": "drift-04",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "ci.yml's per-crate feature table calls itself the deduplicated union across crates but credits test-support to cobre-solver alone, while four other crates declare it",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 18
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 22
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Only four rows are wrong: cobre-core, cobre-io, cobre-sddp and cobre-stochastic each declare test-support (crates/cobre-core/Cargo.toml:30, crates/cobre-io/Cargo.toml:33, crates/cobre-sddp/Cargo.toml:55, crates/cobre-stochastic/Cargo.toml:26) yet their rows at ci.yml:20, :21, :23 and :24 omit it while ci.yml:22 attributes the feature to cobre-solver alone. The deduplicated-union sentence at ci.yml:17-18 and the union value at ci.yml:32 are both correct, and every other feature name in the table is attributed to every crate that declares it, so the residue is the provenance of those four rows only, with no effect on which features any CI job enables.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "At the pin the block is a per-crate DECLARATION map, not a motivation list, and the table proves that about itself: ci.yml:21 and ci.yml:24 attribute slow-tests to cobre-io and cobre-stochastic, whose own manifests state the declaration is reserved with no slow tests in the crate (crates/cobre-io/Cargo.toml:17-19, crates/cobre-stochastic/Cargo.toml:16-18), so a row lists what a crate declares, not the crate for whose sake a feature is in the union. Under that convention every feature name in the union at ci.yml:32 is attributed exhaustively: mpi to cobre-comm and cobre-cli (crates/cobre-comm/Cargo.toml:21, crates/cobre-cli/Cargo.toml:54), schema to cobre-core and cobre-io (crates/cobre-core/Cargo.toml:26, crates/cobre-io/Cargo.toml:16), slow-tests to all four of its declarers, numa, shared-memory, serde and flatc-conformance to their single declarers. test-support is the sole exception: ci.yml:22 gives it to cobre-solver alone (crates/cobre-solver/Cargo.toml:31) while crates/cobre-core/Cargo.toml:30, crates/cobre-io/Cargo.toml:33, crates/cobre-sddp/Cargo.toml:55 and crates/cobre-stochastic/Cargo.toml:26 declare it too. Four rows therefore contradict the manifests they enumerate, which is drift rather than a merely unguarded enumeration; the prose analogue in .claude/rules/doc-integrity.md section 2 does not govern a YAML comment because that rule scopes itself to Markdown artifacts, so the verdict rests on the tree contradiction alone. The comment enforces nothing by itself: blocking strength belongs to the jobs that expand NON_SOLVER_FEATURES at ci.yml:71, :114, :154, :219, :221, :223, :233, :399 and :497, and the value at ci.yml:32 does contain test-support, so no job loses coverage and the workspace-wide unification sentence at ci.yml:17 is correct as written. cobre-python is absent from the table under the sanctioned workspace exclusion at Cargo.toml:18-23 and declares no test-support at crates/cobre-python/Cargo.toml:37-41, so it forms no part of the residue.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-05": {
+      "candidateRef": "drift-05",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "The genericity hard rule names three forbidden tokens while the gate it is enforced by rejects eleven alternatives, including standalone cut and Cut",
+      "anchors": [
+        {
+          "path": "CLAUDE.md",
+          "line": 39
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 79
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": "CD-061",
+      "priorId": "CD-061",
+      "priorRelation": "sharpens",
+      "relatedTo": null,
+      "relatedCandidates": [
+        "architecture-00",
+        "architecture-01"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": true,
+        "sites": {
+          "prose": true,
+          "script": true,
+          "step": true
+        },
+        "result": "both-sites-named"
+      },
+      "ingestNotes": [],
+      "verdict": "dismissed",
+      "survivingClaim": null,
+      "dismissalBasis": "premise-false-at-pin",
+      "basisCitation": "CLAUDE.md:40",
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "CLAUDE.md:40 states the contract as an invariant, namely that the five infrastructure crates must contain zero algorithm-specific references, and the token list at :41 sits inside a parenthetical that illustrates that invariant rather than closing it. Every alternative the gate adds at check-infra-genericity.sh:79 (standalone Cut and cut, the cut-pool, cutting-plane and outer-approximation phrases, and the CutSync, CutSelection and MetadataCuts type prefixes) is itself an algorithm-specific reference, so the gate enforces instances of the invariant the prose asserts and permits nothing the prose forbids. The script header at :5 to :22 is the documented authoritative spelling list, :10 to :11 records why the word boundaries are anchored (so identifiers such as execution and cuts_active do not trip), and the failure text at :137 to :138 routes a contributor from a hit to the fix, so the enforced set is one hop from the blocking step at ci.yml:261-262. The prose is therefore imprecise, not contradicted: a partial enumeration that reads exhaustive, while every token it names is still forbidden at the pin, is a doc-integrity rule 2 observation about an unguarded enumeration that remains true today, which rule 10 makes a dismissal rather than drift. The same reading covers the site clause at :41. The gate scanning every non-test production line under SCAN_DIRS :62 to :68 is stricter than the types, functions and doc-comments illustration, so the prose understates the prohibition without asserting anything the tree denies. On the gate-side delta over CD-061 there is nothing left to confirm either, because CD-061 already treats the sddp, SDDP, Benders and standalone-cut tokens as the ratified enforced set, and this candidate adds no site where the ratified set and the gate diverge. Keeping the invariant head clause and letting the script own the exact spellings is also the shape that can follow the target layering, since extending coverage to the future L1 crates amends the script list without touching the prose contract.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "rejected-defender"
+    },
+    "drift-06": {
+      "candidateRef": "drift-06",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "A shipped conformance test states it verifies the contracts of a backend-testing.md that has never existed in this repository, and two gate blind spots keep the reference invisible",
+      "anchors": [
+        {
+          "path": "docs/design/README.md",
+          "line": 18
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 57
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 84
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 276
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": [
+        "solver-comm gate R16 (backend-testing.md cite) → drift lens"
+      ],
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Only the citation half survives: the shipped rustdoc at crates/cobre-comm/tests/local_conformance.rs:4, together with the eight section banners that repeat its SS1.1-SS1.8 coordinates, cites a document that is untracked at the pin, never added on any ref and absent from the sibling methodology repo, so the suite's stated contract source is unreachable for every reader and the repair belongs at the citation site. The two claimed gate blind spots are not part of the surviving claim: E3b's prefix requirement is the documented external-citation scope bound, and the src-only scan set would not surface a bare filename even if extended to the crates test trees.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "Scope bound (critical): repo-relative prefixes only — never \"every cited filename resolves\", because README/CONTRIBUTING legitimately cite the external `cobre-docs` spec/theory pages absent from this repo.",
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Read at the pin. crates/cobre-comm/tests/local_conformance.rs:4 asserts the suite verifies the Communicator, SharedMemoryProvider and LocalCommunicator contracts of backend-testing.md SS1.1-SS1.8, and the eight section banners at :15, :41, :91, :104, :115, :125, :152 and :195 repeat those coordinates one per group, so the citation is structural to the file, not an aside. The cited document resolves nowhere: git ls-tree at the pin counts zero matches, the add-filtered log over all refs is empty, the design-doc index header at docs/design/README.md:18 carries eight rows at :20-27 and names no such doc, and the one surviving testing-standard doc opens section 1 at testing-architecture.md:27 as Problem statement with its first numbered subsection at :46, so SS1.1-SS1.8 land in no tracked section either. The sibling methodology repository carries no backend page, so this is not an intentionally external citation that the repo-relative scope bound protects. The docClaim contradicts the tree at the cited line and the citation half is confirmed. The enforcement half is over-reach and is stripped. E3b's prefix requirement at check-comment-refs.sh:84 is not a blind spot but the scope bound the gate header states at :19-26, where external methodology citations are said to carry a different prefix and to be intentionally not flagged, and which doc-integrity section 3 failure mode 4 pins as the spec a path checker must honor; a bare-filename resolution class is therefore barred, and the precedent the candidate cites at check-no-plan-leaks.sh:119 has the opposite polarity, since SECTION_REF_ALLOW matches a .md token to whitelist a section reference and never tests that the named file exists. The src-only scan set at :57-68 is exactly the scope the header declares at :28, and ferrompi.rs:241, :272 and :279 show the same bare spec-SS citation family sitting inside the scanned set unflagged, which shows that extending the set to the test trees would not surface this reference. The repair belongs at the citation site, naming the surfaces under test as the file's first line already does.",
+      "needsHuman": [
+        "Whether the private spec-SS citation family is re-anchored or published is the owner's call: crates/cobre-comm/src/ferrompi.rs:279 cites backend-ferrompi.md SS5.2 and :241 and :272 cite bare spec SS4.7 and SS3.1, and neither backend doc exists in the tree, in any ref's add history, or in the sibling methodology repo, so the fix at local_conformance.rs:4 sets the pattern for those sites too.",
+        "Whether check-comment-refs.sh's scan set should be aligned to the sibling gate is an owner decision this verdict does not make: its comment at :56 says the set mirrors check-no-plan-leaks.sh SCAN_DIRS, but that gate appends crates/*/tests and crates/*/benches at :148 and its header at :76-80 records an incident where exactly this scan-set asymmetry let leaks ship."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-07": {
+      "candidateRef": "drift-07",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "Four gate headers cite rule-file sections that do not resolve, and a sibling gate sanctions the filename-plus-section form as durable",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-doc-paths.sh",
+          "line": 5
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 6
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 5
+        },
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 7
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 48
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "touches-sanctioned-anchor",
+        "touches": [
+          "scripts/ci/check-comment-line-refs.sh (advisory-by-design; header `# Exit code: ALWAYS 0` at :35)"
+        ]
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'an amendment to an existing check rather than a new framework … do not add a second scan library for it'",
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Five citation sites across four gate headers name a `.claude/rules` section number that does not resolve at the pin: check-doc-paths.sh:5 and :43 cite doc-integrity.md §6.4 in a file whose last top-level section is §5 at :173; check-doc-placeholders.sh:6 cites §5 under a title belonging to §3 items 2 and 4; check-comment-refs.sh:5 and check-comment-line-refs.sh:7 cite comments.md §4 'Durability' where §4 at :152 is Relocation routing and Durability is :312 under §10. The quoted heading text in each citation does resolve, so the defect is confined to the numeric coordinate; the absence of a guard is deliberate (check-doc-paths.sh:24-26 and :140-141 strip a trailing section suffix by design) and the check-no-plan-leaks.sh:48 durable-form clause, which governs `.md`-anchored section refs in `.rs` comments, does not sanction rule-file section numbers in shell headers.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Read at the pin: `.claude/rules/doc-integrity.md` carries five top-level sections (`## 1.` at :22 through `## 5. Voice register` at :173) and no section six, so the two citations of §6.4 in check-doc-paths.sh:5 and :43 name a coordinate that cannot resolve, while the scope bound they quote lives in §3 item 4 at :103-112. check-doc-placeholders.sh:6 cites §5 under the title 'stale snapshots / executable claims', but §5 at :173 is the Voice register and the named content is §3 items 2 and 4. In `.claude/rules/comments.md` at the pin `## 4.` at :152 is 'Relocation routing' and 'Durability' is a third-level heading at :312 under `## 10. Principles`, so check-comment-refs.sh:5 and check-comment-line-refs.sh:7 both cite a number that names a different section. The tree contradicts the headers at the cited lines, which is drift under rule 10 rather than a true-but-unguarded count. The candidate over-reaches twice and I narrow both. First, each of the five citation sites carries the quoted heading text and every quoted text does resolve (the executable-claim failure mode at doc-integrity.md:107, Durability at comments.md:312), so the residue is the numeric coordinate, not a citation a reader cannot route. Second, check-no-plan-leaks.sh:42-52 sanctions an `.md`-anchored section reference in `.rs` comment lines, matching comments.md N3 at :384 and the Durability clause at :312-316, whose sanctioned anchor is a stable external spec in a declared source-of-truth root, not a `.claude/rules` section number in a shell header that no gate scans; that half of the title states repository context, not a defect. That nothing catches these numbers is deliberate and documented: check-doc-paths.sh:24-26 and :140-141 strip a trailing section suffix from a token before resolving it, by design, so the residue is the wrong numbers and not a missing guard. The sanctioned-advisory anchor the ingest screen flagged, check-comment-line-refs.sh exiting 0 by design per its header at :35, does not bear on this claim, which concerns that file's header citation rather than its exit behaviour.",
+      "needsHuman": [
+        "Owner must decide whether `.claude/rules/*.md` section numbers are a citable coordinate at all, since five gate headers cite them and no gate scans shell-script headers; that decision sets whether the residue is re-pointing the five citations alone or re-pointing plus a suffix check on the `.claude/rules/` token class check-comment-refs.sh already parses at :75."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-08": {
+      "candidateRef": "drift-08",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "The roadmap's Part-I item 6 records a genericity-gate exemption for the four cobre-io policy files that the gate retired before this baseline",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 74
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 70
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": "I.3-6",
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": [
+        "partI-handoff I.3-6 (this station's evidence package for epic 9)"
+      ],
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Only the parenthetical clause of the mirrored Part-I row at plans/architecture-debt-audit/tools/target-layering-brief.md:91 is contradicted at the pin: no file is exempt from the blocking genericity scan, because EXCLUDED_FILES is empty at scripts/ci/check-infra-genericity.sh:74 while SCAN_DIRS at :64 covers crates/cobre-io/src and the header at :38-44 and :70-73 records the former output/policy exemption as retired. The row's substantive claim that the policy checkpoint format is literally cut records is not adjudicated, the untracked source roadmap's own wording is not verified, and the gate itself is correct as written.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "The two sites contradict each other at the pin. The enforcement site is unambiguous: scripts/ci/check-infra-genericity.sh:74 declares EXCLUDED_FILES as an empty array, the skip loop at :90-96 therefore matches nothing, SCAN_DIRS at :64 covers crates/cobre-io/src, and the basename skip at :100 does not fire because none of checkpoint.rs, codec.rs, mod.rs or records.rs carries test in its name. The script states the retirement twice in its own voice, at :38-44 (the value-function-artifact format bump landed, so the exemption is retired and the directory module is scanned like every other infra source file) and at :70-73 (adding an entry back needs owner sign-off). Replaying the gate's own two-stage pipeline over git show output for the four files shows their production scope, ahead of each tail cfg(test) marker, free of the vocabulary in PATTERN at :79, which is exactly the outcome the retirement rationale predicts. Against that, the mirrored Part-I row at plans/architecture-debt-audit/tools/target-layering-brief.md:91 asserts in present tense that the genericity gate exempts the four policy files. The table preamble at :80-82 does not shield the parenthetical: it scopes the snapshot disclaimer to the v0.12 anchor column and defers only re-verification of each row to the alignment epic, while the brief's own convention is to annotate a row in place when the baseline contradicts it, as rows 3 and 4 do at :88 and :89. Row 6 carries no such annotation. This is a contradiction, not a merely stale reading, so it clears the drift bar. Two narrowings apply. The gate needs no change, since the empty array is the sanctioned state. And the source roadmap plans/generalizing/beyond-sddp-generalization.md is not tracked at this pin, so the mirror line is the only copy whose wording can be adjudicated here; nothing about the roadmap's own text is established, and the row's substantive claim about the checkpoint format plus the row's disposition remain epic 9's.",
+      "needsHuman": [
+        "The Part-I source document plans/generalizing/beyond-sddp-generalization.md is untracked at the pin, so no in-repo guard and no baseline read can see its copy of the exemption parenthetical; the owner decides whether a correction is expected in the untracked source as well as in the tracked mirror at target-layering-brief.md:91."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "drift-09": {
+      "candidateRef": "drift-09",
+      "lens": "drift",
+      "disposition": "defended",
+      "title": "The unsafe-code hard rule enumerates one unsafe island in cobre-sddp while the crate's own manifest states there are two",
+      "anchors": [
+        {
+          "path": "CLAUDE.md",
+          "line": 19
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 112
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "n-a",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": [
+        "sddp gate NH40 (R6-nh-40) → E07/E11"
+      ],
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Confined to the containment parenthetical 'isolated in src/gemm.rs' on the unsafe-code hard rule at CLAUDE.md:19: at the pin cobre-sddp also compiles the unsafe extern \"C\" qhull binding at src/hull/ffi.rs:27 and the three guarded blocks at src/hull/mod.rs:82, :152 and :192 through the uncfg'd module declaration at src/lib.rs:36, so that clause is contradicted by the tree. The rest of the candidate does not survive as defect: the four-crate override list is exact against Cargo.toml:36 and the four per-crate allows, the dgemm reason itself is true, the crate manifest rationale at crates/cobre-sddp/Cargo.toml:112-121 is the accurate side of the pair and requires no change, and the lint-enforcement path needs no new gate.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": "Do not freeze a COUNT, VERSION, ENUMERATION, or run-snapshot NUMBER without a guard",
+      "enforcementStrength": "not-a-gate",
+      "measurement": "n/a",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Read at the pin: CLAUDE.md:19 states the cobre-sddp override exists for the matrixmultiply::dgemm call its cut-selection kernel needs and closes with the containment parenthetical 'isolated in src/gemm.rs'. The crate manifest comment at crates/cobre-sddp/Cargo.toml:112-121 says in its own words that the crate has two unsafe surfaces and names the second, the qhull binding in src/hull/ffi.rs plus the RAII/SAFETY-guarded blocks in src/hull/mod.rs. A git grep for unsafe over crates/cobre-sddp/src returns exactly two code surfaces: the block at gemm.rs:93, and the unsafe extern \"C\" declaration at hull/ffi.rs:27 with the three guarded blocks at hull/mod.rs:82, :152 and :192; the remaining hits are module prose and two test comments that assert the absence of unsafe. The hull surface is unconditional, not feature-gated: lib.rs:36 declares the module as pub(crate) mod hull with no cfg, so every build of the crate compiles it. That makes the prose clause false at the pin rather than merely stale or imprecise, which is the distinction rule 10 draws: this is not a count that is true today but unguarded, it is a containment assertion the tree contradicts at the cited line. The drift is one-sided. The crate-list half of the rule line is exact: the workspace default sits at Cargo.toml:36 and the only manifests that override it to allow are cobre-comm:36, cobre-python:47, cobre-sddp:121 and cobre-solver:38, matching the four crates the prose names. The manifest rationale is the correct side of the pair and needs no edit. No markdown file in the sweep other than CHANGELOG.md, CONTRIBUTING.md, THIRD_PARTY_NOTICES.md and docs/design/testing-architecture.md mentions qhull, and none of those carries the hard rule, so the agent-facing contract line is the sole enumeration of the crate's unsafe islands and it omits one. Enforcement is not-a-gate: no scripts/ci gate parses unsafe_code, and the mechanical path that does enforce the lint, the workspace forbid at Cargo.toml:36 with the per-crate allows plus the clippy step at .github/workflows/ci.yml:154 which runs with -D warnings, is blind to prose that misdescribes where the allow is used. The inbound sddp gate handoff NH40 routed this fact here; this is its first adjudication and it is argued from the tree. Fix shape, in prose only and without weakening anything: the invariant form the doc-integrity enumeration directive prefers is for the hard rule to name the overriding crates and point at each crate's own lints rationale, which is the fact's single owner, rather than re-listing islands in a second place; amending in place by naming the qhull shim as the second island is also correct but keeps an unguarded enumeration that will fall behind the next surface added or removed.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "performance-00": {
+      "candidateRef": "performance-00",
+      "lens": "performance",
+      "disposition": "defended",
+      "title": "The schemas job carries the MPICH Cache/Build/Set triple although its only compile is the default-feature release CLI binary, and the sibling docs-examples job runs that identical build with no triple and says in writing why none is needed",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 310
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 316
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 339
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 344
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 360
+        },
+        {
+          "path": "scripts/ci/check_schemas.sh",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-cli/Cargo.toml",
+          "line": 42
+        },
+        {
+          "path": "crates/cobre-comm/Cargo.toml",
+          "line": 20
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "over-engineering-00",
+        "performance-02"
+      ],
+      "mergedInto": null,
+      "mergedFrom": [
+        "performance-01"
+      ],
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": {
+          "ci.yml": 8,
+          "mpi-slurm.yml": 1,
+          "release-mpi.yml": 1,
+          "total": 10,
+          "githubActionsDir": false
+        },
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Exactly two of ci.yml's eight cache-hit-guarded MPICH consumers configure the Cache/Build/Set triple on a job whose every cargo invocation resolves a feature set without `mpi`: schemas (:310-336, sole compile at check_schemas.sh:23) and, from the folded twin performance-01, python (:516-547, compiles at :559, :561 and :567-568). What survives is that structural mismatch alone, together with the fact that the repository already documents the minimal alternative for the byte-identical build at ci.yml:344-346 and check-docs-examples.sh:86. The residue explicitly excludes the cost half of the candidate, since the source build is skipped on a warm key by the guards at :317 and :523 and no magnitude is measured, and excludes any prelude rule for the other six consumers, which pass NON_SOLVER_FEATURES at :32 containing `mpi`. From the twin the surviving delta is narrower still: the python triple is the only step block in that job with no matrix condition while :563, :580 and :588 each carry one; the twin's hedge about a later MPI-enabled bindings test does NOT survive, because cobre-python/src/lib.rs:7-8 forbids that crate from depending on ferrompi at all.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "UNMEASURED",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Confirmed on exactly the mechanism rule 9 names: a prelude configured on a job whose feature resolution cannot use it. The schemas job's sole cargo invocation is the release cobre binary build at check_schemas.sh:23, reached from ci.yml:339, and the job block :310-336 carries Cache MPICH, Build MPICH from source and Set MPICH environment. That build target resolves cobre-cli's default feature list at cobre-cli/Cargo.toml:42, which is `highs` alone, with `mpi` opt-in at :54 forwarding to cobre-comm/mpi; cobre-comm opens its `[features]` block at :20 with `mpi = [dep:ferrompi]`, declares NO `default` list, and marks ferrompi `optional = true` at :17, so ferrompi cannot enter that graph. I read every Cargo.toml at the pin: no workspace member default-enables `mpi`, and none of the three build scripts (cobre-cli, cobre-sddp, cobre-solver) probes for mpicc or pkg-config, so nothing this job compiles or links wants /opt/mpich. The counter-example sits in the same file with the repository's own written rationale: docs-examples at ci.yml:349-360 has only checkout, toolchain, rust-cache and the gate, its script runs the byte-identical release cobre binary build at check-docs-examples.sh:86, and the comment at ci.yml:344-346 states that only the default-feature HiGHS binary is needed, no MPICH or flatc, since the default CLI build enables neither `mpi` nor `flatc-conformance`. Of the eight cache-hit-guarded consumers in ci.yml (guards at :50, :88, :131, :181, :317, :378, :469, :523), six pass NON_SOLVER_FEATURES declared at :32, which lists `mpi`; schemas and python are the two that do not, so the candidate's isolation of those two is exact. The folded twin performance-01 survives and is the stronger half: the python job's compiles are maturin develop --release at :559, resolving cobre-python's default list at cobre-python/Cargo.toml:38 (extension-module plus highs, with no mpi feature declared anywhere in that manifest), the CLI build for the parity tests at :561 resolving cobre-cli defaults, and the bindings Rust test at :567-568 passing --no-default-features --features highs; the triple at :516-547 is the one step block in that job with no matrix condition, while :563, :580 and :588 are each narrowed to a single matrix entry. The twin's own hedge, keeping the option of an MPI-enabled bindings test later, does not hold at the pin: cobre-python/src/lib.rs:7-8 states the crate MUST NOT initialize MPI or depend on ferrompi, and gives the GIL/MPI incompatibility as the reason, so no future feature of that crate can make the prelude needed. I narrow on two points. First, per rule 9 I judge the mechanism and not the cost: the source build is gated by the cache-hit condition at :317 and :523, so on a warm key that step is skipped and only the cache restore plus the three GITHUB_PATH / GITHUB_ENV writes remain, and the magnitude of the miss path is UNMEASURED. Second, I decline the candidate's general rule as stated for the other six consumers, whose feature string does contain `mpi` and whose triple is therefore correct. No dismissal basis applies: sanctionedAdvisoryScreen is not-applicable and nothing in rule 5's closed set covers a workflow prelude; neither the schemas nor the python block carries a comment recording the choice, so deliberate-and-documented fails, and the only rationale comment in the file argues for the minimal setup rather than the triple. The fix shape stays inside .github/workflows/ci.yml, is an amend-in-place onto a pattern docs-examples already sets, proposes no composite action (so rule 8's MPICH exemption is untouched), no populator edge (that is performance-02's subject) and no change to the schema-freshness gate, which stays blocking.",
+      "needsHuman": [
+        "Owner call carried over from the attacker: whether every ci.yml job keeps a byte-identical MPICH prelude for readability even where its own feature string excludes `mpi`, or the prelude is derived per job from that feature string. It still decides the disposition of this confirmed residue for both the schemas and the python job, and it is the only attacker item that survives this read (the shared-key populator, the single-producer release binary and the license-tool version pin belong to other candidates)."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "performance-01": {
+      "candidateRef": "performance-01",
+      "lens": "performance",
+      "disposition": "dup-of",
+      "title": "The python job carries the MPICH Cache/Build/Set triple on every instance of its version matrix although none of its three compiles enables an mpi feature",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 511
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 516
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 522
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 559
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 561
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 568
+        },
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 38
+        },
+        {
+          "path": "crates/cobre-comm/Cargo.toml",
+          "line": 20
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": "performance-00",
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": {
+          "ci.yml": 8,
+          "mpi-slurm.yml": 1,
+          "release-mpi.yml": 1,
+          "total": 10,
+          "githubActionsDir": false
+        },
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [
+        "cross-lens twin of performance-00 — the same mechanism (the MPICH prelude configured on a job whose feature resolution never enables `mpi`) on a second job; the attacker itself asks that the two be carried as one item"
+      ],
+      "verdict": null,
+      "state": "merged"
+    },
+    "performance-02": {
+      "candidateRef": "performance-02",
+      "lens": "performance",
+      "disposition": "defended",
+      "title": "The eight MPICH consumers in ci.yml share one immutable cache key with no dependency edge anywhere in the workflow, so a key change is missed concurrently by every job instance rather than once by a populator",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 12
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 45
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 47
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 315
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 506
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 521
+        },
+        {
+          "path": ".github/workflows/mpi-slurm.yml",
+          "line": 61
+        },
+        {
+          "path": ".github/workflows/release-mpi.yml",
+          "line": 73
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "over-engineering-00",
+        "performance-00"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": {
+          "ci.yml": 8,
+          "mpi-slurm.yml": 1,
+          "release-mpi.yml": 1,
+          "total": 10,
+          "githubActionsDir": false
+        },
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Within ci.yml only, and only on a cold key (a deliberate `MPICH_VERSION` bump at :12 or a cache eviction), the ten job instances carrying the MPICH triple each re-run the identical from-source configure-and-make, because the shared `key:` at :48 and its seven copies are strict (no `restore-keys` in the file) and no `needs:` edge orders any consumer behind a producer; the warm path is correct and un-serialized, and the cross-workflow fleet-wide half and the cache-immutability half of the title do not survive.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "UNMEASURED",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Confirmed on structure, narrowed on scope. At the pin a grep for `needs` over ci.yml returns nothing, so no job waits on another; the eight `Cache MPICH` steps at :43 :81 :124 :174 :310 :371 :462 :516 carry a byte-identical `key:` (the check job's is at :48, not :47 as the candidate prose says) with no `restore-keys` anywhere in the file, and every `runs-on:` is ubuntu-latest, so `runner.os` and `runner.arch` cannot split the population and the only varying component is `MPICH_VERSION` at :12. With the python matrix at :511 that is ten instances, each guarded only by `if: steps.mpich-cache.outputs.cache-hit != 'true'`, so a cold key fans the identical third-party configure-and-make across all ten instead of paying it under one owner. No dismissal basis is available. Nothing in the file documents the edge-free shape, and the file demonstrably does write down decisions of exactly this kind when it makes them: :235-236 says formatting runs once and is NOT duplicated onto CLP, :362 says the same of docs, :453 of coverage, and :205-206 gives a written reason for the distinct rust-cache prefix-key the candidate cites as context. That is a considered surface with nothing written here, so `deliberate-and-documented` fails for want of a citation, and no CLAUDE.md Hard Rule requires the current shape. Two halves of the title do not survive. The cross-workflow fleet-wide framing fails: mpi-slurm.yml and release-mpi.yml each declare their own `MPICH_VERSION` (at :33 and :31), fire on unrelated triggers (path-filtered dispatch and version tags), and release-mpi.yml gates its cache step on `if: matrix.mpi_source == 'source'` under a matrix whose arm runner resolves a different `runner.arch` and whose macos entry skips the step, so those are not concurrent consumers of one resolved key. The immutability half (all but one save discarded as a duplicate) rests on hosted-cache write-once semantics that no repository line at the pin establishes, and the redundant-build cost the candidate names does not depend on it. Fix shape stays prose only: an owning producer plus restore-only consumers is an ordering change, and the attacker is right that it buys a rare cold-key saving at the price of a permanent serialization point on every warm run, which is the owner's call, not this verdict's.",
+      "needsHuman": [
+        "Whether a populator job and `needs:` edges for the shared MPICH key are worth adding a serialization point to every warm run in order to collapse the rare cold-key fan-out is an owner trade-off; the workflow text supports both shapes and neither is required by a pinned rule."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "performance-03": {
+      "candidateRef": "performance-03",
+      "lens": "performance",
+      "disposition": "defended",
+      "title": "Three job definitions each compile the release cobre binary independently, with no artifact handoff and no cache-sharing directive anywhere in the workflow, while three cache-separating directives are present",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 337
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 339
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 358
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 360
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 545
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 561
+        },
+        {
+          "path": "scripts/ci/check_schemas.sh",
+          "line": 23
+        },
+        {
+          "path": "scripts/ci/check-docs-examples.sh",
+          "line": 86
+        }
+      ],
+      "proposedSeverity": "B",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "Narrowed to the artifact-handoff half over the two blocking gate jobs: `schemas` at `ci.yml:339` and `docs-examples` at `ci.yml:360` invoke the byte-identical `cargo build --release --bin cobre`, and `ci.yml` declares no needs: edge and no artifact publish or consume step anywhere, so one release artifact has independent producers even though both gate scripts already accept a prebuilt target/release/cobre when called without --build (`check_schemas.sh:21-24`, `check-docs-examples.sh:84-87`). The python job's `-p cobre-cli` at `:561` counts as the same artifact only because `crates/cobre-cli/Cargo.toml:15-18` declares a single bin and no lib target, and it is matrix-multiplied at `:511` for a different consumer, so it is a weaker third instance rather than a peer of the two gate jobs. Neither the absence of shared-key nor the presence of the three prefix-key directives survives as part of the claim.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "UNMEASURED",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "The structural half holds at the pin and the cache half does not. Same-artifact check: `crates/cobre-cli/Cargo.toml:15-18` declares one bin target named cobre, `git ls-tree` over `crates/cobre-cli/src` shows no lib.rs beside it, and `:42` sets default = [\"highs\"], so the byte-identical `cargo build --release --bin cobre` at `check_schemas.sh:23` and `check-docs-examples.sh:86` and the package-scoped `cargo build --release -p cobre-cli` at `ci.yml:561` all resolve to the one release artifact. Independence check: a grep over `ci.yml` for upload-artifact, download-artifact, shared-key and needs: returns nothing at all, so none of the 14 jobs publishes, consumes or waits on another, and the two consuming gates already accept a prebuilt target/release/cobre when invoked without --build (`check_schemas.sh:21-24`, `check-docs-examples.sh:84-87`) — that seam is real, not aspirational. What I strip: the absence of shared-key is the action's default per-job scoping rather than a declared refusal to share, and a cache scope is not an artifact handoff, so it cannot put one job's binary in another job. None of the three prefix-key directives is a counterexample about this binary, because each separates a compilation that genuinely differs: the step comment at `ci.yml:205-206` states that clp exists so the CLP job does NOT share the HiGHS target directory and actually compiles the vendored COIN superbuild, cov pairs with llvm-tools-preview at `:490-492` and cargo llvm-cov at `:497`, and python sits on the interpreter matrix at `:511` beside the separate maturin build at `:555-558`. The separating-versus-sharing asymmetry is therefore rhetoric, not evidence. Two further baseline facts frame the residue for the perf epic: `release.yml:69` and `:85` with their needs: edges show the repository already owns the publish/consume vocabulary, so the one-producer shape is an amend in existing idiom; and because `ci.yml` declares no needs: edge at all, adding one would introduce the first serialization point into a fully parallel workflow and would let a single broken build block the consumers instead of each gate surfacing its own. The docs-examples comment at `:341-348` documents why that job's setup is minimal (only the default-feature HiGHS binary, no MPICH, no flatc) but says nothing about why it produces rather than receives, so it is not a documented justification for the duplication.",
+      "needsHuman": [
+        "Owner call: whether the release cobre binary gets one producer plus a publish/consume edge — which would be the first needs: edge in `ci.yml` (none at the pin, so every job is independent today) and would let one broken build block the consumers instead of each gate surfacing its own — or stays duplicated per job; the candidate's second shape, a shared rust-cache scope, is not an alternative to that decision, since a cache scope does not hand a built binary to another job."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "performance-04": {
+      "candidateRef": "performance-04",
+      "lens": "performance",
+      "disposition": "defended",
+      "title": "Ten of the fourteen quality-scripts steps each enumerate the crates tree themselves, and the shared scan library they already source exposes only a per-file predicate and no enumeration helper",
+      "anchors": [
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 21
+        },
+        {
+          "path": "scripts/ci/lib/comment_scan.sh",
+          "line": 32
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 127
+        },
+        {
+          "path": "scripts/ci/check-comment-refs.sh",
+          "line": 155
+        },
+        {
+          "path": "scripts/ci/check-comment-line-refs.sh",
+          "line": 118
+        },
+        {
+          "path": "scripts/ci/check-doc-placeholders.sh",
+          "line": 104
+        },
+        {
+          "path": "scripts/ci/check-no-plan-leaks.sh",
+          "line": 180
+        },
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 680
+        },
+        {
+          "path": "scripts/ci/quality-report.sh",
+          "line": 91
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 262
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": [
+        "over-engineering-02"
+      ],
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": "blocking",
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "touches-sanctioned-anchor",
+        "touches": [
+          "scripts/ci/check-comment-line-refs.sh (advisory-by-design; header `# Exit code: ALWAYS 0` at :35)",
+          "scripts/ci/quality-report.sh (advisory-by-design; header `# Exit code: ALWAYS 0` at :42)"
+        ]
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": true,
+        "vocabularyHitReviewed": "the sentence is a disclaimer: 'Proposing a NEW shared scan library or a gate-runner framework would be the push-shaped answer and should be tagged as conflicting'",
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "dismissed",
+      "survivingClaim": null,
+      "dismissalBasis": "premise-false-at-pin",
+      "basisCitation": "scripts/ci/lib/comment_scan.sh:5 with .github/workflows/ci.yml:262-300",
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "UNMEASURED",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Both descriptive halves hold at the pin: the shared library exposes only per-file predicates (cs_emit_production_lines at :21 and cs_emit_comment_lines at :32, each taking one file), and its four callers source it at check-comment-line-refs.sh:43, check-comment-refs.sh:51, check-doc-placeholders.sh:49 and check-no-plan-leaks.sh:102, with check-comment-line-refs.sh:80-82 wrapping the shared predicate locally. The load-bearing mechanism clause does not hold. The candidate asserts that only a library-owned enumeration would reduce the number of walks. comment_scan.sh:5 states the file is sourced and never executed, so any helper added to it runs inside the sourcing process, and every gate the candidate counts is launched as its own bash process from its own step (ci.yml:262, :264, :270, :272, :276, :280, :284, :286, :292, :300). A library-owned enumeration therefore executes once per gate process and removes no traversal: the traversal count is fixed by the per-step process decomposition, not by where the find lives. Relief would need a single-process gate runner or a cached file-list artifact, and the candidate itself names the runner as the push-shaped answer it disclaims. The premise that the gates walk the same directory tree also fails: the genericity gate scans only the infrastructure crate src dirs at :62-68, the plan-leak gate scans every crate src dir plus the glob-expanded tests and benches dirs at :126-151, the past-inflows gate scans only the crates tests dirs at :42-44, and check-allow-rationale.sh:450 collects mod.rs and lib.rs for symbol resolution while :680 reads crates src .rs files, so these are different roots under different filters rather than redundant reads of one file set. The library header at :5-16 states its designed scope is the one canonical cfg(test) boundary and names the holdout gates that cannot use the streaming helpers at all, so sharing the predicate and not the walk is the library's stated job. The duplicated scan-root vocabulary is a real maintainability subject, but it travels with sibling over-engineering-02 and is judged there; nothing at this station is measured.",
+      "needsHuman": [],
+      "defenderRetries": 0,
+      "state": "rejected-defender"
+    },
+    "performance-05": {
+      "candidateRef": "performance-05",
+      "lens": "performance",
+      "disposition": "defended",
+      "title": "Three jobs install their cargo tool from source with cargo install while the same workflow already uses a prebuilt-binary install action for its one other tool",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 215
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 217
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 413
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 443
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 496
+        },
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 29
+        },
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 50
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": null,
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "At exactly two ci.yml sites, the cargo-audit install in the security job at :413 and the cargo-llvm-cov install in the coverage job at :496, both of which carry the locked flag alone with no version pin and no feature selection, the from-source acquisition is an asymmetry no adjacent comment or repository document explains against the prebuilt-binary install action the same workflow already wires at :215-217; the license-notices site at :443 is excluded from the claim because its exact version pin plus feature selection makes prebuilt availability unverifiable at the baseline.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "UNMEASURED",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "At the pin the asymmetry is real and nothing in the tree explains it. ci.yml:215-217 acquires nextest through the prebuilt-binary install action, and invariance-shuffle.yml:29-31 and :50-52 use that same action, so it is already a wired CI dependency of this repository rather than something a fix would introduce. Three ci.yml steps instead compile their tool inside the job: :413 in security, :443 in license-notices, :496 in coverage. I read the comment block adjacent to each of those steps and none of them addresses the acquisition method. The block at :403-404 says only that cargo-audit reads Cargo.lock and the advisory database and compiles no crate, so it cannot trip the both-backends compile-error guard in cobre-solver. The block at :430-434 says only why cargo-about carries an exact version pin, namely that its output format is version-dependent so an unpinned bump would read as spurious notices drift. The line at :453 says only that coverage runs once on the primary backend and is not duplicated onto CLP. The nextest block at :210-213 justifies choosing nextest for per-process FFI isolation, not choosing the install action as the acquisition route. A grep across CONTRIBUTING.md, CLAUDE.md, ARCHITECTURE.md, docs and scripts at the pin returns no statement of any tool-acquisition policy, so there is no deliberate-and-documented citation to dismiss on, and no pinned rule at this station requires the from-source form, so contract is unavailable too. The mechanism the candidate names is visible in the workflow text: the from-source steps make each tool's own dependency graph part of that job's work, while the wired action replaces that with a download. I therefore confirm, but strip the license-notices site. The step at :443 carries both an exact version pin and a feature selection, and whether a prebuilt distribution exists for that version-and-feature combination is an external fact this read-only station cannot check, so that site is not part of the defensible residue. The two remaining steps carry the locked flag only, with no version pin and no feature selection, which is exactly the shape the already-wired action covers, so the surviving residue is an unexplained two-site asymmetry in acquisition method and not a gap in pinning discipline. Informational only: the mechanism is judged from workflow text at the baseline and nothing here is measured.",
+      "needsHuman": [
+        "Whether a prebuilt distribution of cargo-about exists for the exact version pinned at ci.yml:443 together with its cli feature selection is an external fact unverifiable at the baseline, and it decides whether that third site can join the amend at all.",
+        "Whether the rust-cache action wired at ci.yml:412 and :495 already restores compiled cargo binaries between runs is a property of an action implemented outside this repository, and it decides how much repeated work the two confirmed sites actually carry."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    },
+    "performance-06": {
+      "candidateRef": "performance-06",
+      "lens": "performance",
+      "disposition": "defended",
+      "title": "Nine of the fourteen job definitions check out every vendored submodule recursively, and on each of them at least one vendored superbuild tree is fetched that the job's feature set never compiles",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 42
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 173
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 219
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 309
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 356
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 515
+        },
+        {
+          "path": "crates/cobre-solver/build.rs",
+          "symbol": "main"
+        }
+      ],
+      "proposedSeverity": "C",
+      "attackerEnforcementStrength": "blocking",
+      "attackerAlignmentHint": "neutral",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "priorId": null,
+      "priorRelation": null,
+      "relatedTo": [
+        "CD-080 (L3886, build.rs:30/:97 link-demand facts)"
+      ],
+      "relatedCandidates": null,
+      "mergedInto": null,
+      "mergedFrom": null,
+      "censusClass": null,
+      "sanctionedAdvisoryScreen": {
+        "checked": true,
+        "result": "not-applicable",
+        "touches": []
+      },
+      "pullDontPushScreen": {
+        "checked": true,
+        "result": "amend-in-place",
+        "vocabularyHit": false,
+        "vocabularyHitReviewed": null,
+        "mpichConsumers": null,
+        "reason": null
+      },
+      "twoSiteScreen": {
+        "applies": false
+      },
+      "ingestNotes": [],
+      "verdict": "confirmed",
+      "survivingClaim": "One workflow-level acquisition choice, not nine defective jobs: the single `submodules: recursive` input repeated at ci.yml:42, 80, 123, 173, 309, 356, 370, 461 and 515 acquires the whole four-entry .gitmodules registry, while crates/cobre-solver/build.rs opens a vendored tree only inside its own feature branch (HiGHS at :30, Clp plus CoinUtils at :182), so the never-compiled tree on a given job is exactly the complement of that job's selected backend: the COIN pair on the eight default-feature jobs and the HiGHS tree on clp (:219). The residue is fetch-time only, with no compile, cache-key or gate consequence (vendored trees are outside the workspace members at Cargo.toml:3-15, the rust-cache prefixes key off manifests, and the crates-walking gates run in the submodule-free quality-scripts job), and no per-job feature configuration can ever make the recursive set exact because the two backends are mutually exclusive by design (cobre-solver/Cargo.toml:16-19, build.rs:28). The surviving claim asserts nothing about the relative size of the four trees and nothing about the build scripts' link demands.",
+      "dismissalBasis": null,
+      "basisCitation": null,
+      "sanctionedBy": null,
+      "contractCited": null,
+      "enforcementStrength": "blocking",
+      "measurement": "UNMEASURED",
+      "alignmentHint": "neutral",
+      "conflicts": false,
+      "conflictsRule": null,
+      "argument": "Every load-bearing premise holds at the pin, and I resolved all nine sites rather than trusting the attacker's count. `git show 077dbe2c:.gitmodules` registers exactly four submodules (crates/cobre-solver/vendor/HiGHS, Clp, CoinUtils and crates/cobre-sddp/vendor/qhull) and `git ls-tree 077dbe2c crates/cobre-solver/vendor/ crates/cobre-sddp/vendor/` shows those four as gitlinks plus the tracked, non-submodule vendor/coin-build tree, so `submodules: recursive` expands to all four on every job that asks for it. Nine of the fourteen job keys in ci.yml carry that input (lines 42, 80, 123, 173, 309, 356, 370, 461, 515); the remaining five (fmt at :237, quality-scripts at :248, security at :405, deny at :419, license-notices at :435) take a plain checkout, so the workflow already discriminates needs-submodules from does-not at job granularity and stops one level short of submodule granularity. On the compile side crates/cobre-solver/build.rs reads a vendored tree only inside a feature branch: the HiGHS cmake configure and its missing-source panic sit under CARGO_FEATURE_HIGHS at :30, and the Clp plus CoinUtils header probe with the coin-build configure sit under CARGO_FEATURE_CLP at :182, with the comment at :28 stating that exactly one backend may be enabled and cobre-solver/Cargo.toml:16-19 restating the mutual exclusion and its compile_error. I checked each of the nine jobs' feature resolution: check (:71), test (:114), clippy (:154), docs (:399) and coverage (:497) keep default features, and default is highs (cobre-solver/Cargo.toml:16); schemas (:339) and docs-examples (:360) run gate scripts whose only compile is `cargo build --release --bin cobre` (check_schemas.sh:23, check-docs-examples.sh:86), again at default features; python builds cobre-python, whose default set is extension-module plus highs (crates/cobre-python/Cargo.toml:38), then the CLI at default features (:561) and the bindings tests explicitly at highs (:567); only clp turns defaults off and selects clp (:219, :221, :223, :233). So on each of the nine exactly one backend's vendored tree is fetched and never opened by any compiler in that job, and the candidate correctly withholds the charge for qhull, since cobre-sddp/build.rs:11 states that script reads no CARGO_FEATURE_ variable and compiles unconditionally. The mechanism is therefore real, structural and irreducible at job level, which is why this is confirmed rather than dismissed: no premise-false basis is available and nothing in the workflow text, CONTRIBUTING.md:123-126 or CONTRIBUTING.md:176-179 documents the uniform recursive choice as deliberate. What I strip is the framing and the fix shape's unverifiable half. The finding presents nine job definitions as nine sites, but there is one acquisition decision replicated verbatim, and no job's YAML is individually wrong; the docs-examples comment at :344-346 shows the project pruning that job to a minimal setup (no MPICH, no flatc) and still leaving the submodule input whole, which is consistent with the input being treated as all-or-nothing rather than per-job. I also strip the relative-size premise in the fix shape, since a gitlink at the pin exposes no tree contents and nothing readable here ranks the four trees. Cost scope narrows too: the unused tree touches nothing beyond the fetch, because the vendored trees are not workspace members (Cargo.toml:3-15 lists thirteen members and :18-23 excludes only cobre-python), the rust-cache prefixes at :204-206, :493-495 and :545-547 key off the cargo manifests and not submodule content, and the comment-scanning gates that walk crates/ run in quality-scripts, which takes no submodules at all. The fix shape the candidate sketches stays inside the workflow layer and does not push workflow vocabulary into a Rust crate or stand up a new gate framework, so no conflicts trigger fires; it does, however, trade one input for a hand-listed submodule set per job, which is the owner call recorded below.",
+      "needsHuman": [
+        "Whether a job-tailored submodule set is acceptable at all: actions/checkout exposes no per-submodule input, so the only tailored shape drops the input and hand-lists submodule paths in a following step on each affected job, creating a second copy of the four-entry .gitmodules registry inside the workflow with no guard pinning the two together; the owner decides whether that duplication is worth the avoided fetch, and the pointer is inert until they do."
+      ],
+      "defenderRetries": 0,
+      "state": "accepted"
+    }
+  }
+}

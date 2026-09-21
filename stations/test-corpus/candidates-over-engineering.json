@@ -1,0 +1,260 @@
+{
+  "station": "test-corpus",
+  "stationLabel": "test-corpus",
+  "subStation": "sec-over-engineering",
+  "worker": "sec-over-engineering",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "over-engineering",
+  "primary": false,
+  "informational": false,
+  "gatedAt": "2026-09-19",
+  "dispatcher": "adversarial-attacker (Opus, read-only) — one worker over the whole corpus",
+  "workers": {
+    "sec-over-engineering": "ok: 2 candidates, 15 positives, 0 seeds"
+  },
+  "attempts": {
+    "sec-over-engineering": 1
+  },
+  "candidates": [
+    {
+      "id": "sec-over-engineering-001",
+      "title": "The `test-support` fixture surface carries a public `GeometryDims` builder, `eq_with_anticipated`, that no caller in the workspace reaches",
+      "claimKind": "tree-fact",
+      "yardstickRef": "ta-5.2",
+      "measurementDefinition": "n/a",
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "dupOf": null,
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "line": 177,
+          "symbol": "eq_with_anticipated",
+          "note": "the zero-caller builder"
+        },
+        {
+          "path": "crates/cobre-sddp/src/test_support.rs",
+          "line": 152,
+          "symbol": "eq",
+          "note": "the sibling builder that does have callers, e.g. crates/cobre-sddp/tests/basis_trajectory_probe.rs"
+        }
+      ],
+      "evidence": {
+        "command": "git grep -n 'eq_with_anticipated' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+        "reading": "The grep returns exactly one line at the pin, crates/cobre-sddp/src/test_support.rs:177, which is the declaration itself. There is no second hit anywhere in the workspace, so the function has no caller in any lib unit test, any integration binary, any doctest and any benchmark. It is a `#[must_use] pub fn` taking nine positional parameters (hydro_count, max_par_order, n_thermals, n_lines, n_buses, n_blks, has_inflow_penalty, n_anticipated, k_max) and differs from the used `eq` at :152 only by the two trailing anticipated-thermal parameters and by defaulting `anticipated_thermal_indices` to `(0..n_anticipated).collect()`. Nothing in the toolchain can surface this: the item is `pub` inside a feature-gated module of a library crate, and rustc never emits dead_code for a reachable `pub` item, so only a census finds it. The lens claim is the unused half of a two-builder fixture pair, not the pair.",
+        "definition": "A caller is any occurrence of the identifier outside its own declaration line, over the whole tree at the pin."
+      },
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "rule": "RULE 6",
+        "citation": "`docs/design/reserved-seams-and-deferred-debt.md:30-152` holds exactly four reserved-seam entries at the pin (transit bucket topology, `LipschitzConfig.mode`, the shared-memory communicator trait hierarchy, the boundary-cut wire `graph_stage_id`) and none of them is about a test fixture. The anticipated-family reservation prose at `docs/design/reserved-seams-and-deferred-debt.md:880-882` reserves post-horizon lanes in the production boundary-state writer, not a test constructor, so it does not reach this item. `ARCHITECTURE.md:108` § Reserved crates lists only the five stub crates. The builder is therefore not a ratified seam; the fix-shape below still keeps it available rather than deleting a capability."
+      },
+      "fixShape": "Coverage-neutral and count-neutral. Either give the existing `eq` builder the anticipated-thermal fields through its default path so one constructor serves both shapes, or leave the explicit-field constructor in place and have the anticipated integration suite that needs explicit anticipated identities call it, which is the state its doc comment already assumes. No test is deleted, skipped, renamed or weakened, and `cargo nextest list --features test-support` reports the same count before and after. Owner picks which of the two directions the anticipated fixture surface should take.",
+      "partIRef": null,
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "id": "sec-over-engineering-002",
+      "title": "The `cobre-sddp` `tests/common/` aggregator declares every submodule to every consumer binary, so a single-consumer helper module compiles into all of them behind a blanket `dead_code` allow",
+      "claimKind": "tree-fact",
+      "yardstickRef": "ta-2.2",
+      "measurementDefinition": "binary",
+      "measuredValue": {
+        "key": "figures.int-binaries.perCrate.cobre-sddp",
+        "value": 40
+      },
+      "proposedSeverity": "C",
+      "alignmentHint": "neutral",
+      "dupOf": null,
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "line": 25,
+          "note": "the four unconditional `pub mod` declarations at :25-28"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/mod.rs",
+          "line": 6,
+          "note": "`#![allow(clippy::expect_used, dead_code)]` at aggregator scope, inherited by all four submodules"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/common/anticipated_structural_assertions.rs",
+          "line": 39,
+          "symbol": "assert_training_converged_structurally",
+          "note": "the single-consumer submodule; its module doc says helpers shared by the anticipated-thermals integration tests, plural"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/permute_helpers.rs",
+          "line": 1,
+          "note": "the authors' own prior mitigation of the same fan-out, relocated out of the aggregator so `mod common;` contributes no test to its consumers"
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:crates/cobre-sddp/tests/common/mod.rs | sed -n '1,29p' ; for f in $(git ls-tree --name-only 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c crates/cobre-sddp/tests/ | grep '.rs$'); do git show 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c:$f | grep -qE '^[[:space:]]*mod common;' && echo $f; done | wc -l ; git grep -l 'anticipated_structural_assertions' 077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c -- crates/cobre-sddp/tests",
+        "reading": "The aggregator declares four submodules unconditionally at mod.rs:25-28 (anticipated_structural_assertions, builders, parity_hash, permute). Of the 40 depth-1 integration binaries in cobre-sddp, 33 declare `mod common;`, and because `pub mod X;` in mod.rs compiles X into every binary that declares the aggregator, all four submodules are compiled 33 times: 383 lines of builders, 417 of parity_hash, 204 of permute and 181 of anticipated_structural_assertions, 1185 helper lines beyond mod.rs's own 320. Consumer resolution is lopsided: builders reaches 27 binaries, permute 3 (deterministic.rs, parity.rs, permute_helpers.rs), parity_hash 2 (deterministic.rs, parity.rs) and anticipated_structural_assertions exactly 1, crates/cobre-sddp/tests/anticipated_scenarios.rs, so its module doc's plural is already wrong at the pin and its three public helpers each resolve to that single consumer. The `dead_code` allow at mod.rs:6 is what makes the shape possible and is also what makes an unused shared helper undetectable, since a binary that uses one submodule would otherwise warn on the other three. The relocation of the permutation-primitive tests into crates/cobre-sddp/tests/permute_helpers.rs shows the authors already treat aggregator-wide inheritance as a cost worth paying down, so the direction is established rather than proposed here.",
+        "definition": "A consumer of a submodule is a depth-1 crates/cobre-sddp/tests/*.rs file whose text names that submodule. Binary counts are the pin figure int-binaries, definition binary (depth-1 tests/*.rs, what Cargo links)."
+      },
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "not-found",
+        "rule": "RULE 6",
+        "citation": "`docs/design/reserved-seams-and-deferred-debt.md:1201-1204` does speak to this directory: the Fixed entry's closing paragraph records that `crates/cobre-sddp/tests/common/` still holds its own fixture directory rather than collapsing into that crate's `test-support` surface, and names that as the open half of the convention. That is a statement about the directory's LOCATION, not a sanction of its internal all-to-all fan-out, and the same entry's last bullet notes the test listing moves only by the permutation-helper tests the aggregator no longer inherits into every binary, which is the opposite of a sanction. The four-entry reserved-seam register at `docs/design/reserved-seams-and-deferred-debt.md:30-152` covers no test fixture, and `ARCHITECTURE.md:108` § Reserved crates covers only the five stub crates."
+      },
+      "fixShape": "Coverage-neutral and count-neutral, and it is the shape the crate already used once. Give the aggregator per-consumer granularity so a binary compiles only the helpers it names: either re-home the single-consumer assertion helpers into their one consumer as a `#[path]` submodule, or keep them in tests/common/ and let each binary declare the submodules it uses instead of inheriting all four through mod.rs, which is what lets the blanket `dead_code` allow narrow to the items that genuinely need it. Either direction leaves the binary count, the feature-combo count and every assertion untouched, so `cargo nextest list --features test-support` is identical before and after. The destination question (consumer-local versus the `test-support` collapse the mirror names as the open half of the convention) is an owner pick, recorded under _needsHuman.",
+      "partIRef": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+          "symbol": "mod common",
+          "note": "the one consumer that reaches that submodule",
+          "anchorForm": "symbol is not a bare identifier (check-anchors.py cannot resolve it)",
+          "why": "symbol is not a bare identifier (check-anchors.py cannot resolve it); demoted at the gate under rule 11 / anchor-form"
+        }
+      ],
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "The golden `parity_hash_*` roster in `crates/cobre-sddp/tests/parity.rs` and `crates/cobre-sddp/tests/common/parity_hash.rs`",
+      "why": "Five distinct parity_hash_* functions plus the prefix's occurrences across the suite look like duplication to a naive over-engineering sweep, but they are the bit-exactness substrate the generalization roadmap depends on: each names a distinct golden case, and the roster is what makes a reproducibility regression visible. Reported here as substrate, never as debt.",
+      "sanctionedBy": "OFF-LIMITS list, sec-over-engineering prompt RULE 6; inventory figure golden-cases, goldenRosterSize",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "`crates/cobre-sddp/tests/mpi_wire.rs` and its power self-checks at :576 (`retries > 0`), :703 (`n_openings >= 3`) and :2003 (`fan_nodes >= 2`)",
+      "why": "The self-checks are assertions about the fixture's own discriminating power, which an over-engineering lens could misread as redundant scaffolding around the real assertions. They are the opposite: they stop the wire-format gates from silently degenerating into tautologies, which is exactly the failure this station exists to catch.",
+      "sanctionedBy": "OFF-LIMITS list, sec-over-engineering prompt RULE 6",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The dual `crates/cobre-sddp/tests/fixtures/parity_baselines` and `parity_baselines_clp` decks, five `.sha256` files each",
+      "why": "Two decks holding the same case names is the textbook shape of a duplicated golden path, but the split is load-bearing: the two backends legitimately reach different-but-equally-valid optimal vertices, so one shared deck could not hold both. Collapsing them would destroy backend coverage, not remove duplication.",
+      "sanctionedBy": "OFF-LIMITS list, sec-over-engineering prompt RULE 6; inventory figure golden-cases, decks",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The five reserved stub crates `cobre-mcp`, `cobre-tui`, `cobre-flow`, `cobre-uc`, `cobre-emt`",
+      "why": "Zero test surface in a workspace member is the strongest over-engineering signal a sweep can see, and here it is ratified: these crates are reserved-not-dead, so their empty test surface is neither a coverage gap nor unearned structure.",
+      "sanctionedBy": "ARCHITECTURE.md:108 § Reserved crates; CLAUDE.md § Workspace",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The facade crate `crates/cobre`",
+      "why": "A crate with no test surface that only re-exports reads as a pass-through layer, which is a canonical over-engineering finding. It is a ratified facade, so the absence of tests is by design rather than a gap.",
+      "sanctionedBy": "ARCHITECTURE.md:104; OFF-LIMITS list, sec-over-engineering prompt RULE 6",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "Every `proptest!` invocation in the workspace at the pin, eight invocations across seven files",
+      "why": "The lens's single-value-strategy shape is absent. All eight were read: crates/cobre-core/src/system/builder.rs:1118, crates/cobre-io/src/windowed_history.rs:304, crates/cobre-sddp/src/lead_time/tests.rs:1213, crates/cobre-sddp/src/lp/indexer/cut_state_projection.rs:895, crates/cobre-sddp/src/stochastic/noise_key.rs:356, crates/cobre-stochastic/src/sampling/external.rs:3013 and crates/cobre-stochastic/src/season_cast/mod.rs:1294 and :1337. Each generates a genuine range or a composed strategy; none enumerates one value, so there is no proptest machinery whose cost exceeds its use.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The `prop_shuffle` strategy over nine `Just(reference_X())` cases at `crates/cobre-core/src/system/builder.rs:1118`",
+      "why": "Nine hand-written `Just` arms inside a property test is exactly the shape an over-engineering lens flags as a strategy doing no work. Here the shuffle IS the permutation step: it is the sanctioned declaration-order-invariance pattern, so the arms are the fixture and the shuffle is the generator.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/test-corpus/lens-rules.md Rule 1, permutation step 2",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The golden regeneration surface across the corpus",
+      "why": "The lens's per-family duplicated regen path is absent. Only crates/cobre-stochastic/tests/forward_sampler_golden.rs and crates/cobre-stochastic/tests/saa_golden_value.rs exist as golden binaries, there is no env-var bless path in any test, and no `fn write_`, `regen_`, `update_` or `bless_` helper is declared in any test file; the only `regen` reference in the tree is scripts/ci/check_schemas.sh, which is CI-owned and not a test harness.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The empty `KEEP_ORDERED` table at `crates/cobre-sddp/tests/common/permute.rs`",
+      "why": "An empty configuration table with a panic arm for its degenerate case is the classic speculative-generality shape, but the counter-signal is stated in place: the doc says every registry this axis has encountered resolves through an id-keyed lookup and names the exact trigger for adding the first entry. The panic is the intended fail-loud behavior, not an unused arm.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The shared `StubComm` at `crates/cobre-sddp/tests/common/mod.rs:32` and `Rank0Of2` at `:86`",
+      "why": "These are the aggregator's genuinely load-bearing tenants: both are reached by many of the 33 consumer binaries, which is why the fan-out candidate above targets the single-consumer submodule and the declaration granularity rather than the aggregator's existence. A mock with unused arms was looked for here and not found.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The `*_reversed` fixture builders, each with one caller",
+      "why": "One caller per builder is the lens's own signature for an unearned fixture, and it was nearly raised. It is defended: these fixtures exist precisely to be the declaration-order permutation of their canonical sibling, so a second caller would defeat the purpose. A one-caller count is the correct steady state for this family.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/test-corpus/lens-rules.md Rule 1, permutation step 3",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "`TrunkFanFixture` in the cobre-sddp integration suite",
+      "why": "An occurrence census on the type name reported no external references and would have produced a false positive. Re-running the search on its constructor names found eight real call sites in crates/cobre-sddp/tests/node_native_backward_gate.rs and crates/cobre-sddp/tests/simulation_integration.rs. Recorded so the same census shape is not trusted unqualified by a later round.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "The private `StubComm` and `MockSolver` copies already carried by the register",
+      "why": "The duplicated-mock shape is real in the tree but is already owned: TD-053, TD-054 and TD-056 name these instances. Cross-referenced here per the station's dispositions rather than re-raised under a second id.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "Overall density of unearned test machinery",
+      "why": "Twelve shared helper surfaces were swept for zero-caller and one-caller items and exactly one zero-caller function came out, in the lib-side test_support module rather than in the integration fixtures. For a corpus of this size that is a clean result, and it is the reason this envelope carries two candidates rather than a list.",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    },
+    {
+      "subject": "Rule 2 compliance of both candidates",
+      "why": "Neither fix-shape deletes, skips, weakens or re-baselines a test, and neither is motivated by suite size, build time, link time or CI wall-clock. Both are count-neutral consolidation or re-homing shapes, so `cargo nextest list --features test-support` is unchanged either way.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/test-corpus/lens-rules.md Rule 2",
+      "raisedBy": [
+        "sec-over-engineering"
+      ]
+    }
+  ],
+  "seedDispositions": [],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "sec-over-engineering: {'question': \"For the `cobre-sddp` `tests/common/` aggregator, which destination should the single-consumer helper module take: re-home it into its one consumer binary, or collapse it into the crate's `test-support` surface?\", 'why': \"The mirror names the collapse of `crates/cobre-sddp/tests/common/` into that crate's `test-support` surface as the open half of a ratified convention, so the two directions are not equivalent: consumer-local re-homing is cheap and reversible but moves away from the named convention, while the `test-support` collapse is the convention's direction and also the destination the yardstick's §5.2 gives for the shared `close` and tolerance helpers. An attacker cannot pick between a ratified-but-unlanded direction and a cheaper local one.\", 'citation': 'docs/design/reserved-seams-and-deferred-debt.md:1201-1204; docs/design/testing-architecture.md:436-438', 'relatedCandidate': 'sec-over-engineering-002'}"
+  ],
+  "gate": {
+    "validator": "stations/test-corpus/validate-tb.py envelope <file> --worker <name> (shared tools/validate-envelope.py shape + the test-bloat profile + scope + seed ledger)",
+    "okWorkers": [
+      "sec-over-engineering"
+    ],
+    "mergedDuplicates": [],
+    "demotedAnchors": [
+      {
+        "worker": "sec-over-engineering",
+        "title": "The `cobre-sddp` `tests/common/` aggregator declares every submodule to every consumer binary, so a single-consumer helper module compiles into all of them behind a blanket `dead_code` allow",
+        "path": "crates/cobre-sddp/tests/anticipated_scenarios.rs",
+        "line": null,
+        "symbol": "mod common",
+        "code": "anchor-form"
+      }
+    ],
+    "rejections": []
+  }
+}

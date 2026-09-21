@@ -1,0 +1,507 @@
+{
+  "station": "build-ci",
+  "stationLabel": "build-ci-docs",
+  "subStation": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "architecture",
+  "gatedAt": "2026-09-19",
+  "worker": "adversarial-attacker (Opus, read-only)",
+  "attempt": 1,
+  "candidates": [
+    {
+      "title": "The infra-genericity gate's crate list is a hand-kept literal in two unpaired places, so the rule's coverage cannot follow the target layering without a synchronized script-and-prose edit that nothing enforces",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 62
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 261
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-infra-genericity.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Infra genericity gate",
+        "line": 262
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:scripts/ci/check-infra-genericity.sh | sed -n '62,68p'; git show 077dbe2c:CLAUDE.md | sed -n '39,41p'; git show 077dbe2c:.github/workflows/ci.yml | sed -n '248p;261,262p'",
+        "output": "SCAN_DIRS=(\n    \"${REPO_ROOT}/crates/cobre-core/src\"\n    \"${REPO_ROOT}/crates/cobre-io/src\"\n    \"${REPO_ROOT}/crates/cobre-solver/src\"\n    \"${REPO_ROOT}/crates/cobre-stochastic/src\"\n    \"${REPO_ROOT}/crates/cobre-comm/src\"\n)\n-- CLAUDE.md --\n- **Infrastructure crate genericity** -- `cobre-core`, `cobre-io`, `cobre-solver`,\n  `cobre-stochastic`, `cobre-comm` must contain zero algorithm-specific references\n  (no \"sddp\", \"SDDP\", \"Benders\" in types, functions, or doc comments)\n-- ci.yml --\n  quality-scripts:\n      - name: Infra genericity gate\n        run: bash scripts/ci/check-infra-genericity.sh",
+        "reading": "Two independent literal enumerations of the same five crates: SCAN_DIRS at :62-68 (cobre-core, cobre-io, cobre-solver, cobre-stochastic, cobre-comm) and the prose bullet at CLAUDE.md:39-41 (the same five names in the same order). Membership is a hardcoded path list, not derived from the workspace or from a layer declaration, so a crate added to the workspace is outside the rule by default -- silence, not failure. Nothing compares the two lists: `git grep -n 'cobre-stochastic' 077dbe2c -- scripts/ci` returns only check-infra-genericity.sh, so no gate cross-checks the prose enumeration against SCAN_DIRS. The layering brief's L1 row states the rule extends to the future `cobre-model` / `cobre-network` ONLY by amending the CI grep's crate list; the target-state coverage therefore depends on a person remembering two files in two languages at once."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Amend in place, and make the pairing mechanical rather than remembered. The durable shape is to let one of the two sites own the crate list and have the other derive or verify it: either the gate reads the layer membership from a single declared list and the prose points at that list by name instead of re-enumerating it, or the gate grows a self-check that fails when the crates it scans and the crates the rule names diverge. Either way the edit that adds a future L1 crate touches one authoritative list and the gate refuses to pass while the other site disagrees. Do not build a new gate framework or a new shared scan library for this -- the existing blocking gate and its single `quality-scripts` step are the right home, and a new framework would be a one-consumer abstraction.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 39
+        },
+        "script": {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 62
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 262
+        }
+      },
+      "alignmentHint": "advances-1",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "CLAUDE.md",
+          "line": 39,
+          "why": "the hard-rule prose this gate is supposed to enforce; carried in twoSite.prose because a root-level path is not a legal anchor form"
+        },
+        {
+          "path": "plans/architecture-debt-audit/tools/target-layering-brief.md",
+          "line": 14,
+          "why": "the L1 row: the genericity rule extends to the two new crates only by amending the CI grep's crate list -- the brief states the coupling this candidate is about"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 3,
+          "why": "the workspace members list is the other enumeration of crates; SCAN_DIRS is not derived from it, so neither the five stubs nor a future member is covered by default"
+        }
+      ]
+    },
+    {
+      "title": "The infra-genericity gate matches one engine's vocabulary rather than the engine-concept rule it enforces, so a sibling engine's nouns and an underscore-joined identifier both pass unflagged",
+      "anchors": [
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 79
+        },
+        {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 10
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-infra-genericity.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Infra genericity gate",
+        "line": 262
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:scripts/ci/check-infra-genericity.sh | sed -n '9,11p;79p'; git grep -n 'cut_nz_per_col' 077dbe2c -- crates/cobre-solver/src/freeze.rs",
+        "output": "#\n# Patterns flagged (word-boundary anchored to avoid false positives on\n# identifiers like \"execution\", \"cuts_active\", \"cutting_edge\"):\n-- :79 --\nPATTERN='\\bSddp\\b|\\bsddp\\b|\\bSDDP\\b|\\bBenders\\b|\\bCut\\b|\\bcut\\b|cut pool|cutting-plane|cutting[.]plane|outer approximation|CutSync[[:alnum:]_]*|CutSelection[[:alnum:]_]*|\\bMetadataCuts\\b'\n-- freeze.rs --\ncrates/cobre-solver/src/freeze.rs:22:    pub cut_nz_per_col: Vec<u32>,\ncrates/cobre-solver/src/freeze.rs:137, :138, :141, :188 (production uses)",
+        "reading": "The script states its own reason for the word boundaries at :10-11: they are deliberate, chosen to avoid false positives on identifiers like `execution`, `cuts_active` and `cutting_edge`, where the letters `cut` are incidental. That rationale is sound for those three, and the design is not naive. The gap is a different one. `\\bcut\\b` requires a non-word character after `cut`; `_` is a word character, so `cut_nz_per_col` never matches, and the gate exits 0 at the pin (solver+comm station handoff: exit 0, \"OK: no algorithm-specific vocabulary found in infrastructure crates.\"). But `cut_nz_per_col` is NOT an incidental-letters false positive of the `execution` kind: it is declared as `FreezeScratch.cut_nz_per_col: Vec<u32>` at freeze.rs:22 and used in production at :137, :138, :141 and :188 as a per-column count of cut-row non-zeros in the frozen LP. The word `cut` there denotes exactly the Benders cut row the rule forbids naming in cobre-solver -- it is the engine concept, spelled in snake_case. Separately, PATTERN enumerates the nouns of ONE engine (Sddp, Benders, Cut, cut pool, cutting-plane, outer approximation, CutSync*, CutSelection*, MetadataCuts). CLAUDE.md:41 states the rule as \"zero algorithm-specific references\", which is a concept test; the gate implements a fixed vocabulary of one algorithm, so a future sibling engine's vocabulary in an L0/L1 crate passes silently."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Sharpen the existing gate in place; the vocabulary half of the leak belongs to the solver+comm station, the gate half is here. Two independent moves. First, close the snake_case hole without losing the deliberate false-positive protection the script's own :10-11 rationale buys: the boundary needs to treat an underscore as a word separator for the engine nouns rather than as a word character, so `cut_nz_per_col` matches while `cuts_active` and `cutting_edge` still do not. Second, make the vocabulary's single-engine scope explicit rather than implicit: the rule prose says \"algorithm-specific\", so the gate should carry a named, reviewable list of engine vocabularies with an obvious place for a second engine's nouns, so that adding an engine forces a visible edit instead of inheriting silent coverage. Both stay inside the one blocking gate and its one `quality-scripts` step; neither needs a new gate, a new scan library, or a rename in cobre-solver (the rename decision is the register entry's, not this station's).",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 41
+        },
+        "script": {
+          "path": "scripts/ci/check-infra-genericity.sh",
+          "line": 79
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 262
+        }
+      },
+      "alignmentHint": "advances-1",
+      "alignmentCitation": "Part IV.1",
+      "partIRef": null,
+      "reRaiseOf": "CD-061",
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "CLAUDE.md",
+          "line": 41,
+          "why": "the hard-rule prose this gate is supposed to enforce; carried in twoSite.prose because a root-level path is not a legal anchor form"
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "line": 22,
+          "why": "the declaration `FreezeScratch.cut_nz_per_col: Vec<u32>` -- the live evader, pre-seeded by the solver+comm station; cited, never anchored (rule 8)"
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "line": 137,
+          "why": "production use 1 of 4, proving the identifier is not test-only scaffolding (the cfg(test) boundary is at :244)"
+        },
+        {
+          "path": "crates/cobre-solver/src/freeze.rs",
+          "line": 188,
+          "why": "production use 4 of 4"
+        },
+        {
+          "path": "plans/architecture-debt-audit/stations/solver-comm/partI-handoff.json",
+          "line": 1,
+          "why": "genericityGateBlindSpot records the evasion mechanism and that the gate exits 0 at the pin; changeProposed is false there, so the gate-side fix is unclaimed. A plan artifact read at HEAD, not a baseline tree path -- plans/ is outside the sweep list."
+        }
+      ]
+    },
+    {
+      "title": "No CI workflow runs on a pull request into develop, so every blocking gate first sees a develop change only after it has already merged",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 6
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 4
+        },
+        {
+          "path": "scripts/ci/check-allow-rationale.sh",
+          "line": 422
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-allow-rationale.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "quality-scripts",
+        "step": "Infra genericity gate",
+        "line": 262
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | sed -n '3,7p'; git grep -n 'pull_request' 077dbe2c -- .github/workflows; git show 077dbe2c:scripts/ci/check-allow-rationale.sh | sed -n '368p;422p'",
+        "output": "on:\n  push:\n    branches: [main, develop]\n  pull_request:\n    branches: [main]\n-- check-allow-rationale.sh --\nBASE_REF=\"${BASE_REF:-origin/main}\"\n    done < <(git -C \"$REPO_ROOT\" diff --unified=0 \"${BASE}\"...HEAD -- 'crates/*/src/*.rs')",
+        "reading": "The trigger block is asymmetric: `push` covers main AND develop (:4-5), `pull_request` covers main only (:6-7). A pull request whose base is develop therefore triggers no ci.yml run; the first evaluation of that change happens on the post-merge push. All 14 jobs are affected, including the 13 blocking gates wired in `quality-scripts` (:248-300) -- genericity (:262), cut-selection determinism (:264), comment refs (:276), doc paths (:274), plan leaks (:270), python parity (:294), doc voice (:296) -- plus clippy (:154), fmt (:246), schemas (:339) and docs-examples (:360). A failure on develop is detected on a branch that already contains the defect, so the gate reports rather than prevents. The E4 allow-rationale gate compounds this: its base is `git merge-base HEAD origin/main` (:368) over `crates/*/src/*.rs` (:422), so on a develop push its diff window is the whole develop-versus-main delta rather than the one change, and its per-change scoping is lost exactly where the PR run is missing."
+      },
+      "proposedSeverity": "A",
+      "fixShape": "One sentence, as the probe directs: the trigger list is the owner's call, and the shape that removes the asymmetry is to have the pull_request trigger cover the same branch set the push trigger already covers. Everything else follows from that one edit; no job, gate or script changes.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": []
+    },
+    {
+      "title": "The invariance-shuffle workflow cannot compile the test target it dispatches, and the automatic suite skips the same tests, so the declaration-order-invariance shuffle matrix has no executable path in CI",
+      "anchors": [
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 34
+        },
+        {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 55
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 55
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 114
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/invariance-shuffle.yml",
+        "job": "shuffle-highs",
+        "step": "Full shuffle matrix (HiGHS)",
+        "line": 34
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/invariance-shuffle.yml | sed -n '3,7p;32,35p;53,56p'; git show 077dbe2c:crates/cobre-sddp/Cargo.toml | sed -n '46p;55p;77p'; git show 077dbe2c:crates/cobre-sddp/src/lib.rs | sed -n '46,47p'; git show 077dbe2c:crates/cobre-sddp/tests/parity.rs | sed -n '752p;894p'; git show 077dbe2c:.github/workflows/ci.yml | sed -n '114p'",
+        "output": "on:\n  workflow_dispatch:\n  # Optional nightly run -- uncomment to dispatch automatically.\n  # schedule:\n  #   - cron: \"0 3 * * *\"\n-- :32-35 --\n      - name: Full shuffle matrix (HiGHS)\n        run: |\n          cargo nextest run -p cobre-sddp --features slow-tests --test parity \\\n            -E 'test(shuffle_matrix)' --run-ignored ignored-only\n-- :53-56 --\n      - name: Full shuffle matrix (CLP)\n        run: |\n          cargo nextest run -p cobre-sddp --no-default-features --features \"clp slow-tests\" \\\n            --test parity -E 'test(shuffle_matrix)' --run-ignored ignored-only\n-- cobre-sddp/Cargo.toml --\nslow-tests = []\ntest-support = [\"cobre-core/test-support\"]\ncobre-core = { version = \"0.15.0\", path = \"../cobre-core\", features = [\"test-support\"] }\n-- cobre-sddp/src/lib.rs :46-47 --\n#[cfg(any(test, feature = \"test-support\"))]\npub mod test_support;\n-- tests/parity.rs --\n752: mod determinism {\n894:             cobre_sddp::test_support::fill_consistent_basis(out);\n-- ci.yml :114 --\n      - run: cargo test --workspace --features \"${{ env.NON_SOLVER_FEATURES }}\"",
+        "reading": "Four facts compose into a dead path. (1) Both workflow invocations pass features but not `test-support`: `--features slow-tests` at :34 and `--no-default-features --features \"clp slow-tests\"` at :55. (2) `pub mod test_support` in the library is gated `#[cfg(any(test, feature = \"test-support\"))]` at lib.rs:46-47; an integration test links the library built WITHOUT cfg(test), so the module exists only when the feature is passed. (3) The `parity` target needs it unconditionally: `mod determinism` at parity.rs:752 is ungated (line 751 is blank, 750 closes the preceding module) and calls `cobre_sddp::test_support::fill_consistent_basis` at :894, with three further unconditional uses at :1303, :1437 and :1461. (4) The crate's own `test-support` feature at Cargo.toml:55 is not reachable by accident: the dev-dependency at :77 enables `cobre-core/test-support`, a DIFFERENT crate's feature, which does not turn on cobre-sddp's. So both dispatched commands fail at compile time, before any shuffle test is selected. The automatic suite does not compensate: the five shuffle tests carry a plain `#[ignore = \"full shuffle matrix -- dispatched via invariance-shuffle.yml\"]` (parity.rs:139, :145, :151, :157, :163 -- not the slow-tests cfg_attr form used elsewhere), and ci.yml:114 runs `cargo test --workspace` with no `--include-ignored`, so they are skipped there too. The workflow is also `workflow_dispatch`-only, with the nightly schedule commented out at :5-7, so nothing ever surfaces the compile failure automatically. Net: the declaration-order-invariance contract at CLAUDE.md:26-31 has a shuffle matrix that no CI path can execute."
+      },
+      "proposedSeverity": "A",
+      "fixShape": "Amend the two existing run lines so the feature set they pass actually satisfies the target they name: the parity binary needs the crate's own `test-support` feature alongside the backend and slow-tests features, on both the primary-backend and the secondary-backend invocation. That is the whole compile fix. Two further decisions surround it and are named, not taken here. First, the ignore form: these five tests use a bare ignore rather than the slow-tests cfg_attr pattern the rest of the crate uses, which is why the automatic suite cannot reach them even with the workspace feature set; converting them to the crate's established gating form would let the main suite run them whenever the feature is on, and would make the dispatch-only workflow a convenience rather than the sole path. Second, the trigger: a manually dispatched workflow cannot report a regression nobody dispatched, so the owner should decide between restoring the commented-out schedule and folding the matrix into an automatically triggered job. A cheap guard against the whole class is worth stating: an automatically triggered compile-only step over this test target would have caught the missing feature immediately, since the failure is at compile time and needs no shuffle run.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 26
+        },
+        "script": {
+          "path": ".github/workflows/invariance-shuffle.yml",
+          "line": 34
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 114
+        }
+      },
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-sddp/src/lib.rs",
+          "line": 46,
+          "why": "the cfg gate on `pub mod test_support` -- the reason the feature is load-bearing for an integration test; cited, never anchored (rule 8)"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/parity.rs",
+          "line": 752,
+          "why": "`mod determinism {` is ungated, so its test-support uses are unconditional for the whole parity target"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/parity.rs",
+          "line": 894,
+          "why": "the first unconditional `cobre_sddp::test_support::fill_consistent_basis` call; :1303, :1437 and :1461 are the others"
+        },
+        {
+          "path": "crates/cobre-sddp/tests/parity.rs",
+          "line": 139,
+          "why": "the bare `#[ignore = \"full shuffle matrix -- dispatched via invariance-shuffle.yml\"]`, repeated at :145 :151 :157 :163 -- the reason ci.yml:114 skips these tests"
+        }
+      ]
+    },
+    {
+      "title": "The CLI template mirror is guarded in one direction only: a file added to the canonical example deck but not to the embedded list leaves both guards green while cobre init ships an incomplete case",
+      "anchors": [
+        {
+          "path": "crates/cobre-cli/build.rs",
+          "symbol": "TEMPLATE_FILES"
+        },
+        {
+          "path": "scripts/ci/check-docs-examples.sh",
+          "line": 32
+        },
+        {
+          "path": "scripts/ci/check-docs-examples.sh",
+          "line": 113
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": "scripts/ci/check-docs-examples.sh",
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "docs-examples",
+        "step": "Verify init/run structural invariants",
+        "line": 360
+      },
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-cli/build.rs | sed -n '8,9p;16p'; git show 077dbe2c:scripts/ci/check-docs-examples.sh | sed -n '32p;111,116p'; git grep -nE 'diff -r|diff -ru|cmp ' 077dbe2c -- scripts .github/workflows; git grep -n 'examples/1dtoy' 077dbe2c -- scripts .github/workflows",
+        "output": "-- build.rs --\n//! The canonical source for these files is `examples/1dtoy/` at the workspace\n//! root. The copies in `templates/1dtoy/` must be kept in sync.\nconst TEMPLATE_FILES: &[&str] = &[\n-- check-docs-examples.sh --\nreadonly EXPECTED_INPUT_FILES=11\n# Invariant 1: init materializes exactly the expected file count\n\"$BIN\" init --template \"$TEMPLATE\" \"$CASE_DIR\" >/dev/null\nactual_files=\"$(find \"$CASE_DIR\" -type f | wc -l | tr -d '[:space:]')\"\nif [[ \"$actual_files\" -ne \"$EXPECTED_INPUT_FILES\" ]]; then\n  fail \"`cobre init --template $TEMPLATE` wrote $actual_files input files, expected $EXPECTED_INPUT_FILES. ...\"\n-- diff -r / cmp across scripts and workflows --\nscripts/ci/check_schemas.sh:31 (the only recursive diff in the corpus; it compares schemas/, not the template trees)\n-- examples/1dtoy references in scripts and workflows --\n(no hit: no script or workflow reads examples/1dtoy)",
+        "reading": "build.rs:8-9 states the invariant in prose -- `examples/1dtoy/` is canonical and `templates/1dtoy/` must be kept in sync BY HAND -- and `const TEMPLATE_FILES` is the embedded enumeration. Content equality IS guarded, and the naive claim that nothing checks it is false: a unit test byte-compares each embedded file against the canonical file on disk and runs in the workspace suite (see positives). The surviving hole is directional. Both guards iterate the embedded set: the unit test walks the embedded files and asserts each matches its canonical counterpart, and the shell gate at :113 counts the files that `cobre init` WROTE and compares that count to `EXPECTED_INPUT_FILES=11` -- which is the embedded cardinality, so the assert is a tautology with respect to TEMPLATE_FILES and says nothing about the canonical tree. Nothing reads the canonical directory: no script or workflow mentions `examples/1dtoy` at all, and the corpus's only recursive diff is check_schemas.sh:31 over `schemas/`. Consequence: add a twelfth file to `examples/1dtoy/` and forget TEMPLATE_FILES, and every guard stays green while `cobre init --template 1dtoy` silently produces a deck the documented canonical case does not match."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Amend the existing blocking gate rather than adding one. The gate already has the canonical directory available at the workspace root and already knows the template name, so the missing assertion is a set comparison rather than a count: compare the file set the canonical directory contains against the file set `cobre init` materializes, and fail when either side has a member the other lacks. That subsumes the current count assert, removes the hand-maintained expected-count literal from the script, and closes the direction the unit test cannot see because the unit test's iteration domain is the embedded list itself. The build script's prose invariant at :8-9 then describes something a gate enforces instead of something a person remembers.",
+      "twoSite": null,
+      "alignmentHint": "neutral",
+      "alignmentCitation": null,
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "line": 204,
+          "why": "`fn test_1dtoy_embedded_files_match_canonical_source()` -- the content-equality guard that does exist; it iterates only the embedded template files, which is why the canonical-to-embedded direction is unguarded. Cited, never anchored (rule 8)"
+        },
+        {
+          "path": "crates/cobre-cli/src/templates.rs",
+          "line": 212,
+          "why": "the `assert_eq!(file.content, on_disk.as_slice(), ...)` byte comparison, reached via `std::fs::read` at :210 against `concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../examples/1dtoy\")` at :206"
+        }
+      ]
+    },
+    {
+      "title": "No clippy invocation in CI reaches the published Python bindings crate, so the lint bar the crate declares for itself, including the deny-level unwrap rule, is never evaluated",
+      "anchors": [
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 46
+        },
+        {
+          "path": "crates/cobre-python/Cargo.toml",
+          "line": 50
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 154
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 221
+        }
+      ],
+      "enforcementStrength": "blocking",
+      "script": null,
+      "wiring": {
+        "workflow": ".github/workflows/ci.yml",
+        "job": "clippy",
+        "step": "cargo clippy --workspace --all-targets",
+        "line": 154
+      },
+      "evidence": {
+        "command": "git grep -n 'cargo clippy\\|cargo doc' 077dbe2c -- .github scripts; git show 077dbe2c:Cargo.toml | sed -n '21,23p'; git show 077dbe2c:crates/cobre-python/Cargo.toml | sed -n '15,18p;43,50p'; git show 077dbe2c:CLAUDE.md | sed -n '20,21p'; git show 077dbe2c:scripts/ci/check-allow-rationale.sh | sed -n '422p'",
+        "output": "ci.yml:154: cargo clippy --workspace --all-targets --features \"$NON_SOLVER_FEATURES\" -- -D warnings\nci.yml:221: cargo clippy --workspace --all-targets --no-default-features --features \"clp $NON_SOLVER_FEATURES\" -- -D warnings\nci.yml:399: cargo doc --workspace --no-deps --features \"$NON_SOLVER_FEATURES\"\n-- root Cargo.toml :21-23 --\nexclude = [\n    \"crates/cobre-python\",\n]\n-- crates/cobre-python/Cargo.toml --\n[lib]\nname = \"_native\"\ncrate-type = [\"cdylib\"]\ndoc = false\n[lints.rust]\nunsafe_code = \"allow\"\nmissing_docs = \"warn\"\n\n[lints.clippy]\nall = { level = \"warn\", priority = -1 }\npedantic = { level = \"warn\", priority = -1 }\nunwrap_used = \"deny\"\n-- CLAUDE.md :20-21 --\n- `unwrap_used = \"deny\"` -- no `.unwrap()` in library code (ok in tests)\n- `clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI\n-- check-allow-rationale.sh :422 --\n    done < <(git ... diff --unified=0 \"${BASE}\"...HEAD -- 'crates/*/src/*.rs')",
+        "reading": "Every clippy invocation in the repository is `--workspace` (ci.yml:154 in the `clippy` job at :116, ci.yml:221 in the `clp` job at :166); `git grep` finds no third one and none with `--manifest-path`. The bindings crate is excluded from the workspace (root Cargo.toml:21-23), so neither invocation compiles it, and clippy therefore never evaluates the table the crate declares at :50-55 -- `all` and `pedantic` at warn, `unwrap_used = \"deny\"`, `expect_used` and `panic` at warn. Those are clippy tool lints: rustc ignores them, so the one CI compile of this crate, `cargo test --manifest-path crates/cobre-python/Cargo.toml` at :567, does not evaluate them either. CLAUDE.md:20-21 lists both as non-negotiable hard rules (\":17 -- These are non-negotiable\"). The crate is not in breach at the pin: all ten `.unwrap()` occurrences in its sources sit in a test module covered by an explicit allow, so this is an uncovered surface rather than a live violation -- the clippy job would stay green if that changed. The asymmetry is sharpest against the E4 gate, which is blocking at ci.yml:292 and scopes its diff to `crates/*/src/*.rs` at check-allow-rationale.sh:422: that glob DOES match the bindings crate, so a new `#[allow(clippy::...)]` there must carry a written rationale for a lint no CI job ever runs, and the crate already carries around twenty such suppressions. The seeded `doc = false` at :18 is a separate and much smaller fact: the docs job's `cargo doc --workspace --no-deps` at :399 never sees the crate anyway because of the same exclusion, so that line changes nothing about CI coverage and is inert here."
+      },
+      "proposedSeverity": "A",
+      "fixShape": "Amend the job that already exists rather than reopening the exclusion. The workspace exclusion is sanctioned and states its own reason, so the fix is not to make the crate a member; it is to give the crate the same lint pass every member gets, at the one place in CI that already builds it with a Python interpreter present. The python job already compiles this crate against its own manifest for the Rust tests, on a single matrix entry, so a clippy pass over the same manifest with warnings denied belongs beside that step and inherits its interpreter and its backend feature selection. Two secondary points for the owner. The same membership boundary means the crate is outside the documentation-warning bar as well, so whoever adds the clippy pass should decide whether a docs pass over the manifest is worth the minutes, given that the crate's rustdoc is user-facing for Python readers. And once clippy runs, the roughly twenty existing clippy suppressions in the crate become meaningful for the first time, so expect the first run to surface work; that is the finding, not a side effect of the fix.",
+      "twoSite": {
+        "prose": {
+          "path": "CLAUDE.md",
+          "line": 20
+        },
+        "script": {
+          "path": ".github/workflows/ci.yml",
+          "line": 154
+        },
+        "step": {
+          "path": ".github/workflows/ci.yml",
+          "line": 116
+        }
+      },
+      "alignmentHint": "advances-0a",
+      "alignmentCitation": "Part IV.4",
+      "partIRef": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": null,
+      "docClaim": null,
+      "treeFact": null,
+      "measured": null,
+      "mechanism": null,
+      "citedContext": [
+        {
+          "path": "Cargo.toml",
+          "line": 18,
+          "why": "the exclusion's own rationale, sanctioned by the station brief -- this candidate accepts it and does not propose reversing it"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 567,
+          "why": "`cargo test --manifest-path crates/cobre-python/Cargo.toml --no-default-features --features highs` -- the one CI compile of the crate and the natural host for a manifest-scoped clippy pass; guarded by `if: matrix.python-version == '3.12'` at :563"
+        },
+        {
+          "path": "crates/cobre-python/src/errors.rs",
+          "line": 359,
+          "why": "`#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` above the test module that holds all ten `.unwrap()` uses -- the evidence that no live breach exists at the pin. Cited, never anchored (rule 8)"
+        },
+        {
+          "path": "crates/cobre-python/src/lib.rs",
+          "line": 17,
+          "why": "`#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]` -- the crate-level test carve-out, mirroring the workspace convention for a crate the workspace never lints"
+        },
+        {
+          "path": ".github/workflows/publish.yml",
+          "line": 102,
+          "why": "\"cobre-python is published to PyPI via maturin, not crates.io\" -- the crate ships, so the uncovered surface is a released one"
+        }
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "Template content equality between the embedded CLI templates and the canonical example deck is guarded by a real byte comparison, not by prose alone",
+      "why": "The obvious attack on the hand-mirror note at crates/cobre-cli/build.rs:8-9 is that nothing checks the copies. That attack is wrong and worth recording so it is not raised again: `fn test_1dtoy_embedded_files_match_canonical_source()` at crates/cobre-cli/src/templates.rs:204 reads each canonical file with `std::fs::read` at :210 and asserts byte equality at :212-219, and it runs in the ordinary workspace suite at ci.yml:114. Only the direction is incomplete, which is the narrowed candidate above.",
+      "sanctionedBy": "crates/cobre-cli/src/templates.rs:203-219 (test at :204, byte assert at :212), executed by .github/workflows/ci.yml:114"
+    },
+    {
+      "subject": "The three advisory-by-design gates are sanctioned, not broken",
+      "why": "Each pairs an ADVISORY step comment in the workflow with a terminal exit 0 in the script, so a zero exit is the declared contract rather than a silent pass. Examined and left alone: comment line-refs (E2), comment banners (E7) and the quality hotspot report, with check-comment-bloat.sh reached transitively through quality-report.sh:132.",
+      "sanctionedBy": ".github/workflows/ci.yml:278-279, :282-283, :298-299; terminal exit 0 at check-comment-line-refs.sh:157, check-comment-banners.sh:174, quality-report.sh:134"
+    },
+    {
+      "subject": "The cobre-python workspace exclusion is a deliberate, documented build-system decision",
+      "why": "The root manifest states the reason in place: the crate needs a Python interpreter and is built by maturin, and excluding it keeps the workspace test and packaging commands interpreter-free. The clippy-coverage candidate above accepts this sanction and proposes a manifest-scoped pass instead of reversing the exclusion.",
+      "sanctionedBy": "Cargo.toml:18-20 (rationale) and :21-23 (the exclude list)"
+    },
+    {
+      "subject": "The genericity gate's exemption list is empty and says why",
+      "why": "EXCLUDED_FILES is an empty array whose preceding comment records that the value-function-artifact format break retired the former output/policy exemption and that entries require owner sign-off. Emptiness here is the enforced state, so the gate has no carve-outs to audit.",
+      "sanctionedBy": "scripts/ci/check-infra-genericity.sh:70-73 (rationale) and :74 (EXCLUDED_FILES=())"
+    },
+    {
+      "subject": "The allow-rationale gate's scope does not stop at the workspace boundary",
+      "why": "Its diff glob `crates/*/src/*.rs` matches every crate directory including the workspace-excluded bindings crate, so the requirement to justify a new suppression applies uniformly. Worth protecting: it is the one quality gate in the corpus whose reach is defined by the directory layout rather than by workspace membership, and the comment scans follow the same principle by naming crates/cobre-python/src explicitly.",
+      "sanctionedBy": "scripts/ci/check-allow-rationale.sh:422 ('crates/*/src/*.rs'); explicit inclusion at check-comment-banners.sh:57, check-comment-line-refs.sh:57, check-comment-refs.sh:65, check-doc-placeholders.sh:66, check-no-plan-leaks.sh:134, quality-report.sh:61"
+    },
+    {
+      "subject": "The rustc-side lint bar does reach the bindings crate, because RUSTFLAGS is set at workflow scope",
+      "why": "Examined and clean, and it bounds the clippy candidate above precisely. `RUSTFLAGS: -Dwarnings` sits in the workflow-level env block, so it applies to the python job's manifest-scoped test compile as well; rustc lints the crate declares, including missing_docs at warn, are therefore promoted to errors there. The gap is specific to clippy tool lints, which rustc does not evaluate.",
+      "sanctionedBy": ".github/workflows/ci.yml:11 (RUSTFLAGS in the workflow env) applying to :567; crates/cobre-python/Cargo.toml:46-48 ([lints.rust] with missing_docs at :48)"
+    },
+    {
+      "subject": "The MPICH provisioning triple is repetition with ten consumers, not a missing abstraction",
+      "why": "Checked against the one-consumer test before considering it: the Cache/Build/Set triple appears eight times byte-identically in ci.yml and twice as documented near-variants in mpi-slurm.yml and release-mpi.yml. A composite action would have ten call sites, so the duplication is a cost question for another lens and not an architecture defect; the station brief already exempts it.",
+      "sanctionedBy": ".github/workflows/ci.yml Build MPICH steps at :49 :87 :130 :180 :316 :377 :468 :522; near-variants at .github/workflows/mpi-slurm.yml:63 and .github/workflows/release-mpi.yml:75"
+    }
+  ],
+  "handoffs": [],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "Should the pull_request trigger cover develop as well as main, accepting a CI run on every develop pull request, or is post-merge detection on develop the intended trade?",
+    "For the shuffle matrix, should the commented-out nightly schedule be restored, or should the five shuffle tests move to the crate's slow-tests gating form so the automatically triggered suite runs them and the dispatch workflow becomes a convenience?",
+    "Should the clippy pass for the Python bindings crate live beside the existing manifest-scoped test step in the python job, which adds minutes to one matrix entry, or somewhere that does not need an interpreter present?",
+    "Does the documentation-warning bar apply to the bindings crate's rustdoc, given that its readers are Python users and the workspace docs job cannot see the crate?",
+    "Does the underscore-boundary change to the genericity pattern need owner sign-off before it lands, since it will start flagging identifiers in cobre-solver that the register entry deliberately left un-renamed?"
+  ],
+  "outOfScope": [],
+  "coverage": {
+    "P1 SCAN_DIRS two-site": [
+      "The infra-genericity gate's crate list is a hand-kept literal in two unpaired places, so the rule's coverage cannot follow the target layering without a synchronized script-and-prose edit that nothing enforces"
+    ],
+    "P2 PATTERN vocabulary": [
+      "The infra-genericity gate matches one engine's vocabulary rather than the engine-concept rule it enforces, so a sibling engine's nouns and an underscore-joined identifier both pass unflagged",
+      "The invariance-shuffle workflow cannot compile the test target it dispatches, and the automatic suite skips the same tests, so the declaration-order-invariance shuffle matrix has no executable path in CI"
+    ],
+    "P3 trigger asymmetry": [
+      "No CI workflow runs on a pull request into develop, so every blocking gate first sees a develop change only after it has already merged",
+      "The invariance-shuffle workflow cannot compile the test target it dispatches, and the automatic suite skips the same tests, so the declaration-order-invariance shuffle matrix has no executable path in CI"
+    ],
+    "P4 hand-mirrored templates": [
+      "The CLI template mirror is guarded in one direction only: a file added to the canonical example deck but not to the embedded list leaves both guards green while cobre init ships an incomplete case"
+    ],
+    "P5 invariance-shuffle features": [
+      "The invariance-shuffle workflow cannot compile the test target it dispatches, and the automatic suite skips the same tests, so the declaration-order-invariance shuffle matrix has no executable path in CI"
+    ],
+    "P6 CI coverage / doc = false": [
+      "No clippy invocation in CI reaches the published Python bindings crate, so the lint bar the crate declares for itself, including the deny-level unwrap rule, is never evaluated"
+    ]
+  },
+  "gate": {
+    "validator": "pass",
+    "validatorErrors": [],
+    "rejections": [
+      {
+        "title": "handoff I.3-6",
+        "code": "handoff-routed",
+        "detail": "Part-I re-verification records travel in the drift envelope only (prompt: drift P3)"
+      }
+    ],
+    "demotedAnchors": [],
+    "stamps": [],
+    "droppedKeys": [],
+    "headerFixes": [],
+    "gateNotes": []
+  }
+}

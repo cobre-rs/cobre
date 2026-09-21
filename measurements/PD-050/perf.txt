@@ -1,0 +1,3 @@
+# PD-050 attributed symbol `read_parquet_partition_into` is absent from the CLI binary.
+# cobre-python symbol (read_parquet_partition_into) absent from the CLI binary; the `cobre run` harness never enters the Python parquet reader. Needs a Python-driven profile.
+# No user-space samples possible from a `cobre run` profile; verdict case-infeasible.

@@ -1,0 +1,261 @@
+{
+  "station": "test-corpus",
+  "stationLabel": "test-corpus",
+  "subStation": "sec-performance",
+  "worker": "sec-performance",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "lens": "performance",
+  "primary": false,
+  "informational": true,
+  "gatedAt": "2026-09-19",
+  "dispatcher": "adversarial-attacker (Opus, read-only) — one worker over the whole corpus",
+  "workers": {
+    "sec-performance": "ok: 3 candidates, 7 positives, 0 seeds"
+  },
+  "attempts": {
+    "sec-performance": 1
+  },
+  "candidates": [
+    {
+      "title": "The whole workspace test surface is linked in three separate pull-request jobs, one per backend-and-profile combination, and no two of them can share a link artifact",
+      "anchors": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 114
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 223
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 233
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 497
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 209
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 495
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 59
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:.github/workflows/ci.yml | grep -n 'cargo test --workspace\\|cargo build --workspace\\|cargo nextest run\\|cargo llvm-cov\\|prefix-key'",
+        "output": "114:      - run: cargo test --workspace --features \"${{ env.NON_SOLVER_FEATURES }}\"\n209:          prefix-key: clp\n223:        run: cargo build --workspace --all-targets --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\"\n233:        run: cargo nextest run --workspace --no-default-features --features \"clp ${{ env.NON_SOLVER_FEATURES }}\" --no-fail-fast\n495:          prefix-key: cov\n497:      - run: cargo llvm-cov --workspace --features \"${{ env.NON_SOLVER_FEATURES }}\" --lcov --output-path lcov.info\n545:          prefix-key: python",
+        "reading": "Three pull-request jobs produce linked test executables for the whole workspace: the Test job at .github/workflows/ci.yml:114 under the default HiGHS backend, the CLP job at .github/workflows/ci.yml:223 and :233 under --no-default-features --features clp, and the Coverage job at .github/workflows/ci.yml:497 under llvm-cov instrumentation. Each of the three pays the static solver link for every solver-linking integration binary (measuredValue figures.int-binaries-solver-linking.value), the dependency edge being crates/cobre-sddp/Cargo.toml:59. The three cannot reuse one another's artifacts: the feature sets differ (HiGHS default versus clp), the coverage pass compiles under instrumentation, and the cache namespaces are disjoint, .github/workflows/ci.yml:209 setting prefix-key clp and :495 setting prefix-key cov against the default namespace the Test job's cache uses. The yardstick states the cost unit at §2.1 and names Test, CLP and Coverage as the consumers of NON_SOLVER_FEATURES at §2.3, but nowhere states that the cost unit is multiplied by that job census with no artifact sharing between the factors; that product is the reading. The fix direction is the cadence tiering the yardstick itself marks unratified at §5.6, so this is a pointer for the cross-cutting performance epic and an owner policy call, never a defect."
+      },
+      "yardstickRef": "ta-2.3",
+      "claimKind": "tree-fact",
+      "measurementDefinition": "binary",
+      "measuredValue": {
+        "key": "figures.int-binaries-solver-linking.value",
+        "value": 62
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Coverage-neutral and count-neutral: tier the cadence, never the corpus. Keep one backend as the per-pull-request gate that links and runs the whole surface, move the second backend and the coverage-instrumented pass to a merge-queue or scheduled tier, and leave the pull-request tier the non-linking check and clippy passes that already cover every target. No test is deleted, skipped, renamed or weakened, so cargo nextest list reports the same count before and after and every retained test asserts what it asserted before. Where the tier boundary sits is an owner policy decision, not a mechanical edit.",
+      "alignmentHint": "neutral",
+      "seedRef": null,
+      "dupOf": null,
+      "reRaiseOf": null,
+      "informational": true,
+      "status": "UNMEASURED",
+      "statusReason": "This station runs no benchmark and the envelope may carry no timing literal. The job census and the link-bearing target selection are read straight off the workflow, so the cost is stated as a mechanism and left UNMEASURED for the cross-cutting performance epic to measure.",
+      "costMechanism": "binaries x static solver link, paid once per link-bearing job: each solver-linking integration binary is relinked in every pull-request job that produces test executables, and job cadence decides how many such jobs a pull request runs",
+      "mechanism": "binaries x static solver link, paid once per link-bearing job: each solver-linking integration binary is relinked in every pull-request job that produces test executables, and job cadence decides how many such jobs a pull request runs",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "title": "cobre-sddp concentrates most of the workspace's solver-linking integration binaries, and the consolidation shape the §5.1 target asks for is already proven inside that same test directory",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "line": 4400
+        },
+        {
+          "path": "crates/cobre-sddp/tests/template_integration.rs",
+          "line": 4421
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 59
+        },
+        {
+          "path": "docs/design/testing-architecture.md",
+          "line": 353
+        }
+      ],
+      "evidence": {
+        "command": "git ls-tree --name-only 077dbe2c crates/cobre-sddp/tests/ | grep -c '\\.rs$'; git grep -n '#\\[path = \"template_integration/' 077dbe2c -- crates/cobre-sddp/tests/template_integration.rs",
+        "output": "40\n077dbe2c:crates/cobre-sddp/tests/template_integration.rs:4400:#[path = \"template_integration/deficit_and_withdrawal.rs\"]\n077dbe2c:crates/cobre-sddp/tests/template_integration.rs:4402:#[path = \"template_integration/evaporation.rs\"]\n… trimmed …\n077dbe2c:crates/cobre-sddp/tests/template_integration.rs:4420:#[path = \"template_integration/violations_par_anticipated.rs\"]",
+        "reading": "At the pin cobre-sddp carries the largest share of the workspace's solver-linking integration binaries (measuredValue figures.int-binaries-solver-linking.perCrate.cobre-sddp, against the workspace total at figures.int-binaries-solver-linking.value), and the edge that makes each one link the C++ solver is crates/cobre-sddp/Cargo.toml:59. The same directory already demonstrates the §5.1 consolidation shape: crates/cobre-sddp/tests/template_integration.rs:4400-4421 declares its eleven sibling files as #[path] submodules of a single binary, which is why the recursive file census for this crate (figures.int-binaries.altDefinition.perCrate.cobre-sddp) exceeds its depth-1 binary census. The §5.1 target therefore is not waiting on a mechanism to be invented; what is open is which files group together, which §6 phase 1 owns. Recorded as a target-gap, never as a defect."
+      },
+      "yardstickRef": "ta-5.1",
+      "claimKind": "target-gap",
+      "measurementDefinition": "binary",
+      "measuredValue": {
+        "key": "figures.int-binaries-solver-linking.perCrate.cobre-sddp",
+        "value": 40
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Coverage-neutral consolidation in the shape already working in the same directory: group sibling integration files under one depth-1 tests entry point that declares them with #[path] submodule declarations, exactly as crates/cobre-sddp/tests/template_integration.rs:4400-4421 declares its eleven files today. Every test keeps its body, its name and its assertions, so cargo nextest list reports the same count before and after while the linked-binary count falls. Deleting, skipping or weakening a test is never the shape. The grouping boundary and the §6 phase order are the owner's call.",
+      "alignmentHint": "neutral",
+      "seedRef": null,
+      "dupOf": null,
+      "reRaiseOf": null,
+      "informational": true,
+      "status": "UNMEASURED",
+      "statusReason": "This station runs no benchmark and the envelope may carry no timing literal. The binary census is a structural count taken from inventory.json, so the saving is stated as a mechanism and left UNMEASURED for the cross-cutting performance epic.",
+      "costMechanism": "binaries x static solver link: every depth-1 integration entry point in a crate that depends on cobre-solver becomes its own executable carrying its own static copy of the C++ solver, so the crate's binary count, not its test count, sets the link bill",
+      "mechanism": "binaries x static solver link: every depth-1 integration entry point in a crate that depends on cobre-solver becomes its own executable carrying its own static copy of the C++ solver, so the crate's binary count, not its test count, sets the link bill",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "title": "The CLP job links the criterion bench executables on every pull request although no workflow at the pin runs a benchmark, while the same job's non-linking passes already compile those bodies",
+      "anchors": [
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 92
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 108
+        },
+        {
+          "path": "crates/cobre-sddp/Cargo.toml",
+          "line": 59
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 223
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 219
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 221
+        }
+      ],
+      "evidence": {
+        "command": "git show 077dbe2c:crates/cobre-sddp/Cargo.toml | grep -n -A2 '\\[\\[bench\\]\\]'; git grep -n -i 'bench' 077dbe2c -- '.github/workflows/*.yml'",
+        "output": "92:[[bench]]\n93-name = \"backward_stats_gather\"\n94-harness = false\n--\n96:[[bench]]\n97-name = \"cut_application_anticipated_state\"\n98-harness = false\n--\n100:[[bench]]\n101-name = \"cut_selection\"\n102-harness = false\n--\n104:[[bench]]\n105-name = \"cut_selection_kernel\"\n106-harness = false\n--\n108:[[bench]]\n109-name = \"dcs_batched_scoring\"\n110-harness = false\n[the workflow grep prints nothing and exits non-zero: no workflow at the pin mentions a benchmark]",
+        "reading": "crates/cobre-sddp/Cargo.toml:92-110 declares the crate's criterion bench targets (measuredValue harness.benches.count), each with harness = false, and harness.benches.benchDirectoriesWorkspaceWide records that cobre-sddp holds the workspace's only benches directory. .github/workflows/ci.yml:223 runs cargo build --workspace --all-targets under the CLP feature set, and --all-targets includes bench targets, so each bench becomes a linked executable carrying its own static copy of the solver through the crates/cobre-sddp/Cargo.toml:59 edge. Grepping the three workflows for bench returns no hit, so no job at the pin executes a benchmark. The same CLP job's check and clippy passes at .github/workflows/ci.yml:219 and :221 already pass --all-targets, and those passes compile the bench bodies without producing linked executables, so the type-level coverage of the bench sources does not depend on the linking build step. The bench targets themselves are sanctioned (see reservedSeamsCheck); what no document states is that the linking step pays for them on every pull request."
+      },
+      "yardstickRef": "ta-2.2",
+      "claimKind": "tree-fact",
+      "measurementDefinition": "file",
+      "measuredValue": {
+        "key": "harness.benches.count",
+        "value": 5
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Coverage-neutral and bench-preserving, with two admissible shapes for the owner to choose between. Either narrow the CLP build step's target selection to the test surface that step exists to verify, leaving the bench bodies covered by the same job's non-linking check and clippy passes at .github/workflows/ci.yml:219 and :221, or fold the criterion targets into one bench target whose entry point dispatches the existing groups. The first keeps per-bench targets available for local performance work; the second lowers the linked-target count everywhere but makes any local bench run build every body. No bench body and no test is deleted, skipped or weakened under either shape, so cargo nextest list is unchanged.",
+      "alignmentHint": "neutral",
+      "seedRef": null,
+      "dupOf": null,
+      "reRaiseOf": null,
+      "reservedSeamsCheck": {
+        "checked": true,
+        "result": "sanctioned",
+        "citation": ".claude/rules/testing.md:12 and docs/design/testing-architecture.md:246",
+        "rule": "benches are not tests, and criterion belongs where a hot path is measured. The bench targets are therefore sanctioned and this candidate proposes nothing about them; it is scoped to the target selection of the one linking build step."
+      },
+      "informational": true,
+      "status": "UNMEASURED",
+      "statusReason": "This station runs no benchmark and the envelope may carry no timing literal. The bench target census is a structural count taken from inventory.json, so the cost is stated as a mechanism and left UNMEASURED for the cross-cutting performance epic.",
+      "costMechanism": "binaries x static solver link: --all-targets on a cargo build makes every declared bench target its own executable, and because the crate depends on cobre-solver each one links its own static copy of the C++ solver, paid on every pull request for artifacts no job runs",
+      "mechanism": "binaries x static solver link: --all-targets on a cargo build makes every declared bench target its own executable, and because the crate depends on cobre-solver each one links its own static copy of the C++ solver, paid on every pull request for artifacts no job runs",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-sddp/tests/parity.rs parity_hash_* roster",
+      "why": "The determinism substrate this lens must never propose trading away: the roster hashes a training run and compares bit-for-bit, which is what makes reproducibility and declaration-order invariance checkable at all. Any consolidation must carry these bodies across unchanged, and no candidate here touches them.",
+      "sanctionedBy": "docs/design/testing-architecture.md §2.2",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "subject": "crates/cobre-sddp/tests/mpi_wire.rs",
+      "why": "Rank-shape and wire-payload self-checks whose whole value is that they run across world sizes; a cost lens has no admissible proposal here. Its fn close carrier already belongs to the mirror's Oracle test-harness duplication item, so this worker records it rather than raising it.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md Oracle test-harness duplication",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "subject": ".github/workflows/ci.yml:71 and :154, the non-linking --all-targets passes",
+      "why": "Correct as they stand and worth naming: both cover every target in the workspace, benches and examples included, without producing a single linked executable, so the cheapest breadth in the pipeline is already in place. They are precisely why narrowing a linking step's target selection would lose no compile coverage.",
+      "sanctionedBy": null,
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "subject": "crates/cobre-sddp/tests/template_integration.rs:4400-4421",
+      "why": "Examined and clean, and the station's strongest asset for the §5.1 target: the #[path] submodule grouping already works in-tree, so the consolidation fix-shape is demonstrated rather than hypothetical.",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.1",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "subject": "crates/cobre-sddp/tests/fixtures/parity_baselines and crates/cobre-sddp/tests/fixtures/parity_baselines_clp",
+      "why": "Examined and clean. To a cost lens the two decks look like duplication, but they are per-backend golden baselines and collapsing them would silently drop backend coverage, which is the reason the CLP job exists at all. inventory.json records both deck sizes under harness.fixtureDecks.",
+      "sanctionedBy": "docs/design/testing-architecture.md §2.2",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "subject": "the slow-tests cargo feature as the corpus's only cadence switch",
+      "why": "Examined and left alone. The switch itself is sound and is exactly what a cadence tier would turn on; the yardstick's own §2.3 reading is that it functions as a local-dev convenience only because the pull-request feature set includes it. Removing slow-gated tests is never proposed, and the inert declarations in two crate manifests are already an owner-decided build-ci register item that this worker does not re-raise.",
+      "sanctionedBy": ".claude/rules/testing.md",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    },
+    {
+      "subject": "Rule 2 cost discipline as applied to this envelope's own output",
+      "why": "Recorded so the boundary is visible: every fix-shape above is consolidation, target-scoping or cadence tiering. None deletes, skips, weakens or re-baselines a test, and no candidate proposes shrinking the corpus under any rationale.",
+      "sanctionedBy": ".claude/rules/testing.md:113",
+      "raisedBy": [
+        "sec-performance"
+      ]
+    }
+  ],
+  "seedDispositions": [],
+  "cleanVerdict": null,
+  "_needsHuman": [
+    "sec-performance: Cadence tiering is marked unratified at §5.6: does a pull request keep all three link-bearing jobs (Test at .github/workflows/ci.yml:114, CLP at :223 and :233, Coverage at :497), or does one backend gate pull requests while the second backend and the coverage pass move to a merge-queue or scheduled tier? Only the owner can set that risk boundary.",
+    "sec-performance: For the criterion bench targets, which shape: narrow the CLP build step's target selection at .github/workflows/ci.yml:223 to the test surface and keep per-bench targets available for local performance work, or fold crates/cobre-sddp/Cargo.toml:92-110 into a single bench target and accept that any local bench run builds every body?",
+    "sec-performance: Is the #[path] submodule grouping at crates/cobre-sddp/tests/template_integration.rs:4400-4421 the ratified consolidation shape for the §5.1 Layer 1 work, and what sets the grouping boundary: feature area, fixture deck, or one entry point per crate?"
+  ],
+  "gate": {
+    "validator": "stations/test-corpus/validate-tb.py envelope <file> --worker <name> (shared tools/validate-envelope.py shape + the test-bloat profile + scope + seed ledger)",
+    "okWorkers": [
+      "sec-performance"
+    ],
+    "mergedDuplicates": [],
+    "demotedAnchors": [],
+    "rejections": []
+  }
+}

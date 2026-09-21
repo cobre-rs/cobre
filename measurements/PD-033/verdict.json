@@ -1,0 +1,24 @@
+{
+  "claimRef": "PD-033",
+  "claimType": "single-process",
+  "layout": "4t",
+  "case": "reduzido (attempted)",
+  "baselineSha": "077dbe2c",
+  "attributedSymbol": "add_rows",
+  "symbolStatus": "absent-from-cli-binary",
+  "verdict": "unmeasured",
+  "unmeasuredReason": "case-infeasible",
+  "evidence": "CLP backend not compiled into the profiling binary (no ClpSolver::add_rows symbol; HiGHS is the built backend). Needs a --features clp rebuild outside the pinned binary.",
+  "medianSeconds": null,
+  "selfPct": null,
+  "topSymbols": [],
+  "kernelFramesDropped": null,
+  "fixShape": "unchanged; preserved as recorded (not re-argued at this pass)",
+  "byteNeutral": true,
+  "alignment": "neutral",
+  "originStation": "solver-comm",
+  "runLog": "plans/architecture-debt-audit/measurements/PD-033/",
+  "_needsHuman": [
+    "case-infeasible on the CLI+HiGHS harness \u2014 commission a CLP-backend (--features clp) rebuild to measure this claim?"
+  ]
+}

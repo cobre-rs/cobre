@@ -1,0 +1,3 @@
+# PD-049 attributed symbol `load_convergence` is absent from the CLI binary.
+# cobre-python is a separate maturin cdylib excluded from the workspace; its symbols are not linked into the `cobre` CLI binary and `cobre run` never loads the Python bindings. Profiling load_policy needs a Python-driven workload the perf-run.sh harness cannot express.
+# No user-space samples possible from a `cobre run` profile; verdict case-infeasible.

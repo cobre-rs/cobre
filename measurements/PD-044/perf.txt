@@ -1,0 +1,3 @@
+# PD-044: self-% for `process_stage_backward` read from the shared 4t profile measurements/SWEEP-4T/perf.txt
+# self_pct=0.0000%  verdict=not-material  (kernel frames dropped: 1)
+# no user-space row matches `process_stage_backward`: 0 samples (below the sampling floor on this deck)

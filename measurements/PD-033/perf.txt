@@ -1,0 +1,3 @@
+# PD-033 attributed symbol `add_rows` is absent from the CLI binary.
+# CLP backend not compiled into the profiling binary (no ClpSolver::add_rows symbol; HiGHS is the built backend). Needs a --features clp rebuild outside the pinned binary.
+# No user-space samples possible from a `cobre run` profile; verdict case-infeasible.

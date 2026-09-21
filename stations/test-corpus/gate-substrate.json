@@ -1,0 +1,219 @@
+{
+  "station": "test-corpus",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "emittedAt": "2026-09-19",
+  "informational": true,
+  "findings": [],
+  "ids": [],
+  "proposedChanges": [],
+  "purpose": "the machinery a Phase-0a bit-for-bit engine-seam gate would reuse (plans/generalizing roadmap Part V §V.0a); a hand-off for the alignment / roadmap epics, not a finding",
+  "goldenRoster": {
+    "cases": [
+      "D06",
+      "D15",
+      "D30",
+      "D34",
+      "D41"
+    ],
+    "backends": [
+      {
+        "module": "parity_hash_highs",
+        "anchor": "crates/cobre-sddp/tests/parity.rs:40",
+        "runGoldenCaseCall": "crates/cobre-sddp/tests/parity.rs:59",
+        "baselineDir": "crates/cobre-sddp/tests/fixtures/parity_baselines",
+        "solver": "HighsSolver",
+        "caseTests": {
+          "D06": "crates/cobre-sddp/tests/parity.rs:98",
+          "D15": "crates/cobre-sddp/tests/parity.rs:107",
+          "D30": "crates/cobre-sddp/tests/parity.rs:116",
+          "D34": "crates/cobre-sddp/tests/parity.rs:125",
+          "D41": "crates/cobre-sddp/tests/parity.rs:134"
+        },
+        "slowTestsGatedFns": 5,
+        "caseTestsGated": 5
+      },
+      {
+        "module": "parity_hash_clp",
+        "anchor": "crates/cobre-sddp/tests/parity.rs:200",
+        "runGoldenCaseCall": "crates/cobre-sddp/tests/parity.rs:214",
+        "baselineDir": "crates/cobre-sddp/tests/fixtures/parity_baselines_clp",
+        "solver": "ClpSolver",
+        "caseTests": {
+          "D06": "crates/cobre-sddp/tests/parity.rs:257",
+          "D15": "crates/cobre-sddp/tests/parity.rs:266",
+          "D30": "crates/cobre-sddp/tests/parity.rs:275",
+          "D34": "crates/cobre-sddp/tests/parity.rs:284",
+          "D41": "crates/cobre-sddp/tests/parity.rs:293"
+        },
+        "slowTestsGatedFns": 12,
+        "caseTestsGated": 5
+      }
+    ],
+    "helperOwner": "crates/cobre-sddp/tests/common/parity_hash.rs",
+    "helpers": {
+      "compute_parity_hash": 48,
+      "case_dir": 230,
+      "run_golden_case": 375,
+      "regen_golden_case": 390,
+      "assert_permutation_hash": 406
+    },
+    "helpersAbsentAtPin": [],
+    "gating": {
+      "attr": "#[cfg_attr(not(feature = \"slow-tests\"), ignore = \"slow: run with --features slow-tests\")]",
+      "inCi": true,
+      "ciEvidence": [
+        ".github/workflows/ci.yml:32 NON_SOLVER_FEATURES includes slow-tests",
+        ".github/workflows/ci.yml:114 cargo test --workspace --features NON_SOLVER_FEATURES (HiGHS test job)"
+      ],
+      "note": "the gate tiers the local default `cargo test`, not CI: the roster executes on every pull request through the HiGHS test job"
+    },
+    "inventory": {
+      "goldenRoster": [
+        "parity_hash_d06",
+        "parity_hash_d15",
+        "parity_hash_d30",
+        "parity_hash_d34",
+        "parity_hash_d41"
+      ],
+      "goldenRosterSize": 5,
+      "parityHashPrefixOccurrences": 47
+    }
+  },
+  "determinismGates": {
+    "binary": "crates/cobre-sddp/tests/mpi_wire.rs",
+    "modules": [
+      {
+        "name": "test_mpi_hydro_models_output_path",
+        "line": 21,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:21"
+      },
+      {
+        "name": "test_mpi_basis_broadcast_large_len",
+        "line": 60,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:60"
+      },
+      {
+        "name": "test_mpi_wire_format_version",
+        "line": 137,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:137"
+      },
+      {
+        "name": "test_mpi_4rank_basis_broadcast_round_trip",
+        "line": 267,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:267"
+      },
+      {
+        "name": "retry_armed_determinism",
+        "line": 430,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:430"
+      },
+      {
+        "name": "opening_order_determinism",
+        "line": 630,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:630"
+      },
+      {
+        "name": "derived_inflow_seeds_rank_invariance",
+        "line": 734,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:734"
+      },
+      {
+        "name": "by_node_scheduler_determinism",
+        "line": 825,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:825"
+      },
+      {
+        "name": "by_node_scratch",
+        "line": 1316,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:1316"
+      },
+      {
+        "name": "k_fan_graph_invariance",
+        "line": 1944,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:1944"
+      },
+      {
+        "name": "by_node_k_fan_branching",
+        "line": 2096,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:2096"
+      },
+      {
+        "name": "k_fan_enumerated_determinism",
+        "line": 2311,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:2311"
+      },
+      {
+        "name": "simulation_aggregation_determinism",
+        "line": 2457,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:2457"
+      },
+      {
+        "name": "uniform_weight_left_to_right_reduction",
+        "line": 2602,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:2602"
+      },
+      {
+        "name": "k_fan_sampled_declaration_order_invariance",
+        "line": 2676,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:2676"
+      },
+      {
+        "name": "non_uniform_branching_projection",
+        "line": 2762,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:2762"
+      },
+      {
+        "name": "branching_gate_roster",
+        "line": 3009,
+        "anchor": "crates/cobre-sddp/tests/mpi_wire.rs:3009"
+      }
+    ],
+    "ticketNamedModules": [
+      "by_node_scheduler_determinism",
+      "derived_inflow_seeds_rank_invariance",
+      "k_fan_enumerated_determinism",
+      "k_fan_graph_invariance",
+      "k_fan_sampled_declaration_order_invariance",
+      "opening_order_determinism",
+      "retry_armed_determinism",
+      "simulation_aggregation_determinism",
+      "test_mpi_4rank_basis_broadcast_round_trip",
+      "test_mpi_wire_format_version"
+    ],
+    "selfChecks": [
+      "retries > 0 (:576)",
+      "n_openings >= 3 (:703)",
+      "fan_nodes >= 2 (:2003)"
+    ]
+  },
+  "baselineDirs": [
+    {
+      "path": "crates/cobre-sddp/tests/fixtures/parity_baselines",
+      "files": 5,
+      "ext": ".sha256",
+      "cases": [
+        "D06",
+        "D15",
+        "D30",
+        "D34",
+        "D41"
+      ]
+    },
+    {
+      "path": "crates/cobre-sddp/tests/fixtures/parity_baselines_clp",
+      "files": 5,
+      "ext": ".sha256",
+      "cases": [
+        "D06",
+        "D15",
+        "D30",
+        "D34",
+        "D41"
+      ]
+    }
+  ],
+  "ticketDeviations": [
+    "the four helper anchors the ticket names (compute_parity_hash:48, run_golden_case:375, regen_golden_case:390, assert_permutation_hash:406) all resolve at the pin at their stated lines; case_dir:230 is added as the fixture resolver the roster also owns",
+    "mpi_wire.rs carries eighteen `mod` blocks at the pin; the ticket named ten — all ten resolve at the same lines and the other eight are listed for completeness"
+  ]
+}

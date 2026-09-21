@@ -1,0 +1,9 @@
+{
+  "station": "build-ci",
+  "baseline": "077dbe2c287b92c2d0c6a12d5f67c2c0cb83c39c",
+  "emittedAt": "2026-09-19",
+  "rows": [],
+  "emptyReason": "no confirmed test-corpus finding at this station: the test-bloat lens is not run here and epic 8 (test-corpus station) owns test-bloat findings and the docs/design/testing-architecture.md yardstick; the build/CI surface produced architecture, over-engineering, drift and informational performance rows only",
+  "owner": "epic 8 — test-corpus station",
+  "yardstick": "docs/design/testing-architecture.md"
+}

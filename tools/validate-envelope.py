@@ -18,7 +18,14 @@ import re
 import sys
 from typing import Any
 
-LENSES = {"architecture", "perf", "performance", "over-engineering", "test-bloat"}
+LENSES = {
+    "architecture",
+    "perf",
+    "performance",
+    "over-engineering",
+    "test-bloat",
+    "drift",
+}
 # Sub-station vocabularies differ per station (core-io A-D; stochastic
 # par/sampling/tree-noise/seam; sddp 5a-5d; ...), so the shape validator accepts any
 # short token and leaves the substation==filename check to the per-station gate.
@@ -81,7 +88,8 @@ def validate_attacker(
                 or path.startswith("/")
                 or ".." in path
                 or not re.match(
-                    r"(crates|scripts|docs|schemas|examples|tests|\.github|\.claude|plans)/",
+                    r"(crates|scripts|docs|schemas|examples|tests|\.github|\.claude|plans)/"
+                    r"|(Cargo\.toml|ARCHITECTURE\.md|CLAUDE\.md)$",
                     path,
                 )
             ):

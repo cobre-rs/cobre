@@ -1,0 +1,19 @@
+{
+  "id": "SWEEP-4T",
+  "source": "untimed replay metadata.json (excluded from the median); cobre has no summary subcommand",
+  "trainingWallSeconds": 137.053,
+  "forwardPhaseWallSeconds": 147.2237344689999,
+  "backwardPhaseWallSeconds": 304.8258363119999,
+  "setupWallSeconds": 1.665885,
+  "setupBreakdown": {
+    "load_seconds": 0.107005128,
+    "stochastic_fit_seconds": 1.285143232,
+    "production_fit_seconds": 0.016034042,
+    "evaporation_fit_seconds": 0.000343647,
+    "broadcast_seconds": 0.25735881
+  },
+  "simulationWallSeconds": 85.97,
+  "totalLpSolves": 8995,
+  "parallelism": 4,
+  "denominatorUsed": "trainingWallSeconds (dominant phase; the hot backward/forward loop runs inside it)"
+}

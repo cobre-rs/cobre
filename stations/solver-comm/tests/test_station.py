@@ -750,20 +750,20 @@ class PartIHandoffTests(sc.StationCase):
         )
         self.assertEqual(check["mirrorHits"], 0)
         self.assertEqual(check["backlogHits"], 0)
-        register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
+        lines = backlog_parse.read_register(sc.BACKLOG)
+        register = "\n".join(lines)
         entries = [
             e
-            for s in backlog_parse.all_evaluation_sections(
-                backlog_parse.read_register(sc.BACKLOG)
-            )
-            for e in backlog_parse.iter_entries(s)
+            for slug in _STATION_ORDER
+            for e in backlog_parse.iter_entries(backlog_parse.find_section(lines, slug))
         ]
         hits = [
             e.id for e in entries if "StageTemplate" in "\n".join([e.heading, *e.body])
         ]
         # Before this station recorded its section no register entry covered StageTemplate (so
-        # I.3-8 is a new finding, not a dup-of); afterwards the ONLY entries that mention it are
-        # this station's own I.3-8 rows.
+        # I.3-8 is a new finding, not a dup-of); afterwards the ONLY crate-station entries that
+        # mention it are this station's own I.3-8 rows (the alignment epic's Part-I row CD-126
+        # consolidates them and lives outside the station sections).
         own = {
             r["id"]
             for r in sc.load_json(self.artifact("calibration.json"))["assigned"]
@@ -1662,6 +1662,33 @@ PRECEDENTS = {
 }
 
 
+_STATION_ORDER = [
+    "core-io",
+    "stochastic",
+    "solver-comm",
+    "sddp",
+    "cli-python",
+    "build-ci",
+    "test-corpus",
+]
+
+
+_EPIC_SECTIONS = ("generalization-alignment", "performance-sweep", "unified-roadmap")
+
+
+def register_before_station(register: str, own_section: str, slug: str) -> str:
+    """The register as it stood when this station minted: its own section, every LATER crate-station section and the epic blocks written after all stations (the alignment ledger names every id) removed."""
+    prior = register.replace(own_section, "")
+    for later in _STATION_ORDER[_STATION_ORDER.index(slug) + 1 :] + list(
+        _EPIC_SECTIONS
+    ):
+        marker = f"## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — {later}"
+        if marker in prior:
+            block = prior.split(marker, 1)[1].split("\n## ", 1)[0]
+            prior = prior.replace(marker + block, "")
+    return prior
+
+
 class CalibrationTests(sc.StationCase):
     """E04-5: id assignment, house calibration, alignment, the rendered section and the queues.
 
@@ -1685,7 +1712,7 @@ class CalibrationTests(sc.StationCase):
         cls.register = "\n".join(backlog_parse.read_register(sc.BACKLOG))
         scaffold = "## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — solver-comm"
         cls.section = cls.register.split(scaffold, 1)[1].split("\n## ", 1)[0]
-        cls.prior = cls.register.replace(cls.section, "")
+        cls.prior = register_before_station(cls.register, cls.section, "solver-comm")
 
     def test_envelope_and_baseline(self) -> None:
         self.assertEqual(self.cal["station"], "solver-comm")

@@ -1,0 +1,24 @@
+{
+  "claimRef": "PD-032",
+  "claimType": "single-process",
+  "layout": "4t",
+  "case": "reduzido (attempted)",
+  "baselineSha": "077dbe2c",
+  "attributedSymbol": "cobre_clp_chg_bounds",
+  "symbolStatus": "absent-from-cli-binary",
+  "verdict": "unmeasured",
+  "unmeasuredReason": "case-infeasible",
+  "evidence": "CLP backend not compiled into the profiling binary (default feature = highs; nm shows no cobre_clp_chg_bounds/ClpSolver symbols; `cobre version` reports HiGHS 1.13.1). Measuring the CLP FFI needs a --features clp rebuild, a different binary than the sweep's pinned `cargo build --profile profiling --features mpi`.",
+  "medianSeconds": null,
+  "selfPct": null,
+  "topSymbols": [],
+  "kernelFramesDropped": null,
+  "fixShape": "unchanged; preserved as recorded (not re-argued at this pass)",
+  "byteNeutral": true,
+  "alignment": "neutral",
+  "originStation": "solver-comm",
+  "runLog": "plans/architecture-debt-audit/measurements/PD-032/",
+  "_needsHuman": [
+    "case-infeasible on the CLI+HiGHS harness \u2014 commission a CLP-backend (--features clp) rebuild to measure this claim?"
+  ]
+}

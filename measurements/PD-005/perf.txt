@@ -1,0 +1,13 @@
+PD-005 residual (NestedUbTopology precompute) read off the shared PD-004 2t recording:
+
+nested_ub_recursion         0 samples
+NestedUbTopology            0 samples
+walk_leaf_to_root           0 samples
+EnumeratedPlan::from_parts  1 sample (0.02%) — the once-per-plan precompute the Wave-2 fix moved here
+
+Reading: the enumerated deck DOES construct an EnumeratedPlan (from_parts appears), yet the per-iteration
+topology-rebuild frames (nested_ub_recursion's children/roots/order allocation, walk_leaf_to_root) carry
+zero samples. This RE-CONFIRMS BY ABSENCE the 2026-08-22 Wave-2 closure: the topology is precomputed once on
+EnumeratedPlan and nested_ub_recursion now fills only per-iteration realized costs, so the per-iteration
+rebuild the residual named is gone from the hot path. The profile does not contradict the closure and does
+not re-open PD-005; recorded as a noted residual only.

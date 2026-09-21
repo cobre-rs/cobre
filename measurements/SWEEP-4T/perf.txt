@@ -1,0 +1,505 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 78K of event 'cpu_core/cycles/Pu'
+# Event count (approx.): 3766121620191
+#
+# Overhead  Command  Shared Object        Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+# ........  .......  ...................  ..........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    18.35%  cobre    cobre                [.] solveHyper(int, int const*, int const*, double const*, int const*, int const*, int const*, double const*, HVectorBase<double>*)
+     9.16%  cobre    cobre                [.] HighsSparseMatrix::priceByRowWithSwitch(bool, HVectorBase<double>&, HVectorBase<double> const&, double, int, double, int) const
+     6.78%  cobre    cobre                [.] HighsSparseMatrix::priceByRowDenseResult(std::vector<double, std::allocator<double> >&, HVectorBase<double> const&, int, int) const
+     6.38%  cobre    cobre                [.] HEkkDualRow::chooseMakepack(HVectorBase<double> const*, int)
+     6.06%  cobre    cobre                [.] HVectorBase<double>::reIndex()
+     5.57%  cobre    cobre                [.] HEkkDualRow::choosePossible()
+     4.33%  cobre    cobre                [.] HEkkDualRHS::chooseNormal(int*)
+     3.22%  cobre    cobre                [.] HEkk::getValueScale(int, std::vector<double, std::allocator<double> > const&) const
+     3.06%  cobre    cobre                [.] HFactor::btranL(HVectorBase<double>&, double, HighsTimerClock*) const
+     2.55%  cobre    cobre                [.] HEkkDualRow::updateDual(double)
+     2.45%  cobre    cobre                [.] HEkkDualRow::computeDevexWeight(int)
+     2.13%  cobre    cobre                [.] HEkkDualRHS::updatePrimal(HVectorBase<double>*, double)
+     2.01%  cobre    cobre                [.] HFactor::btranFT(HVectorBase<double>&) const
+     1.56%  cobre    cobre                [.] HFactor::ftranFT(HVectorBase<double>&) const
+     1.26%  cobre    cobre                [.] HFactor::buildSimple()
+     1.10%  cobre    cobre                [.] HFactor::ftranU(HVectorBase<double>&, double, HighsTimerClock*) const
+     1.06%  cobre    cobre                [.] HEkkDualRow::chooseFinal()
+     1.06%  cobre    cobre                [.] HEkkDualRHS::updateInfeasList(HVectorBase<double>*)
+     0.89%  cobre    cobre                [.] std::vector<double, std::allocator<double> >::_M_fill_assign(unsigned long, double const&)
+     0.89%  cobre    cobre                [.] HFactor::updateFT(HVectorBase<double>*, HVectorBase<double>*, int)
+     0.85%  cobre    cobre                [.] HEkkPrimal::chooseColumn(bool)
+     0.77%  cobre    cobre                [.] HFactor::btranU(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.77%  cobre    libc.so.6            [.] __memset_avx2_unaligned_erms
+     0.74%  cobre    cobre                [.] HighsSparseMatrix::priceByColumn(bool, HVectorBase<double>&, HVectorBase<double> const&, int) const
+     0.72%  cobre    cobre                [.] HVectorBase<double>::clear()
+     0.71%  cobre    libc.so.6            [.] __memmove_avx_unaligned_erms
+     0.70%  cobre    cobre                [.] HighsSparseMatrix::collectAj(HVectorBase<double>&, int, double) const
+     0.67%  cobre    cobre                [.] HFactor::buildKernel()
+     0.63%  cobre    cobre                [.] HVectorBase<double>::tight()
+     0.53%  cobre    cobre                [.] HEkk::initialiseSimplexLpRandomVectors()
+     0.45%  cobre    cobre                [.] HEkk::computePrimal()
+     0.45%  cobre    cobre                [.] std::vector<int, std::allocator<int> >::_M_fill_assign(unsigned long, int const&)
+     0.43%  cobre    cobre                [.] HFactor::buildFinish()
+     0.43%  cobre    cobre                [.] HEkk::computeSimplexPrimalInfeasible()
+     0.42%  cobre    cobre                [.] HEkk::computeSimplexDualInfeasible()
+     0.40%  cobre    cobre                [.] HEkk::computeDual()
+     0.38%  cobre    cobre                [.] HEkkPrimal::updateDevex()
+     0.37%  cobre    cobre                [.] HEkk::updatePivots(int, int, int)
+     0.37%  cobre    cobre                [.] assessMatrix(HighsLogOptions const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, int, int, bool, std::vector<int, std::allocator<int> >&, std::vector<int, std::allocator<int> >&, std::vector<int, std::allocator<int> >&, std::vector<double, std::allocator<double> >&, double, double)
+     0.36%  cobre    cobre                [.] HEkk::updateDualDevexWeights(HVectorBase<double> const*, double)
+     0.31%  cobre    cobre                [.] HEkk::unitBtranResidual(int, HVectorBase<double> const&, HVectorBase<double>&, double&)
+     0.29%  cobre    cobre                [.] HEkkDual::correctDualInfeasibilities(int&)
+     0.28%  cobre    cobre                [.] HFactor::ftranL(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.28%  cobre    cobre                [.] HEkk::setBasis(HighsBasis const&)
+     0.28%  cobre    cobre                [.] HEkkDualRow::chooseFinalWorkGroupQuad()
+     0.26%  cobre    cobre                [.] maxHeapify(int*, int*, int, int)
+     0.25%  cobre    cobre                [.] HEkkPrimal::chooseRow()
+     0.24%  cobre    cobre                [.] HighsSparseMatrix::priceByRowDenseResult(std::vector<HighsCDouble, std::allocator<HighsCDouble> >&, HVectorBase<double> const&, int, int) const
+     0.24%  cobre    cobre                [.] HEkk::isBadBasisChange(SimplexAlgorithm, int, int, int)
+     0.24%  cobre    cobre                [.] HEkk::computeDualObjectiveValue(int)
+     0.22%  cobre    cobre                [.] HighsSparseMatrix::createRowwisePartitioned(HighsSparseMatrix const&, signed char const*)
+     0.21%  cobre    cobre                [.] getPrimalDualGlpsolErrors(HighsOptions const&, HighsLp const&, std::vector<double, std::allocator<double> > const&, HighsSolution const&, HighsPrimalDualErrors&)
+     0.20%  cobre    cobre                [.] HighsSparseMatrix::update(int, int, HighsSparseMatrix const&)
+     0.19%  cobre    cobre                [.] HEkkDual::chooseColumn(HVectorBase<double>*)
+     0.19%  cobre    cobre                [.] HEkkDualRHS::createInfeasList(double)
+     0.17%  cobre    cobre                [.] HEkkDual::initialiseDevexFramework()
+     0.16%  cobre    libc.so.6            [.] __libc_malloc2
+     0.16%  cobre    cobre                [.] getVariableKktFailures(double, double, double, double, double, double, HighsVarType, double&, double&, unsigned char&, unsigned char&, int)
+     0.15%  cobre    cobre                [.] getKktFailures(HighsOptions const&, bool, HighsLp const&, std::vector<double, std::allocator<double> > const&, HighsSolution const&, HighsInfo&, bool)
+     0.14%  cobre    cobre                [.] HEkk::unitBtranIterativeRefinement(int, HVectorBase<double>&)
+     0.13%  cobre    cobre                [.] HighsLinearSumBounds::update(int&, HighsCDouble&, int, double, double) const
+     0.13%  cobre    cobre                [.] HEkkPrimal::updateDual()
+     0.12%  cobre    libc.so.6            [.] _int_malloc
+     0.12%  cobre    libc.so.6            [.] malloc
+     0.11%  cobre    cobre                [.] assessExcessiveObjectiveBoundScaling(HighsLogOptions, HighsModel const&, HighsUserScaleData&)
+     0.11%  cobre    cobre                [.] HEkkDualRHS::createArrayOfPrimalInfeasibilities()
+     0.11%  cobre    cobre                [.] HVectorBase<double>::pack()
+     0.10%  cobre    cobre                [.] HEkk::computePrimalObjectiveValue()
+     0.09%  cobre    cobre                [.] getPrimalDualBasisErrors(HighsOptions const&, HighsLp const&, HighsSolution const&, HighsBasis const&, HighsPrimalDualErrors&)
+     0.08%  cobre    cobre                [.] highs_isInfinity(double)
+     0.08%  cobre    cobre                [.] HEkk::initialiseLpColBound()
+     0.07%  cobre    cobre                [.] presolve::HPresolve::detectParallelRowsAndCols(presolve::HighsPostsolveStack&)
+     0.07%  cobre    cobre                [.] HSimplexNla::debugCheckData(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) const
+     0.06%  cobre    cobre                [.] HEkk::initialiseLpColCost()
+     0.06%  cobre    cobre                [.] HEkk::putBacktrackingBasis(std::vector<int, std::allocator<int> > const&)
+     0.06%  cobre    libc.so.6            [.] cfree@GLIBC_2.2.5
+     0.06%  cobre    cobre                [.] HEkk::initialiseLpRowBound()
+     0.06%  cobre    cobre                [.] parquet::util::interner::Interner<S>::intern
+     0.06%  cobre    cobre                [.] HEkkPrimal::phase2UpdatePrimal(bool)
+     0.06%  cobre    cobre                [.] HEkk::getNonsingularInverse(int)
+     0.06%  cobre    cobre                [.] HEkkDualRow::chooseFinalLargeAlpha(int&, int&, int, std::vector<std::pair<int, double>, std::allocator<std::pair<int, double> > > const&, std::vector<int, std::allocator<int> > const&)
+     0.06%  cobre    cobre                [.] cobre_stochastic::correlation::spectral::SpectralFactor::decompose_with_diagnostics
+     0.05%  cobre    cobre                [.] ZSTD_compressBlock_doubleFast
+     0.05%  cobre    cobre                [.] HEkkDual::chooseRow()
+     0.05%  cobre    cobre                [.] assessBounds(HighsOptions const&, char const*, int, HighsIndexCollection const&, std::vector<double, std::allocator<double> >&, std::vector<double, std::allocator<double> >&, double, HighsVarType const*)
+     0.05%  cobre    cobre                [.] HEkk::factorSolveError()
+     0.05%  cobre    libc.so.6            [.] _int_free_chunk
+     0.04%  cobre    cobre                [.] HEkkDual::updatePrimal(HVectorBase<double>*)
+     0.04%  cobre    cobre                [.] HighsSparseMatrix::numNz() const
+     0.04%  cobre    cobre                [.] HighsSimplexAnalysis::simplexTimerStop(int, int)
+     0.04%  cobre    libc.so.6            [.] unlink_chunk.isra.0
+     0.03%  cobre    cobre                [.] HEkk::initialiseNonbasicValueAndMove()
+     0.03%  cobre    cobre                [.] HEkk::computeDualForTableauColumn(int, HVectorBase<double> const&) const
+     0.03%  cobre    cobre                [.] HighsSparseMatrix::hasLargeValue(double)
+     0.03%  cobre    cobre                [.] getComplementarityViolations(HighsLp const&, HighsSolution const&, double, int&, double&)
+     0.03%  cobre    cobre                [.] HEkkDual::shiftBack(int)
+     0.03%  cobre    cobre                [.] std::vector<double, std::allocator<double> >::_M_default_append(unsigned long)
+     0.03%  cobre    cobre                [.] std::vector<std::pair<int, double>, std::allocator<std::pair<int, double> > >::_M_default_append(unsigned long)
+     0.03%  cobre    cobre                [.] parquet::encodings::rle::RleEncoder::put
+     0.03%  cobre    libc.so.6            [.] _int_free_create_chunk
+     0.03%  cobre    cobre                [.] HEkk::getSolution()
+     0.03%  cobre    cobre                [.] HEkk::getHighsBasis(HighsLp&) const
+     0.03%  cobre    cobre                [.] HEkkDual::iterationAnalysisData()
+     0.03%  cobre    cobre                [.] presolve::HPresolve::link(int)
+     0.03%  cobre    cobre                [.] core::hash::BuildHasher::hash_one
+     0.03%  cobre    cobre                [.] parquet::util::interner::Interner<S>::intern
+     0.02%  cobre    cobre                [.] std::vector<HighsCDouble, std::allocator<HighsCDouble> >::_M_default_append(unsigned long)
+     0.02%  cobre    cobre                [.] HEkkDual::computeDualInfeasibilitiesWithFixedVariableFlips()
+     0.02%  cobre    cobre                [.] std::vector<int, std::allocator<int> >::_M_default_append(unsigned long)
+     0.02%  cobre    cobre                [.] HEkk::computeSimplexLpDualInfeasible()
+     0.02%  cobre    cobre                [.] HighsSparseMatrix::addRows(HighsSparseMatrix, signed char const*)
+     0.02%  cobre    cobre                [.] HighsSimplexAnalysis::simplexTimerStart(int, int)
+     0.02%  cobre    cobre                [.] HEkkDual::iterate()
+     0.02%  cobre    cobre                [.] computeDualObjectiveValue(double const*, HighsLp const&, HighsSolution const&, double&)
+     0.02%  cobre    cobre                [.] HEkkDualRow::createFreelist()
+     0.02%  cobre    cobre                [.] HFactor::setupGeneral(int, int, int, int const*, int const*, double const*, int*, double, double, int, HighsLogOptions const*, bool, int)
+     0.02%  cobre    cobre                [.] HEkkDual::updateFtran()
+     0.02%  cobre    cobre                [.] HEkk::tableauRowPrice(bool, HVectorBase<double> const&, HVectorBase<double>&, int)
+     0.02%  cobre    cobre                [.] cobre_io::output::simulation_writer::build_hydros_batch
+     0.02%  cobre    cobre                [.] HEkkPrimal::initialiseDevexFramework()
+     0.02%  cobre    cobre                [.] std::pair<std::_Rb_tree_iterator<std::pair<int, int> >, bool> std::_Rb_tree<std::pair<int, int>, std::pair<int, int>, std::_Identity<std::pair<int, int> >, std::less<std::pair<int, int> >, std::allocator<std::pair<int, int> > >::_M_emplace_unique<int&, int&>(int&, int&)
+     0.02%  cobre    cobre                [.] cobre_stochastic::correlation::spectral::SpectralFactor::transform
+     0.02%  cobre    libstdc++.so.6.0.36  [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned long&, unsigned long)
+     0.02%  cobre    cobre                [.] parquet::column::writer::encoder::ColumnValueEncoderImpl<T>::write_slice
+     0.02%  cobre    cobre                [.] parquet::encodings::rle::RleEncoder::flush_bit_packed_run
+     0.02%  cobre    cobre                [.] core::slice::sort::shared::smallsort::small_sort_general
+     0.02%  cobre    cobre                [.] HighsSimplexAnalysis::iterationReport()
+     0.02%  cobre    cobre                [.] Highs_getSolution
+     0.02%  cobre    cobre                [.] presolve::HPresolve::rowPresolve(presolve::HighsPostsolveStack&, int)
+     0.02%  cobre    cobre                [.] HEkk::putBacktrackingBasis()
+     0.02%  cobre    cobre                [.] parquet::column::writer::encoder::ColumnValueEncoderImpl<T>::write_slice
+     0.01%  cobre    cobre                [.] arrow_array::builder::primitive_builder::PrimitiveBuilder<T>::append_value
+     0.01%  cobre    cobre                [.] presolve::HPresolve::updateColImpliedBounds(int)
+     0.01%  cobre    cobre                [.] HEkk::updateFactor(HVectorBase<double>*, HVectorBase<double>*, int*, int*)
+     0.01%  cobre    cobre                [.] HEkkDual::updateDual()
+     0.01%  cobre    cobre                [.] HEkkDual::solvePhase2()
+     0.01%  cobre    cobre                [.] HEkkDualRow::updateFlip(HVectorBase<double>*)
+     0.01%  cobre    cobre                [.] int highs_splay<int, presolve::HPresolve::unlink(int)::{lambda(int)#1}&, presolve::HPresolve::unlink(int)::{lambda(int)#2}&, presolve::HPresolve::unlink(int)::{lambda(int)#3}&>(int const&, int, presolve::HPresolve::unlink(int)::{lambda(int)#1}&, presolve::HPresolve::unlink(int)::{lambda(int)#2}&, presolve::HPresolve::unlink(int)::{lambda(int)#3}&) [clone .isra.0]
+     0.01%  cobre    cobre                [.] presolve::HPresolve::updateColImpliedBounds(int, int, double)
+     0.01%  cobre    cobre                [.] HighsLinearSumBounds::getImplVarUpper(int, double, double, int) const
+     0.01%  cobre    cobre                [.] HighsLinearSumBounds::add(int, int, double)
+     0.01%  cobre    cobre                [.] HEkkDual::updateVerify()
+     0.01%  cobre    cobre                [.] <std::hash::random::DefaultHasher as core::hash::Hasher>::write
+     0.01%  cobre    libm.so.6            [.] __frexp
+     0.01%  cobre    cobre                [.] presolve::HPresolve::checkUpdateColImpliedBounds(int, double*, double*) const
+     0.01%  cobre    cobre                [.] HEkkDual::debugDualSimplex(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, bool)
+     0.01%  cobre    [unknown]            [k] 0xffffffffb2001988
+     0.01%  cobre    cobre                [.] <parquet::column::writer::encoder::ColumnValueEncoderImpl<T> as parquet::column::writer::encoder::ColumnValueEncoder>::flush_data_page
+     0.01%  cobre    libstdc++.so.6.0.36  [.] operator new(unsigned long)@plt
+     0.01%  cobre    cobre                [.] presolve::HPresolve::shrinkProblem(presolve::HighsPostsolveStack&)
+     0.01%  cobre    cobre                [.] assessCosts(HighsOptions const&, int, HighsIndexCollection const&, std::vector<double, std::allocator<double> >&, bool&, double)
+     0.01%  cobre    libstdc++.so.6.0.36  [.] operator new(unsigned long)
+     0.01%  cobre    cobre                [.] HEkkPrimal::correctPrimal(bool)
+     0.01%  cobre    cobre                [.] HEkkPrimal::getBasicPrimalInfeasibility()
+     0.01%  cobre    cobre                [.] bool HighsHashTable<unsigned long, void>::insert<HighsHashTableEntry<unsigned long, void> >(HighsHashTableEntry<unsigned long, void>&&) [clone .isra.0]
+     0.01%  cobre    cobre                [.] HEkkPrimal::getNonbasicFreeColumnSet()
+     0.01%  cobre    cobre                [.] HSimplexNla::update(HVectorBase<double>*, HVectorBase<double>*, int*, int*)
+     0.01%  cobre    cobre                [.] hashbrown::raw::RawTable<T,A>::reserve_rehash
+     0.01%  cobre    cobre                [.] memset@plt
+     0.01%  cobre    cobre                [.] HighsLp::objectiveValue(std::vector<double, std::allocator<double> > const&) const
+     0.01%  cobre    cobre                [.] HEkkDual::updatePivots()
+     0.01%  cobre    cobre                [.] HEkk::updateBadBasisChange(HVectorBase<double> const&, double)
+     0.01%  cobre    cobre                [.] <parquet::column::writer::encoder::ColumnValueEncoderImpl<T> as parquet::column::writer::encoder::ColumnValueEncoder>::flush_data_page
+     0.01%  cobre    libstdc++.so.6.0.36  [.] free@plt
+     0.01%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter::SpecFromIter<T,I>>::from_iter
+     0.01%  cobre    cobre                [.] cobre_stochastic::season_cast::merge_layered_windows
+     0.01%  cobre    cobre                [.] cobre_sddp::simulation::extraction::extract_stage_result_with_lookups
+     0.01%  cobre    cobre                [.] nearestPowerOfTwoScale(double)
+     0.01%  cobre    cobre                [.] Highs::infeasibleBoundsOk()
+     0.01%  cobre    cobre                [.] HEkk::zeroBasicDuals()
+     0.01%  cobre    cobre                [.] cobre_sddp::solve::stage_solve::fill_unscaled
+     0.01%  cobre    cobre                [.] HEkk::reinvertOnNumericalTrouble(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, double&, double, double, double)
+     0.01%  cobre    libc.so.6            [.] _int_free_maybe_trim
+     0.01%  cobre    libm.so.6            [.] __wrap_scalbn
+     0.01%  cobre    cobre                [.] HEkkDual::updateFtranBFRT()
+     0.01%  cobre    cobre                [.] getOptionIndex(HighsLogOptions const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<OptionRecord*, std::allocator<OptionRecord*> > const&, int&)
+     0.01%  cobre    cobre                [.] sortSetData(int, std::vector<int, std::allocator<int> >&, double const*, double const*, double const*, double*, double*, double*)
+     0.01%  cobre    cobre                [.] HEkkDual::newDevexFramework(double)
+     0.01%  cobre    cobre                [.] operator delete(void*)@plt
+     0.01%  cobre    cobre                [.] cobre_sddp::stochastic::noise::transform_inflow_noise
+     0.01%  cobre    cobre                [.] HUF_compress1X_usingCTable_internal_bmi2
+     0.01%  cobre    cobre                [.] presolve::HPresolve::changeImplColUpper(int, double, int)
+     0.01%  cobre    cobre                [.] core::slice::sort::unstable::quicksort::quicksort
+     0.01%  cobre    cobre                [.] std::vector<double, std::allocator<double> >::_M_fill_append(unsigned long, double const&)
+     0.01%  cobre    cobre                [.] HighsLinearSumBounds::handleImplVarUpper(int, double, double, int)
+     0.01%  cobre    cobre                [.] cobre_sddp::simulation::pipeline::extract_sim_stage_result
+     0.01%  cobre    cobre                [.] HEkk::updateOperationResultDensity(double, double&) const
+     0.01%  cobre    libm.so.6            [.] __pow_finite@plt
+     0.01%  cobre    libm.so.6            [.] pow@@GLIBC_2.29
+     0.01%  cobre    cobre                [.] cobre_solver::backends::highs::interface::<impl cobre_solver::trait_def::SolverInterface for cobre_solver::backends::highs::solver::HighsSolver>::solve
+     0.01%  cobre    cobre                [.] void pdqsort_detail::pdqsort_loop<__gnu_cxx::__normal_iterator<std::pair<int, double>*, std::vector<std::pair<int, double>, std::allocator<std::pair<int, double> > > >, std::less<std::pair<int, double> >, false>(__gnu_cxx::__normal_iterator<std::pair<int, double>*, std::vector<std::pair<int, double>, std::allocator<std::pair<int, double> > > >, __gnu_cxx::__normal_iterator<std::pair<int, double>*, std::vector<std::pair<int, double>, std::allocator<std::pair<int, double> > > >, std::less<std::pair<int, double> >, int, bool) [clone .isra.0]
+     0.01%  cobre    cobre                [.] cobre_stochastic::par::evaluate::evaluate_par_batch
+     0.01%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.01%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.01%  cobre    cobre                [.] presolve::HPresolve::detectDominatedCol(presolve::HighsPostsolveStack&, int, bool)
+     0.01%  cobre    libstdc++.so.6.0.36  [.] std::_Rb_tree_insert_and_rebalance(bool, std::_Rb_tree_node_base*, std::_Rb_tree_node_base*, std::_Rb_tree_node_base&)
+     0.01%  cobre    cobre                [.] increasingSetOk(std::vector<int, std::allocator<int> > const&, int, int, bool)
+     0.01%  cobre    libstdc++.so.6.0.36  [.] operator delete(void*)
+     0.01%  cobre    libc.so.6            [.] _int_free_merge_chunk
+     0.01%  cobre    cobre                [.] HIST_count_parallel_wksp
+     0.01%  cobre    cobre                [.] cobre_solver::freeze::freeze_rows_into_template
+     0.01%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.01%  cobre    libstdc++.so.6.0.36  [.] std::_Rb_tree_rebalance_for_erase(std::_Rb_tree_node_base*, std::_Rb_tree_node_base&)
+     0.01%  cobre    cobre                [.] refineBasis(HighsLp const&, HighsSolution const&, HighsBasis&)
+     0.01%  cobre    cobre                [.] HFactor::update(HVectorBase<double>*, HVectorBase<double>*, int*, int*)
+     0.01%  cobre    cobre                [.] HEkk::debugSimplex(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, SimplexAlgorithm, int, bool) const
+     0.01%  cobre    cobre                [.] cobre_sddp::lp::builder::patch::PatchBuffer::fill_col_state_patches
+     0.01%  cobre    cobre                [.] HFactor::btranCall(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.01%  cobre    cobre                [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned long&, unsigned long)@plt
+     0.01%  cobre    cobre                [.] std::_Hashtable<unsigned long, std::pair<unsigned long const, int>, std::allocator<std::pair<unsigned long const, int> >, std::__detail::_Select1st, std::equal_to<unsigned long>, std::hash<unsigned long>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, false, false> >::_M_insert_multi_node(std::__detail::_Hash_node<std::pair<unsigned long const, int>, false>*, unsigned long, std::__detail::_Hash_node<std::pair<unsigned long const, int>, false>*)
+     0.01%  cobre    libm.so.6            [.] __scalbn
+     0.01%  cobre    cobre                [.] calculateRowValuesQuad(HighsLp const&, std::vector<double, std::allocator<double> > const&, std::vector<double, std::allocator<double> >&, int)
+     0.01%  cobre    cobre                [.] presolve::HPresolve::okFromCSC(std::vector<double, std::allocator<double> > const&, std::vector<int, std::allocator<int> > const&, std::vector<int, std::allocator<int> > const&)
+     0.01%  cobre    cobre                [.] HEkk::bailout()
+     0.01%  cobre    cobre                [.] HighsLinearSumBounds::getResidualSumLowerOrig(int, int, double, int, double, double) const
+     0.01%  cobre    cobre                [.] ZSTD_encodeSequences_bmi2
+     0.01%  cobre    cobre                [.] HSimplexNla::debugCheckInvert(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, int) const
+     0.01%  cobre    cobre                [.] presolve::HPresolve::computeLocks(int, bool, std::function<bool (int, bool)>) const
+     0.01%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter::SpecFromIter<T,I>>::from_iter
+     0.01%  cobre    cobre                [.] HEkkDualRHS::updatePivots(int, double)
+     0.01%  cobre    cobre                [.] core::iter::adapters::flatten::and_then_or_clear
+     0.01%  cobre    cobre                [.] HEkk::pivotColumnFtran(int, HVectorBase<double>&)
+     0.01%  cobre    libc.so.6            [.] __strlen_avx2
+     0.01%  cobre    cobre                [.] HSimplexNla::ftran(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.01%  cobre    cobre                [.] cobre_sddp::simulation::extraction::HydroStageContext::new
+     0.01%  cobre    cobre                [.] maxHeapsort(int*, int*, int)
+     0.01%  cobre    cobre                [.] HUF_buildCTable_wksp
+     0.01%  cobre    cobre                [.] cobre_highs_set_basis_non_alien
+     0.01%  cobre    cobre                [.] changeBounds(std::vector<double, std::allocator<double> >&, std::vector<double, std::allocator<double> >&, HighsIndexCollection const&, std::vector<double, std::allocator<double> > const&, std::vector<double, std::allocator<double> > const&)
+     0.01%  cobre    cobre                [.] presolve::HPresolve::computeColBounds(int, int, double, int, double*, double*, double*, double*)
+     0.01%  cobre    cobre                [.] HFactor::build(HighsTimerClock*)
+     0.01%  cobre    cobre                [.] alloc::vec::in_place_collect::from_iter_in_place
+     0.01%  cobre    cobre                [.] HSimplexNla::applyBasisMatrixRowScale(HVectorBase<double>&) const
+     0.01%  cobre    cobre                [.] presolve::HPresolve::yieldsImpliedLowerBound(int, double) const
+     0.01%  cobre    cobre                [.] parquet::arrow::arrow_writer::levels::LevelInfoBuilder::write
+     0.01%  cobre    cobre                [.] presolve::HPresolve::isRedundant(int) const
+     0.00%  cobre    cobre                [.] cobre_sddp::setup::template_postprocess::postprocess_templates
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace(unsigned long, unsigned long, char const*, unsigned long)
+     0.00%  cobre    cobre                [.] std::pair<std::_Rb_tree_iterator<int>, bool> std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> >::_M_emplace_unique<int&>(int&) [clone .isra.0]
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::fitting::correlation::compute_pearson_correlation_matrix
+     0.00%  cobre    cobre                [.] presolve::HPresolve::dualFixing(presolve::HighsPostsolveStack&, int)
+     0.00%  cobre    cobre                [.] HEkk::initialiseBound(SimplexAlgorithm, int, bool)
+     0.00%  cobre    cobre                [.] alloc::vec::in_place_collect::from_iter_in_place
+     0.00%  cobre    cobre                [.] isBasisConsistent(HighsLp const&, HighsBasis const&)
+     0.00%  cobre    cobre                [.] RefactorInfo::clear()
+     0.00%  cobre    cobre                [.] HEkk::debugNlaCheckInvert(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, int) const
+     0.00%  cobre    cobre                [.] HEkk::updateMatrix(int, int)
+     0.00%  cobre    cobre                [.] presolve::HPresolve::isUpperStrictlyImplied(int, double*) const
+     0.00%  cobre    libc.so.6            [.] __printf_fp_buffer_1.isra.0
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::residual(int&, HighsCDouble&, double, double, int, double, double, double) const
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::getImplVarUpper(int, int) const
+     0.00%  cobre    cobre                [.] std::_Function_handler<bool (int, bool), presolve::HPresolve::dualFixing(presolve::HighsPostsolveStack&, int)::{lambda(int, bool)#1}>::_M_invoke(std::_Any_data const&, int&&, bool&&)
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::fitting::yw_matrices::solve_linear_system
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::updatedImplVarUpper(int, int, double, double, double, int)
+     0.00%  cobre    cobre                [.] HEkk::unapplyTabooRowOut(std::vector<double, std::allocator<double> >&)
+     0.00%  cobre    cobre                [.] HEkkPrimal::useVariableIn()
+     0.00%  cobre    cobre                [.] presolve::HPresolve::rowPresolve(presolve::HighsPostsolveStack&, int)::{lambda(int, int, double, double, HighsCDouble const&, presolve::HighsPostsolveStack::RowType)#1}::operator()(int, int, double, double, HighsCDouble const&, presolve::HighsPostsolveStack::RowType) const
+     0.00%  cobre    libm.so.6            [.] __ieee754_pow_fma
+     0.00%  cobre    cobre                [.] HEkkDualRow::createFreemove(HVectorBase<double>*)
+     0.00%  cobre    cobre                [.] HSimplexNla::sparseLoopStyle(int, int, int&) const
+     0.00%  cobre    cobre                [.] presolve::HPresolve::markChangedRow(int)
+     0.00%  cobre    cobre                [.] presolve::HPresolve::checkLimits(presolve::HighsPostsolveStack&)
+     0.00%  cobre    cobre                [.] HighsHashTable<unsigned long, void>::growTable()
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::handleVarUpper(int, double, double, int)
+     0.00%  cobre    cobre                [.] HEkkPrimal::considerBoundSwap()
+     0.00%  cobre    cobre                [.] HEkkPrimal::initialiseInstance()
+     0.00%  cobre    cobre                [.] <core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::fold
+     0.00%  cobre    cobre                [.] presolve::HPresolve::unlink(int)
+     0.00%  cobre    cobre                [.] HSimplexNla::transformForUpdate(HVectorBase<double>*, HVectorBase<double>*, int, int)
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::shrink(std::vector<int, std::allocator<int> > const&, int)
+     0.00%  cobre    cobre                [.] HEkk::setBasis()
+     0.00%  cobre    cobre                [.] cobre_sddp::training::training::train
+     0.00%  cobre    cobre                [.] cobre_sddp::stochastic::noise::transform_ncs_noise
+     0.00%  cobre    cobre                [.] memcpy@plt
+     0.00%  cobre    cobre                [.] std::set<int, std::less<int>, std::allocator<int> >* std::__do_uninit_fill_n<std::set<int, std::less<int>, std::allocator<int> >*, unsigned long, std::set<int, std::less<int>, std::allocator<int> > >(std::set<int, std::less<int>, std::allocator<int> >*, unsigned long, std::set<int, std::less<int>, std::allocator<int> > const&)
+     0.00%  cobre    cobre                [.] bool okAssign<int>(std::vector<int, std::allocator<int> >&, int, int)
+     0.00%  cobre    cobre                [.] <core::iter::adapters::flatten::FlatMap<I,U,F> as core::iter::traits::iterator::Iterator>::next
+     0.00%  cobre    libstdc++.so.6.0.36  [.] malloc@plt
+     0.00%  cobre    cobre                [.] frexp@plt
+     0.00%  cobre    cobre                [.] operator new(unsigned long)@plt
+     0.00%  cobre    cobre                [.] HEkkPrimal::debugPrimalSimplex(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, bool)
+     0.00%  cobre    cobre                [.] presolve::HPresolve::getColumnVector(int) const
+     0.00%  cobre    cobre                [.] HSimplexNla::btran(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.00%  cobre    cobre                [.] Highs::changeColsBounds(int, int const*, double const*, double const*)
+     0.00%  cobre    cobre                [.] cobre_sddp::simulation::extraction::hydro_operational_slacks
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::remove(int, int, double)
+     0.00%  cobre    cobre                [.] cobre_stochastic::correlation::resolve::DecomposedCorrelation::groups_for_stage
+     0.00%  cobre    cobre                [.] <alloc::vec::into_iter::IntoIter<T,A> as core::iter::traits::iterator::Iterator>::try_fold
+     0.00%  cobre    cobre                [.] HSimplexNla::reportPackValue(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, HVectorBase<double> const*, bool) const
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::handleVarLower(int, double, double, int)
+     0.00%  cobre    cobre                [.] Highs::setNonbasicStatusInterface(HighsIndexCollection const&, bool)
+     0.00%  cobre    cobre                [.] HSimplexNla::btranInScaledSpace(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.00%  cobre    cobre                [.] cobre_sddp::training::forward::stage_solve::run_forward_stage
+     0.00%  cobre    cobre                [.] HEkkDualRow::deleteFreelist(int)
+     0.00%  cobre    cobre                [.] cobre_sddp::solver_stats::SolverStatsDelta::from_snapshots
+     0.00%  cobre    cobre                [.] HighsInfo::initRecords()
+     0.00%  cobre    cobre                [.] HFactor::ftranCall(HVectorBase<double>&, double, HighsTimerClock*) const
+     0.00%  cobre    cobre                [.] presolve::HPresolve::toCSC(std::vector<double, std::allocator<double> >&, std::vector<int, std::allocator<int> >&, std::vector<int, std::allocator<int> >&)
+     0.00%  cobre    cobre                [.] cobre_sddp::solve::stage_solve::fill_unscaled_dual
+     0.00%  cobre    cobre                [.] HEkk::choosePriceTechnique(int, double, bool&, bool&) const
+     0.00%  cobre    cobre                [.] presolve::HPresolve::getRowPositions(int, std::vector<int, std::allocator<int> >&) const
+     0.00%  cobre    cobre                [.] alloc::vec::in_place_collect::from_iter_in_place
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_int<long>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, long) const
+     0.00%  cobre    cobre                [.] cobre_sddp::training::stage_solve_prep::StageSolvePrep::run
+     0.00%  cobre    cobre                [.] HEkkPrimal::considerInfeasibleValueIn()
+     0.00%  cobre    cobre                [.] presolve::HPresolve::~HPresolve()
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::fitting::partitioned_covariance::conditional_facp_partitioned
+     0.00%  cobre    cobre                [.] debugHighsSolution(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, HighsOptions const&, HighsModel const&, HighsSolution const&, HighsBasis const&, HighsModelStatus, HighsInfo const&)
+     0.00%  cobre    cobre                [.] cobre_sddp::simulation::pipeline::solve_simulation_stage
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::getImplVarLower(int, int) const
+     0.00%  cobre    cobre                [.] cobre_io::scenarios::estimation::load_and_aggregate_observations
+     0.00%  cobre    cobre                [.] arrow_array::builder::primitive_builder::PrimitiveBuilder<T>::append_null
+     0.00%  cobre    cobre                [.] HEkkDualRow::deleteFreemove()
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::entries::assemble_csc
+     0.00%  cobre    cobre                [.] cobre_io::output::simulation_writer::scenario_batch_thermals
+     0.00%  cobre    cobre                [.] void std::vector<double, std::allocator<double> >::_M_realloc_append<double const&>(double const&)
+     0.00%  cobre    cobre                [.] parquet::column::writer::encoder::ColumnValueEncoderImpl<T>::write_slice
+     0.00%  cobre    cobre                [.] HEkkDual::shiftCost(int, double)
+     0.00%  cobre    libc.so.6            [.] __memcmp_avx2_movbe
+     0.00%  cobre    cobre                [.] arrow_array::builder::primitive_builder::PrimitiveBuilder<T>::append_value
+     0.00%  cobre    cobre                [.] cobre_io::output::simulation_writer::scenario_batch_inflow_lags
+     0.00%  cobre    cobre                [.] cobre_sddp::cut::row::build_cut_row_batch_into
+     0.00%  cobre    cobre                [.] core::hash::BuildHasher::hash_one
+     0.00%  cobre    cobre                [.] <chrono::naive::date::NaiveDate as core::fmt::Debug>::fmt
+     0.00%  cobre    cobre                [.] core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+     0.00%  cobre    cobre                [.] cobre_sddp::convergence::risk_measure::RiskMeasure::aggregate_cut_into
+     0.00%  cobre    cobre                [.] crossbeam_deque::deque::Stealer<T>::steal
+     0.00%  cobre    libc.so.6            [.] realloc
+     0.00%  cobre    cobre                [.] cobre_io::validation::semantic::scenarios::check_estimation_prerequisites
+     0.00%  cobre    cobre                [.] presolve::HPresolve::aggregator(presolve::HighsPostsolveStack&)
+     0.00%  cobre    cobre                [.] presolve::HighsPostsolveStack::FixedCol::undo(HighsOptions const&, std::vector<presolve::HighsPostsolveStack::Nonzero, std::allocator<presolve::HighsPostsolveStack::Nonzero> > const&, HighsSolution&, HighsBasis&) const
+     0.00%  cobre    cobre                [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace(unsigned long, unsigned long, char const*, unsigned long)@plt
+     0.00%  cobre    cobre                [.] Highs_getBasis
+     0.00%  cobre    libstdc++.so.6.0.36  [.] memcpy@plt
+     0.00%  cobre    cobre                [.] cobre_sddp::cut::cut_sync::CutSyncBuffers::pack_pool_into
+     0.00%  cobre    cobre                [.] HEkk::unitBtran(int, HVectorBase<double>&)
+     0.00%  cobre    cobre                [.] HEkkPrimal::localReportIter(bool)
+     0.00%  cobre    cobre                [.] std::vector<signed char, std::allocator<signed char> >::_M_fill_assign(unsigned long, signed char const&)
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::getImplVarLower(int, double, double, int) const
+     0.00%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.00%  cobre    cobre                [.] HEkk::solve(bool)
+     0.00%  cobre    cobre                [.] HEkkDual::rebuild()
+     0.00%  cobre    cobre                [.] buildMaxheap(int*, int*, int)
+     0.00%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.00%  cobre    cobre                [.] initialiseScatterData(int, HighsScatterData&)
+     0.00%  cobre    cobre                [.] presolve::HPresolve::okSetInput(HighsLp&, HighsOptions const&, int, HighsTimer*)
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::commitment_reconcile::fill_bound_relaxations
+     0.00%  cobre    cobre                [.] cobre_solver::backends::highs::interface::<impl cobre_solver::trait_def::SolverInterface for cobre_solver::backends::highs::solver::HighsSolver>::load_model
+     0.00%  cobre    cobre                [.] highsLogDev(HighsLogOptions const&, HighsLogType, char const*, ...)
+     0.00%  cobre    cobre                [.] reportSimplexPhaseIterations(HighsLogOptions const&, int, HighsSimplexInfo&, bool)
+     0.00%  cobre    cobre                [.] core::ptr::drop_in_place<cobre_sddp::production::hydro_models::types::PrepareHydroModelsResult>
+     0.00%  cobre    cobre                [.] presolve::HPresolve::colPresolve(presolve::HighsPostsolveStack&, int)
+     0.00%  cobre    cobre                [.] HEkk::fullBtran(HVectorBase<double>&)
+     0.00%  cobre    libc.so.6            [.] _int_realloc
+     0.00%  cobre    cobre                [.] std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> >::operator=(std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> > const&) [clone .isra.0]
+     0.00%  cobre    cobre                [.] HEkkDualRow::clear()
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned long&, unsigned long)@plt
+     0.00%  cobre    cobre                [.] std::vector<HighsBasisStatus, std::allocator<HighsBasisStatus> >::_M_fill_append(unsigned long, HighsBasisStatus const&)
+     0.00%  cobre    cobre                [.] HighsSimplexAnalysis::userInvertReport(bool, bool)
+     0.00%  cobre    cobre                [.] std::vector<char, std::allocator<char> >::_M_fill_assign(unsigned long, char const&)
+     0.00%  cobre    cobre                [.] HighsSimplexAnalysis::simplexTimerRunning(int, int) const
+     0.00%  cobre    cobre                [.] std::time::Instant::now
+     0.00%  cobre    cobre                [.] presolve::HPresolve::changeImplRowDualUpper(int, double, int)
+     0.00%  cobre    libc.so.6            [.] __mpn_cmp
+     0.00%  cobre    cobre                [.] HighsLp::operator=(HighsLp&&) [clone .isra.0]
+     0.00%  cobre    cobre                [.] HighsSimplexAnalysis::reportInfeasibility(bool)
+     0.00%  cobre    cobre                [.] OptionRecordString::OptionRecordString(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, bool, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)
+     0.00%  cobre    cobre                [.] HEkkDual::~HEkkDual()
+     0.00%  cobre    cobre                [.] hashbrown::raw::RawIterRange<T>::fold_impl
+     0.00%  cobre    cobre                [.] presolve::HPresolve::changeImplColLower(int, double, int)
+     0.00%  cobre    cobre                [.] cobre_io::validation::semantic::season::check_observation_season_alignment
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::reserve(unsigned long)@plt
+     0.00%  cobre    cobre                [.] HighsLp::clear()
+     0.00%  cobre    cobre                [.] std::io::buffered::bufwriter::BufWriter<W>::write_all_cold
+     0.00%  cobre    cobre                [.] bool okResize<double>(std::vector<double, std::allocator<double> >&, int, double)
+     0.00%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.00%  cobre    [vdso]               [.] 0x0000000000000abe
+     0.00%  cobre    cobre                [.] cobre_stochastic::sampling::ForwardSampler::sample
+     0.00%  cobre    cobre                [.] core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+     0.00%  cobre    [vdso]               [.] 0x0000000000000a89
+     0.00%  cobre    cobre                [.] presolve::HPresolve::resetRowDualImpliedBoundsDerivedFromCol(int)
+     0.00%  cobre    cobre                [.] presolve::HPresolve::isImpliedEquationAtLower(int) const
+     0.00%  cobre    cobre                [.] void std::vector<int, std::allocator<int> >::_M_realloc_append<int const&>(int const&)
+     0.00%  cobre    cobre                [.] cobre_solver::backends::highs::solver::HighsSolver::extract_solution_view
+     0.00%  cobre    cobre                [.] cobre_sddp::solve::stage_solve::run_stage_solve
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::getResidualSumLower(int, int, double, int, double, double) const
+     0.00%  cobre    cobre                [.] presolve::HPresolve::updateRowDualImpliedBounds(int)
+     0.00%  cobre    cobre                [.] cobre_io::output::simulation_writer::scenario_batch_hydro_bus_generation
+     0.00%  cobre    cobre                [.] cobre_stochastic::sampling::out_of_sample::fill_uncorrelated
+     0.00%  cobre    cobre                [.] rand::rng::RngExt::sample
+     0.00%  cobre    cobre                [.] HEkk::debugReportReinvertOnNumericalTrouble(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, double, double, double, double, bool) const
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::_Rb_tree_increment(std::_Rb_tree_node_base*)
+     0.00%  cobre    cobre                [.] HEkkDual::improveChooseColumnRow(HVectorBase<double>*)
+     0.00%  cobre    cobre                [.] solveLpSimplex(HighsLpSolverObject&)
+     0.00%  cobre    cobre                [.] pow@plt
+     0.00%  cobre    cobre                [.] presolve::HPresolve::findNonzero(int, int)
+     0.00%  cobre    cobre                [.] parquet::column::writer::GenericColumnWriter<E>::add_data_page
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::basic_ios<char, std::char_traits<char> >::init(std::basic_streambuf<char, std::char_traits<char> >*)@plt
+     0.00%  cobre    cobre                [.] create(HighsIndexCollection&, int, int const*, int)
+     0.00%  cobre    cobre                [.] HEkk::fullPrice(HVectorBase<double> const&, HVectorBase<double>&)
+     0.00%  cobre    cobre                [.] parquet::column::writer::GenericColumnWriter<E>::write_batch_internal
+     0.00%  cobre    cobre                [.] std::_Rb_tree_node_base* std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> >::_M_copy<false, std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> >::_Reuse_or_alloc_node>(std::_Rb_tree_node<int>*, std::_Rb_tree_node_base*, std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> >::_Reuse_or_alloc_node&) [clone .isra.0]
+     0.00%  cobre    cobre                [.] std::vector<char, std::allocator<char> >::_M_default_append(unsigned long)
+     0.00%  cobre    libc.so.6            [.] __mpn_lshift
+     0.00%  cobre    cobre                [.] HEkk::initialiseCost(SimplexAlgorithm, int, bool)
+     0.00%  cobre    cobre                [.] void std::vector<double, std::allocator<double> >::_M_realloc_append<double>(double&&)
+     0.00%  cobre    cobre                [.] HEkk::computeFactor()
+     0.00%  cobre    cobre                [.] core::hash::BuildHasher::hash_one
+     0.00%  cobre    cobre                [.] cobre_sddp::training::backward::outcome_aggregation::write_opening_outcome
+     0.00%  cobre    cobre                [.] HighsSolution::clear()
+     0.00%  cobre    cobre                [.] parquet::arrow::arrow_writer::levels::LevelInfoBuilder::try_new
+     0.00%  cobre    cobre                [.] HSimplexNla::applyBasisMatrixColScale(HVectorBase<double>&) const
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::getResidualSumUpper(int, int, double, int, double, double) const
+     0.00%  cobre    cobre                [.] cobre_sddp::training::backward::duals_extraction::fill_state_duals
+     0.00%  cobre    cobre                [.] PresolveComponent::clear()
+     0.00%  cobre    libstdc++.so.6.0.36  [.] std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::~basic_stringstream()
+     0.00%  cobre    cobre                [.] HEkkDual::solve(bool)
+     0.00%  cobre    cobre                [.] cobre_stochastic::tree::opening_tree::OpeningTreeView::opening
+     0.00%  cobre    cobre                [.] solveLp(HighsLpSolverObject&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)
+     0.00%  cobre    cobre                [.] HEkkPrimal::removeNonbasicFreeColumn()
+     0.00%  cobre    cobre                [.] presolve::HPresolve::presolveChangedRows(presolve::HighsPostsolveStack&)
+     0.00%  cobre    cobre                [.] Highs::newHighsBasis()
+     0.00%  cobre    cobre                [.] HEkk::invalidateDualInfeasibilityRecord()
+     0.00%  cobre    cobre                [.] bool okResize<int>(std::vector<int, std::allocator<int> >&, int, int)
+     0.00%  cobre    cobre                [.] cobre_sddp::training::backward::duals_extraction::extract_duals_from_view
+     0.00%  cobre    cobre                [.] <alloc::vec::Vec<T> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<T,I>>::from_iter
+     0.00%  cobre    cobre                [.] HEkkDual::bailoutOnDualObjective()
+     0.00%  cobre    libc.so.6            [.] __strchrnul_avx2
+     0.00%  cobre    cobre                [.] presolve::HPresolve::computeColBounds(int, int, double, int, double*, double*, double*, double*)::{lambda(presolve::HPresolve::computeColBounds(int, int, double, int, double*, double*, double*, double*)::nonZeros const&, double, int, bool)#1}::operator()(presolve::HPresolve::computeColBounds(int, int, double, int, double*, double*, double*, double*)::nonZeros const&, double, int, bool) const
+     0.00%  cobre    cobre                [.] HighsHashTable<int, int>::operator[](int const&)
+     0.00%  cobre    libc.so.6            [.] __mpn_mul
+     0.00%  cobre    cobre                [.] std::vector<std::_Rb_tree_const_iterator<std::pair<int, int> >, std::allocator<std::_Rb_tree_const_iterator<std::pair<int, int> > > >::_M_fill_assign(unsigned long, std::_Rb_tree_const_iterator<std::pair<int, int> > const&)
+     0.00%  cobre    cobre                [.] ZSTD_selectEncodingType
+     0.00%  cobre    cobre                [.] memmove@plt
+     0.00%  cobre    cobre                [.] <parquet::column::writer::encoder::ColumnValueEncoderImpl<T> as parquet::column::writer::encoder::ColumnValueEncoder>::try_new
+     0.00%  cobre    cobre                [.] HIST_countFast_wksp
+     0.00%  cobre    cobre                [.] HEkk::moveLp(HighsLpSolverObject&)
+     0.00%  cobre    cobre                [.] void std::vector<int, std::allocator<int> >::_M_range_insert<__gnu_cxx::__normal_iterator<int const*, std::vector<int, std::allocator<int> > > >(__gnu_cxx::__normal_iterator<int*, std::vector<int, std::allocator<int> > >, __gnu_cxx::__normal_iterator<int const*, std::vector<int, std::allocator<int> > >, __gnu_cxx::__normal_iterator<int const*, std::vector<int, std::allocator<int> > >, std::forward_iterator_tag) [clone .isra.0]
+     0.00%  cobre    cobre                [.] parquet::arrow::arrow_writer::ArrowWriter<W>::write
+     0.00%  cobre    cobre                [.] FSE_buildCTable_wksp
+     0.00%  cobre    cobre                [.] presolve::HPresolve::resetColImpliedBounds(int, int)
+     0.00%  cobre    cobre                [.] HUF_simpleQuickSort
+     0.00%  cobre    cobre                [.] cobre_io::output::simulation_writer::scenario_batch_exchanges
+     0.00%  cobre    cobre                [.] arrow_array::builder::primitive_builder::PrimitiveBuilder<T>::append_value
+     0.00%  cobre    cobre                [.] std::thread::functions::yield_now
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::patch::PatchBuffer::fill_forward_patches
+     0.00%  cobre    cobre                [.] HEkkPrimal::solvePhase2()
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::lag_kernel::advance_lag_chain
+     0.00%  cobre    cobre                [.] presolve::HPresolve::removeFixedCol(int, double)
+     0.00%  cobre    cobre                [.] arrow_array::builder::boolean_builder::BooleanBuilder::append_value
+     0.00%  cobre    libc.so.6            [.] __libc_calloc2
+     0.00%  cobre    cobre                [.] HEkkDual::isBadBasisChange()
+     0.00%  cobre    cobre                [.] std::_Rb_tree<int, int, std::_Identity<int>, std::less<int>, std::allocator<int> >::_M_erase(std::_Rb_tree_node<int>*) [clone .isra.0]
+     0.00%  cobre    cobre                [.] HighsLinearSumBounds::getResidualSumUpperOrig(int, int, double, int, double, double) const
+     0.00%  cobre    cobre                [.] core::slice::sort::unstable::quicksort::quicksort
+     0.00%  cobre    cobre                [.] cobre_sddp::policy::scaling_report::summarize_scale_factors
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::fitting::estimation::estimate_ar_with_pacf_annual
+     0.00%  cobre    cobre                [.] cobre_io::output::simulation_writer::scenario_batch_buses
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::scaling::compute_col_scale
+     0.00%  cobre    cobre                [.] parquet::column::writer::GenericColumnWriter<E>::truncate_statistics
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::fitting::estimation::group_observations_by_season
+     0.00%  cobre    cobre                [.] chrono::naive::date::NaiveDate::signed_duration_since
+     0.00%  cobre    cobre                [.] cobre_stochastic::par::aggregate::aggregate_observations_to_season
+     0.00%  cobre    cobre                [.] cobre_core::model::temporal::SeasonMap::season_for_date
+     0.00%  cobre    cobre                [.] chrono::naive::date::NaiveDate::from_ymd_opt
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::columns::fill_stage_columns
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::scaling::apply_row_scale
+     0.00%  cobre    cobre                [.] cobre_sddp::lp::builder::entries::build_stage_matrix_entries
+     0.00%  cobre    cobre                [.] core::slice::sort::shared::smallsort::small_sort_general
+     0.00%  cobre    cobre                [.] cobre_io::output::hydro_models::write_fpha_hyperplanes
+     0.00%  cobre    cobre                [.] serde_core::ser::impls::<impl serde_core::ser::Serialize for alloc::vec::Vec<T>>::serialize
+     0.00%  cobre    cobre                [.] <core::hash::sip::Hasher<S> as core::hash::Hasher>::write
+     0.00%  cobre    cobre                [.] ZSTD_createCCtx
+     0.00%  cobre    cobre                [.] cobre_core::model::resolved::bounds::_::<impl serde_core::ser::Serialize for cobre_core::model::resolved::bounds::HydroCell>::serialize
+     0.00%  cobre    cobre                [.] <serde_json::de::SeqAccess<R> as serde_core::de::SeqAccess>::next_element_seed::has_next_element
+     0.00%  cobre    cobre                [.] qh_setnew
+     0.00%  cobre    cobre                [.] qh_setdel
+     0.00%  cobre    cobre                [.] cobre_io::windowed_history::validate_windowed_records
+     0.00%  cobre    cobre                [.] qh_triangulate
+     0.00%  cobre    cobre                [.] core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+     0.00%  cobre    cobre                [.] hashbrown::raw::RawTable<T,A>::reserve_rehash
+     0.00%  cobre    cobre                [.] cobre_sddp::production::fpha_fitting::fit_fpha_planes
+     0.00%  cobre    cobre                [.] cobre_io::scenarios::inflow_history::parse_inflow_history
+     0.00%  cobre    cobre                [.] qh_getcenter
+     0.00%  cobre    cobre                [.] core::hash::BuildHasher::hash_one
+     0.00%  cobre    cobre                [.] <alloc::string::String as core::clone::Clone>::clone
+     0.00%  cobre    cobre                [.] cobre_sddp::production::fpha_fitting::geometry::ForebayTable::new
+     0.00%  cobre    libc.so.6            [.] sysmalloc
+     0.00%  cobre    cobre                [.] HighsIis::clear()
+
+
+#
+# (Tip: To show context switches in perf report sample context add --switch-events to perf record.)
+#

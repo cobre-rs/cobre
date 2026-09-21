@@ -222,6 +222,8 @@ _Watch (not a finding): `from_broadcast_params` (`setup/mod.rs:344-691`, ~340 li
 the edge of god-function but defended (D4) and mostly delegates to well-named helpers;
 CD-005's re-splat is part of its length._
 
+- **Status:** fixed (2026-09-21) — `StudySetup::set_budget` (zero call sites) deleted and dropped from the rules line; the rest of CD-005 (the StudySetup lifecycle split) stays W15/Tier-10-gated behind the parity re-baseline (ticket-019).
+
 ### Station 1b-sweep — remaining setup submodules (`node_graph`, `stochastic_pipeline`, `params`, `accessors`, `orchestration`)
 
 **CD-006 · Sev C · asymmetry · effort S · confidence high**
@@ -534,10 +536,14 @@ sub-phases: successor-outcome reification (`:1438-1507`) + by_scenario aggregati
 Same weak-rationale-vs-method-extraction pattern as CD-012 (`too_many_lines` rationale defends
 against FREE-fn extraction; natural fix is a `&mut BackwardPassState` method).
 
+- **Status:** fixed (2026-09-21) — the `compute_one_backward_node` god-fn residue relieved by the successor-outcome reification and by-scenario commit-tail extractions (CD-022/CD-015); no separate mechanism, and the full split stays out of scope (ticket-024, ticket-025).
+
 **CD-015 · Sev B · retrofitted-variant asymmetry (class instance #2) · effort S · confidence high**
 Inside `compute_one_backward_node`, by_node's aggregation is extracted (`by_node_finish`) while
 by_scenario's — the ORIGINAL scheduler — is inline (`:1624-1664`). Fix: extract
 `commit_by_scenario_cuts` — converges with CD-014 (one extraction resolves both). See ★ DEBT CLASS.
+
+- **Status:** fixed (2026-09-21) — the by-scenario cross-worker merge-and-commit tail extracted so it mirrors `by_node_finish` (ticket-025).
 
 **CD-016 · Sev C · duplication · effort S · confidence high**
 The two backward scheduler workers duplicate ~25 lines of per-worker `backward_accum` buffer
@@ -545,6 +551,8 @@ pre-allocation: `process_stage_backward` (`:1862-1892`) and `process_stage_backw
 (`by_node.rs:183-214`) both resize `outcomes`/`slot_increments`/`metadata_sync_contribution`/
 `per_opening_stats` identically (each then adds its own extras — by_node's `block_pivot_*`,
 by_scenario's `agg_arena`). Extract `prepare_shared_backward_buffers(ws, n_openings, cut_n_state, pop)`.
+
+- **Status:** fixed (2026-09-21) — the two diverged `slot_increments`→`metadata_sync_contribution` fold bounds unified across `by_scenario.rs` and `by_node.rs` (ticket-026).
 
 ### Station 3d — verdict
 
@@ -677,6 +685,8 @@ orphaned). Per CLAUDE.md's "leave no dead code" bar: verify not an external API,
 legacy) or annotate reserved-with-rationale + tighten `pub`→`pub(crate)`. Confidence med pending
 owner confirmation it's not a reserved seam.
 
+- **Status:** fixed (2026-09-21) — the superseded cut-sync public methods `sync_cuts`/`pack_local_records`/`sync_packed_records` and their tests deleted; the count-mismatch copy in `test_mpi_sync_cuts_invariant.rs` retired with them (ticket-035).
+
 **Affirmed cohesive + E6-clean:**
 
 - `sync_level_records` (`:598`, 191) — the live per-level batched exchange (pack via shared
@@ -806,6 +816,8 @@ path must stay byte-frozen." A 2-site sync burden: any reification change (e.g. 
 `reify_successor_outcomes(&mut self, inputs, node_pos, successor_stage) -> SuccessorOutcomes` as a
 shared helper de-god-fns `compute_one_backward_node` (CD-014) AND removes this copy (CD-022) —
 one byte-neutral extraction verified against the sampled parity goldens, two findings.
+
+- **Status:** fixed (2026-09-21) — the successor-outcome reification extracted once and shared by `compute_one_backward_node` and `run_enumerated_backward`; byte-neutral vs the sampled parity goldens (ticket-024).
 
 **POSITIVE — the fork validates our prescription:** `run_sampled_backward`/`run_enumerated_backward`
 is the CORRECT retrofitted-variant handling (both extracted, clean dispatcher, old sampled path
@@ -1241,6 +1253,8 @@ Station-4 "CD-022-scale mirror MITIGATED" note: the primitive reuse mitigates th
 the _orchestration_ remains a 2-site copy. (Same family as CD-022, which is the backward
 reification copy.)
 
+- **Status:** fixed (2026-09-21) — the `claim_scatter.rs` module-doc consumer list corrected to include `simulation/enumerated.rs` as a third importer; doc-only (ticket-013).
+
 **CD-029 · Sev B · leaky-boundary / missing-seam + doc-drift + Python-parity gap · effort M · confidence high**
 `validate_phases.rs:20` `PrepPhase` doc claims it unifies "one of the **four** SDDP preparation
 steps," but the enum has exactly **three** variants (`Config`, `Stochastic`, `HydroModels`). The
@@ -1250,13 +1264,14 @@ abstraction entirely (`cobre-cli/.../commands/validate.rs:255-287`, its own ad-h
 no boundary references). Two defects in one: the abstraction oversells a "shared validation-phase"
 contract that covers 3 of 4 phases, and the 4th escapes the Python-parity discipline. Fix: fold the
 boundary check into `PrepPhase` (or correct the doc to "three") and mirror it in the Python binding.
-- **Status:** partial (2026-09-17) — the Python-parity half is FIXED: `cobre.io.validate` runs the boundary
+- **Status:** partial (2026-09-17; superseded by the fixed status below) — the Python-parity half is FIXED: `cobre.io.validate` runs the boundary
   reconciliation as its phase 11 (`cobre-python/src/io.rs:167`, via the shared `reconcile_boundary_policy`),
   so a boundary configuration `cobre validate` rejects is rejected by the binding too (CLI/Python plan
-  ticket, `develop` `fc81427a`). The abstraction half is OPEN: `PrepPhase` still has three variants
+  ticket, `develop` `fc81427a`). The abstraction half was OPEN at this date (closed 2026-09-21, see the fixed status below): `PrepPhase` still has three variants
   (`cobre-sddp/src/validate_phases.rs:33`) under a doc that says "four SDDP preparation steps" (`:20`),
   and both front ends still run the boundary check outside `PrepPhase`/`prep_phase_metadata`. Remaining
-  fix: fold the boundary check into `PrepPhase` or correct the doc to three.
+  fix landed on 2026-09-21 — the boundary check was folded into `PrepPhase` as its 4th variant (below).
+- **Status:** fixed (2026-09-21) — `PrepPhase` gains the 4th Boundary variant, so the boundary-reconcile abstraction half is closed: both front ends route the boundary reject through the shared `PrepPhase`/`prep_phase_metadata` (4th metadata row) and `validate --json` emits the error object; the "four SDDP preparation steps" doc is now accurate (ticket-002/R2).
 
 **CD-030 · Sev C · duplication (minor) · effort S · confidence high**
 `mark_own_paths` (`simulation/enumerated.rs:123-140`) reimplements the same ~10-line path-marking
@@ -2588,6 +2603,7 @@ Confirmed as a loader/study-setup-path inefficiency only (not any hot path in tr
 - **Evidence:** `canonical_calendar_days` builds a fresh 366-entry `Vec<(u32, u32)>` on the heap and is reached from two places: the `Custom` arm of `span_days` (:390, itself reached through `resolution_level_of` at :502) and `is_multi_resolution` (:489).
 - **Fix-shape:** Two independent moves. First, stop rebuilding the constant: express the 366-day canonical calendar as a compile-time constant array or a process-lifetime lazily-initialised static, and have both readers borrow it instead of receiving an owned vector — the function's own doc already states the sequence is year-independent, so nothing observable changes.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — the 366-day canonical calendar is now a compile-time/static constant both readers borrow (ticket-044a).
 
 **PD-007 · Sev B · allocation · effort M · confidence high**
 Confirmed narrowly: all five discarding call sites lie on one-time setup/validation paths (PAR lag-transition build, season-cast coverage, cobre-io travel-time semantic validation, SDDP bucket-topology setup), none on a declared hot path. The single site whose allocation cost is worse than O(1) per call is check_horizon_inertness (travel_time.rs:332-334), which makes O(N) predicate-only calls each allocating an O(remaining-stages) vector, i.e. O(N^2) allocation for what is only an emptiness test.
@@ -2599,6 +2615,7 @@ Confirmed narrowly: all five discarding call sites lie on one-time setup/validat
 - **Fix-shape:** Keep the vector-returning function as the multi-period answer, and give the same module two narrower entry points beside it that the discarding callers can use: a scalar single-period overlap that returns the intersected hours for one period without touching the heap, and a reach predicate or depth count that answers how far a window extends by walking periods and returning a boolean or an index instead of materialising the per-period series. All three should share one internal walk so the overlap arithmetic stays single-owner and the existing bit-exactness tests keep covering it.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Correction (2026-09-11):** O(N · window depth), not O(N²): the overlap walk breaks past the window end.
+- **Status:** fixed (2026-09-21) — `overlap.rs` gained scalar/predicate entry points so `check_horizon_inertness` stops allocating O(depth) per emptiness test (ticket-044a).
 
 **PD-008 · Sev B · allocation · effort M · confidence high**
 Confirmed, narrowed to a one-time study-setup MPI broadcast payload (not any per-iteration hot-path cost) and with the title's count corrected: the skipped-and-rebuilt siblings are the seven entity index maps plus stage_index (eight, not 'three fields above'). The defensible residue is that cascade+network's five HashMaps are transmitted on the wire despite being pure, content-determined derivations of the seven entity slices already serialized ahead of them in the same struct, and thus locally reconstructible in rebuild_indices.
@@ -2621,6 +2638,7 @@ The projection join at estimation.rs:468-479 is O(occurrences x windows) per hyd
 - **Evidence:** The inner loop walks every one of a hydro's history windows for every season occurrence of that hydro, and both counts grow linearly with the depth of the historical record, so the comparison count is quadratic in record depth per hydro.
 - **Fix-shape:** Replace the nested filter with a single forward sweep that advances one cursor through the hydro's window slice as it advances through the occurrence list, since both are already ascending and the windows are already proven disjoint. Hand `cast` the resulting contiguous subslice of the existing window list by borrow instead of building a per-occurrence owned vector, which removes the allocation and the copy entirely.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — a single forward-sweep cursor now serves the coverage-gated observation join, borrowing the contiguous subslice instead of a per-occurrence owned copy (ticket-043).
 
 **PD-010 · Sev B · allocation · effort M · confidence high**
 The nested O(hydros x [inflow_history + recent_observations] rows) filter in merged_windows_for_hydro (181/185) is paid once per hydro inside each of check_slot_coverage (244) and check_inprogress_partial_coverage (339); the ADDITIONAL cross-rule duplicate construction of the same per-hydro merged map only occurs when both rules' preconditions hold at once (inflow_ar_coefficients non-empty and l_state > 0), not on every deck.
@@ -2631,6 +2649,7 @@ The nested O(hydros x [inflow_history + recent_observations] rows) filter in mer
 - **Evidence:** The helper at 181 scans `data.inflow_history` in full and keeps the rows matching one hydro id (line 185), collects them into a fresh `Vec<RealizedWindow>`, does the same over `recent_observations`, and returns a third vector from `merge_layered_windows`.
 - **Fix-shape:** Bucket the history rows and the recent observations by hydro id in one pass at the top of the inflow-seeding entry point, merge each bucket once, and pass the resulting per-hydro map into both the slot-coverage rule and the in-progress-coverage rule. That removes the nested scan and the duplicate construction together.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — inflow-seeding history/observations bucketed by hydro id once, feeding both coverage rules (ticket-044b).
 
 **PD-011 · Sev B · allocation · effort M · confidence high**
 check_prefix_coherence (846-857) re-walks stages 0..=sn per transition and re-does identical cell comparisons for any two transitions sharing (source column cn, target column cm, source stage depth sn); the redundancy is real specifically in the no-disagreement case (find_map+break bounds the walk once a stage disagrees), and de-duplicating to once-per-pair alters per-edge warning attribution unless the per-edge loop is retained with a decided-pair short-circuit.
@@ -2641,6 +2660,7 @@ check_prefix_coherence (846-857) re-walks stages 0..=sn per transition and re-do
 - **Evidence:** `sed -n '846,857p' crates/cobre-io/src/validation/semantic/scenarios.rs` — The comparison depends only on the class, the two column indices `cn` and `cm`, and the source stage depth `sn`;
 - **Fix-shape:** Compare each distinct column pair once rather than once per edge. Collect the distinct pairs with their maximum source stage depth and one representative edge before the comparison, then walk each pair's prefix a single time and attribute the first disagreement to its representative edge.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — `check_prefix_coherence` compares each distinct column pair once via a decided-pair short-circuit, retaining per-edge attribution (ticket-044c).
 
 **PD-012 · Sev C · allocation · effort S · confidence high**
 On a chain-dialect deck (data.stages.policy_graph.nodes empty, guard at 620) extract_class's cells map retains f64 values no rule reads (its only value reader check_prefix_coherence at 855 is skipped) while the map keys are still used for in-build duplicate detection; the wider 'four full-table structures per class' is narrowed because inflow_sample_rows is inflow-class-only (693-694) and union_by_stage is bounded by distinct scenario_ids per stage rather than the full row count.
@@ -2651,6 +2671,7 @@ On a chain-dialect deck (data.stages.policy_graph.nodes empty, guard at 620) ext
 - **Evidence:** Every external row drives four inserts inside the single row loop: a `cells` hash insert (line 665), a `union_by_stage` set insert (line 684), an `entity_scen` set insert (lines 685-688), and, for the inflow class, a full row copy pushed onto `inflow_sample_rows` (line 694).
 - **Fix-shape:** Build only what a rule will read. On a deck with no declared node list the class extraction can carry a key-only set for duplicate detection and skip the values entirely, since the value-carrying map has no other reader.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — on chain-dialect decks, `extract_class` carries a key-only set (skipping the unread value map) (ticket-044c).
 
 **PD-013 · Sev C · allocation · effort S · confidence high**
 The identical stage_index build (season.rs:141, season.rs:264, scenarios.rs:1012) and the identical partition_point predecessor lookup over data.inflow_history are triplicated under the shared estimation-active predicate; the narrowed residue is that shared index+lookup only, NOT a fully-shared season resolution (site 1 adds an .or_else season_for_date fallback, site 3 resolves to stage-occurrence + cast() coverage gating rather than a season), and the three do not always co-fire (site 2 requires non-External inflow scheme, site 3's index needs season_map present).
@@ -2661,6 +2682,7 @@ The identical stage_index build (season.rs:141, season.rs:264, scenarios.rs:1012
 - **Evidence:** Three sites declare the identical index type, build it from the same stage filter, then run the identical predecessor lookup on the same table.
 - **Fix-shape:** Resolve each history row's season and stage occurrence once. Lift the index build and the per-row predecessor lookup into a single helper that returns, per history row, its resolved season and stage position, evaluate the estimation-active predicate once alongside it, and let the three rules consume that shared result to fill their own counters.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — the triplicated stage-index build + predecessor lookup lifted into one shared per-history-row helper (ticket-044c).
 
 **PD-014 · Sev B · allocation · effort M · confidence high**
 slot_occupying_classes (357) full-scans up to three external tables plus a fresh HashSet per call, and check_realization_rules invokes it once per node (308 inside for node in nodes) so nodes sharing a stage recompute an identical stage-keyed result — that per-node redundancy is the solid defect; call sites 667/797 recompute once per DISTINCT staged stage (staged is already deduped), not per node, and the sibling ClassExternal.raw_c (536/716) holds the same count in one pass but reusing it is a cross-module (scenarios.rs->stages.rs) share, not a free local one.
@@ -2671,6 +2693,7 @@ slot_occupying_classes (357) full-scans up to three external tables plus a fresh
 - **Evidence:** The helper body at 365-397 filters `data.external_scenarios`, `data.external_load_scenarios` and `data.external_ncs_scenarios` in full for a single `stage_id`, then `distinct_count` (line 403) collects the surviving scenario ids into a fresh `HashSet<i32>`.
 - **Fix-shape:** Compute the per-stage slot-occupancy vector once per validation run, before any node or stage loop, with a single pass over each external table that accumulates a distinct-scenario-id count per resolved stage index, and have all three call sites index that vector instead of recounting. The value already has an owner one module over: the external-library coherence check builds exactly this vector in one pass and keeps it on its per-class record.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — the per-stage slot-occupancy vector computed once before the node/stage loops (ticket-044d).
 
 **PD-015 · Sev C · allocation · effort S · confidence high**
 The internal checkpoint write path pays an avoidable full-buffer memcpy: each serializer's finished_data().to_vec() (codec.rs:284/333/365/455) is copied only for fs::write in checkpoint.rs:221/227/237/244 to borrow it as a slice and drop it, but the copy occurs at checkpoint cadence and the owned-Vec return stays justified for the pub API's doctest/external callers.
@@ -2682,6 +2705,7 @@ The internal checkpoint write path pays an avoidable full-buffer memcpy: each se
 - **Fix-shape:** Let the write path consume the builder's bytes without an intervening owned copy: either give the checkpoint writer serialize-and-write entry points that hand the builder's finished slice straight to the file write, or have the serializers surrender the builder's own buffer instead of copying out of it. Keep the current owning signatures available if external callers need a standalone buffer, so the copy is paid only by callers that genuinely want ownership rather than by the one production path that writes and drops.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
 - **Part-I:** I.3-6 (cross-reference; verdict travels to Epic 9).
+- **Status:** fixed (2026-09-21) — the checkpoint write path consumes the serializer's finished bytes without the `to_vec()` copy; the owning signature kept for external callers (ticket-045a).
 
 **PD-016 · Sev C · allocation · effort S · confidence high**
 Each build_*_batch reconstructs its run-invariant Arrow Field list (with fresh column-name Strings) once per scenario (simulation_writer.rs:1076; schemas.rs:10-53) and write_parquet_atomic rebuilds WriterProperties per file (atomic.rs:109-114): a bounded, data-volume-independent per-scenario/per-file allocation, not a row-count-scaling cost.
@@ -2692,6 +2716,7 @@ Each build_*_batch reconstructs its run-invariant Arrow Field list (with fresh c
 - **Evidence:** Each of the fourteen `build_*_batch` functions in `simulation_writer.rs` opens with `let schema = Arc::new(<entity>_schema());`, and each `*_schema()` in `schemas.rs` constructs its `Field` list from scratch (`costs_schema` at crates/cobre-io/src/output/schemas.rs:22-53 builds twenty-nine of them).
 - **Fix-shape:** Give each output schema a single lazily initialized shared instance that the batch builders clone the handle of rather than the contents, so the field list and its column-name strings are constructed once per process instead of once per scenario. For the writer properties, resolve them once where the `ParquetWriterConfig` is already stored on the writer and pass the resolved value into the atomic write helper, rather than rebuilding them from the same config inside every file write.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — one lazily-initialised shared Arrow schema per output that batch builders clone the handle of; `WriterProperties` resolved once and passed into `write_parquet_atomic` (ticket-045b).
 
 **PD-017 · Sev B · allocation · effort M · confidence high**
 The partitions_written inventory reaches no output file (SimulationMetadata at manifest.rs:434-462 has no field for it and write_simulation_results at results_writer.rs:133-155 never reads it), so its cross-run retention, merge clone-and-sort (mod.rs:431-435), and MPI allgatherv (simulation.rs:305-357) are unconsumed work; the per-partition format! allocation itself is negligible.
@@ -2715,6 +2740,7 @@ On the one-shot output-conversion path (cli outputs.rs / python run.rs, not the 
 - **Evidence:** The producer's log entry deliberately stores `phase` as `&'static str` and its own doc at crates/cobre-sddp/src/solver_stats.rs:231-232 states the reason is 'to avoid per-entry heap allocation on the hot push path'.
 - **Fix-shape:** Change the row's phase field to a borrowed or enumerated phase so the closed vocabulary travels without an allocation, and let the row reference the producer's histogram rather than owning a copy of it, since the writer's only use of it is to fold it into the aggregation map. If a borrow is undesirable across the crate boundary, the alternative shape is to have the writer accept the producer's log slice directly and do the phase-name and histogram handling internally, which removes the intermediate `Vec<SolverStatsRow>` entirely.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — `delta_to_stats_row` carries phase as an enum/`&'static str` instead of an allocated `String` (ticket-045c).
 
 **PD-019 · Sev C · allocation · effort S · confidence high**
 build_iterations_columns (solver_stats_writer.rs:88-176) alone builds 18 scalar columns via <Array>::from(iter.collect::<Vec<..>>()), paying one redundant intermediate Vec allocation + copy per column that a pre-sized Builder::with_capacity+append (the idiom every sibling writer uses) would avoid, a one-shot iterations.parquet write cost, not a hot-path cost.
@@ -2725,6 +2751,7 @@ build_iterations_columns (solver_stats_writer.rs:88-176) alone builds 18 scalar 
 - **Evidence:** Counting only production code (the scan stops at the inline test module), every other Parquet writer in the crate builds its columns exclusively through `Builder::with_capacity` and per-row `append_value`, with zero intermediate collects.
 - **Fix-shape:** Rewrite the column construction to the idiom the other four writers already use: allocate one typed Arrow builder per column with the row count as its capacity, then walk the row slice once appending each column's value or null in the same loop. That removes the eighteen intermediate vectors and the duplicate copy, and it makes the writer read the same way as its siblings so a future column addition follows one pattern rather than two.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — `build_iterations_columns` rewritten to the builder-with-capacity idiom, dropping the 18 intermediate Vecs (ticket-045c).
 
 ### Over-engineering findings
 
@@ -2893,6 +2920,7 @@ Conceding the struct is not dead (its three fields are read by every parquet wri
 - **Evidence:** The struct-literal grep returns only the declaration and the `Default` impl: nowhere in the workspace is a `ParquetWriterConfig` built with non-default fields, and the only field assignment anywhere is `cloned.row_group_size = 50_000` inside the type's own clone-independence test at parquet_config.rs:90.
 - **Fix-shape:** Decide first whether Parquet compression, row-group size and dictionary encoding are a supported knob for third-party library consumers of cobre-io or a frozen internal constant set; the retired `exports.compression` input key argues for frozen.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target-layering brief)
+- **Status:** fixed (2026-09-21) — `ParquetWriterConfig` frozen as an internal constant set and the threaded `&ParquetWriterConfig` machinery collapsed (folded with PD-016; ADR-013) (ticket-045b).
 
 **OD-024 · Sev C · speculative-generality · effort S · confidence high**
 Conceding the byte-parsing body itself is correct and harmless (a faithful mirror of read_f64_vector), the narrower defect is purely its retention as dead code: at baseline the symbol resolves only at codec.rs:575, carries the scope's sole #[allow(dead_code)] (codec.rs:574), and its comment names neither owner nor landing reader, so it qualifies as neither sanctioned #[allow] census class.
@@ -3368,6 +3396,7 @@ Narrowed: the parallelizable region is specifically the INITIAL per-hydro estima
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Status:** fixed (2026-09-21) — the initial per-hydro estimation loop of `estimate_ar_with_pacf_annual` parallelized with `flat_map_iter`/collect canonical-order reassembly; the annual reduction stays serial (ticket-046a).
 
 **PD-021 · Sev B · duplication · effort M · confidence high**
 Narrowed: the double date-set intersection holds only for seasons that pass the MIN_CORRELATION_PAIRS gate — a rejected season intersects once (in min_pairs) then `continue`s (correlation.rs:418-420), so it pays the walk once, not twice. And this is fitting/setup-time work (one correlation build per solve), so the confirmable cost is bounded setup latency and allocation traffic scaling with n_hydros^2 * observation-length, NOT a per-scenario/per-stage runtime-hot-path regression. Any fix must keep the two documented determinism contracts (canonical hydro_ids-order collect; NaiveDate-ordered pair accumulation) so declaration-order invariance is preserved.
@@ -3380,6 +3409,7 @@ Narrowed: the double date-set intersection holds only for seasons that pass the 
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path; deferred pending a profile) — queued to the performance sweep (see `perf-queue.json`).
 - **Queued to:** performance-sweep
+- **Status:** fixed (2026-09-21) — each pair's overlap count computed once + residuals stored date-sorted for a linear merge-walk, preserving both determinism contracts (ticket-046a).
 
 **PD-022 · Sev C · duplication · effort S · confidence high**
 Narrowed: the borrow-view substitution is valid only where the consumer never mutates the owned vector — verified true at the two reduction loops and the PAR-A initial estimate, which build obs_refs: Vec<&[f64]> and only read (e.g. the classical closure's `obs_by_season[season].len() < 2` guard reads, never writes). It is setup-time memory-traffic debt (one fit per solve), so the confirmable defect is bounded allocation/copy volume (2x classical / up to 4x PAR-A of raw history), NOT a per-iteration hot-path regression; and the classical par_iter closure's canonical hydro_ids-order collect (estimation.rs:947-951) is unaffected by swapping clone_from for a shared-immutable borrow.
@@ -3391,6 +3421,7 @@ Narrowed: the borrow-view substitution is valid only where the consumer never mu
 - **Fix-shape:** Where the consumer only reads observations (the two reduction loops and the PAR-A initial estimate all build obs_refs: Vec<&[f64]> and pass borrows into the FACP/YW primitives), construct that borrow view directly from group_obs -- e.g. (0..n_seasons).map(|s| group_obs.get(&(hydro_id, s)).map_or(&[][..], Vec::as_slice)).collect() -- instead of clone_from into an owned Vec<Vec<f64>>. group_obs outlives every pass within the fitter, so the borrows are valid. This keeps the classical parallel closure's canonical-order determinism unchanged (it still returns per-hydro results in hydro_ids order) and does not alter any numeric result; it only removes the intermediate owned copies. No paradigm noun, engine dependency, or new abstraction.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path) — recorded as deferred debt, below the Sev-A/B performance-sweep threshold.
+- **Status:** fixed (2026-09-21) — a borrow view (`Vec<&[f64]>`) built from `group_obs` for read-only consumers instead of `clone_from` (ticket-046a).
 
 **PD-023 · Sev B · duplication · effort M · confidence high**
 Scoped to the OutOfSample QmcSobol forward path only (SAA/InSample/Historical/External are allocation-free per the positives): the direction matrix + scramble params are recomputed and heap-allocated per (iteration, scenario, stage) though invariant across the scenario axis, and the existing SobolPrecomputed/sobol_ctx seam already amortizes this bit-identically — so the residue is wiring an existing dormant hoist whose sole production caller hard-codes None, not new infrastructure and not a determinism risk.
@@ -3482,6 +3513,7 @@ The quadratic is real but bounded to a single setup-time construction (StudySetu
 - **Fix-shape:** Walk the backward season-occurrence chain once per hydro instead of restarting per k. Add a StageCalendar method (or a season_cast free helper) that, given the anchor and a max depth, yields the sequence of SeasonPeriodWindow occurrences 0..=l_state by advancing previous_season_period_window incrementally, so each occurrence and its O(S) season lookup is computed exactly once; derive_inflow_seeds then casts each returned window onto merged. This stays engine-neutral (no cut/state/Benders noun), introduces no one-consumer abstraction beyond the existing single caller, and preserves the exact walk semantics (same previous_season_period_window / season_for_date sequence) so seed values stay bit-identical.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path) — recorded as deferred debt, below the Sev-A/B performance-sweep threshold.
+- **Status:** fixed (2026-09-21) — the O(n_hydros·l_state²·S) setup redundancy fixed by walking the occurrence chain once per hydro (one-per-study setup cost) (ticket-046b).
 
 **PD-030 · Sev C · duplication · effort S · confidence high**
 Real O(n_hydros*(|record|+|conditioning|)) re-scan, but confined to the one-per-study StudySetup::new construction (never a per-scenario/stage/iteration path); the confirmed residue is a setup-time overscan fixable by a single group-by-hydro_id pass, and any fix must preserve the returned canonical-order positional layout bit-for-bit.
@@ -3493,6 +3525,7 @@ Real O(n_hydros*(|record|+|conditioning|)) re-scan, but confined to the one-per-
 - **Fix-shape:** Before the hydro loop, do one pass over record and one over conditioning to bucket rows by hydro_id (e.g. a HashMap<EntityId, Vec<RealizedWindow>>), then index each hydro's bucket inside the loop. Keep the existing hydros-canonical-order iteration for the returned position, and preserve the row order within each bucket so merge_layered_windows sees the same window sequence and seeds stay bit-identical. Engine-neutral, no new cross-crate dependency, single existing consumer.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L1 cobre-stochastic)
 - **Measurement:** UNMEASURED (setup/fitting-time path, not the training hot path) — recorded as deferred debt, below the Sev-A/B performance-sweep threshold.
+- **Status:** fixed (2026-09-21) — the setup-time overscan fixed by a single group-by-`hydro_id` pass, preserving the returned canonical-order positional layout bit-for-bit (ticket-046b).
 
 #### Over-engineering
 
@@ -3835,6 +3868,7 @@ Narrowed to the mechanism at this station only: because a crate-level `[lints]` 
 - **Calibration:** CD-009 precedent (a hand-copied table with a bounded, checker-shaped fix): Cargo forbids the `lints.workspace = true` overlay beside a per-lint override, so the copies are forced and the debt is manifest-level drift, not spreading structure.
 - **Reviewer rating:** B — recalibrated to C because blast radius is two manifests and the fix is a checker or a shared include, not a structural change — CD-009 duplication precedent, Sev C.
 - **Owner decision (2026-09-18, R9):** Keep forbid + checker — the workspace `unsafe_code = forbid` stays the unoverridable default (CLAUDE.md hard rule); a scripts/ci checker diffs each per-crate `[lints]` copy against the workspace tables so drift is red CI; the four FFI crates keep their audited overrides.
+- **Status:** fixed (2026-09-21) — a `scripts/ci` checker now diffs each per-crate `[lints]` copy against `[workspace.lints]` (forbid kept + checker) (ticket-038).
 
 **CD-076 · Sev C · leaky-boundary · effort S · confidence high**
 Three of the seven put above-L0 vocabulary in the normative sentence itself with no adjacent generic restatement: highs/solver.rs:477 ('the primary warm-start mechanism for the backward pass', an L3 traversal phase with no L0 referent), trait_def.rs:212 (the public determinism guarantee scoped to 'a scenario's result' and 'which scenarios a worker happened to process' instead of to the solver handle), and trait_def.rs:95 (the qualifier 'scenario' on solve's otherwise crate-owned 'patches' precondition). The other four restate the L0 fact in the same sentence, mark the caller boundary as an 'e.g.', or duplicate a trait-level anchor, and the gate's inability to see any of them is not part of the defect.
@@ -3847,6 +3881,7 @@ Three of the seven put above-L0 vocabulary in the normative sentence itself with
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** doc-only vocabulary in an L0 crate with no type or behaviour change; CD-064 (stochastic phase-vocabulary reword) is the nearest recorded precedent and sits at B only because it spans a whole L1 kernel — here three sentences.
 - **Owner decision (2026-09-18, R10):** Now-fix reword — same treatment as stochastic CD-064: a pure doc reword in the generic register, no type or behaviour change, independent of the phase-1 shed; CD-076 stays neutral, Sev C.
+- **Status:** fixed (2026-09-21) — the seven L0 cobre-solver doc sites reworded into the generic register (the three determinism sentences restated as solver-handle properties); doc-only (ticket-011).
 
 **CD-077 · Sev C · asymmetry · effort S · confidence high**
 At `clp/mod.rs:25` the `pub(crate) use retry::LADDER_RUNGS` re-export has no non-test consumer -- `interface.rs:6` reads the constant through its owning path `super::retry`, which is equally reachable from the sibling `clp/tests.rs` -- so that facade line and the `not(test)` suppression above it exist only to give the test module a shallower import path; the claim does not extend to a HiGHS/CLP facade-rule divergence (HiGHS defines no module-level rung constant) nor to the suppression's form, which is minimum-scope, rationale-carrying and mirrored at `cobre-sddp/src/workspace/mod.rs:31`.
@@ -3858,6 +3893,7 @@ At `clp/mod.rs:25` the `pub(crate) use retry::LADDER_RUNGS` re-export has no non
 - **Fix-shape:** Have the sibling test module import the constant by its owning path — `super::retry::LADDER_RUNGS`, exactly what interface.rs:6 already does — and delete both the re-export and the `cfg_attr` allow from the facade. That removes a lint suppression from production source, removes a production surface that exists only for tests, and restores symmetry with the HiGHS facade, which re-exports only what non-test code consumes. Blast radius is three lines: one import in the sibling tests module and the two facade lines. Note for the owner what this candidate is not: it is not a claim that the constant should be private or that the tests should stop asserting on it, only that a test's import path should not appear in the production facade when the owning path is already reachable and already used.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** a single facade line and its lint suppression that exist for a test import path; cosmetic module-shape asymmetry.
+- **Status:** fixed (2026-09-21) — the CLP `LADDER_RUNGS` facade re-export and its `cfg_attr` allow deleted; the sibling test imports by the owning path (ticket-038).
 
 **CD-078 · Sev B · duplication + asymmetry · effort M · confidence high**
 The ffi/clp.rs:27-31 rationale is stale at the baseline — get_basis and install_basis decode and re-encode the CLP codes through BasisStatus with folding rather than round-tripping them verbatim as raw i32 — and its 'no symbolic definitions' conclusion is contradicted by the two private constants at backends/clp/solver.rs:18 and :22, which reset_cold_basis uses as the single bypass of the canonical to_clp_code/from_clp_code owner, leaving interface.rs:600's CLP_BASIS_* reference resolvable to nothing. Conceded: the code space is NOT ownerless, and naming the six values would add a single definition site, not compile-time anchoring, since the HiGHS constants are themselves hand-written literals.
@@ -3869,6 +3905,7 @@ The ffi/clp.rs:27-31 rationale is stale at the baseline — get_basis and instal
 - **Fix-shape:** Give the CLP code space one owner in the binding module, mirroring what the HiGHS side already does: declare all six values as named constants in ffi/clp.rs next to the header they mirror, have both directions of the canonical mapping match on those names instead of bare numerals, and have the two private constants in backends/clp/solver.rs use them rather than redeclare two of the six. Rewrite the ffi/clp.rs:27-31 rationale to say what is true — the codes are interpreted in both directions, so they get names — instead of the round-tripped-verbatim premise that argued against naming them. Then backends/clp/interface.rs:600's `CLP_BASIS_*` reference resolves to something real, and the numerals stop being duplicated across three modules. This is a two-way door with no public surface change: the mapping functions keep their signatures, so the blast radius is one binding module, one enum body, and two constants. It is worth doing above C severity because the numerals are a warm-start correctness contract — a value transposed in one of the three copies mis-installs a basis silently rathe…
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** four spellings of one FFI code space with a stale rationale and a private bypass of the canonical mapping — a real smell confined to the CLP backend; the HiGHS half already has the named-constant owner.
+- **Status:** fixed (2026-09-21) — the CLP basis-code space given one owner in `ffi/clp.rs` (six named constants) that both directions of `to_clp_code`/`from_clp_code` and the two `backends/clp/solver.rs` constants use; stale rationale rewritten (ticket-020).
 
 **CD-079 · Sev B (A-risk) · leaky-boundary · effort M · confidence high**
 Two additions survive, both scoped to the E9 collateral estimate and neither to crate behaviour: (a) the handoff clips exactly two of its three assertion spans — conformance.rs is 153-157 not 154-156 and types.rs is 779-783 not 779-782, while freeze.rs:320-324 is correct as recorded; (b) the definite 'four StageTemplate test fixtures' list omits a fifth in-src fixture at types.rs:749-753 plus three in backends/clp/tests.rs, four in backends/highs/tests.rs, five further in freeze.rs (:437,:475,:555,:755,:800), and names none of the eight in tests/conformance.rs. Stripped: 'seven further freeze.rs blocks' over-counts by two, since freeze.rs:162 is the production copy-forward named as the fix site and :324 is a named assertion span, leaving five; and '22 in-src mentions' is a matching-line count (24 occurrences), two of whose types.rs lines are the declaration and its doc comment rather th…
@@ -3895,6 +3932,7 @@ Narrowed off ffi/mod.rs and off any harm claim: the CLP-only build's carried HiG
 - **Calibration:** expression asymmetry between the two halves of basis_status.rs plus a README line; the defender conceded every harm claim.
 - **Needs-human (owner gate):** Owner picks the residue's direction: keep the canonical mapping unconditional and correct README.md:106-107, or name the CLP codes in ffi::clp and gate each half - the latter also makes BasisStatus::to_highs_code/from_highs_code and the legacy-checkpoint agreement test (basis_status.rs:280-289) HiGHS-only.
 - **Owner decision (2026-09-18, R5):** Keep mapping unconditional; fix README — the canonical BasisStatus mapping stays feature-independent; name the CLP codes in ffi::clp for symmetry and correct README.md:106-107 — smallest blast radius, no test becomes HiGHS-only.
+- **Status:** fixed (2026-09-21) — cobre-solver/README.md's false HiGHS feature-gating contract corrected (BasisStatus mapping kept unconditional) and the CLP codes named in `ffi::clp` for symmetry; doc half (ticket-012).
 
 **CD-081 · Sev C · leaky-boundary (naming) · effort S · confidence high**
 The private, contract-unpinned FreezeScratch.cut_nz_per_col -- declaration at crates/cobre-solver/src/freeze.rs:22 plus its four production uses at 137, 138, 141 and 188 -- is an unsanctioned L0 vocabulary residue, narrowly because it carries no serialized key and therefore falls outside the deliberate key/type divergence that crates/cobre-io/src/config/training.rs documents for cut_selection and that output/mod.rs applies to cuts_active. The gate half of the title does not survive: the word-character evasion is already recorded in partI-handoff.json's genericityGateBlindSpot and owned by E7, and the #[cfg(test)] truncation is a documented intentional exclusion rather than a second blind spot.
@@ -3907,6 +3945,7 @@ The private, contract-unpinned FreezeScratch.cut_nz_per_col -- declaration at cr
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** CD-011 naming-asymmetry precedent: a private identifier carrying a caller-loop noun, no serialized key, no public surface; the gate blind spot travels to E7, the rename stands on its own.
 - **Queued to:** build-ci
+- **Status:** fixed (2026-09-21) — the private `FreezeScratch.cut_nz_per_col` field and its four production uses renamed to name the CSC per-column nonzero census (ticket-039).
 
 #### Performance
 
@@ -3962,6 +4001,7 @@ At the baseline ExecutionTopology::is_homogeneous (crates/cobre-comm/src/topolog
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-comm)
 - **Calibration:** one public predicate with zero in-workspace readers and no register entry — the delete-or-register disposition the mirror's dead-surface standard requires.
 - **Owner decision (2026-09-18, R8):** Delete — leftover, not a planned heterogeneous-layout guard; drop the predicate and its four unit tests, the eventual caller re-adds it beside its use.
+- **Status:** fixed (2026-09-21) — `ExecutionTopology::is_homogeneous` and its four unit tests deleted (zero in-workspace readers); coverage-neutral (ticket-016).
 
 **OD-033 · Sev B · speculative-generality · effort M · confidence high**
 Only the acquire half of the CLP hot-start lifecycle - the shim/extern pair cobre_clp_mark_hot_start plus cobre_clp_solve_from_hot_start and the two safe methods at crates/cobre-solver/src/backends/clp/solver.rs:350 and :394 - has no production caller and is absent from the reserved-seam register, so the defect is the missing register entry (owner plus consuming milestone) for that pair alone; the release half (unmark_hot_start, its three interface.rs call sites and Drop) is production-wired and the determinism harness is a contract-pinning exerciser, so neither is part of the unwired surface nor needs registering.
@@ -3975,6 +4015,7 @@ Only the acquire half of the CLP hot-start lifecycle - the shim/extern pair cobr
 - **Calibration:** an acquire/solve pair built through the C++ shim, the extern block and the safe wrapper with no production caller and no reserved-seam entry; bounded to the CLP backend but spanning three layers — Sev B pending the owner's milestone or retirement.
 - **Needs-human (owner gate):** Owner must supply the activating milestone for the CLP hot-start acquire/solve pair, or rule it retired at the next licensed public-API break; the register admits an entry only with both an owner and a consuming milestone, and this station cannot invent one.
 - **Owner decision (2026-09-18, R6):** Retire at the next licensed public-API break — OD-033 stays accepted at Sev B; the fix-shape becomes 'delete the acquire half (shim, extern, wrapper, harness) at the next licensed API break' — no reserved-seam entry, no wiring.
+- **Status:** fixed (2026-09-21) — the CLP hot-start acquire half (`cobre_clp_mark_hot_start`, `cobre_clp_solve_from_hot_start`, the two safe wrappers and their harness tests) removed in the licensed public-API batch; no production consumers (ticket-036).
 
 **OD-034 · Sev C · duplication · effort S · confidence high**
 The 12-value agreement between `HighsProfile::default()` and the `default_options()` table (config.rs:58-77 against 168-238) is a load-bearing invariant for the delta-only dispatch in `ProfiledSolver::new`/`set_profile` (profiled.rs:38-58) that no test or compile-time assert pins; the defect is the missing guard alone, not the second surface, since the 17-entry table carries 5 non-profile options and remains the sole installer on the fresh-handle and retry-restore paths and so cannot be collapsed into the profile.
@@ -3986,6 +4027,7 @@ The 12-value agreement between `HighsProfile::default()` and the `default_option
 - **Fix-shape:** Make one surface the owner of each default. Either derive HighsProfile::default() from the table by reading the typed entry for each field it names, or -- if the two types must stay separate -- state the invariant as a test that walks the table and asserts each named option's value against the corresponding profile field, so the doc comment's bit-for-bit claim is enforced instead of asserted. Nothing here should be generalized to CLP: CLP has no options table and adding one to match would be over-engineering.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** the defect is the missing guard on a 12-value agreement two tables already keep by hand; a compile-time or unit assertion closes it.
+- **Status:** fixed (2026-09-21) — a guard added on the `HighsProfile::default()`↔`default_options()` 12-value agreement (ticket-038).
 
 **OD-035 · Sev B · duplication · effort S · confidence high**
 The profile-floored tolerance pair in highs/retry.rs (two f64::max bindings plus the two cobre_highs_set_double_option calls) has no single owner: it is written out verbatim four times at levels 3, 7, 10 and 11, with the level-3 and level-7 bodies byte-identical and only the floor literal (1e-8 versus 1e-7) separating the two groups. The residue is a floor-taking two-statement extraction with four call sites; the CLP rung-table comparison in the title is conceded and does not carry, because the twelve heterogeneous HiGHS levels are not tabulable the way CLP's five fixed-arity rungs are.
@@ -3997,6 +4039,7 @@ The profile-floored tolerance pair in highs/retry.rs (two f64::max bindings plus
 - **Fix-shape:** Give the repeated fragment one owner: a private helper that takes the floor and applies both tolerance options in the current fixed order, and express the per-level deltas (floor, scaler ints, solver string) as a static rung table analogous to the CLP ladder's, so each level is data and the FFI call sequence is written once. The constraint that makes this bounded rather than risky is that the ladder is determinism-sensitive: the refactor must reproduce the exact per-level FFI call order and the exact set of options touched -- the escalation composition tests in the solver crate are what pin that, and a rung table is only legitimate if it preserves the order verbatim. Blast radius is the HiGHS retry escalation path alone (levels 3, 7, 10, 11 of one backend). Do not build a shared ladder abstraction across the two backends: HiGHS's string-keyed options and CLP's typed setters have no common shape worth a second layer, and a cross-backend ladder trait would be a one-consumer abstraction.
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV crate table — L0 cobre-solver)
 - **Calibration:** one two-statement fragment written out four times in one retry ladder where the sibling backend is a declarative rung table; confined to retry.rs, so B not A.
+- **Status:** fixed (2026-09-21) — the HiGHS retry tolerance pair extracted into one private helper; per-level FFI call order kept verbatim, pinned by the escalation tests (ticket-021).
 
 #### Test bloat
 
@@ -4068,6 +4111,7 @@ Narrowed to two anchors: the module-doc guarantee at clp_only_smoke.rs:3-4 is fa
 - **Yardstick:** docs/design/testing-architecture.md §5.1 canonical per-crate layout (integration binaries are expensive; group into one binary) (see `td-queue.json`).
 - **Queued to:** test-corpus
 - **Owner decision (2026-09-18, R11):** Retire the binary — clp_only_smoke.rs is retired; the clp-gated section of conformance.rs is the clp-only guard (testing-architecture §5.1: a solver-linked binary must earn its link cost).
+- **Status:** fixed (2026-09-21) — `crates/cobre-solver/tests/clp_only_smoke.rs` retired; the clp-gated section of `conformance.rs` is the surviving guard (ticket-017).
 
 **TD-040 · Sev C · duplication · effort S · confidence high**
 Only test_fixture_stage_template_data (conformance.rs:137-158) is I.3-8 collateral - its assertions at :153-157 re-encode the five shed fields; test_fixture_row_batch_data (:160-170) carries none of them, so the title's second half holds for one of the two tests. What holds for both is narrower than the title: each asserts a same-file struct-literal builder against its own transcription, adds no relation the builder does not already contain, and invokes no SolverInterface method, while the objective and primal assertions at :72 and :176 already pin the same fixture against an LP-derived oracle.
@@ -4570,6 +4614,7 @@ Narrowed to a missed error class, not a corrupted report: because StudySetup::ne
 - **Related prior entries:** CD-004, CD-024-successor (distinct claims; adjudicated at ingest).
 - **Needs-human (owner gate):** Whether the fail-loud leg changes the public surface of ResolvedParameters::get (a fallible signature or a panic) or is instead enforced as a construction-time check at the LP-build site, leaving get infallible: get is pub and must_use, so the choice is an owner call on public API shape, not a correctness question.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — scalar-parameter table is now a `StudySetup` constructor input and the three `ResolvedParametersError` classes (`MissingSeason`/`PerStageBlockCoverage`/`MissingSpecificProductivity`) fail loud at the LP-build/admission site, so both `cobre validate` and Python `cobre.io.validate` reject them instead of exiting 0; `ResolvedParameters::get` stays infallible (ticket-003).
 
 **CD-083 · Sev C · bad-abstraction · effort S · confidence high**
 `CutManagementConfig::warm_start_cuts` (config.rs:148) is the struct's only field with no production reader -- its four siblings are read at training/backward_pass_state.rs:164-165 and training/session/mod.rs:262/1042/1215 -- and its rustdoc contract 'contributes to cut-pool capacity' (config.rs:147) is false at the baseline because capacity is derived solely from the per-pool counts consumed by `pool_capacity` (cut/fcf.rs:498) and `CutPool::new_with_warm_start` (cut/pool.rs:893-895). Conceded from the title's framing: no wrong-shape defect is established for this field (that argument belongs to the distinct cobre-io manifest symbol `ProducerBlock::warm_start_cuts`), and the residue does not decide delete-versus-give-it-a-reader, because the field is `pub` on a re-exported type so removal is a breaking API change.
@@ -4584,6 +4629,7 @@ Narrowed to a missed error class, not a corrupted report: because StudySetup::ne
 - **Byte-neutrality:** asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction.
 - **Calibration:** one inert `pub` config field with a false rustdoc contract and no production reader; public-API removal or a reserved-seams entry — the delete-or-register disposition (OD-032 precedent) at cosmetic blast radius.
 - **Needs-human (owner gate):** Owner must choose between removing `CutManagementConfig::warm_start_cuts` (a breaking change to a re-exported public type) and giving it a real reader plus a reserved-seams entry; the verdict establishes the field is inert and its doc line false, not which of the two lands.
+- **Status:** fixed (2026-09-21) — the false rustdoc line on `CutManagementConfig::warm_start_cuts` corrected (ticket-014), then the field, its two production literals, the `train_inner` reset, the test literals and `warm_start_cuts_field_accessible` deleted in the licensed public-API batch (ticket-031).
 
 **Performance** — 3 minted
 
@@ -4602,6 +4648,7 @@ Only the symmetric-matrix half of the title survives as a bit-exact free win: `l
 - **Calibration:** the surviving residue is the bit-exact symmetric-matrix half only, on a once-per-study opening-order chain builder (setup-time by project rule); the tour-cost half moves goldens and is demoted to an owner call — structural calibration only, UNMEASURED.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: redundant pass — a whole-tour cost sum recomputed per candidate reversal where only two edges change, a symmetric distance matrix computed twice per pair, and a per-start buffer allocation; exercising call sites (cited, not anchored): stochastic/noise_key.rs · shortest_chain_path → nearest_neighbor_tour / two_opt_improve (once per study at setup). Sev C — not queued; the owner gate may promote it; no number is asserted here.
 - **Needs-human (owner gate):** Owner call: whether the goldens-moving delta reformulation of the 2-opt accept test is worth a parity re-baseline at all, given that the confirmed free win is only the symmetric matrix fill; if not, the perf sweep should carry the symmetric-fill item alone.
+- **Status:** fixed (2026-09-21) — symmetric distance-matrix fill + hoisted per-start buffers landed (the byte-exact half only) (ticket-040).
 
 **PD-036 · Sev B · duplication · effort S · confidence high**
 At `NodeGraph::backward_cut_levels` and its two per-iteration callers only (`run_sampled_backward`, `run_enumerated_backward`), the graph-invariant level partition is re-derived by evaluating the cut-generating predicate once per (stage, node) pair instead of in one bucket pass, and re-collected into a fresh outer `Vec` plus one fresh `Vec` per non-empty level, on every backward pass; `build_node_graph` is a fix site rather than a defect site, and the buffer is distinct in SUBJECT (not in named driver) from the `stage_stats` telemetry pack that the register's deferred backward-scratch item already covers for BOTH drivers.
@@ -4650,6 +4697,7 @@ The defect is confined to public-surface and naming hygiene on one read-only acc
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV §IV.1 (L3 engine internals))
 - **Byte-neutrality:** n/a — test-only, visibility-only or doc-only change; no rendered LP byte can move (bounded by the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction as a formality).
 - **Calibration:** a `pub fn *_for_test` shipped ungated on the public surface with one test caller; naming and surface hygiene on one read-only accessor.
+- **Status:** fixed (2026-09-21) — `ncs_stochastic_dormant_for_test` visibility narrowed (ticket-039).
 
 **Test bloat** — 6 minted
 
@@ -4713,6 +4761,7 @@ Only the byte-identical fixture classes duplicate: in anticipated_core.rs the si
 - **Yardstick:** docs/design/testing-architecture.md §5.1 canonical per-crate layout (one declaration per fixture class per binary; whole-system builders parameterised, not copied) (td-queue.json).
 - **Needs-human (owner gate):** Scope call for the owner: the default_hydro_penalties body is one md5 across anticipated_core.rs and anticipated_scenarios.rs, and scenarios build_config at 2954 equals core build_config at 3831, so the owner must decide whether the hoist stays per-binary at file scope or lifts the shared class into tests/common (the test-corpus station owns the cross-binary convention).
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — per-binary file-scope hoist of the byte-identical fixture classes in `crates/cobre-sddp/tests/anticipated_core.rs` (the cross-binary lift stays E08) (ticket-028).
 
 **TD-045 · Sev B · duplication · effort S · confidence high**
 For state_layout_for the surviving residue is narrower than the title in two ways: the seven bodies are identical only after dedent and are semantically the same StateSpace::new call as test_support::state_layout, the unreachability half of the rationale is false in all seven because each file already resolves other cobre_sddp::test_support symbols ungated, but the stale-symbol half is false in six of seven (inflow_nonnegativity.rs:69-71 names no symbol), and the duplicated symbol is imported by NONE of the seven - it is imported by name in three other binaries of the same corpus (mpi_wire.rs:1344, lp_builder.rs:1532, basis_trajectory_probe.rs:282), which is what proves reachability. From the merged 5d twin: the five all_enabled_cut_state_layouts copies survive in full, and there the cited symbol does exist (test_support.rs:657) so only the reachability claim is false, with simulation_pipeline_integration.rs:47 importing it by name while four siblings hand-copy it; the four study_dims…
@@ -4765,6 +4814,7 @@ Narrowed to a LATENT single-site contract violation with a named precondition: f
 - **Contract:** .claude/rules/sddp.md — *In-LP anticipated ring: definition-row sign, hold carry & asymmetric masking*; *State pinning uses column bounds, not equality rows*; *The ring axis: the delivery axis with the fixed post-horizon window excised* — the contract is the reason the current shape is correct; the fix-shape preserves it.
 - **Calibration:** a LATENT single-site contract divergence: `fill_anticipated_columns` is the only one of four ring-residue owners keying the deposit slot off the raw delivery axis instead of `PointResolution::ring_index`, contradicting its own rustdoc and the pinned deposit clause; the residues diverge only for a plant whose fixed post-horizon width is not a multiple of k_max AND which carries a class-3 in-study decision above that window — a bounded, wrong-but-compiling divergence that would write a wrong column bound silently, hence the A-risk marker (CD-074 class: pinned state coupled to a bounded column reconciled ad hoc per family).
 - **Reviewer rating:** A — recalibrated to B (A-risk) because latent at the pin (no shipped deck satisfies the two-part precondition), a single fill site, and the three sibling residue owners are correct — the blast radius is one function, not a spreading structure.
+- **Status:** fixed (2026-09-21) — one `lp/builder` ring-residue walker (via `ring_index`) now drives the anticipated row fill, column fill and `build_anticipated_slot_row_pos`; byte-neutral against every golden (ticket-007).
 
 **CD-085 · Sev B · missing-seam · effort S · confidence high**
 Only the two commitment-hold reads in simulation/extraction.rs (:268 incoming, :316 outgoing) are genuine untyped LP-column recompositions: the same file already resolves the storage, lag and bucket families' primal reads through the typed InCol/OutCol accessors, while the commitment family has no StateSpace-side accessor reachable from outside lp/ because its purpose-named owner DeliveryRing::out_col/in_col is only constructible through the pub(super) anticipated_ring helper. The three state-vector sites (commitment_reconcile.rs:193 with :208, setup/mod.rs:2651, :2667) are StateDim indices and not columns, and the DeliveryRing out_col versus slot_target transposition hazard is unreachable at every production call site.
@@ -4781,6 +4831,7 @@ Only the two commitment-hold reads in simulation/extraction.rs (:268 incoming, :
 - **Calibration:** the commitment-hold family is the only one of five state families without a typed `InCol`/`OutCol` resolver reachable from outside lp/, so the two extraction-side reads recompose the LP column by hand — CD-035 precedent (missing typed-role seam), Sev B; NOT a one-consumer seam: both consumers exist at the pin and the accessors complete an existing five-member family (owner question carried).
 - **Needs-human (owner gate):** Alignment-epic owner call: whether conflicts trigger 4 (one-consumer abstraction) reaches a purpose-named single-consumer StateSpace accessor that completes an existing five-member family, or is bounded to seams, traits and crates as its text states.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — typed `commitment_hold_incoming_col`/`commitment_hold_outgoing_col` resolvers added on `StateSpace` and the untyped LP-column recompositions in `simulation/extraction.rs` converted; byte-neutral via equivalence test (ticket-022).
 
 **Performance** — 2 minted
 
@@ -4833,6 +4884,7 @@ Among the types declared in lp/indexer/index.rs, only Col and Row have no non-te
 - **Reviewer rating:** B — recalibrated to C because zero consumers, three in-file tests and two rustdoc links are the whole blast radius; OD-032 (zero-consumer public predicate) calibrated C.
 - **Needs-human (owner gate):** Scheduling only: whether the public-API removal of Col and Row ships as its own semver-major break or waits for the 0b cobre-model carve-out of lp/, as the CD-019 deferral precedent suggests — the defect itself is settled.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — the `Col`/`Row` newtypes and their three round-trip tests deleted, dropped from the `lp/indexer/mod.rs` re-export and `lib.rs`, module doc narrowed (ticket-032).
 
 **OD-038 · Sev C · speculative-generality · effort S · confidence high**
 FphaRowRange (lp/indexer/layout.rs:34-40) has no construction or read site anywhere under crates/ outside its own cfg(test) Debug/Copy smoke test, yet is public API through lib.rs:69, and the satellite-types carrier sentence at layout.rs:5-7 is false for it because StageGeometry exposes FPHA rows only as the flat fpha: row_fpha_start()..fpha_rows_end range (builder/layout.rs:1905), never as a Vec<FphaRowRange>. Narrowed from the title on two counts: the documented row formula does NOT contradict the walker's stride, since start + k * planes_per_block + p reproduces BlockGrid::fpha_plane (block_grid.rs:95-104) exactly and only the granularity of start diverges, per-plant in the doc against the per-CELL re-base in for_each_fpha_plane (fpha_cursor.rs:80-97); and that divergence is latent rather than a live mis-address, because the hydro-cell partition is the identity for every shipping study (hydro_cell.rs:5-10, builder/layout.rs:1282-1284), so no in-repo deck can be mis-addressed by it.…
@@ -4851,6 +4903,7 @@ FphaRowRange (lp/indexer/layout.rs:34-40) has no construction or read site anywh
 - **Reviewer rating:** B — recalibrated to C because a single zero-consumer type and one false doc sentence; the formula contradiction the reviewer weighed did not survive the defender.
 - **Needs-human (owner gate):** Owner call carried over from the attacker: deleting FphaRowRange is a public-API removal (reachable as cobre_sddp::indexer::FphaRowRange via lib.rs:69) with no in-repo consumer; decide whether it lands now as ordinary cleanup or is batched with the Phase 0b cobre-model carve-out that relocates lp/indexer anyway, per the CD-019 deferral precedent. Scope call: the fix as filed leaves the same per-plant framing live in BlockGrid::advance_fpha_base's rustdoc (block_grid.rs:106-107), so the reader hazard is only half retired; decide whether that sibling doc correction joins this item or gets its own.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — the false `FphaRowRange` module doc + `BlockGrid::advance_fpha_base` rustdoc corrected (ticket-015), then `FphaRowRange` and its smoke test deleted with the re-export dropped in the licensed public-API batch (ticket-033).
 
 **Test bloat** — 4 minted
 
@@ -4887,6 +4940,7 @@ build_classical_fixture (par_a_lag12_lp_coefficient.rs:347-580, 234 lines) repea
 - **Yardstick:** docs/design/testing-architecture.md §3.2 sustainability (a fixture earns its second copy only by a delta the copy cannot express as a parameter) (td-queue.json).
 - **Needs-human (owner gate):** Whether this binary's classical arm should be parameterized in place or instead folded onto the existing two_hydro_par_system helper when template_integration and par_a_lag12_lp_coefficient are grouped under the testing-architecture section 5.1 layout - a test-corpus station call, since that homing layout is still a proposal at the pin.
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — `build_classical_fixture` parameterized onto `build_par_a_fixture` in place in `par_a_lag12_lp_coefficient.rs` via one `Option<AnnualComponent>` param + thin wrappers (ticket-029).
 
 **TD-049 · Sev B · duplication · effort M · confidence high**
 Narrowed to two verified copy-paste families and a corrected cost basis: the anticipated-thermal trio (one_anticipated_thermal_system, two_thermal_one_anticipated_system, two_anticipated_thermal_system, 127 and 130 of 144 lines identical, differing only in the thermal list and the n_thermals and k_max derived from it) and the one_bus_system_n_blks / one_bus_system_n_blks_with_generic pair (111 of 117 identical, the second being the first plus two builder calls) are genuine sibling copies that one list-parameterized builder would subsume. The title's stated cost is wrong and does not survive: StageSpec plus the Default spread at all 20 sites keeps a new Stage field O(1) per the invariant documented at tests/common/builders.rs:1-9, so the per-copy fan-out is confined to the non-Spec literals, namely the four bounds and penalties sizing structs (20 copies, 55 of 80 sites without a Default spread) and the InflowModel and LoadModel literals (32 sites, none with one), which the proposed fam…
@@ -4941,6 +4995,7 @@ Under `Traversal::Enumerated`, `run_enumerated_backward` neither folds a `slot_i
 - **Related prior entries:** CD-022 (distinct claims; adjudicated at ingest).
 - **Re-raise-of:** PD-004; performance-debt-follow-ups-first-performance-pass-2026-08-18; NOT a re-raise — distinct claim anchored in a file a file-scoped retired item also cites; NOT a re-raise
 - **Needs-human (owner gate):** Carried over from the attacker and still decisive: is enumerated traversal combined with dynamic cut selection a SUPPORTED configuration? Road (a) rejects the pairing beside the existing enumerated preconditions in `setup/mod.rs`; road (b) wires the binding contribution plus a per-stage metadata reduction into the enumerated driver. Both are byte-neutral on today's goldens, so only owner intent decides which road. Scope and severity call: `CutPool::enforce_budget`'s `(last_active_iter, active_count)` eviction key is a second production reader that degrades the same way under enumerated traversal, and unlike the DCS seed it changes which cuts are deactivated and therefore the bound. The owner must decide whether that reader belongs inside this item's scope and whether it lifts the severity above B; I did not mint a separate it…
+- **Status:** fixed (2026-09-21) — a typed admission-gate arm now rejects `Traversal::Enumerated` combined with dynamic cut selection beside the enumerated preconditions, with a named test and a `.claude/rules/sddp.md` contract entry (ticket-004).
 
 **Performance** — 5 minted
 
@@ -5045,6 +5100,7 @@ The method must not exist while `actual_per_rank` accepts `total_forward_passes`
 - **Byte-neutrality:** asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction.
 - **Calibration:** a parameter that shadows a total the struct already stores, letting the per-rank view be built from a different total than the one its siblings were derived from; the deletion half is dropped because the mirror declares the method the owner of the partition arithmetic.
 - **Related prior entries:** OD-009 (distinct claims; adjudicated at ingest).
+- **Status:** fixed (2026-09-21) — the rank-distribution parameter cleaned up (the two-comment correction routed to E07) (ticket-039).
 
 **Test bloat** — 4 minted
 
@@ -5065,6 +5121,7 @@ Narrowed to one deletion and stripped of its two supporting claims: at the pin s
 - **Yardstick:** docs/design/testing-architecture.md §5.1 canonical per-crate layout (integration binaries are expensive; one owner per assertion) (td-queue.json).
 - **Needs-human (owner gate):** Sequencing call for the cut-pool/training owner: delete the redundant binary now, or let it retire together with the superseded sync_cuts family at the next licensed public-API break, since all three copies of this assertion die with the method.
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — `crates/cobre-sddp/tests/test_mpi_allgatherv_nonuniform_workers.rs` deleted (the weakest of three count-mismatch copies) (ticket-018).
 
 **TD-052 · Sev C · duplication · effort S · confidence high**
 Only the three constant-valued helpers duplicate without justification: d01_case_dir at 41, 917 and 1580, d03_case_dir at 908 and 1884, and ascending_stage_end_dates at 54, 1593 and 2745 are fixed deck paths and one pure function of n_pools with no per-group tuning surface, and the d01 copies have already drifted unforced (`.unwrap()` at 41 and 1580 versus `.expect(...)` at 917, with both lint styles allowed file-wide at lines 8-9); each should be declared once at cut_basis.rs file scope. write_test_checkpoint and build_setup are excluded: the former is the assertion-feeding fixture whose baked metadata constants are per-site pinning covered by the module doc at lines 3-5 and the Layer-1 fixtures-untouched invariant, and the latter genuinely diverges in return type at 113 versus 1652. The claim that the wired `mod common` seam is the unused sharing route does not survive, since that seam is used at seven sites and its build_setup_for_case drives from_broadcast_params with patched scal…
@@ -5134,6 +5191,7 @@ Narrowed to the internal-import half of the alias block at lib.rs:56-99: the cra
 - **Reviewer rating:** B — recalibrated to C because import-path spelling only: no type, behaviour or dependency changes, and the public re-export surface is untouched — the CD-021 organisational precedent is C.
 - **Needs-human (owner gate):** Whether the public half of the alias block is also retired is an owner call: lib.rs:23-26 declares the pub mod namespaces non-semver-stable and the nested paths already resolve, but removing pub use policy::orchestration would touch cobre-cli, cobre-python, the integration corpus and the literal match in scripts/ci/check_python_parity.py.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — the intra-crate crate-root module aliases retired as an internal import path (`lp` aliases first, ticket-023), then `pub use policy::orchestration` removed — updating cobre-cli, cobre-python, the integration corpus and the `check_python_parity.py` literal (ticket-034).
 
 **CD-088 · Sev C · leaky-boundary · effort S · confidence high**
 Narrowed to a documentation-and-organization misfit: production/mod.rs:3-6 states a cluster purpose that does not cover production/conversion.rs, whose sole source domain is simulation/types.rs, making it the one engine-to-cobre_io projection in cobre-sddp homed outside the domain that owns its source types (unlike training/training_output.rs, policy/policy_export.rs, production/hydro_models/export.rs, fixed_delivery_echo.rs and generic_constraint_echo.rs). Conceded and dropped from the claim: the file breaks no layering or dependency rule (production/ imports cobre_io elsewhere), costs nothing at any call site or to Python parity (both front ends reach it by From coherence without naming the module), and the doc sentence is judged as written rather than as an amendment.
@@ -5182,6 +5240,7 @@ Narrowed to a reservation asymmetry with a logarithmic residue: the three per-bl
 - **Calibration:** a reservation asymmetry with a logarithmic residue: three per-block extraction vectors (four when PAR lags are present) grow by amortised doubling from a first-group seed while six siblings pre-reserve the same product — a bounded number of reallocations per (scenario, stage); structural calibration only, UNMEASURED.
 - **Reviewer rating:** B — recalibrated to C because the residue is O(log n) reallocations per vector per (scenario, stage), a reservation asymmetry rather than an unbounded allocation pattern; bounded to one file.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: Allocation per call: collect over a FlatMap begins at zero capacity and grows by reallocation, so each of these per-(scenario, stage) result vectors performs a sequence of reallocations and copies where one exact allocation would do.; exercising call sites (cited, not anchored): simulation/extraction.rs · extract_hydros / extract_exchanges / extract_buses / extract_stub_collections (per scenario per stage). Sev C — not queued; the owner gate may promote it; no number is asserted here.
+- **Status:** fixed (2026-09-21) — the redundant reservation regrowth removed so the three per-block branches and `inflow_lags` reserve the exact product like their five siblings; byte-exact (ticket-040).
 
 **PD-047 · Sev B · duplication · effort M · confidence high**
 The avoidable copy in re_expand is one deep clone per owned distinct arena node, not one per visiting leaf path: dispatch_scenario_result takes the stage-result Vec by value and moves it into the channel, so each path must own its materialized rows and only a node's terminal visit can become a move. The bookkeeping-free subset is the final-stage clone at enumerated.rs:401, where paths.leaf is injective over the single-predecessor tree so a path's own leaf result has exactly one reader. The title's immutable-borrow causation does not survive, because the caller already holds the scratch mutably at enumerated.rs:494-499.
@@ -5212,6 +5271,7 @@ Narrowed to a one-time study-setup cost whose SIZE, not its once-per-plant recur
 - **Reviewer rating:** B — recalibrated to C because once per run at study setup, never per solve or per iteration; the project rule accepts setup-time recomputation — the rule-11 scope question (superlinear setup cost) goes to the owner gate.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: Redundant pass: a full linear scan of the inflow-history table filtered to a single hydro_id, repeated once per computed-FPHA hydro, where one grouped pass before the parallel map would serve all of them.; exercising call sites (cited, not anchored): production/hydro_models/production.rs · fit_one_hydro (once per computed-FPHA hydro at setup). Sev C — not queued; the owner gate may promote it; no number is asserted here.
 - **Needs-human (owner gate):** Rule-11 scope call the owner may want to settle once for all similar candidates: does the setup-time per-plant carve-out cover a per-plant recomputation whose cost is sized by a whole shared table (superlinear in plant count), or only one sized by the plant's own data? I read it as the latter and narrowed accordingly.
+- **Status:** fixed (2026-09-21) — `long_term_mean_inflow` no longer sizes its scan by the whole shared inflow-history table per plant, so setup scan work is bounded to total history rows once (`ComputedFromGeometry` plants only) (ticket-040).
 
 **Over-engineering** — 3 minted
 
@@ -5230,6 +5290,7 @@ Only 4 of the 42 bare openers survive, and not as a comment gap: at the four `#[
 - **Calibration:** of 42 bare `#[allow]` openers only the four `cast_sign_loss` sites in `resolve_fitting_bounds` survive, and not as a comment gap: no non-negativity guarantee for the four discretisation counts exists in cobre-io's raw struct, `validate_model_fields` or the schema, and the `< 2` / `< 1` guards test the already-cast `usize`, so a declared negative count wraps past every guard — a real input-boundary hazard confined to one fn, Sev B; the residue is a cobre-io validation gap routed to reconciliation (E11) for re-filing against the owning crate.
 - **Needs-human (owner gate):** Doc-owner call: the mirror sentence at reserved-seams-and-deferred-debt.md:1278-1284 asserts every numeric-cast allow on production code carries a `// Rationale:`, which comments.md D4 and the E4 gate's IN_SCOPE_LINTS both contradict; decide whether that sentence is corrected down to the D4 scope or D4 is widened to cover cast_* lints. Routing call: the surviving residue is a missing input-boundary validation owned by cobre-io, not an over-engineering item in cobre-sddp; decide whether it stays on this station's over-engineering ledger or is re-filed against the owning crate.
 - **Queued to:** reconciliation (re-file the cobre-io validation gap)
+- **Status:** fixed (2026-09-21) — cobre-io now validates the four FPHA discretization counts non-negative at the input boundary, so a negative count fails validation instead of wrapping past the `< 2`/`< 1` guards into `build_grid`; no 42-site rationale sweep (ticket-010).
 
 **OD-041 · Sev C · speculative-generality · effort S · confidence high**
 Narrowed to the tailrace trio only, and to a marker-level cleanup rather than a defect: QuarticSegment (tailrace.rs:60), TailraceSegments (:86) and TailraceFamily (:189) hold pub(crate) that no signature forces and that contradicts the module's own declared crate surface at fpha_fitting/mod.rs:66, and they must be narrowed as one unit because TailraceFamily's pub segments field (:194) types TailraceSegments. SimWorkerParams drops out (mirror of ForwardWorkerParams, whose pub(crate) is forced by pub(crate) fn run_forward_worker) and DEFAULT_REFERENCE_VOLUME_FRACTION drops out (its 'sole owner' doc is about the 0.65 literal, held in production code, with the cross-file protocol at types.rs:441-443 routed through resolve_reference_volume_hm3). The trio is 3 of 25 single-file pub(crate) declarations out of 397 in the crate, so it belongs to a crate-wide visibility pass with per-site forcing checks, not to a standalone three-file edit.
@@ -5244,6 +5305,7 @@ Narrowed to the tailrace trio only, and to a marker-level cleanup rather than a 
 - **Byte-neutrality:** asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction.
 - **Calibration:** three tailrace types carry `pub(crate)` that no signature forces and that contradicts the module's declared crate surface; marker-level cleanup narrowed to one unit (the family's `segments` field types the segments type); the two other items are conceded as forced.
 - **Needs-human (owner gate):** Scope call: whether crate-internal single-file items should be narrowed to module-private at all, or whether pub(crate) is the ratified uniform internal marker for this workspace; if narrowing is wanted it should be one crate-wide pass over the 25 sites with a per-site forcing check, not this five-anchor slice.
+- **Status:** fixed (2026-09-21) — the tailrace trio (`QuarticSegment`/`TailraceSegments`/`TailraceFamily`) narrowed `pub(crate)` as one unit with per-site forcing checks (ticket-039).
 
 **OD-042 · Sev C · redundant-wrapper · effort S · confidence high**
 The removable residue is exactly the one-item impl block at simulation/state.rs:87-118 — `SimulationInputs::new`, its `#[allow(clippy::too_many_arguments)]` and its RATIONALE comment — justified not by a duplicated suppression pair but by `run_simulate` at simulation/pipeline/tests.rs:38-66 being a signature-for-signature twin of `simulate` that already constructs the bundle with the struct literal at lines 54 and 92, proving the literal compiles at that exact call shape; the suppression on `simulate` itself is independently earned by its own public ten-parameter signature and survives.
@@ -5256,6 +5318,7 @@ The removable residue is exactly the one-item impl block at simulation/state.rs:
 - **Alignment:** neutral (provisional; Epic 9 adjudicates against the L0-L4 target layering — plans/generalizing/beyond-sddp-generalization.md Part IV §IV.1 (L3 engine internals))
 - **Byte-neutrality:** asserted against the parity goldens (`parity_hash_highs` / `parity_hash_clp` in the sddp parity binary), the rank-invariance harness (tests/common/permute.rs) and `mpiexec -n 1/2` reproduction.
 - **Calibration:** a one-item impl block (`SimulationInputs::new`, its `too_many_arguments` allow and rationale) whose struct-literal replacement is proven by the test twin `run_simulate` already constructing the bundle at the same call shape.
+- **Status:** fixed (2026-09-21) — the `SimulationInputs::new` wrapper cleaned up (ticket-039).
 
 **Test bloat** — 2 minted
 
@@ -5625,6 +5688,7 @@ Only the simulate-arm gate is genuinely written twice in non-equivalent form: ex
 - **Part-I:** I.5 (cross-reference; the verdict travels to Epic 9 with partI-handoff.json).
 - **Needs-human (owner gate):** C1 (kept, narrowed): this verdict dismisses the no-op arm as per-front-end presentation, so if the owner holds that the CLI stderr line and the bindings' zeroed RunSummary are meant to be one behaviour, the surviving claim widens to cover that arm; both are public surface and neither writes a file, so the file-set parity test cannot decide it.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — the engine answers the run-phase plan as one owned value that both L4 entry points (CLI, Python) consume, replacing the two non-equivalent simulate-arm gate copies; per-front-end no-op rendering kept (ticket-008).
 
 **CD-090 · Sev B · duplication · effort S · confidence high**
 The pure log-to-totals fold over a SolverStatsLogEntry slice is duplicated line for line at cobre-cli training.rs:262-294 and cobre-python run.rs:256-282, differing only by the CLI rank guard at training.rs:272-274, with no shared owner even though cobre-sddp solver_stats.rs:316 already exports a sibling pure fold over the same type that both front ends share; and the bit-for-bit total_lp_solves divergence caveat exists as prose only in the cobre-python copy (run.rs:252-255), while the dropped lower-bound solve time is documented only in the CLI copy (training.rs:276-277). The MetadataTrainingSolveStats assemblies are excluded from the claim: training.rs:240-248 and run.rs:318-326 legitimately differ in value source and parallelism semantics.
@@ -5641,6 +5705,7 @@ The pure log-to-totals fold over a SolverStatsLogEntry slice is duplicated line 
 - **Part-I:** I.5 (cross-reference; the verdict travels to Epic 9 with partI-handoff.json).
 - **Needs-human (owner gate):** Owner confirmation only, narrowed from the attacker's C6: confirm that this pure fold sits outside CD-025's writer set-plus-guards scope (mirror :587), so a cobre-sddp home next to its input types is not the held-for-owner L3 writer case. Evidence already on the record: solver_stats_log_to_rows (cobre-sddp solver_stats.rs:316) is shared by both front ends over the same type, and the cobre-sddp to cobre-io dependency…
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — the solver-stats log-to-totals fold now lives once in cobre-sddp `solver_stats.rs` over `&[SolverStatsLogEntry]` with the rank filter as an argument, called by CLI and Python; the `total_lp_solves` caveat is a doc + named regression (ticket-009).
 
 **S6b — diagnostics + CLI shell** — 4 minted
 
@@ -5662,6 +5727,7 @@ Narrowed to the un-owned LoadError kind map plus the non-boundary uncovered --js
 - **Part-I:** I.5 (cross-reference; the verdict travels to Epic 9 with partI-handoff.json).
 - **Needs-human (owner gate):** May the CLI's --json phase value CaseValidationError be retired in favour of the cobre-io/Python vocabulary? It is referenced nowhere outside its own declaration and doc (validate.rs:90 and :361), so the change costs nothing mechanically, but it is a user-visible field in a documented machine-readable contract and an unknown downstream consumer may match on it.
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — one `LoadError`→kind map in cobre-io is called by both front ends, every CLI early return routes through `emit_validate_json` under `--json` (with `error.phase` for `ParseError`/`SchemaError`), and `CaseValidationError` is retired with no alias (ticket-001).
 
 **CD-092 · Sev C · duplication · effort S · confidence high**
 Only the rendered message, not the phase driver, is unowned: the expression joining prep_phase_metadata's file_label to the error text exists in four copies (cobre-cli validate.rs:147 plus cobre-python io.rs:258, :292, :301) with no single owner anywhere, and two observable divergences survive from the folded S6c text - the opposite relative order of training_scenario_source and resolve_boundary_state_requirements (validate.rs:396 then :401 against io.rs:264 then :274) changes which error a deck failing both reports first, and the CLI --json surface classifies one of five LoadError classes under a string the bindings never use against the bindings' five of five. The driver bodies, the phase-versus-kind key names and the short-circuit doc claim do not survive.
@@ -5697,6 +5763,7 @@ Seven doc fences in banner.rs, error.rs, progress.rs and templates.rs are annota
 - **Calibration:** seven doc fences annotated as compilable Rust over use lines that resolve nowhere in a bin-only crate whose own summary.rs already applies the honest ignore/text treatment — a documentation-annotation defect with no code path or contract behind it: Sev C.
 - **Reviewer rating:** B — recalibrated to C because seven mis-annotated fences in four modules; the fix is the fence annotation (ignore / text) summary.rs already uses — cosmetic tier; the absent lib target is the correct L4 shape, not a defect.
 - **Needs-human (owner gate):** Should cobre-cli gain a [lib] target? Carried from the attacker because it still decides the residue's shape: with a library the four cobre_cli:: examples become compiler-verified, without one they must be de-annotated or de-fenced. Publishing the CLI's renderers, error enum and progress types as a maintained surface with no current consumer is the cost, so the choice is the owner's, not the station's.
+- **Status:** fixed (2026-09-21) — the seven cobre-cli doc fences made honest (module-local imports / de-annotated); no `[lib]` target (ticket-041).
 
 **CD-094 · Sev C · asymmetry · effort S · confidence high**
 Three of the six names in the summary.rs re-export (HydroProductionProvenance, InflowProvenance, ProvenanceSource) have no production consumer anywhere in cobre-cli, so their module-scope presence and the #[allow(unused_imports)] covering them are created by the module's own test fixtures alone; the pub is a separate unredeemed visibility no-op over all six names (private mod summary at main.rs:14, one [[bin]] with doc = false, no import through crate::summary), not a test-driven requirement, and the rationale at :18-21 is wrong only on the single point that the pub is what makes the use super at :1968-1969 resolve.
@@ -5713,6 +5780,7 @@ Three of the six names in the summary.rs re-export (HydroProductionProvenance, I
 - **Calibration:** three engine-type re-exports with no production consumer plus a visibility no-op over all six, under an allow whose rationale is wrong on one point — dead imports and a stale rationale in one module: Sev C.
 - **Part-I:** I.5 (cross-reference; the verdict travels to Epic 9 with partI-handoff.json).
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — the `summary.rs` re-export split: three dead engine-type re-exports moved to a `#[cfg(test)]` import, dropping `pub` + `#[allow(unused_imports)]` (ticket-041).
 
 **S6c — bindings + facade** — 4 minted
 
@@ -5729,6 +5797,7 @@ Scoped to the entity_type=None branch of both readers (results.rs:1147 and :1389
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** a hand-kept ten-name copy of cobre-io's fourteen-family declaration that makes the documented load-everything path silently omit four written families — a cross-crate hand-mirror with a false completeness promise and no shared owner: Sev B on the CD-025 precedent (bounded: the explicit-name branch still reads the data).
 - **Queued to:** alignment
+- **Status:** fixed (2026-09-21) — cobre-io exposes the simulation family names it writes beside `SIMULATION_FAMILIES` and both cobre-python readers iterate it, so `hydro_bus_generation`/`in_transit`/`transit_seed`/`anticipated_lanes` are no longer silently omitted; read-side regression added (ticket-005).
 
 **CD-096 · Sev B · duplication · effort S · confidence high**
 load_convergence drops exactly one written column, mean_rows_in_lp, from the mapping it returns while its own doc claims the keys match the convergence.parquet schema, and the drop is unguarded because test_load_convergence_dict_keys checks key presence only; the arrow sibling's fourteen-row table is a non-behavioural rustdoc mirror drift under the comments.md mirror clause rather than a data defect, and the residue is schema-driven iteration inside cobre-python, since convergence_schema is pub(crate) and cannot be named across the crate boundary.
@@ -5743,6 +5812,7 @@ load_convergence drops exactly one written column, mean_rows_in_lp, from the map
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Contract:** .claude/rules/comments.md § Contract-mirroring beats DRY (but a mirror is shape, never a number) — cited by the defender as the rule the narrowing rests on; the fix-shape preserves it.
 - **Calibration:** one written column dropped from a reader whose doc promises schema parity, guarded only by a key-presence test, with a doc-only mirror drift in the arrow sibling — a real one-function defect in the public Python API: Sev B (a promised column is silently missing; not C because the dict is the published contract).
+- **Status:** fixed (2026-09-21) — `load_convergence` now iterates the parquet file's own schema fields like the arrow sibling, so `mean_rows_in_lp` is no longer dropped; regression asserts returned keys == written field names (ticket-006).
 
 **CD-097 · Sev C · coupling · effort S · confidence high**
 The eight prefixes in message_prefix_to_pyerr share no named constant with any of their mint sites in run.rs, and exactly four of the eight branches are pinned by no test at either end: policy checkpoint error, config parse error, config read error, and the simulation error Message branch. The title's count of five does not survive, because output write error, policy validation error and config override error are each pinned end-to-end by a pytest assertion that a rename would break; nor does its claim that errors.rs pins simulation error and the training fallthrough as prefixes, since those two tests drive the typed ErrorSource::Sddp arms rather than the string classifier.
@@ -5756,6 +5826,7 @@ The eight prefixes in message_prefix_to_pyerr share no named constant with any o
 - **L2 destination rule:** outside the writer-mirror scope, no condition hit (cobre-sddp home / cli-local module / Engine below L4 / second engine / one-consumer seam) — not a conflicts row.
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** eight message prefixes without a named constant at their mint sites and four branches pinned by no test — string coupling inside one L4 crate: Sev C.
+- **Status:** fixed (2026-09-21) — one set of named constants for the eight `message_prefix_to_pyerr` prefixes, referenced at both ends (ticket-042a).
 
 **CD-098 · Sev C · duplication · effort S · confidence high**
 Narrower than the title on both halves: exactly two format strings are byte-identical and the output-directory message shares only its prefix (the four error constructions and the CLI terminal stderr line legitimately differ, so the copies are not verbatim), and the bindings side is covered for count, valid JSON and directory creation. The surviving defect is that no gate compares the bindings' written filenames or bytes against committed schemas/ or against the CLI export, so a change to the bindings' write mechanics alone (path join, pretty-print form, trailing bytes) is unguarded, while schema content cannot diverge because both front ends consume the shared generator.
@@ -5770,6 +5841,7 @@ Narrower than the title on both halves: exactly two format strings are byte-iden
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Contract:** CLAUDE.md § Hard Rules — Python parity — cited by the defender as the rule the narrowing rests on; the fix-shape preserves it.
 - **Calibration:** two identical format strings across the two schema-export loops and no gate over the bindings' written filenames or bytes, while schema content cannot diverge because both consume the shared generator — a minor mirror with a small unguarded surface: Sev C.
+- **Status:** fixed (2026-09-21) — the schema-export file-writing loop moved beside `generate_schemas` in cobre-io; each front end maps the typed error (ticket-042b).
 
 #### Performance (PD)
 
@@ -5848,6 +5920,7 @@ The seven PySystem collection getters (model.rs:406-474) carry no memo, so the c
 - **Calibration:** seven collection getters rebuild N wrapper objects per property read with no memo; the sharpest instance copies Hydro's full payload to publish nine scalars — a per-read clone in a reader with no hot-path role: Sev C, not queued.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: clone-per-access: a full deep clone of a cobre-core entity vector plus one wrapper allocation per entity on every property read, with no cached view; exercising call sites (cited, not anchored): cobre-python model.rs · PySystem collection getters :406-474 (per read of a collection property). Sev C — not queued; the owner gate may promote it; no number is asserted here.
 - **Needs-human (owner gate):** A per-collection wrapper memo makes element object identity stable across reads (today system.buses[0] is system.buses[0] is False, since every read builds new objects). No test or stub pins that, so the owner must say whether per-read element identity is part of the published cobre.model contract before the memo shape is accepted.
+- **Status:** fixed (2026-09-21) — the seven `PySystem` entity-list getters now hold the shared `Arc<System>` + an index instead of deep-cloning the entity vector per read (element identity may change across reads, sanctioned) (ticket-042d).
 
 **PD-053 · Sev C · duplication · effort S · confidence high**
 Narrowed to the default arm and to the copy alone: on reserve_depth == None (policy.rs:411-415) the collect at policy.rs:391 duplicates the whole cut pool into owned Vec<f64> that no consumer ever owns, because PolicyCutRecord.coefficients is a borrowed slice (cobre-io records.rs:211, whose doc at :193 states the borrow exists to avoid copying large coefficient vectors) filled from &data.coefficients at policy.rs:480. Conceded and excluded: the Some(depth) arm's collect, required by reserve_boundary_inflow_lag_slots's &[Vec<f64>] parameter (policy_export.rs:341); and the GIL-placement half of the title, since the by-value FromPyObject signature at policy.rs:448-456 already materialises the same pool element-wise from Python under the held GIL.
@@ -5862,6 +5935,7 @@ Narrowed to the default arm and to the copy alone: on reserve_depth == None (pol
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** one avoidable whole-pool copy on the no-reservation arm of a once-per-export builder — Sev C, not queued.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: redundant materialisation of the full cut pool: one Vec<f64> clone per cut per stage on a branch whose consumer only borrows, executed under the GIL before the detached write; exercising call sites (cited, not anchored): cobre-python policy.rs · build_stage_cuts_data (default arm, the :391 collect). Sev C — not queued; the owner gate may promote it; no number is asserted here.
+- **Status:** fixed (2026-09-21) — `build_stage_cuts_data`'s owned coefficient buffer made conditional — the no-reservation (`None`) branch borrows via `Cow::Borrowed` instead of cloning; bytes written identical (ticket-042d).
 
 **PD-054 · Sev C · duplication · effort S · confidence high**
 Narrowed to the repeated-access residue only: opening_tree re-derives each stage's block by comparing every stage_id entry rather than a partition_point over the order read_opening_rows already enforces, so a caller that walks stages pays a whole-column comparison sweep per stage. Not confirmed for a single call, where the per-element Python conversion in reshape_f64 over the returned block is the leading mechanism and the scan only repeats a sweep the loader's own sort check already performs. No in-repo or documented caller iterates stages at the pin, so the sweep must script the stage walk to observe it; the fix stays inside cobre-python and, because Stochastic is frozen, must precompute per-stage offsets at load or use partition_point on the sorted column.
@@ -5876,6 +5950,7 @@ Narrowed to the repeated-access residue only: opening_tree re-derives each stage
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** a per-stage linear sweep where the loader already guarantees the sort order — a repeated-access residue with no in-repo caller walking stages: Sev C, not queued.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: redundant full pass per call: a linear scan of all opening rows to find one stage's contiguous block, repeated for every stage, despite a sort invariant enforced at read time; exercising call sites (cited, not anchored): cobre-python results.rs · Stochastic::opening_tree (per-stage whole-column sweep; observable only under a scripted stage walk). Sev C — not queued; the owner gate may promote it; no number is asserted here.
+- **Status:** fixed (2026-09-21) — `opening_tree` uses `partition_point` over the sorted opening rows instead of a linear per-stage scan (ticket-042d).
 
 **PD-055 · Sev C · asymmetry · effort S · confidence high**
 Narrower than the title on two axes. io.rs is the only module in cobre-python with no py.detach site, and validate (io.rs 200) is the single entry point that holds the interpreter across all three phases named, the six-layer load (io.rs 236), prepare_stochastic (io.rs 281) and prepare_hydro_models_from_artifacts (io.rs 297); load_case (io.rs 138) holds it across the six-layer load only (io.rs 145) and never runs the stochastic or hydro-model phases at all. The defensible harm is confined to Python-level concurrency, other Python threads cannot progress during either call, and explicitly does NOT include throttling cobre-sddp's own worker threads, which the interpreter lock never gated; so the surviving defect is the unexplained departure from the stated crate posture at lib.rs 11-13 and from the identical detached load-and-prepare sequence at study.rs 503, not any loss of native parallelism.
@@ -5890,6 +5965,7 @@ Narrower than the title on two axes. io.rs is the only module in cobre-python wi
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** io.rs is the one module with no py.detach site; the harm is Python-level concurrency only (no native parallelism is gated) — a posture departure from lib.rs:11-13 and from the detached study.rs sequence: Sev C, not queued.
 - **Measurement:** UNMEASURED — claim-type single-process, layout `4t`, requires none; mechanism: GIL held across a bulk read and a compute pipeline: the six-layer case load, PAR estimation and hydro-model preparation all run with the interpreter held, blocking every other Python thread for work that touches no Python object; exercising call sites (cited, not anchored): cobre-python io.rs · validate (:200) holding the GIL across the six-layer load, prepare_stochastic and prepare_hydro_models_from_artifacts; cobre-python io.rs · load_case (:138) across the load only. Sev C — not queued; the owner gate may promote it; no number is asserted here.
+- **Status:** fixed (2026-09-21) — `cobre.io.validate`/`load_case` run the Rust phase pipeline inside `py.detach` (behaviour-neutral; single-thread results identical), matching the crate's detached posture (ticket-042d).
 
 #### Over-engineering (OD)
 
@@ -5928,6 +6004,7 @@ Exactly one field of WriteTrainingArgs is redundant at outputs.rs:52 — a sub-b
 - **L2 destination rule:** in writer-mirror scope, no condition hit (cobre-sddp home / cli-local module / Engine below L4 / second engine / one-consumer seam) — not a conflicts row.
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** one field of a ten-field args struct duplicates a sub-borrow of another field at its single construction site, read at four cobre-cli-internal sites — Sev C.
+- **Status:** fixed (2026-09-21) — the redundant `hydro_models` field of `WriteTrainingArgs` dropped; the four sites read `args.setup.hydro_models` (ticket-041).
 
 **OD-045 · Sev C · redundant-wrapper · effort S · confidence high**
 At exactly two sites, training.rs:191 and simulation.rs:173, the copied two-lint cast suppression is over-broad and avoidable rather than merely unannotated: both operands are usize (RunContext.n_threads at run/mod.rs:94, Communicator::size at cobre-comm traits.rs:225), so cast_sign_loss cannot fire there and is earned only at the f64-to-u64 site training.rs:166, while the truncation half disappears under the checked idiom the parent module already uses for the same n_threads at run/mod.rs:297. The 13-site count and the run.rs:1405 site do not survive.
@@ -5944,6 +6021,7 @@ At exactly two sites, training.rs:191 and simulation.rs:173, the copied two-lint
 - **Contract:** .claude/rules/comments.md D4 - Rationale above suppression — cited by the defender as the rule the narrowing rests on; the fix-shape preserves it.
 - **Calibration:** two copied two-lint cast suppressions where one lint cannot fire on usize operands and the other disappears under the checked idiom the parent module already uses — avoidable suppressions at two sites: Sev C (OD-009 class: a retained wrapper/suppression under the census).
 - **Needs-human (owner gate):** The committed mirror's allow census (docs/design/reserved-seams-and-deferred-debt.md:1324-1330) asserts that every Load-bearing numeric-cast and needless_pass_by_value allow carries a // Rationale: comment; twelve cast sites in this cell carry none, so the owner must decide whether the E11 write-back corrects that census prose to match D4's narrower closed list, or whether D4 is extended to cast lints (which would m…
+- **Status:** fixed (2026-09-21) — the duplicated cast parallelism computed once in `training.rs`/`simulation.rs` (code half); the census mirror-prose correction is Epic 6 (ticket-042c).
 
 **S6b — diagnostics + CLI shell** — 1 minted
 
@@ -5961,6 +6039,7 @@ Two of the three named entry points are unjustified, not three, and the residue 
 - **Contract:** .claude/rules/comments.md D4 — Rationale above suppression: Every `#[allow(...)]` for a refactor-decision lint (`clippy::too_many_arguments`, `too_many_lines`, `type_complexity`, `dead_code`, `unused_*`) and every borrow-checker workaround carries a rationale — cited by the defender as the rule the narrowing rests on; the fix-shape preserves it.
 - **Calibration:** two by-value clap-args signatures whose only effect is the lint they suppress — removable suppressions, not a missing rationale (needless_pass_by_value is outside comments.md D4's closed list): Sev C.
 - **Needs-human (owner gate):** The mirror's allow census (:1272, Load-bearing class) asserts that every refactor-decision allow including `needless_pass_by_value` carries a `// Rationale:`, which is false at schema.rs:49, validate.rs:329 and init.rs:53, while comments.md D4's closed list omits that lint: the owner must decide whether the census prose is corrected to match D4 or D4's list is extended to cover `needless_pass_by_value`, since that c…
+- **Status:** fixed (2026-09-21) — `&SchemaArgs`/`&ValidateArgs` taken by reference and the two `needless_pass_by_value` suppressions deleted (ticket-041).
 
 **S6c — bindings + facade** — 2 minted
 
@@ -5978,6 +6057,7 @@ Only the field-depth asymmetry and its unpinned status survive: three of the sev
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Calibration:** three of seven model twins surface identity only while the other four surface their full parameter set, with nothing pinning the gap — an unpinned depth asymmetry, not speculative scaffolding: Sev C.
 - **Needs-human (owner gate):** Direction for the three cobre.model twins (EnergyContract, PumpingStation, NonControllableSource): fill the getters to the house pattern the other four twins follow, or withdraw the three classes and have the PySystem getters return untyped mappings until a caller needs typed objects. The station confirms the asymmetry and the unpinned status; only the owner can pick which way it resolves, and the mirror needs the r…
+- **Status:** fixed (2026-09-21) — the three `cobre.model` twins (`PyEnergyContract`, `PyPumpingStation`, `PyNonControllableSource`) completed to the house field-exposure pattern (ticket-042a).
 
 **OD-048 · Sev C · redundant-wrapper · effort S · confidence high**
 Exactly one site survives, and only as a dead-attribute deletion: errors.rs:359's '#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]' on the errors test module suppresses precisely the three lints lib.rs:17 already allows crate-wide under the same cfg(test) gate, adds no fourth entry the way run.rs:1759's float_cmp does, and is contradicted rather than supported by the policy.rs:558 and schema.rs:61 test modules that carry none. The needless_pass_by_value family is struck from the claim entirely: the counts are wrong (16 sites in-surface, 13 bare), the three study.rs rationales state three different facts rather than one reason copied, and the lint is outside D4's mandatory-rationale list so bare sites are not a defect.
@@ -5992,6 +6072,7 @@ Exactly one site survives, and only as a dead-attribute deletion: errors.rs:359'
 - **Byte-neutrality:** asserted against the CLI-vs-Python value golden (crates/cobre-python/tests/test_cli_python_determinism_parity.py, examples/1dtoy through both entry points), the runtime file-set parity test (tests/test_cli_python_file_set_parity.py) with its Rust companion (crates/cobre-cli/tests/python_parity_check.rs::python_parity_script_passes), the import-resolving gate scripts/ci/check_python_parity.py (--min-shared 18) and the `cobre validate --json` object.
 - **Contract:** .claude/rules/comments.md D4 — Rationale above suppression. Every `#[allow(...)]` for a refactor-decision lint (`clippy::too_many_arguments`, `too_many_lines`, `type_complexity`, `dead_code`, `unused_*`) and every borrow-checker workaround carries a rationale: why the refactor that removes the lint is inappropriate. — cited by the defender as the rule the narrowing rests on; the fix-shape preserves it.
 - **Calibration:** one test-module allow that repeats the crate-level cfg(test) allow verbatim — a dead attribute: Sev C.
+- **Status:** fixed (2026-09-21) — the dead `#[allow(...)]` on the `errors.rs` test module deleted (lib.rs already covers it crate-wide) (ticket-042a).
 
 #### Test-suite bloat (TD)
 
@@ -6018,6 +6099,7 @@ Narrowed to the first Cost-discipline bullet plus literal duplication: six of th
 - **Yardstick:** docs/design/testing-architecture.md §5.1 canonical per-crate layout (by-subcommand integration binaries; helpers live once) / §3.2 sustainability (td-queue.json).
 - **Needs-human (owner gate):** Sequencing: is a cobre-cli-local consolidation sanctioned now, or does it wait for the proposed Layer-1 migration in docs/design/testing-architecture.md §5.1, whose §6 phase 1 orders that consolidation first workspace-wide? Destination: rule 14 names tests/common/ as the cobre-cli helper home, while docs/design/testing-architecture.md §6 phase 3 proposes collapsing tests/common/ into cobre-sddp's test-support feature; an owner must pick one so the helper home is not built twice. Sequencing only: docs/design/testing-architecture.md already names cli_metadata as the cobre-cli domain binary that would absorb both files under its #[path] submodule mechanics, but that section is a Proposal, so the owner must decide whether to fold this pair now under the standing Cost-discipline rule or defer it to the Layer-1 grouping so the move is made once rather than twice.
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — `crates/cobre-cli/tests/common/` established as the single harness home (`cobre()`, `case_dir`, `write_file`, `PENALTIES_JSON`, parameterised valid-case builder) and the six single-`#[test]` run-path binaries folded into `cli_run.rs` (ticket-027).
 
 **TD-058 · Sev C · duplication · effort S · confidence high**
 The four read-only Policy tests in test_study.py (:363 cut-matrix-max, :391 shapes/dtype, :416 stage-out-of-range, :433 bad-state-length) each pay a dedicated 1dtoy training for an object they only read through an &self accessor, and test_run_1dtoy_creates_output (test_run.py:38) re-runs the default deck for an artifact-tree assertion that test_outputs.py:33-50 already makes as a strict superset on its module-scoped run_output fixture; one module-scoped fixture in the existing conftest.py would serve all five with every assertion text unchanged. The other trainings and runs in both files are the claim under test and are not redundant.
@@ -6123,6 +6205,7 @@ Narrower residue at the pin: production declares no report-rendering function an
 - **Calibration:** two cfg(test) render helpers with formats the production path never emits, while the shipped header literal and the warning-entry render carry zero positive assertions anywhere in the crate — a coverage hole behind a parallel test-only shape: Sev B (the shipped output can drift green).
 - **Yardstick:** docs/design/testing-architecture.md §3.2 sustainability (the shipped renderer must be the asserted one) / §5.3 tier taxonomy (td-queue.json).
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — the inline render in `validate.rs::execute` extracted into a `*_lines` helper and the `cfg(test)` `format_*_string` twin deleted, tests repointed (ticket-030).
 
 **TD-064 · Sev B · duplication · effort S · confidence high**
 Narrower than the title: only the header word plus its console::style bold wrapper, the label text and column padding, the set and order of lines, and the field-to-label mapping in print_provenance_summary are drift-exposed in the four shipped printers at summary.rs:29, 239, 303 and 375, because the cfg(test) twins at 224, 265, 330 and 395 hold the only asserted copy of those and the eight smoke tests over those four printers read no rendered byte (one of the eight does assert, but on the twin). The computed values are NOT exposed, since both sides call the same private format helpers; and the three printers routing through a shared lines helper plus banner.rs are correctly smoke-tested, so the eleven/fourteen panic-only count is not part of the defect.
@@ -6139,6 +6222,7 @@ Narrower than the title: only the header word plus its console::style bold wrapp
 - **Calibration:** four cfg(test) format twins hold the only asserted copy of the printers' header, labels, line set and mapping, so the four shipped printers can drift while their smoke tests stay green — Sev B (drift exposure on shipped renderers); the computed values are shared helpers and excluded.
 - **Yardstick:** docs/design/testing-architecture.md §3.2 sustainability / §5.10 golden standard (assert the rendered bytes, not a twin) (td-queue.json).
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — the four `summary.rs` `print_*` twins now build through private `*_lines` helpers and the `cfg(test)` `format_*_string` twins deleted, tests repointed (ticket-030).
 
 **TD-065 · Sev B · duplication · effort S · confidence med**
 The fixture fan-out, not the binary-invocation helper: with no crates/cobre-cli/tests/common/, the 24-line PENALTIES_JSON const is byte-identical across five test binaries (cli_color, cli_run, cli_run_anticipated, cli_run_anticipated_k2, cli_validate) and the full eight-const plus write_file plus make_valid_case fixture is verbatim identical between cli_run.rs and cli_color.rs, so one new required field in penalties.json or a system/*.json entity is a five-file edit against the Cost discipline one-place property; the thirteen copies of the one-line fn cobre() delegation to assert_cmd's cargo_bin! macro, and the unexercised run-size divergence in cli_validate.rs's copy, are not part of the surviving defect.
@@ -6156,6 +6240,7 @@ The fixture fan-out, not the binary-invocation helper: with no crates/cobre-cli/
 - **Calibration:** a 24-line fixture constant byte-identical across five integration binaries and a full fixture set identical across two, with no tests/common/ in the crate — one schema change is a five-file edit against the Cost-discipline one-place property: Sev B; confidence med by the Legend's rule (the attacker's evidence is a grep count; the defender's read confirms the byte-identity but the evidence command on record is the count).
 - **Yardstick:** docs/design/testing-architecture.md §5.1 canonical layout (tests/common/ for cross-binary fixtures) / §3.2 sustainability (td-queue.json).
 - **Queued to:** test-corpus
+- **Status:** fixed (2026-09-21) — the byte-identical fixture constant deduped across the folded run-path binaries (ticket-027).
 
 **TD-066 · Sev B · asymmetry · effort S · confidence high**
 Narrowed to the colour binary alone: the three cobre run invocations at cli_color.rs 121/146/170 each pay a full SDDP training for claims already pinned at the unit tier (banner.rs:63-73 for the escape bytes, main.rs:118-132 for resolve_color setting the console global), whose only integration residue -- clap parsing --color into ColorWhen, main.rs:83 applying it before output, and global = true placement -- is observable through the solve-free print_banner call site at init.rs:148; and color_never_flag_suppresses_ansi_in_banner does not exercise the banner at all, because setup.rs:209-210 gates print_banner behind !quiet while the test passes --quiet. The ten runs in cli_validate.rs are explicitly NOT part of the surviving claim: nine are documented policy-checkpoint fixture production (cli_validate.rs:562-563) and the tenth asserts the validate-versus-run agreement that is the validate module contract.

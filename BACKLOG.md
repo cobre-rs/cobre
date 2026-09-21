@@ -1271,7 +1271,7 @@ boundary check into `PrepPhase` (or correct the doc to "three") and mirror it in
   (`cobre-sddp/src/validate_phases.rs:33`) under a doc that says "four SDDP preparation steps" (`:20`),
   and both front ends still run the boundary check outside `PrepPhase`/`prep_phase_metadata`. Remaining
   fix landed on 2026-09-21 — the boundary check was folded into `PrepPhase` as its 4th variant (below).
-- **Status:** fixed (2026-09-21) — `PrepPhase` gains the 4th Boundary variant, so the boundary-reconcile abstraction half is closed: both front ends route the boundary reject through the shared `PrepPhase`/`prep_phase_metadata` (4th metadata row) and `validate --json` emits the error object; the "four SDDP preparation steps" doc is now accurate (ticket-002/R2).
+- **Status:** fixed (2026-09-21) — `PrepPhase` gains the Boundary variant (the 5th), so the boundary-reconcile abstraction half is closed: both front ends route the boundary reject through the shared `PrepPhase`/`prep_phase_metadata` and `validate --json` emits the error object; the doc no longer states a variant count (ticket-002/R2).
 
 **CD-030 · Sev C · duplication (minor) · effort S · confidence high**
 `mark_own_paths` (`simulation/enumerated.rs:123-140`) reimplements the same ~10-line path-marking

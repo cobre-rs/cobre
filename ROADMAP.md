@@ -1,4 +1,4 @@
-# Next-step roadmap — 2026-09-17, amended 2026-09-19
+# Next-step roadmap — 2026-09-17, amended 2026-09-19 and 2026-09-21
 
 Companion to `PRIORITIES.md` §6 (2026-09-17) and §8 (2026-09-19, the live sequence). That section ranks the unrun stations; this file is the
 operating sequence the owner agreed to on 2026-09-17, including the user-reported bug
@@ -245,3 +245,15 @@ has been cut since v0.15.0.
   other machine). `check-reraise.py` aborts with `CorpusMissing: plans/generalizing/refinement-todo.md`,
   and the alignment station (E09) reads `plans/generalizing/beyond-sddp-generalization.md`. Copy or
   track the corpus before E09 or any station verify runs here.
+
+## Amendment 2026-09-21 — after the ungated wave and the evaluation ledger merge
+
+The 2026-09-19 steps 1–4 and 6–8 above are done or superseded: the ungated wave landed
+(`feat/quality-wave-ungated`, 58 tickets, merged to `develop`), build-ci (STATION 7) and test-corpus
+(STATION 8) were ratified 2026-09-19, generalization-alignment was ratified 2026-09-20, and the
+single-process performance sweep was measured 2026-09-20 (`chore/quality-evaluation`, merged at
+`d2545190`). `testing-architecture.md` §5.1 remains a Proposal, so step 7 splits. The live sequence is
+now **`PRIORITIES.md` §9**: (1) plan and execute W18 — the §5.1-independent test-corpus slice plus the
+19 build-ci entries; (2) owner call on the six UNMEASURED perf rows; (3) the Phase-0a plan (W15);
+(4) release; (5) E11 reconciliation + unified roadmap; W19 (Phase 1) waits for the 0b carve. The
+re-pin precondition above still applies before any station verifier runs against the new tip.

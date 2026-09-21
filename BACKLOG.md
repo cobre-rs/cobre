@@ -8420,6 +8420,59 @@ constant, is the defect. **Redesign flagged.**
 - **Status:** FIXED in v0.16.0 (`3356da2d`) — the state-canonicalization plan landed the redesign: solve-time projection onto the admissible box is the single read-back seam `assemble_outgoing_state` (`crates/cobre-sddp/src/solve/stage_solve.rs`), applied at all solve sites; the runtime verdict retired (`StageSolvePrep::run` infallible); the "genuine over-commitment" check moved to the cobre-io load-time validator `check_committed_value_bounds`; and `AnticipatedCommitmentOutOfBounds`, `commitment_reconcile.rs`, and `drift_margin` were deleted. NOTE: the originally-planned per-run drift TALLY (Fix-shape 2 / ROADMAP step 3 Ticket A) was subsequently REMOVED as overengineering (owner decision, `7fbb3da2`) — sub-tolerance clamps are absorbed silently, so no run-summary tally, `DriftSummary` metadata, or CLI/Python drift surface ships. Reported 2026-09-17 by users on an MPI production run.
 - **Side observation (not part of this finding):** the same log shows `LB 3.03e12 > UB 1.87e11` (gap `−93.8%`) at iteration 37. Under a risk-neutral objective the lower bound cannot sit 16× above the forward-pass estimate beyond sampling noise; under CVaR the printed forward statistic is not an upper bound, so this may be benign. Ask the reporter for the risk configuration before treating it as a second defect.
 
+## ★ POST-PLAN RECONCILIATION (2026-09-21) — the ungated quality wave (`04635b8f..cbc0ca10`) and the `chore/quality-evaluation` ledger (merged at `d2545190`)
+
+Two things landed on `develop` since the 2026-09-19 housekeeping: the ungated quality wave
+(`feat/quality-wave-ungated`, 58 tickets — Tiers 6, 7, 8, W17 and W8; every fixed entry carries a
+dated `- **Status:** fixed (2026-09-21)` bullet written by the wave's closure ticket) and the
+evaluation ledger from `chore/quality-evaluation` (27 commits, all under `plans/architecture-debt-audit/`:
+STATION 7 build-ci and STATION 8 test-corpus ratified 2026-09-19, the generalization-alignment gate
+ratified 2026-09-20, the performance sweep measured 2026-09-20). Where both branches annotated the
+same entry (PD-007, PD-009, PD-010, PD-011, PD-014, PD-018, PD-020, PD-021) the `→ MEASURED` bullet
+precedes the `Status: fixed` bullet: each was measured at the register pin, then fixed by the wave.
+**No new ID minted here; no entry closed outright.** `PRIORITIES.md` §7/§9 hold the re-tiered schedule.
+
+**What the ledger settles (register view):**
+
+- **Performance sweep (E10).** 28 single-process claims dispositioned at pin `077dbe2c`: 22
+  not-material (all < 1% of user-space samples and < 3% of the 137.05 s training wall; the profile is
+  HiGHS-simplex-bound) and 6 UNMEASURED / case-infeasible — PD-032, PD-033, PD-034 (the CLP backend is
+  not linked into the HiGHS profiling binary) and PD-049, PD-050, PD-051 (cobre-python is not loaded by
+  `cobre run`); PD-004 not-material on the enumerated deck; PD-005-residual re-confirmed closed. Every
+  W14 B row is therefore either closed not-material (PD-036, PD-038, PD-039, PD-040, PD-041, PD-042,
+  PD-044, PD-045, PD-047 — no fix ticket promoted; fix-shapes stay recorded) or awaiting an owner call
+  on the two extra profiles. Still `measured: false`: the collective 2x2 rows PD-008 and PD-017, both
+  FIXED 2026-09-15 (W6); E10-4 would only confirm post-fix cost.
+- **Generalization alignment (E9).** 243 ledger entries ratified (229 neutral, 7 advances-0a, 1
+  advances-0b, 6 advances-1; 12 retags; 0 holds). Actionable set: Phase 0a — CD-061, CD-088, CD-125,
+  CD-127 (+ CD-051, CD-059, CD-089, CD-091, CD-095, already FIXED by W1/W7/W11); Phase 0b — CD-099
+  (retagged from advances-1; script-only fix); Phase 1 — CD-065, CD-070, CD-071, CD-079 (the R13
+  shed-timing question: Phase 1), TD-040, CD-119, CD-120, CD-122, CD-123, CD-124, CD-126 (+ CD-044,
+  already FIXED by W7). CD-092
+  retagged neutral; its carriers CD-029 and CD-091 are FIXED, so it is ungated. The lp/ engine-neutral
+  share is re-measured at 42–56% (was a fifth to a quarter); extraction stays priced as a rewrite.
+- **Test corpus (E08).** 50 seed folds ratified as the entries' current reading; 10 seeds retired to
+  Cleared (TD-004, TD-005, TD-007, TD-009, TD-014, TD-017, TD-018, TD-023, TD-024, TD-029 — nine were
+  already `Status: fixed` under W5, TD-017's anchors are gone); 4 deletion-only fix-shapes (TD-011,
+  TD-012, TD-015, TD-019) re-stated as folds under the Rule 2 Boundary carve-out; 8 ids minted
+  (TD-074…TD-077, CD-116…CD-118, OD-051). `testing-architecture.md` §5.1 stays a Proposal: only TD-021
+  and TD-031 (and the deprioritized CD-007 inline giants) depend on it; every other queued row's
+  fix-shape is settled and ungated.
+- **Build-ci (E07).** 19 ids (CD-099…CD-115, OD-049, OD-050), all open, all with owner directions;
+  none touched by the wave.
+
+**Schedule consequences (owned by `PRIORITIES.md`):** W14 measured, not satisfied (owner call on
+the six UNMEASURED rows); W15 unblocked with the ratified 0a set; W16 reduced to the §5.1-gated pair
+TD-021 / TD-031; the new **W18 test-corpus + build-ci wave** (44 surviving W9/W16 rows + the 8 minted
+test-corpus ids + the 19 build-ci ids + CD-092; TD-040 travels with CD-079 to W19) is the agreed next wave; the new **W19 Phase-1 set**
+records the adjudicated Phase-1 entries without scheduling them. Owner sequencing 2026-09-21: W18,
+then the Phase-0a plan (W15).
+
+**Anchor drift.** Every station entry above is anchored at `077dbe2c`; the wave changed `crates/`
+(196 files, +8487/−9161), so `check-anchors.py` reports `baseline-drift` until `tools/pin-baseline.sh
+--repin` runs at the tip the next station or wave evaluates. Entries fixed by the wave are closed by
+their `Status` bullets, not by anchor re-resolution.
+
 ## ★ QUALITY EVALUATION (2026-09, baseline a136840d) — unified-roadmap
 
 _(no entries yet)_

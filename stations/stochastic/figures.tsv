@@ -1,0 +1,13 @@
+figure	expected	measured	status	command
+src_files	51	51	OK	find <tree@a136840d>/crates/cobre-stochastic/src -name '*.rs' | wc -l
+sub_par	21	21	OK	find <tree@a136840d>/crates/cobre-stochastic/src/par -name '*.rs' | wc -l
+sub_sampling	8	8	OK	find <tree@a136840d>/crates/cobre-stochastic/src/sampling -name '*.rs' | wc -l
+sub_tree_noise	16	16	OK	find <tree@a136840d>/crates/cobre-stochastic/src/tree <tree@a136840d>/crates/cobre-stochastic/src/noise <tree@a136840d>/crates/cobre-stochastic/src/normal <tree@a136840d>/crates/cobre-stochastic/src/correlation -name '*.rs' | wc -l
+sub_seam	6	6	OK	{ find <tree@a136840d>/crates/cobre-stochastic/src -maxdepth 1 -name '*.rs'; find <tree@a136840d>/crates/cobre-stochastic/src/season_cast -name '*.rs'; } | wc -l
+nontest_loc	35198	35198	OK	find <tree@a136840d>/crates/cobre-stochastic/src -name '*.rs' ! -name tests.rs -print0 | xargs -0 awk 'FNR==1{k=1} /^#\[cfg\(test\)\]/{k=0} k{n++} END{print n}'
+inline_test_files	35	35	OK	grep -rl '^#\[cfg(test)\]' <tree@a136840d>/crates/cobre-stochastic/src | wc -l
+integration_bins	8	8	OK	find <tree@a136840d>/crates/cobre-stochastic/tests -name '*.rs' | wc -l
+external_rs_lines	3200	3200	OK	wc -l < <tree@a136840d>/crates/cobre-stochastic/src/sampling/external.rs
+workspace_deps	1	1	OK	git -C /home/rjalves/git/cobre show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-stochastic/Cargo.toml | grep -oE '^cobre-[a-z-]+' | sort -u | wc -l
+qmc_prelude_diff	0	0	OK	diff <(sed -n '1,317p' <tree@a136840d>/crates/cobre-stochastic/tests/halton_integration.rs | sed 's/halton/QMC/g;s/Halton/QMC/g') <(sed -n '1,317p' <tree@a136840d>/crates/cobre-stochastic/tests/sobol_integration.rs | sed 's/sobol/QMC/g;s/Sobol/QMC/g') | wc -l
+lhs_prelude_diff	52	52	OK	diff <(sed -n '1,317p' <tree@a136840d>/crates/cobre-stochastic/tests/halton_integration.rs | sed 's/halton/QMC/g;s/Halton/QMC/g') <(sed -n '1,317p' <tree@a136840d>/crates/cobre-stochastic/tests/lhs_integration.rs | sed 's/lhs/QMC/g;s/Lhs/QMC/g;s/LHS/QMC/g') | wc -l

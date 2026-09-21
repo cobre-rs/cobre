@@ -3,7 +3,7 @@
 # touched no tracked evaluation surface. Exits 0 only when every check passes;
 # writes the per-check table to stations/harness-verification.md either way.
 set -euo pipefail
-ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 AUDIT="$ROOT/plans/architecture-debt-audit"
 T="$AUDIT/tools"; FX="$T/fixtures"
 cd "$ROOT"

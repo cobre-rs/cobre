@@ -12,7 +12,7 @@
 set -euo pipefail
 
 AUDIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(git -C "$AUDIT_DIR" rev-parse --show-toplevel)"
+REPO_ROOT="$(cd "$AUDIT_DIR/../.." && pwd)"
 DECK_SAMPLED="$HOME/git/cobre-bridge/example/cobre_reduzido"
 DECK_ENUMERATED="$HOME/git/cobre-bridge/example/cobre-mar-26-rv2-reduced"
 COBRE_BIN="$REPO_ROOT/target/profiling/cobre"

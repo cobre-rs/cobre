@@ -257,3 +257,12 @@ now **`PRIORITIES.md` §9**: (1) plan and execute W18 — the §5.1-independent 
 19 build-ci entries; (2) owner call on the six UNMEASURED perf rows; (3) the Phase-0a plan (W15);
 (4) release; (5) E11 reconciliation + unified roadmap; W19 (Phase 1) waits for the 0b carve. The
 re-pin precondition above still applies before any station verifier runs against the new tip.
+
+### Where the register lives (2026-09-21)
+
+The register is no longer tracked on `develop`: its history was split into the `debt-register`
+branch (root = this folder) and `plans/` is ignored again, so release merges carry none of it into
+`main`. Check it out at the same path as a nested worktree — `git worktree add
+plans/architecture-debt-audit debt-register` — and commit register edits on that branch. The tools
+anchor the cobre root by path (`../..` from this folder), not by `git rev-parse --show-toplevel`,
+which now names the register's own worktree.

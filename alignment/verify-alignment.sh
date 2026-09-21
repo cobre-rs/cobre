@@ -11,7 +11,7 @@
 # Exit: 0 every block passed, 1 at least one block failed, 2 cannot locate the repo.
 # shellcheck disable=SC2317  # the check functions are invoked indirectly through block()
 set -uo pipefail
-ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || exit 2
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)" || exit 2
 cd "$ROOT" || exit 2
 ALIGN=plans/architecture-debt-audit/alignment
 TOOLS=plans/architecture-debt-audit/tools

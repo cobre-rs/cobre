@@ -15,14 +15,7 @@ import sys
 import tempfile
 import unittest
 
-ROOT = pathlib.Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+ROOT = pathlib.Path(__file__).resolve().parents[4]
 AUDIT = ROOT / "plans" / "architecture-debt-audit"
 TOOLS = AUDIT / "tools"
 FIXTURES = TOOLS / "fixtures"

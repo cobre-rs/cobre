@@ -19,7 +19,9 @@ REPIN=0
 if [[ "${1:-}" == "--repin" ]]; then REPIN=1; shift; fi
 SHA="${1:?usage: pin-baseline.sh [--repin] <full-sha> [pin-date]}"
 PIN_DATE="${2:-$(date -I)}"
-BACKLOG="$(git rev-parse --show-toplevel)/plans/architecture-debt-audit/BACKLOG.md"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$REPO_ROOT"
+BACKLOG="$REPO_ROOT/plans/architecture-debt-audit/BACKLOG.md"
 SHORT="${SHA:0:8}"
 MIRROR=docs/design/reserved-seams-and-deferred-debt.md
 

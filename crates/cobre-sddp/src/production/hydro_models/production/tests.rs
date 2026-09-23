@@ -2779,3 +2779,49 @@ fn seasonal_reference_volume_supports_nonzero_start_season() {
         "study position 1 (season 1) must resolve percentile 0.8"
     );
 }
+
+// ── Degenerate FPHA detection tests ───────────────────────────────────────────
+
+#[test]
+fn is_degenerate_for_fpha_returns_true_when_max_turbined_zero() {
+    let mut hydro = make_computed_hydro(0);
+    hydro.max_turbined_m3s = 0.0;
+
+    assert!(
+        is_degenerate_for_fpha(&hydro),
+        "should detect degenerate when max_turbined_m3s == 0"
+    );
+}
+
+#[test]
+fn is_degenerate_for_fpha_returns_true_when_max_generation_zero() {
+    let mut hydro = make_computed_hydro(0);
+    hydro.max_generation_mw = 0.0;
+
+    assert!(
+        is_degenerate_for_fpha(&hydro),
+        "should detect degenerate when max_generation_mw == 0"
+    );
+}
+
+#[test]
+fn is_degenerate_for_fpha_returns_true_when_both_zero() {
+    let mut hydro = make_computed_hydro(0);
+    hydro.max_turbined_m3s = 0.0;
+    hydro.max_generation_mw = 0.0;
+
+    assert!(
+        is_degenerate_for_fpha(&hydro),
+        "should detect degenerate when both are zero"
+    );
+}
+
+#[test]
+fn is_degenerate_for_fpha_returns_false_when_normal_bounds() {
+    let hydro = make_computed_hydro(0); // max_turbined=500, max_generation=1000
+
+    assert!(
+        !is_degenerate_for_fpha(&hydro),
+        "should NOT detect degenerate when bounds are normal"
+    );
+}

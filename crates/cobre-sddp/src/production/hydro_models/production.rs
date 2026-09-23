@@ -36,6 +36,23 @@ use crate::fpha_fitting::{
     ForebayTable, FphaDeviationPoint, FphaFitDeviation, FphaFitResult, TailraceFamilies,
     TailraceSource, build_tailrace_families_map, fit_fpha_planes,
 };
+
+// ── Degenerate FPHA detection ────────────────────────────────────────────────
+
+/// Tolerance for detecting effectively-zero turbining/generation bounds.
+/// Values at or below this threshold trigger the degenerate FPHA fallback.
+const FPHA_DEGENERATE_THRESHOLD: f64 = 1e-9;
+
+/// Returns `true` when the hydro has degenerate bounds that prevent FPHA fitting.
+///
+/// A hydro with `max_turbined_m3s <= threshold` or `max_generation_mw <= threshold`
+/// would produce a coplanar/collinear cloud in `build_grid`, causing `convex_hull_3d`
+/// to fail. The caller should fall back to `ConstantProductivity` instead.
+fn is_degenerate_for_fpha(hydro: &Hydro) -> bool {
+    hydro.max_turbined_m3s <= FPHA_DEGENERATE_THRESHOLD
+        || hydro.max_generation_mw <= FPHA_DEGENERATE_THRESHOLD
+}
+
 // ── FPHA production model resolution ─────────────────────────────────────────
 
 /// Return type for [`resolve_production_models_from_artifacts`]. Export rows are non-empty only
@@ -273,6 +290,23 @@ fn fit_one_hydro(
     let config_entry = config_map.get(&hydro.id).copied();
 
     let source = determine_source(hydro, config_entry)?;
+
+    // Degenerate FPHA fallback: when max_turbined or max_generation are zero,
+    // the fitting pipeline would fail (coplanar cloud). Return constant-productivity
+    // with zero output instead — semantically correct since no generation is possible.
+    if source == ProductionModelSource::ComputedFromGeometry && is_degenerate_for_fpha(hydro) {
+        let stage_models: Vec<ResolvedProductionModel> = (0..n_stages)
+            .map(|_| ResolvedProductionModel::ConstantProductivity { productivity: 0.0 })
+            .collect();
+
+        return Ok(PerHydroFit {
+            stage_models,
+            provenance: (hydro.id, ProductionModelSource::ComputedFromGeometry),
+            export_rows: Vec::new(),
+            fpha_deviations: Vec::new(),
+            deviation_point_rows: Vec::new(),
+        });
+    }
 
     let mut export_rows: Vec<FphaHyperplaneRow> = Vec::new();
     let mut fpha_deviations: Vec<FphaDeviationDiagnostic> = Vec::new();

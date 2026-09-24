@@ -39,6 +39,7 @@ use cobre_io::config::{
     SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig, TrainingSelection,
     TrainingSolverConfig, UpperBoundEvaluationConfig,
 };
+use cobre_sddp::SddpError;
 use cobre_sddp::StudySetup;
 use cobre_sddp::indexer::StateDim;
 use cobre_sddp::setup::{NodePos, StageIdx};
@@ -49,6 +50,7 @@ use common::build_setup_in_code;
 use common::builders::{
     BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
 };
+use common::try_build_setup_in_code;
 
 const N_STAGES: usize = 2;
 const BUS_ID: i32 = 10;
@@ -334,7 +336,7 @@ fn end_storage_hm3(setup: &StudySetup, inflow_eta: &[f64]) -> Vec<f64> {
 }
 
 #[test]
-#[ignore = "known defect: chronological inflow noise is patched onto another hydro's water-balance rows"]
+#[ignore = "chronological multi-block inflow noise is rejected at setup; this study sets a positive inflow standard deviation on such a stage"]
 fn chronological_inflow_noise_moves_only_its_own_hydro() {
     let setup = build_setup_in_code(build_system(), &build_config());
     let zeta_hm3_per_m3s: f64 = BLOCK_HOURS.iter().sum::<f64>() * M3S_TO_HM3;
@@ -360,5 +362,22 @@ fn chronological_inflow_noise_moves_only_its_own_hydro() {
             expected_delta[h],
             delta[h]
         );
+    }
+}
+
+#[test]
+fn chronological_multi_block_inflow_noise_is_rejected_at_setup() {
+    match try_build_setup_in_code(build_system(), &build_config()) {
+        Err(SddpError::Validation(msg)) => {
+            assert!(
+                msg.contains("not implemented")
+                    && msg.contains("stage 0")
+                    && msg.contains("hydro 1"),
+                "reject message must name the rejection, stage, and hydro: {msg}"
+            );
+        }
+        other => panic!(
+            "expected a chronological multi-block inflow-noise Validation reject, got {other:?}"
+        ),
     }
 }

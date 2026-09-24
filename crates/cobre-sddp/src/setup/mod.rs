@@ -27,7 +27,9 @@
 //! ```
 
 use chrono::NaiveDate;
+use cobre_core::BlockMode;
 use cobre_core::ContractType::Import;
+use cobre_core::commissioning::{Phase as CommissioningPhase, filling_phase};
 use cobre_core::temporal::SeasonCycleType::Monthly;
 use cobre_core::temporal::SeasonMap;
 use cobre_core::temporal::StageLagTransition;
@@ -343,6 +345,9 @@ impl StudySetup {
     ///   on LP construction failure.
     /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
     ///   an invalid config string.
+    /// - [`SddpError::Validation`] — if a chronological stage with two or more
+    ///   blocks carries inflow noise on a non-`PreFilling` hydro (see
+    ///   [`chronological_multi_block_inflow_noise`]).
     pub fn new(
         system: &System,
         config: &Config,
@@ -421,6 +426,9 @@ impl StudySetup {
     /// - [`SddpError::Validation`] — a per-phase solver profile config sets a
     ///   field the compiled backend does not support (see
     ///   `validate_phase_solver_config`).
+    /// - [`SddpError::Validation`] — if a chronological stage with two or more
+    ///   blocks carries inflow noise on a non-`PreFilling` hydro (see
+    ///   [`chronological_multi_block_inflow_noise`]).
     /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
     ///   the template list is empty ("system has no study stages").
     /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
@@ -466,6 +474,7 @@ impl StudySetup {
         validate_phase_solver_config(training_solver_backward.as_ref(), Phase::Backward)?;
         validate_phase_solver_config(training_solver_forward.as_ref(), Phase::Forward)?;
         validate_phase_solver_config(simulation_solver.as_ref(), Phase::Simulation)?;
+        reject_chronological_multi_block_inflow_noise(system, stochastic.par())?;
 
         // `resolve_profile` is a pure function of the (identically broadcast)
         // config, so every rank resolving independently is sufficient — the
@@ -2650,6 +2659,61 @@ fn reject_recombining_node_enumeration(node_graph: &NodeGraph) -> Result<(), Sdd
         )));
     }
     Ok(())
+}
+
+/// The first stage and hydro where inflow noise lands on a chronological stage
+/// with two or more blocks, whose per-block water-balance rows the noise patch
+/// does not address.
+pub(crate) fn chronological_multi_block_inflow_noise<'s>(
+    system: &'s System,
+    par: &PrecomputedPar,
+) -> Option<(&'s Stage, &'s Hydro)> {
+    let hydros = system.hydros();
+    if par.n_stages() == 0 || par.n_hydros() != hydros.len() {
+        return None;
+    }
+    let study_stages = system.stages().iter().filter(|s| s.id >= 0).enumerate();
+    for (s_idx, stage) in study_stages.take(par.n_stages()) {
+        if stage.block_mode != BlockMode::Chronological || stage.blocks.len() < 2 {
+            continue;
+        }
+        for (h_idx, hydro) in hydros.iter().enumerate() {
+            let phase = filling_phase(
+                hydro.filling.as_ref(),
+                hydro.entry_stage_id,
+                hydro.exit_stage_id,
+                stage.id,
+            );
+            if !matches!(phase, CommissioningPhase::PreFilling) && par.sigma(s_idx, h_idx) > 0.0 {
+                return Some((stage, hydro));
+            }
+        }
+    }
+    None
+}
+
+/// Rejects the studies the predicate flags.
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] naming the offending stage, its block
+/// count, and the hydro when [`chronological_multi_block_inflow_noise`] finds
+/// one.
+fn reject_chronological_multi_block_inflow_noise(
+    system: &System,
+    par: &PrecomputedPar,
+) -> Result<(), SddpError> {
+    match chronological_multi_block_inflow_noise(system, par) {
+        Some((stage, hydro)) => Err(SddpError::Validation(format!(
+            "inflow noise on a chronological stage with more than one block is not \
+             implemented: stage {} has {} blocks and hydro {} has a positive inflow standard \
+             deviation; use parallel block mode or a single block for this stage",
+            stage.id,
+            stage.blocks.len(),
+            hydro.id.0
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn build_entity_counts(system: &System) -> EntityCounts {

@@ -6,7 +6,7 @@
 
 use chrono::NaiveDate;
 use cobre_core::entities::hydro::{HydroGenerationModel, HydroPenalties};
-use cobre_core::scenario::{InflowModel, LoadModel};
+use cobre_core::scenario::{InflowModel, LoadModel, NcsModel};
 use cobre_core::temporal::{
     Block, BlockMode, NoiseMethod, PolicyGraphType, ScenarioSourceConfig, Stage, StageRiskConfig,
     StageStateConfig,
@@ -15,9 +15,9 @@ use cobre_core::{
     AnticipatedCommitmentHistory, AnticipatedConfig, BoundsCountsSpec, BoundsDefaults,
     BusStagePenalties, ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph,
     HydroBlockBounds, HydroStageBounds, HydroStorage, InitialConditions, LineBlockBounds,
-    LineStagePenalties, NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults,
-    PumpingBlockBounds, ResolvedBounds, ResolvedPenalties, SystemBuilder, ThermalBlockBounds,
-    ThermalStageBounds,
+    LineStagePenalties, NcsStagePenalties, NonControllableSource, PenaltiesCountsSpec,
+    PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds, ResolvedPenalties, SystemBuilder,
+    ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_io::config::{
     Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -583,4 +583,232 @@ pub fn parallel_multiblock_evaporation_study()
     let system = build_parallel_evap_system();
     let hydro_models = parallel_evap_hydro_models(&system);
     (system, build_config(), hydro_models)
+}
+
+const STOCHASTIC_N_STAGES: usize = 2;
+const STOCHASTIC_BUS_ID: EntityId = EntityId(1);
+const STOCHASTIC_HYDRO_ID: EntityId = EntityId(2);
+const STOCHASTIC_NCS_ID: EntityId = EntityId(3);
+
+// Rationale: the entity/bounds/penalties construction is one sequential
+// fixture; splitting it into helper fns would fragment the declared shape
+// across call sites with no reuse benefit.
+#[allow(clippy::too_many_lines)]
+fn build_stochastic_parallel_system() -> cobre_core::System {
+    let bus = make_bus(
+        STOCHASTIC_BUS_ID,
+        BusSpec {
+            name: "B1".to_string(),
+            operational_start_date: stage_date(0),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        },
+    );
+
+    let hydro = make_hydro(
+        STOCHASTIC_HYDRO_ID,
+        HydroSpec {
+            name: "H1".to_string(),
+            operational_start_date: stage_date(0),
+            bus_id: STOCHASTIC_BUS_ID,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            penalties: hydro_penalties(),
+            ..Default::default()
+        },
+    );
+
+    let ncs = NonControllableSource {
+        id: STOCHASTIC_NCS_ID,
+        name: "NCS0".to_string(),
+        operational_start_date: stage_date(0),
+        bus_id: STOCHASTIC_BUS_ID,
+        entry_stage_id: None,
+        exit_stage_id: None,
+        max_generation_mw: 30.0,
+        allow_curtailment: true,
+        curtailment_cost: 0.0,
+    };
+
+    // Two distinct block durations (300, 444 h) so a slack priced at one
+    // block's hours is distinguishable from one priced at the stage total.
+    let blocks = vec![
+        Block {
+            index: 0,
+            name: "BLK0".to_string(),
+            duration_hours: 300.0,
+        },
+        Block {
+            index: 1,
+            name: "BLK1".to_string(),
+            duration_hours: 444.0,
+        },
+    ];
+
+    let stages: Vec<Stage> = (0..STOCHASTIC_N_STAGES)
+        .map(|i| {
+            make_stage(
+                i,
+                StageSpec {
+                    start_date: stage_date(i),
+                    end_date: stage_date(i + 1),
+                    season_id: None,
+                    blocks: blocks.clone(),
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: true,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 1,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                },
+            )
+        })
+        .collect();
+
+    let inflow_models: Vec<InflowModel> = (0..STOCHASTIC_N_STAGES)
+        .map(|i| InflowModel {
+            hydro_id: STOCHASTIC_HYDRO_ID,
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+
+    let load_models: Vec<LoadModel> = (0..STOCHASTIC_N_STAGES)
+        .map(|i| LoadModel {
+            bus_id: STOCHASTIC_BUS_ID,
+            stage_id: i as i32,
+            mean_mw: 100.0,
+            std_mw: 10.0,
+        })
+        .collect();
+
+    let ncs_models: Vec<NcsModel> = (0..STOCHASTIC_N_STAGES)
+        .map(|i| NcsModel {
+            ncs_id: STOCHASTIC_NCS_ID,
+            stage_id: i as i32,
+            mean: 0.5,
+            std: 0.2,
+        })
+        .collect();
+
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 1,
+            n_thermals: 0,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: STOCHASTIC_N_STAGES,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds {
+                max_turbined_m3s: 100.0,
+                max_generation_mw: 250.0,
+                ..Default::default()
+            },
+            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 1,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 1,
+            n_stages: STOCHASTIC_N_STAGES,
+        },
+        &PenaltiesDefaults {
+            hydro: hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    let initial_conditions = InitialConditions {
+        storage: vec![HydroStorage {
+            hydro_id: STOCHASTIC_HYDRO_ID,
+            value_hm3: 100.0,
+        }],
+        filling_storage: vec![],
+        past_anticipated_commitments: vec![],
+        recent_observations: vec![],
+        past_defluences: vec![],
+    };
+
+    let policy_graph = HorizonGraph {
+        stage_discount_rate_overrides: std::collections::BTreeMap::new(),
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate: 0.0,
+        transitions: vec![],
+        nodes: Vec::new(),
+        season_map: None,
+    };
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(vec![hydro])
+        .non_controllable_sources(vec![ncs])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .ncs_models(ncs_models)
+        .bounds(bounds)
+        .penalties(penalties)
+        .initial_conditions(initial_conditions)
+        .policy_graph(policy_graph)
+        .build()
+        .expect("stochastic_parallel_study: valid system")
+}
+
+/// Two parallel stages, two blocks each (300 h, 444 h): stochastic inflow
+/// noise on its one hydro, stochastic load noise on its one bus, and
+/// stochastic availability noise on its one non-controllable source —
+/// isolates the load- and NCS-noise patch paths no committed deck exercises.
+#[must_use]
+pub fn stochastic_parallel_study() -> (cobre_core::System, Config) {
+    (build_stochastic_parallel_system(), build_config())
 }

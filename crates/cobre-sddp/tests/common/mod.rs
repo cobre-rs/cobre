@@ -25,6 +25,7 @@ use cobre_stochastic::{
 pub mod anticipated_structural_assertions;
 pub mod builders;
 pub mod decks;
+pub mod in_code_studies;
 pub mod parity_hash;
 pub mod parquet_fixtures;
 pub mod permute;

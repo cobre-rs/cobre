@@ -39,19 +39,34 @@ fn build_deck_or_panic(deck: &Deck) -> StudySetup {
     })
 }
 
-/// One sorted line per `(deck, group)`: `<deck.key>\t<group>\t<sha256-hex>`.
+/// In-code fixtures, keyed by their manifest key: each isolates a stage-LP
+/// builder axis no committed deck combines. Included in both the compare and
+/// the regen tests, never slow-gated.
+fn in_code_decks() -> Vec<(String, StudySetup)> {
+    let (system, config) = common::in_code_studies::discounted_anticipated_study();
+    vec![(
+        "in-code/discounted-anticipated".to_string(),
+        common::build_setup_in_code(system, &config),
+    )]
+}
+
+/// One sorted line per `(key, group)`: `<key>\t<group>\t<sha256-hex>`.
+fn fact_lines(key: &str, setup: &StudySetup) -> Vec<String> {
+    template_fact_groups(setup)
+        .into_iter()
+        .map(|(group, bytes)| format!("{key}\t{group}\t{:x}", Sha256::digest(&bytes)))
+        .collect()
+}
+
 fn manifest_lines(decks: &[Deck]) -> Vec<String> {
     let mut lines: Vec<String> = decks
         .iter()
-        .flat_map(|deck| {
-            let setup = build_deck_or_panic(deck);
-            template_fact_groups(&setup)
+        .flat_map(|deck| fact_lines(&deck.key, &build_deck_or_panic(deck)))
+        .chain(
+            in_code_decks()
                 .into_iter()
-                .map(|(group, bytes)| {
-                    format!("{}\t{group}\t{:x}", deck.key, Sha256::digest(&bytes))
-                })
-                .collect::<Vec<_>>()
-        })
+                .flat_map(|(key, setup)| fact_lines(&key, &setup)),
+        )
         .collect();
     lines.sort();
     lines
@@ -138,6 +153,27 @@ fn template_snapshot_matches_manifest() {
         format_pairs(&moved),
         format_pairs(&added),
         format_pairs(&removed),
+    );
+}
+
+/// The discounted-anticipated fixture's stage-1 anticipated decision is
+/// costed: `LeadStages(2)` on a 4-stage horizon decides stages 0 and 1, both
+/// delivering after stage 0, and the decision column's objective coefficient
+/// must be non-zero for the discount path to be exercised at all.
+#[test]
+fn discounted_anticipated_fixture_decides_after_stage_zero() {
+    let (system, config) = common::in_code_studies::discounted_anticipated_study();
+    let setup = common::build_setup_in_code(system, &config);
+
+    let geometry = &setup.stage_data.stage_templates.geometry_per_stage[1];
+    assert!(
+        !geometry.anticipated_decision.is_empty(),
+        "stage 1 must have an active anticipated-decision column"
+    );
+    let template = &setup.stage_data.stage_templates.templates[1];
+    assert!(
+        template.objective[geometry.anticipated_decision.start] > 0.0,
+        "stage 1's anticipated decision must carry a nonzero costed objective coefficient"
     );
 }
 

@@ -55,7 +55,8 @@ use crate::lead_time::AnticipatedResolution;
 #[cfg(test)]
 use crate::lp::builder::StateBox;
 use crate::lp::builder::{
-    PatchBuffer, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
+    FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
+    encode_lp_facts,
 };
 use crate::lp::indexer::{
     CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions, ThermalSys,
@@ -3780,6 +3781,15 @@ pub fn trunk_fan_setup(
     max_iterations: u32,
 ) -> TrunkFanFixture {
     trunk_fan_fixture(t_trunk, k, k_fan_config(forward_passes, max_iterations))
+}
+
+/// Canonical byte encoding of `setup`'s stage-LP builder facts, keyed by fact
+/// group name, for the plan safety net's per-deck snapshot.
+#[must_use]
+pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8>> {
+    let mut groups = FactGroups::new();
+    encode_lp_facts(&setup.stage_data.stage_templates.templates, &mut groups);
+    groups
 }
 
 #[cfg(test)]

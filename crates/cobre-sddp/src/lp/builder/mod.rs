@@ -71,6 +71,8 @@ pub(crate) use scaling::{
     compute_row_scale,
 };
 pub(crate) use state_box::build_state_box;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use template::canonical::{FactGroups, encode_lp_facts};
 pub(crate) use template::models_from_normal;
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,9 @@ use crate::setup::bucket_topology::build_transit_bucket_topology;
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::resolve_state_layout;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod canonical;
+
 /// Outcome of [`build_stage_templates`]: one [`StageTemplate`] per study stage
 /// plus the per-stage offsets and counts the forward/backward/simulation passes
 /// need. The per-stage `Vec`s are parallel — index `s` of each refers to stage `s`.

@@ -56,7 +56,7 @@ use crate::lead_time::AnticipatedResolution;
 use crate::lp::builder::StateBox;
 use crate::lp::builder::{
     FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
-    encode_lp_facts,
+    encode_stage_templates_facts,
 };
 use crate::lp::indexer::{
     CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions, ThermalSys,
@@ -3788,7 +3788,7 @@ pub fn trunk_fan_setup(
 #[must_use]
 pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8>> {
     let mut groups = FactGroups::new();
-    encode_lp_facts(&setup.stage_data.stage_templates.templates, &mut groups);
+    encode_stage_templates_facts(&setup.stage_data.stage_templates, &mut groups);
     groups
 }
 

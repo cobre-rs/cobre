@@ -2136,6 +2136,15 @@ impl SolverInterface for TemplateCaptureSolver {
     }
 }
 
+/// The `[hydro | load-bus | NCS]` raw-noise vector length:
+/// `hydro_count + n_load_buses + n_stochastic_ncs`.
+#[must_use]
+pub fn raw_noise_len(setup: &StudySetup) -> usize {
+    setup.stage_data.state.hydro_count
+        + setup.stage_data.stage_templates.n_load_buses
+        + setup.stochastic.n_stochastic_ncs()
+}
+
 /// The `[hydro | load-bus | NCS]` standardized noise draw for `node_pos`: an
 /// `External` node reads its own scenario column from the standardized external
 /// inflow library; a `Generated` node draws zeros — the oracle fixtures carry
@@ -2144,9 +2153,7 @@ impl SolverInterface for TemplateCaptureSolver {
 fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
     let stage = setup.node_graph.nodes[node_pos].stage;
     let n_hydros = setup.stage_data.state.hydro_count;
-    let n_load = setup.stage_data.stage_templates.n_load_buses;
-    let n_ncs = setup.stochastic.n_stochastic_ncs();
-    let mut raw = vec![0.0_f64; n_hydros + n_load + n_ncs];
+    let mut raw = vec![0.0_f64; raw_noise_len(setup)];
     let openings = setup.node_graph.nodes[node_pos].openings;
     if openings.source == OpeningSource::External
         && let Some(lib) = setup.scenario_libraries.training.external_inflow.as_ref()
@@ -2172,7 +2179,7 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 #[must_use]
 pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> StageTemplate {
     let raw_noise = oracle_raw_noise(setup, node_pos);
-    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise)
+    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial_state)
 }
 
 /// [`capture_patched_node_template`] with a caller-chosen standardized inflow
@@ -2196,11 +2203,69 @@ pub fn capture_patched_node_template_with_inflow_noise(
         n_hydros,
         "inflow_eta must hold one standardized draw per hydro"
     );
-    let n_load = setup.stage_data.stage_templates.n_load_buses;
-    let n_ncs = setup.stochastic.n_stochastic_ncs();
-    let mut raw_noise = vec![0.0_f64; n_hydros + n_load + n_ncs];
+    let mut raw_noise = vec![0.0_f64; raw_noise_len(setup)];
     raw_noise[..n_hydros].copy_from_slice(inflow_eta);
-    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise)
+    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial_state)
+}
+
+/// [`capture_patched_node_template`] at a caller-chosen raw noise vector and
+/// incoming state, in place of the node's own oracle draw and
+/// [`StudySetup::initial_state`].
+///
+/// # Panics
+///
+/// Panics if `raw_noise.len() != raw_noise_len(setup)`, if
+/// `incoming_state.len() != setup.stage_data.state.n_state`, if `node_pos`
+/// (or its resolved stage) is out of range, or if the template is absent
+/// after [`StageSolvePrep::run`].
+#[must_use]
+pub fn capture_patched_node_template_at(
+    setup: &StudySetup,
+    node_pos: NodePos,
+    raw_noise: &[f64],
+    incoming_state: &[f64],
+) -> StageTemplate {
+    assert_eq!(
+        raw_noise.len(),
+        raw_noise_len(setup),
+        "raw_noise must be the `[hydro | load-bus | NCS]` raw-noise length"
+    );
+    assert_eq!(
+        incoming_state.len(),
+        setup.stage_data.state.n_state,
+        "incoming_state must hold one entry per state dimension"
+    );
+    capture_patched_node_template_with_raw_noise(setup, node_pos, raw_noise, incoming_state)
+}
+
+/// Opening `opening`'s raw `[hydro | load-bus | NCS]` noise vector at
+/// `node_pos`: a `Generated` node's own draw from
+/// [`StochasticContext::opening_tree`]; an `External` node's sole opening
+/// (`0`), which equals [`oracle_raw_noise`].
+///
+/// # Panics
+///
+/// Panics if `opening >= node_pos`'s opening count, or (for an `External`
+/// node) if `opening != 0`.
+#[must_use]
+pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize) -> Vec<f64> {
+    let stage = setup.node_graph.nodes[node_pos].stage;
+    let openings = setup.node_graph.nodes[node_pos].openings;
+    assert!(
+        opening < openings.len,
+        "opening must be < node_pos's opening count"
+    );
+    match openings.source {
+        OpeningSource::Generated => setup
+            .stochastic
+            .opening_tree()
+            .opening(stage.0, openings.offset + opening)
+            .to_vec(),
+        OpeningSource::External => {
+            assert_eq!(opening, 0, "an External node has exactly one opening");
+            oracle_raw_noise(setup, node_pos)
+        }
+    }
 }
 
 #[allow(clippy::expect_used)]
@@ -2208,6 +2273,7 @@ fn capture_patched_node_template_with_raw_noise(
     setup: &StudySetup,
     node_pos: NodePos,
     raw_noise: &[f64],
+    incoming_state: &[f64],
 ) -> StageTemplate {
     let stage = setup.node_graph.nodes[node_pos].stage;
     let base = setup.stage_data.stage_templates.templates[stage.0].clone();
@@ -2246,7 +2312,7 @@ fn capture_patched_node_template_with_raw_noise(
     let ctx = setup.stage_ctx();
     let training_ctx = setup.training_ctx();
     let params = StageSolvePrepParams {
-        state_source: StateSource(&setup.initial_state),
+        state_source: StateSource(incoming_state),
         load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,

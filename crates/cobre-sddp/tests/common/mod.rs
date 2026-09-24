@@ -243,16 +243,40 @@ pub fn stochastic_in_code(system: &System) -> StochasticContext {
     .expect("build_stochastic_context")
 }
 
+/// Fallible core shared by every in-code `StudySetup` constructor below: the
+/// sole call site of `StudySetup::new` in this module.
+#[allow(clippy::needless_pass_by_value)]
+fn try_build_setup_in_code_with_models(
+    system: System,
+    config: &Config,
+    hydro_models: PrepareHydroModelsResult,
+) -> Result<StudySetup, cobre_sddp::SddpError> {
+    let stochastic = stochastic_in_code(&system);
+    StudySetup::new(&system, config, stochastic, hydro_models, Vec::new())
+}
+
+/// Construct a [`StudySetup`] in-process from an explicit `hydro_models`
+/// result, building the stochastic context directly so the test stays
+/// hermetic (no external scenario files). Use this over [`build_setup_in_code`]
+/// when the fixture needs an active production/evaporation model
+/// [`PrepareHydroModelsResult::default_from_system`] cannot express.
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_setup_in_code_with_models(
+    system: System,
+    config: &Config,
+    hydro_models: PrepareHydroModelsResult,
+) -> StudySetup {
+    try_build_setup_in_code_with_models(system, config, hydro_models).expect("StudySetup::new")
+}
+
 /// Construct a [`StudySetup`] in-process, building the stochastic context
 /// directly so the test stays hermetic (no external scenario files).
 // Taken by value so callers pass an owned `System` inline without a separate
 // binding; the body only borrows it.
 #[allow(clippy::needless_pass_by_value)]
 pub fn build_setup_in_code(system: System, config: &Config) -> StudySetup {
-    let stochastic = stochastic_in_code(&system);
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
-
-    StudySetup::new(&system, config, stochastic, hydro_models, Vec::new()).expect("StudySetup::new")
+    build_setup_in_code_with_models(system, config, hydro_models)
 }
 
 /// Fallible sibling of [`build_setup_in_code`]: returns `StudySetup::new`'s
@@ -263,10 +287,8 @@ pub fn try_build_setup_in_code(
     system: System,
     config: &Config,
 ) -> Result<StudySetup, cobre_sddp::SddpError> {
-    let stochastic = stochastic_in_code(&system);
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
-
-    StudySetup::new(&system, config, stochastic, hydro_models, Vec::new())
+    try_build_setup_in_code_with_models(system, config, hydro_models)
 }
 
 /// Train `iterations`, then run the one-scenario simulation and return the drained

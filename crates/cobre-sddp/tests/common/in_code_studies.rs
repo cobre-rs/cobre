@@ -25,6 +25,9 @@ use cobre_io::config::{
     SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig, TrainingSelection,
     TrainingSolverConfig, UpperBoundEvaluationConfig,
 };
+use cobre_sddp::hydro_models::{
+    EvaporationModel, EvaporationModelSet, LinearizedEvaporation, PrepareHydroModelsResult,
+};
 
 use super::builders::{
     BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
@@ -325,4 +328,259 @@ fn build_config() -> Config {
 #[must_use]
 pub fn discounted_anticipated_study() -> (cobre_core::System, Config) {
     (build_system(), build_config())
+}
+
+const EVAP_N_STAGES: usize = 2;
+const EVAP_BUS_ID: EntityId = EntityId(1);
+const EVAP_HYDRO_ID: EntityId = EntityId(2);
+const EVAP_THERMAL_ID: EntityId = EntityId(3);
+
+fn evap_hydro_penalties() -> HydroPenalties {
+    HydroPenalties {
+        evaporation_violation_pos_cost: 11.0,
+        evaporation_violation_neg_cost: 7.0,
+        ..hydro_penalties()
+    }
+}
+
+// Rationale: the entity/bounds/penalties construction is one sequential
+// fixture; splitting it into helper fns would fragment the declared shape
+// across call sites with no reuse benefit.
+#[allow(clippy::too_many_lines)]
+fn build_parallel_evap_system() -> cobre_core::System {
+    let bus = make_bus(
+        EVAP_BUS_ID,
+        BusSpec {
+            name: "B1".to_string(),
+            operational_start_date: stage_date(0),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        },
+    );
+
+    let hydro = make_hydro(
+        EVAP_HYDRO_ID,
+        HydroSpec {
+            name: "H1".to_string(),
+            operational_start_date: stage_date(0),
+            bus_id: EVAP_BUS_ID,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            penalties: evap_hydro_penalties(),
+            ..Default::default()
+        },
+    );
+
+    let thermal = make_thermal(
+        EVAP_THERMAL_ID,
+        ThermalSpec {
+            name: "T1".to_string(),
+            operational_start_date: stage_date(0),
+            bus_id: EVAP_BUS_ID,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_per_mwh: 50.0,
+            ..Default::default()
+        },
+    );
+
+    // 3 blocks of 200h/244h/300h (744 h/stage total): three distinct block
+    // durations, so a slack priced at one block's hours is distinguishable
+    // from one priced at the stage total.
+    let blocks = vec![
+        Block {
+            index: 0,
+            name: "BLK0".to_string(),
+            duration_hours: 200.0,
+        },
+        Block {
+            index: 1,
+            name: "BLK1".to_string(),
+            duration_hours: 244.0,
+        },
+        Block {
+            index: 2,
+            name: "BLK2".to_string(),
+            duration_hours: 300.0,
+        },
+    ];
+
+    let stages: Vec<Stage> = (0..EVAP_N_STAGES)
+        .map(|i| {
+            make_stage(
+                i,
+                StageSpec {
+                    start_date: stage_date(i),
+                    end_date: stage_date(i + 1),
+                    season_id: None,
+                    blocks: blocks.clone(),
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: true,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 1,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                },
+            )
+        })
+        .collect();
+
+    let inflow_models: Vec<InflowModel> = (0..EVAP_N_STAGES)
+        .map(|i| InflowModel {
+            hydro_id: EVAP_HYDRO_ID,
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 0.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+
+    let load_models: Vec<LoadModel> = (0..EVAP_N_STAGES)
+        .map(|i| LoadModel {
+            bus_id: EVAP_BUS_ID,
+            stage_id: i as i32,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        })
+        .collect();
+
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 1,
+            n_thermals: 1,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: EVAP_N_STAGES,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds {
+                max_turbined_m3s: 100.0,
+                max_generation_mw: 250.0,
+                ..Default::default()
+            },
+            thermal: ThermalStageBounds { cost_per_mwh: 50.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 1,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages: EVAP_N_STAGES,
+        },
+        &PenaltiesDefaults {
+            hydro: evap_hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    let initial_conditions = InitialConditions {
+        storage: vec![HydroStorage {
+            hydro_id: EVAP_HYDRO_ID,
+            value_hm3: 100.0,
+        }],
+        filling_storage: vec![],
+        past_anticipated_commitments: vec![],
+        recent_observations: vec![],
+        past_defluences: vec![],
+    };
+
+    let policy_graph = HorizonGraph {
+        stage_discount_rate_overrides: std::collections::BTreeMap::new(),
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate: 0.0,
+        transitions: vec![],
+        nodes: Vec::new(),
+        season_map: None,
+    };
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(vec![hydro])
+        .thermals(vec![thermal])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .bounds(bounds)
+        .penalties(penalties)
+        .initial_conditions(initial_conditions)
+        .policy_graph(policy_graph)
+        .build()
+        .expect("parallel_multiblock_evaporation_study: valid system")
+}
+
+fn parallel_evap_hydro_models(system: &cobre_core::System) -> PrepareHydroModelsResult {
+    let mut hydro_models = PrepareHydroModelsResult::default_from_system(system);
+    hydro_models.evaporation = EvaporationModelSet::new(vec![EvaporationModel::Linearized {
+        coefficients: vec![
+            LinearizedEvaporation {
+                intercept_m3s: 1.0,
+                volume_slope_m3s_per_hm3: 0.01,
+            },
+            LinearizedEvaporation {
+                intercept_m3s: 1.0,
+                volume_slope_m3s_per_hm3: 0.01,
+            },
+        ],
+        reference_volumes_hm3: vec![100.0, 100.0],
+    }]);
+    hydro_models
+}
+
+/// Parallel, 2-stage, 3-block-per-stage study with an active linearized
+/// evaporation model on its one hydro: isolates the parallel multi-block
+/// evaporation slot (R7), a combination no committed deck exercises. The
+/// three distinct block durations (200, 244, 300 h) make a slack priced at
+/// one block's hours distinguishable from one priced at the stage's 744 h.
+#[must_use]
+pub fn parallel_multiblock_evaporation_study()
+-> (cobre_core::System, Config, PrepareHydroModelsResult) {
+    let system = build_parallel_evap_system();
+    let hydro_models = parallel_evap_hydro_models(&system);
+    (system, build_config(), hydro_models)
 }

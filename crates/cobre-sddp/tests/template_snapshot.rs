@@ -44,10 +44,18 @@ fn build_deck_or_panic(deck: &Deck) -> StudySetup {
 /// the regen tests, never slow-gated.
 fn in_code_decks() -> Vec<(String, StudySetup)> {
     let (system, config) = common::in_code_studies::discounted_anticipated_study();
-    vec![(
-        "in-code/discounted-anticipated".to_string(),
-        common::build_setup_in_code(system, &config),
-    )]
+    let (evap_system, evap_config, evap_hydro_models) =
+        common::in_code_studies::parallel_multiblock_evaporation_study();
+    vec![
+        (
+            "in-code/discounted-anticipated".to_string(),
+            common::build_setup_in_code(system, &config),
+        ),
+        (
+            "in-code/parallel-multiblock-evaporation".to_string(),
+            common::build_setup_in_code_with_models(evap_system, &evap_config, evap_hydro_models),
+        ),
+    ]
 }
 
 /// One sorted line per `(key, group)`: `<key>\t<group>\t<sha256-hex>`.
@@ -174,6 +182,23 @@ fn discounted_anticipated_fixture_decides_after_stage_zero() {
     assert!(
         template.objective[geometry.anticipated_decision.start] > 0.0,
         "stage 1's anticipated decision must carry a nonzero costed objective coefficient"
+    );
+}
+
+/// The parallel-multiblock-evaporation fixture's stage 0 is a 3-block
+/// parallel stage with active evaporation.
+#[test]
+fn parallel_evaporation_fixture_evaporates_on_a_multiblock_parallel_stage() {
+    let (system, config, hydro_models) =
+        common::in_code_studies::parallel_multiblock_evaporation_study();
+    let setup = common::build_setup_in_code_with_models(system, &config, hydro_models);
+
+    let geometry = &setup.stage_data.stage_templates.geometry_per_stage[0];
+    assert_eq!(geometry.block_mode, cobre_core::BlockMode::Parallel);
+    assert_eq!(geometry.n_blks, 3);
+    assert!(
+        !geometry.evap_hydro_indices.is_empty(),
+        "stage 0 must have an active evaporation slot"
     );
 }
 

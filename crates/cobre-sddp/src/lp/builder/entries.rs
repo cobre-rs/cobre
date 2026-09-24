@@ -9932,42 +9932,45 @@ mod pumping_water_tests {
         assert_eq!(col_upper[flow_col], q_max);
     }
 
-    /// Each parallel evaporation block prices its violation slacks at the hours of
-    /// water its flow column moves through the water row, so a slack that shifts a
-    /// whole stage of water costs a whole stage of hours.
+    /// A parallel multi-block stage evaporates as one stage-level quantity: one slot per
+    /// evaporating hydro, its flow coupled into the single water row with `ζ`, and its
+    /// violation slacks priced at the violation cost times the stage's total hours.
     #[test]
-    #[ignore = "known defect: parallel multi-block evaporation couples only block 0 and prices its slack at block 0's hours"]
+    #[ignore = "known defect: a parallel multi-block stage allocates one evaporation slot per block and prices the coupled slot's violation slack at one block's hours"]
     fn parallel_multi_block_evap_slack_price_matches_water_it_moves() {
         let durations = [300.0_f64, 444.0];
         let (csc, _rl, _ru, (_cl, _cu, obj), layout) =
             build_fpha_evap_case(BlockMode::Parallel, &durations);
-        let local = EvapLocal::new(0);
-        let water_row = layout.rows.water_balance.start;
-        let zeta = durations.iter().sum::<f64>() * M3S_TO_HM3;
+        let geometry = layout.geometry(BlockMode::Parallel);
+        let total_hours: f64 = durations.iter().sum();
+        let zeta = total_hours * M3S_TO_HM3;
 
-        let mut coupled = 0.0;
-        for blk in 0..layout.n_blks {
-            let block = BlockIdx::new(blk);
-            let coupling = csc_at(&csc, layout.evap_flow_col(local, block), water_row);
-            coupled += coupling;
-            let hours_moved = coupling / M3S_TO_HM3;
-            for (col, cost, name) in [
-                (layout.evap_f_plus_col(local, block), 7.0, "f_evap_plus"),
-                (layout.evap_f_minus_col(local, block), 11.0, "f_evap_minus"),
-            ] {
-                let expected = cost * hours_moved;
-                assert!(
-                    (obj[col] - expected).abs() <= 1e-9 * expected.abs().max(1.0),
-                    "block {blk}: {name} must cost {cost} per hour of water its flow moves \
-                     ({hours_moved} h), expected {expected}, got {}",
-                    obj[col]
-                );
-            }
-        }
-        assert!(
-            (coupled - zeta).abs() <= 1e-12,
-            "evaporation flows must move exactly ζ = {zeta} on the water row, got {coupled}"
+        assert_eq!(
+            geometry.evap_indices.len(),
+            geometry.evap_hydro_indices.len(),
+            "a parallel stage must reserve exactly one evaporation slot per evaporating hydro"
         );
+        let slot = geometry.evap_indices[0];
+        assert_eq!(
+            csc_at(
+                &csc,
+                slot.evaporation_flow_col,
+                layout.rows.water_balance.start
+            ),
+            zeta,
+            "the stage-level evaporation flow must move ζ = {zeta} on the water row"
+        );
+        for (col, cost, name) in [
+            (slot.f_evap_plus_col, 7.0, "f_evap_plus"),
+            (slot.f_evap_minus_col, 11.0, "f_evap_minus"),
+        ] {
+            let expected = cost * total_hours;
+            assert!(
+                (obj[col] - expected).abs() <= 1e-12 * expected,
+                "{name} must cost {cost} per stage hour ({total_hours} h): expected {expected}, got {}",
+                obj[col]
+            );
+        }
     }
 
     // ── Commissioning-dormant FPHA plant (A.1 regression) ────────────────────

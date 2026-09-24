@@ -221,14 +221,12 @@ pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> St
     build_setup_for_case(case_dir, &config, &system, stochastic, hydro_models)
 }
 
-/// Construct a [`StudySetup`] in-process, building the stochastic context
-/// directly so the test stays hermetic (no external scenario files).
-// Taken by value so callers pass an owned `System` inline without a separate
-// binding; the body only borrows it.
-#[allow(clippy::needless_pass_by_value)]
-pub fn build_setup_in_code(system: System, config: &Config) -> StudySetup {
-    let stochastic = build_stochastic_context(
-        &system,
+/// Build a [`StochasticContext`] for an in-code `System`, hermetic (no external
+/// scenario files) — the construction shared by [`build_setup_in_code`] and
+/// [`try_build_setup_in_code`].
+pub fn stochastic_in_code(system: &System) -> StochasticContext {
+    build_stochastic_context(
+        system,
         42,
         None,
         &[],
@@ -240,8 +238,16 @@ pub fn build_setup_in_code(system: System, config: &Config) -> StudySetup {
             ncs: Some(SamplingScheme::InSample),
         },
     )
-    .expect("build_stochastic_context");
+    .expect("build_stochastic_context")
+}
 
+/// Construct a [`StudySetup`] in-process, building the stochastic context
+/// directly so the test stays hermetic (no external scenario files).
+// Taken by value so callers pass an owned `System` inline without a separate
+// binding; the body only borrows it.
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_setup_in_code(system: System, config: &Config) -> StudySetup {
+    let stochastic = stochastic_in_code(&system);
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
 
     StudySetup::new(&system, config, stochastic, hydro_models, Vec::new()).expect("StudySetup::new")
@@ -255,21 +261,7 @@ pub fn try_build_setup_in_code(
     system: System,
     config: &Config,
 ) -> Result<StudySetup, cobre_sddp::SddpError> {
-    let stochastic = build_stochastic_context(
-        &system,
-        42,
-        None,
-        &[],
-        &[],
-        OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
-    )
-    .expect("build_stochastic_context");
-
+    let stochastic = stochastic_in_code(&system);
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
 
     StudySetup::new(&system, config, stochastic, hydro_models, Vec::new())

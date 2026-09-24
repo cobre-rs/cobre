@@ -21,6 +21,8 @@
 
 mod common;
 
+use std::path::Path;
+
 use chrono::NaiveDate;
 use cobre_core::scenario::{InflowModel, LoadModel};
 use cobre_core::temporal::{
@@ -41,9 +43,14 @@ use cobre_io::config::{
 };
 use cobre_sddp::SddpError;
 use cobre_sddp::StudySetup;
+use cobre_sddp::build_stage_templates_resolving_layout;
+use cobre_sddp::hydro_models::PrepareHydroModelsResult;
 use cobre_sddp::indexer::StateDim;
+use cobre_sddp::inflow_method::InflowNonNegativityMethod;
+use cobre_sddp::resolved_parameters::ResolvedParameters;
 use cobre_sddp::setup::{NodePos, StageIdx};
 use cobre_sddp::test_support::capture_patched_node_template_with_inflow_noise;
+use cobre_sddp::test_support::chronological_multi_block_inflow_noise;
 use cobre_solver::{ActiveSolver, SolverInterface};
 
 use common::build_setup_in_code;
@@ -83,6 +90,22 @@ fn hydro_penalties() -> HydroPenalties {
 }
 
 fn build_system() -> cobre_core::System {
+    build_system_with(
+        [BlockMode::Chronological; N_STAGES],
+        &BLOCK_HOURS,
+        [INFLOW_STD_M3S; N_STAGES],
+        [None, None],
+    )
+}
+
+/// `inflow_std_m3s[stage][hydro]` is hydro `hydro`'s inflow standard deviation at
+/// stage `stage`; `entry_stage_ids[hydro]` is that hydro's `HydroSpec::entry_stage_id`.
+fn build_system_with(
+    block_modes: [BlockMode; N_STAGES],
+    block_hours: &[f64],
+    inflow_std_m3s: [[f64; 2]; N_STAGES],
+    entry_stage_ids: [Option<i32>; 2],
+) -> cobre_core::System {
     let start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
 
     let bus = make_bus(
@@ -100,13 +123,15 @@ fn build_system() -> cobre_core::System {
 
     let hydros = HYDRO_IDS
         .iter()
-        .map(|&id| {
+        .enumerate()
+        .map(|(k, &id)| {
             make_hydro(
                 EntityId(id),
                 HydroSpec {
                     name: format!("H{id}"),
                     operational_start_date: start,
                     bus_id: EntityId(BUS_ID),
+                    entry_stage_id: entry_stage_ids[k],
                     min_storage_hm3: 0.0,
                     max_storage_hm3: 10_000.0,
                     max_turbined_m3s: 100.0,
@@ -120,7 +145,7 @@ fn build_system() -> cobre_core::System {
         })
         .collect();
 
-    let blocks: Vec<Block> = BLOCK_HOURS
+    let blocks: Vec<Block> = block_hours
         .iter()
         .enumerate()
         .map(|(index, &duration_hours)| Block {
@@ -140,7 +165,7 @@ fn build_system() -> cobre_core::System {
                         .unwrap(),
                     season_id: Some(0),
                     blocks: blocks.clone(),
-                    block_mode: BlockMode::Chronological,
+                    block_mode: block_modes[i],
                     state_config: StageStateConfig {
                         storage: true,
                         inflow_lags: false,
@@ -157,13 +182,13 @@ fn build_system() -> cobre_core::System {
 
     let inflow_models = HYDRO_IDS
         .iter()
-        .zip(INFLOW_STD_M3S)
-        .flat_map(|(&id, std_m3s)| {
+        .enumerate()
+        .flat_map(|(h, &id)| {
             (0..N_STAGES).map(move |i| InflowModel {
                 hydro_id: EntityId(id),
                 stage_id: i32::try_from(i).expect("stage index fits i32"),
                 mean_m3s: INFLOW_MEAN_M3S,
-                std_m3s,
+                std_m3s: inflow_std_m3s[i][h],
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
                 annual: None,
@@ -280,7 +305,7 @@ fn build_system() -> cobre_core::System {
         .penalties(penalties)
         .initial_conditions(initial_conditions)
         .build()
-        .expect("two independent hydros on a chronological two-block stage")
+        .expect("two independent hydros on a two-stage system")
 }
 
 fn build_config() -> Config {
@@ -380,4 +405,137 @@ fn chronological_multi_block_inflow_noise_is_rejected_at_setup() {
             "expected a chronological multi-block inflow-noise Validation reject, got {other:?}"
         ),
     }
+}
+
+#[test]
+fn chronological_multi_block_inflow_noise_is_flagged() {
+    let system = build_system();
+    let stochastic = common::stochastic_in_code(&system);
+    assert_eq!(
+        chronological_multi_block_inflow_noise(&system, stochastic.par()),
+        Some((0, 1))
+    );
+}
+
+#[test]
+fn single_block_chronological_inflow_noise_is_not_flagged() {
+    let system = build_system_with(
+        [BlockMode::Chronological; N_STAGES],
+        &[744.0],
+        [INFLOW_STD_M3S; N_STAGES],
+        [None, None],
+    );
+    let stochastic = common::stochastic_in_code(&system);
+    assert_eq!(
+        chronological_multi_block_inflow_noise(&system, stochastic.par()),
+        None
+    );
+    assert!(try_build_setup_in_code(system, &build_config()).is_ok());
+}
+
+#[test]
+fn parallel_multi_block_inflow_noise_is_not_flagged() {
+    let system = build_system_with(
+        [BlockMode::Parallel; N_STAGES],
+        &BLOCK_HOURS,
+        [INFLOW_STD_M3S; N_STAGES],
+        [None, None],
+    );
+    let stochastic = common::stochastic_in_code(&system);
+    assert_eq!(
+        chronological_multi_block_inflow_noise(&system, stochastic.par()),
+        None
+    );
+    assert!(try_build_setup_in_code(system, &build_config()).is_ok());
+}
+
+#[test]
+fn inflow_noise_is_flagged_only_on_the_chronological_stage() {
+    let block_modes = [BlockMode::Parallel, BlockMode::Chronological];
+
+    let not_flagged = build_system_with(
+        block_modes,
+        &BLOCK_HOURS,
+        [[10.0, 20.0], [0.0, 0.0]],
+        [None, None],
+    );
+    let not_flagged_stochastic = common::stochastic_in_code(&not_flagged);
+    assert_eq!(
+        chronological_multi_block_inflow_noise(&not_flagged, not_flagged_stochastic.par()),
+        None
+    );
+    assert!(try_build_setup_in_code(not_flagged, &build_config()).is_ok());
+
+    let flagged = build_system_with(
+        block_modes,
+        &BLOCK_HOURS,
+        [[0.0, 0.0], [10.0, 0.0]],
+        [None, None],
+    );
+    let flagged_stochastic = common::stochastic_in_code(&flagged);
+    assert_eq!(
+        chronological_multi_block_inflow_noise(&flagged, flagged_stochastic.par()),
+        Some((1, 1))
+    );
+}
+
+#[test]
+fn prefilling_hydro_inflow_noise_is_not_flagged() {
+    let system = build_system_with(
+        [BlockMode::Chronological; N_STAGES],
+        &BLOCK_HOURS,
+        [[0.0, 20.0], [0.0, 0.0]],
+        [None, Some(1)],
+    );
+    let stochastic = common::stochastic_in_code(&system);
+    assert_eq!(
+        chronological_multi_block_inflow_noise(&system, stochastic.par()),
+        None
+    );
+    assert!(try_build_setup_in_code(system, &build_config()).is_ok());
+}
+
+#[test]
+fn committed_chronological_decks_still_load() {
+    let deterministic_decks = [
+        "d46-travel-time-chronological",
+        "d49-travel-time-chronological-arrival",
+        "d50-travel-time-plain-tributary-confluence",
+    ];
+    let deterministic_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/deterministic");
+    for deck in deterministic_decks {
+        common::fresh_setup_with(&deterministic_root.join(deck), |_| {});
+    }
+
+    let fixture_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chronological_storage");
+    common::fresh_setup_with(&fixture_dir, |_| {});
+}
+
+#[test]
+fn builder_accepts_chronological_multi_block_inflow_noise() {
+    let system = build_system();
+    let stochastic = common::stochastic_in_code(&system);
+    assert!(
+        chronological_multi_block_inflow_noise(&system, stochastic.par()).is_some(),
+        "fixture must be the same system the setup-level rejection test builds"
+    );
+
+    let models = PrepareHydroModelsResult::default_from_system(&system);
+    let templates = build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        stochastic.par(),
+        stochastic.normal(),
+        &models.production,
+        &models.evaporation,
+        &ResolvedParameters::default(),
+    )
+    .expect("the builder must accept chronological multi-block inflow noise");
+    assert_eq!(
+        templates.geometry_per_stage[0].water_balance.len(),
+        4,
+        "two hydros times two chronological blocks"
+    );
 }

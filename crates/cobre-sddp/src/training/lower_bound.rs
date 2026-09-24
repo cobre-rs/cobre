@@ -96,6 +96,28 @@ impl<'a> LbEvalScratchBundle<'a> {
     }
 }
 
+/// The LB path never calls `fill_load_patches`, so `n_load_buses` and
+/// `max_blocks` are pinned to `0`. Bucket and anticipated capacity MUST match
+/// `n_buckets` / `n_anticipated * k_max` — undersizing panics in
+/// `fill_col_state_patches`.
+pub(crate) fn lower_bound_patch_buffer(
+    hydro_count: usize,
+    max_par_order: usize,
+    n_buckets: usize,
+    n_anticipated: usize,
+    k_max: usize,
+) -> PatchBuffer {
+    PatchBuffer::new(
+        hydro_count,
+        max_par_order,
+        0,
+        0,
+        n_buckets,
+        n_anticipated,
+        k_max,
+    )
+}
+
 /// Rank-0 setup: run the append-only LP load. Only called on rank 0.
 ///
 /// # Errors

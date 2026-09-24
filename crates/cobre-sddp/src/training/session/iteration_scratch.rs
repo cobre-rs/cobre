@@ -102,15 +102,9 @@ impl IterationScratch {
             })
             .collect();
 
-        // The LB path never calls `fill_load_patches`, so `n_load_buses` and
-        // `max_blocks` are 0. Bucket and anticipated capacity MUST match
-        // `n_buckets` / `n_anticipated * k_max` — undersizing panics in
-        // `fill_col_state_patches`.
-        let patch_buf = PatchBuffer::new(
+        let patch_buf = crate::lower_bound::lower_bound_patch_buffer(
             hydro_count,
             max_par_order,
-            0,
-            0,
             n_buckets,
             n_anticipated,
             k_max,

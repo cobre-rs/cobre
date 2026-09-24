@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use chrono::NaiveDate;
+use cobre_comm::LocalBackend;
 use cobre_core::scenario::{InflowModel, LoadModel, SamplingScheme};
 use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, Transition};
 use cobre_core::{
@@ -52,6 +53,7 @@ use crate::hydro_models::{
     ResolvedProductionModel,
 };
 use crate::lead_time::AnticipatedResolution;
+use crate::lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound};
 #[cfg(test)]
 use crate::lp::builder::StateBox;
 use crate::lp::builder::{
@@ -2347,6 +2349,63 @@ pub fn oracle_initial_state(setup: &StudySetup) -> Vec<f64> {
 pub fn stage_state_box_bounds(setup: &StudySetup, stage: usize) -> (Vec<f64>, Vec<f64>) {
     let state_box = &setup.stage_data.stage_templates.state_boxes[stage];
     (state_box.lower.clone(), state_box.upper.clone())
+}
+
+/// The no-cut root lower bound: [`evaluate_lower_bound`] over `setup`'s stage-0
+/// LP with whatever cuts `setup.fcf` currently holds (empty on a freshly built
+/// `StudySetup`), with the lower-bound scratch sized from the training
+/// session's own arguments.
+///
+/// # Errors
+///
+/// Returns whatever [`evaluate_lower_bound`] returns.
+pub fn no_cut_root_lower_bound<S: SolverInterface>(
+    setup: &StudySetup,
+    solver: &mut S,
+) -> Result<f64, SddpError> {
+    let training_ctx = setup.training_ctx();
+    let state = training_ctx.state;
+    let stage_ctx = setup.stage_ctx();
+
+    let mut patch_buf = crate::lower_bound::lower_bound_patch_buffer(
+        state.hydro_count,
+        state.max_par_order,
+        state.n_buckets,
+        state.n_anticipated,
+        state.k_max,
+    );
+    let mut lb_cut_batch = RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+    let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing {
+        hydro_count: state.hydro_count,
+        max_par_order: state.max_par_order,
+        downstream_par_order: stage_ctx.downstream_par_order,
+        ..WorkspaceSizing::default()
+    });
+    let mut lb_scratch = LbEvalScratch::new();
+    let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+        &mut patch_buf,
+        &mut lb_cut_batch,
+        None,
+        &mut noise_scratch,
+        &mut lb_scratch,
+    );
+
+    evaluate_lower_bound(
+        solver,
+        &setup.fcf,
+        &stage_ctx,
+        &training_ctx,
+        &setup.cut_management.risk_measures[0],
+        &mut bundle,
+        &LocalBackend,
+    )
 }
 
 // ── Branching value oracle: fixtures ─────────────────────────────────────────

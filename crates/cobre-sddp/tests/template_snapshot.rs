@@ -66,6 +66,172 @@ fn fact_lines(key: &str, setup: &StudySetup) -> Vec<String> {
         .collect()
 }
 
+/// Per-field simulation digest for a fixed deck subset, trained under
+/// `HiGHS` only. The `#[cfg(not(feature = "highs"))]` sibling below keeps
+/// `lines()` compiling under a CLP-only build; `lines()` itself skips
+/// training outside `slow-tests`.
+#[cfg(feature = "highs")]
+mod sim_view {
+    use std::collections::BTreeMap;
+
+    use cobre_sddp::{SimulationScenarioResult, StudySetup};
+    use cobre_solver::highs::HighsSolver;
+    use serde_json::{Map, Value};
+    use sha2::{Digest, Sha256};
+
+    const SIM_VIEW_DECKS: &[&str] = &[
+        "crates/cobre-sddp/tests/fixtures/chronological_storage",
+        "crates/cobre-sddp/tests/fixtures/parallel_storage",
+        "examples/deterministic/d46-travel-time-chronological",
+        "examples/deterministic/d49-travel-time-chronological-arrival",
+        "examples/deterministic/d50-travel-time-plain-tributary-confluence",
+    ];
+
+    fn put_u64(buf: &mut Vec<u8>, value: u64) {
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_f64_bits(buf: &mut Vec<u8>, value: f64) {
+        put_u64(buf, value.to_bits());
+    }
+
+    fn cut_digest_bytes(setup: &StudySetup) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for pool in 0..setup.fcf.pools.len() {
+            for (_slot, intercept, coefficients) in setup.fcf.active_cuts(pool) {
+                put_u64(&mut buf, pool as u64);
+                put_u64(&mut buf, coefficients.len() as u64);
+                put_f64_bits(&mut buf, intercept);
+                for &c in coefficients {
+                    put_f64_bits(&mut buf, c);
+                }
+            }
+        }
+        buf
+    }
+
+    fn put_leaf(buf: &mut Vec<u8>, value: &Value) {
+        match value {
+            Value::Null => buf.push(0),
+            Value::Bool(b) => {
+                buf.push(1);
+                buf.push(u8::from(*b));
+            }
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    buf.push(2);
+                    put_u64(buf, u);
+                } else if let Some(i) = n.as_i64() {
+                    buf.push(3);
+                    buf.extend_from_slice(&i.to_le_bytes());
+                } else {
+                    buf.push(4);
+                    put_f64_bits(
+                        buf,
+                        n.as_f64()
+                            .expect("a JSON number that is neither u64 nor i64 must be an f64"),
+                    );
+                }
+            }
+            Value::String(s) => {
+                buf.push(5);
+                put_u64(buf, s.len() as u64);
+                buf.extend_from_slice(s.as_bytes());
+            }
+            Value::Array(items) => {
+                buf.push(6);
+                put_u64(buf, items.len() as u64);
+                for item in items {
+                    put_leaf(buf, item);
+                }
+            }
+            Value::Object(_) => {
+                unreachable!("walk() routes every object through its own record branch")
+            }
+        }
+    }
+
+    /// A JSON object nested under a field becomes a record of that field's key;
+    /// an array of objects becomes one record per element (`stage` for
+    /// `stages`, else the field key); every other value is a leaf appended to
+    /// `sim.<record_type>.<field>`. An empty array contributes nothing.
+    fn walk(record_type: &str, obj: &Map<String, Value>, groups: &mut BTreeMap<String, Vec<u8>>) {
+        for (key, value) in obj {
+            match value {
+                Value::Object(child) => walk(key, child, groups),
+                Value::Array(items) if matches!(items.first(), Some(Value::Object(_))) => {
+                    let child_type = if key == "stages" {
+                        "stage"
+                    } else {
+                        key.as_str()
+                    };
+                    for item in items {
+                        if let Value::Object(child) = item {
+                            walk(child_type, child, groups);
+                        }
+                    }
+                }
+                Value::Array(items) if items.is_empty() => {}
+                leaf => put_leaf(
+                    groups
+                        .entry(format!("sim.{record_type}.{key}"))
+                        .or_default(),
+                    leaf,
+                ),
+            }
+        }
+    }
+
+    fn sim_digest_lines(
+        deck_key: &str,
+        setup: &StudySetup,
+        mut results: Vec<SimulationScenarioResult>,
+    ) -> Vec<String> {
+        let mut groups: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        groups.insert("sim.cuts".to_string(), cut_digest_bytes(setup));
+
+        results.sort_by_key(|r| r.scenario_id);
+        for scenario in &mut results {
+            scenario.stages.sort_by_key(|s| s.stage_id);
+            let Value::Object(obj) =
+                serde_json::to_value(&*scenario).expect("SimulationScenarioResult must serialize")
+            else {
+                panic!("SimulationScenarioResult must serialize to a JSON object");
+            };
+            walk("scenario", &obj, &mut groups);
+        }
+
+        groups
+            .into_iter()
+            .map(|(group, bytes)| format!("{deck_key}\t{group}\t{:x}", Sha256::digest(&bytes)))
+            .collect()
+    }
+
+    pub(super) fn lines() -> Vec<String> {
+        if !cfg!(all(feature = "highs", feature = "slow-tests")) {
+            return Vec::new();
+        }
+        super::common::decks::committed_decks()
+            .into_iter()
+            .filter(|deck| SIM_VIEW_DECKS.contains(&deck.key.as_str()))
+            .flat_map(|deck| {
+                let (setup, results) = super::common::parity_hash::train_and_simulate_at_dir(
+                    &deck.dir,
+                    HighsSolver::new,
+                );
+                sim_digest_lines(&deck.key, &setup, results)
+            })
+            .collect()
+    }
+}
+
+#[cfg(not(feature = "highs"))]
+mod sim_view {
+    pub(super) fn lines() -> Vec<String> {
+        Vec::new()
+    }
+}
+
 fn manifest_lines(decks: &[Deck]) -> Vec<String> {
     let mut lines: Vec<String> = decks
         .iter()
@@ -75,6 +241,7 @@ fn manifest_lines(decks: &[Deck]) -> Vec<String> {
                 .into_iter()
                 .flat_map(|(key, setup)| fact_lines(&key, &setup)),
         )
+        .chain(sim_view::lines())
         .collect();
     lines.sort();
     lines
@@ -117,13 +284,17 @@ fn format_pairs(pairs: &[(String, String)]) -> String {
 #[test]
 fn template_snapshot_matches_manifest() {
     let slow_tests_enabled = cfg!(feature = "slow-tests");
+    let sim_view_enabled = cfg!(all(feature = "highs", feature = "slow-tests"));
 
     let manifest_text =
         std::fs::read_to_string(manifest_path()).expect("read template snapshot manifest");
     let committed_lines: Vec<String> = manifest_text.lines().map(str::to_string).collect();
     let committed: BTreeMap<(String, String), String> = parse_lines(&committed_lines)
         .into_iter()
-        .filter(|((deck_key, _), _)| slow_tests_enabled || !SLOW_DECKS.contains(&deck_key.as_str()))
+        .filter(|((deck_key, group), _)| {
+            (slow_tests_enabled || !SLOW_DECKS.contains(&deck_key.as_str()))
+                && (sim_view_enabled || !group.starts_with("sim."))
+        })
         .collect();
 
     let computed_lines = manifest_lines(&active_decks());
@@ -213,10 +384,22 @@ fn require_slow_tests() {
     );
 }
 
+#[cfg(feature = "highs")]
+fn require_highs() {}
+
+#[cfg(not(feature = "highs"))]
+fn require_highs() {
+    panic!(
+        "template_snapshot_regen must run with --features highs so the \
+         manifest's simulation-view lines are always regenerated"
+    );
+}
+
 #[test]
 #[ignore = "rewrites the committed template snapshot manifest; run explicitly"]
 fn template_snapshot_regen() {
     require_slow_tests();
+    require_highs();
 
     let lines = manifest_lines(&committed_decks());
     let mut content = lines.join("\n");

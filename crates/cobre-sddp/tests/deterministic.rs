@@ -1792,54 +1792,29 @@ fn d54_range_constraint() {
 )]
 #[test]
 fn d14_block_factors() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d14-block-factors");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![20.0, 20.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-
-    let load_path = scenarios_dir.join("load_seasonal_stats.parquet");
-    let file = std::fs::File::create(&load_path).expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 20.0, 0.0), (0, 1, 20.0, 0.0)],
+    );
 
     // Empty inflow stats: D14 has no hydros.
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::new_empty(Arc::clone(&inflow_schema));
-    let inflow_path = scenarios_dir.join("inflow_seasonal_stats.parquet");
-    let file = std::fs::File::create(&inflow_path).expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[],
+    );
 
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 176_900.0, 1e-4, "D14");
@@ -1882,82 +1857,39 @@ fn d14_block_factors() {
 )]
 #[test]
 fn d15_non_controllable_source() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d15-non-controllable-source");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![80.0, 80.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-
-    let load_path = scenarios_dir.join("load_seasonal_stats.parquet");
-    let file = std::fs::File::create(&load_path).expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 80.0, 0.0), (0, 1, 80.0, 0.0)],
+    );
 
     // Empty inflow stats: D15 has no hydros.
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::new_empty(Arc::clone(&inflow_schema));
-    let inflow_path = scenarios_dir.join("inflow_seasonal_stats.parquet");
-    let file = std::fs::File::create(&inflow_path).expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[],
+    );
 
     // NCS availability is a factor: mean 0.5 × max 100 MW = 50 MW. std 0 drives
     // the stochastic NCS pipeline with zero noise (deterministic).
-    let ncs_schema = Arc::new(Schema::new(vec![
-        Field::new("ncs_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean", DataType::Float64, false),
-        Field::new("std", DataType::Float64, false),
-    ]));
-
-    let ncs_batch = RecordBatch::try_new(
-        Arc::clone(&ncs_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![0.5, 0.5])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("non_controllable_stats RecordBatch");
-
-    let ncs_path = scenarios_dir.join("non_controllable_stats.parquet");
-    let file = std::fs::File::create(&ncs_path).expect("create non_controllable_stats parquet");
-    let mut writer = ArrowWriter::try_new(file, ncs_schema, None).expect("ArrowWriter");
-    writer
-        .write(&ncs_batch)
-        .expect("write non_controllable_stats batch");
-    writer.close().expect("close non_controllable_stats writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("non_controllable_stats.parquet"),
+        "ncs_id",
+        "mean",
+        "std",
+        &[(0, 0, 0.5, 0.0), (0, 1, 0.5, 0.0)],
+    );
 
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 437_927.0, 1e-2, "D15");
@@ -2446,60 +2378,28 @@ pub const D20_EXPECTED_COST: f64 = 195_744_837.222_222_24;
 )]
 #[test]
 fn d21_min_outflow_regression() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d21-min-outflow-regression");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![20.0, 20.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 20.0, 0.0), (0, 1, 20.0, 0.0)],
+    );
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![10.0, 10.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 10.0, 0.0), (0, 1, 10.0, 0.0)],
+    );
 
     let (result, scenario_results, summary) = run_with_simulation(case_dir);
 
@@ -2647,60 +2547,28 @@ pub const D21_EXPECTED_COST: f64 = 285_716_271.0;
 )]
 #[test]
 fn d22_per_block_min_outflow() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d22-per-block-min-outflow");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![20.0, 20.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 20.0, 0.0), (0, 1, 20.0, 0.0)],
+    );
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![10.0, 10.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 10.0, 0.0), (0, 1, 10.0, 0.0)],
+    );
 
     let (result, scenario_results, summary) = run_with_simulation(case_dir);
 
@@ -2807,54 +2675,28 @@ fn d23_bidirectional_withdrawal() {
     use parquet::arrow::ArrowWriter;
     use std::sync::Arc;
 
+    use crate::common::parquet_fixtures::write_seasonal_stats;
+
     let case_dir = Path::new("../../examples/deterministic/d23-bidirectional-withdrawal");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![80.0, 80.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 80.0, 0.0), (0, 1, 80.0, 0.0)],
+    );
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![50.0, 50.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 50.0, 0.0), (0, 1, 50.0, 0.0)],
+    );
 
     let constraints_dir = case_dir.join("constraints");
     std::fs::create_dir_all(&constraints_dir).expect("create constraints dir");
@@ -3072,60 +2914,28 @@ pub const D24_EXPECTED_COST: f64 = 23_950_785.0 / 9.0;
 )]
 #[test]
 fn d24_productivity_override() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d24-productivity-override");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![40.0, 10.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 40.0, 0.0), (0, 1, 10.0, 0.0)],
+    );
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![80.0, 80.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 80.0, 0.0), (0, 1, 80.0, 0.0)],
+    );
 
     let (result, scenario_results, _summary) = run_with_simulation(case_dir);
     assert_cost(result.final_lb, D24_EXPECTED_COST, 1e-4, "D24");
@@ -6035,7 +5845,7 @@ mod chronological_telescoping {
                 generation_model: HydroGenerationModel::ConstantProductivity,
                 specific_productivity_mw_per_m3s_per_m: Some(0.5),
                 max_generation_mw: 250.0,
-                penalties: zero_hydro_penalties(),
+                penalties: zero_hydro_stage_penalties(),
                 ..Default::default()
             },
         );
@@ -6204,27 +6014,6 @@ mod chronological_telescoping {
             .initial_conditions(initial_conditions)
             .build()
             .expect("build_system: valid constant-productivity study")
-    }
-
-    fn zero_hydro_penalties() -> HydroPenalties {
-        HydroPenalties {
-            spillage_cost: 0.0,
-            diversion_cost: 0.0,
-            turbined_cost: 0.0,
-            storage_violation_below_cost: 0.0,
-            filling_target_violation_cost: 0.0,
-            turbined_violation_below_cost: 0.0,
-            outflow_violation_below_cost: 0.0,
-            outflow_violation_above_cost: 0.0,
-            generation_violation_below_cost: 0.0,
-            evaporation_violation_cost: 0.0,
-            water_withdrawal_violation_cost: 0.0,
-            water_withdrawal_violation_pos_cost: 0.0,
-            water_withdrawal_violation_neg_cost: 0.0,
-            evaporation_violation_pos_cost: 0.0,
-            evaporation_violation_neg_cost: 0.0,
-            inflow_nonnegativity_cost: 0.0,
-        }
     }
 
     fn build_config() -> Config {

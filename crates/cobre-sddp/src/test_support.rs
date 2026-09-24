@@ -1357,6 +1357,16 @@ const K_FAN_BRANCH_STAGE_ID: i32 = 1;
 /// (`build_node_graph`'s leaf-sharing rule) — never cut-generating.
 const K_FAN_LEAF_STAGE_ID: i32 = 2;
 
+/// The all-in-sample [`ClassSchemes`]: every fixture whose stochastic context
+/// draws every noise class from the in-sample library shares this literal.
+fn in_sample_class_schemes() -> ClassSchemes {
+    ClassSchemes {
+        inflow: Some(SamplingScheme::InSample),
+        load: Some(SamplingScheme::InSample),
+        ncs: Some(SamplingScheme::InSample),
+    }
+}
+
 /// The declared `nodes[]`/`transitions[]` K-fan: root (id `0`) branches into fan
 /// nodes `1..=k` under strictly non-uniform weights `i / Σj` (never a uniform
 /// `1/k` split — a uniform split would make every reduction order sum identical
@@ -1918,11 +1928,7 @@ pub fn single_path_enumerated_setup(max_iterations: u32) -> StudySetup {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("single_path_enumerated_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -1954,11 +1960,7 @@ fn k_fan_fixture(k: usize, reversed: bool, config: Config) -> KFanFixture {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("k_fan_fixture: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -2055,11 +2057,7 @@ pub fn try_k_fan_simulation_enumerated(k: usize) -> Result<StudySetup, SddpError
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("try_k_fan_simulation_enumerated: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -2309,11 +2307,7 @@ pub fn oracle_chain_setup(max_iterations: u32) -> StudySetup {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("oracle_chain_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -2387,11 +2381,7 @@ pub fn terminal_generated_fan_setup(k: usize, max_iterations: u32) -> StudySetup
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("terminal_generated_fan_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3130,11 +3120,7 @@ fn build_non_uniform_branching_setup(
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("non_uniform_branching_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3173,11 +3159,7 @@ pub fn branching_tree_setup_enumerated(max_iterations: u32) -> StudySetup {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("branching_tree_setup_enumerated: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3558,11 +3540,7 @@ pub fn dual_folding_setup(fold: LagFold, forward_passes: u32, max_iterations: u3
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("dual_folding_setup: build_stochastic_context must succeed");
     let mut hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3733,11 +3711,7 @@ fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixtur
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("trunk_fan_fixture: build_stochastic_context must succeed");
     let mut hydro_models = PrepareHydroModelsResult::default_from_system(&system);

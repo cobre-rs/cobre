@@ -1406,6 +1406,11 @@ pub(crate) fn run_via_study(
     let mut study = Study::new_native(case_dir, Some(output_dir.clone()), threads, overrides)?;
 
     let should_simulate = study.simulation_enabled();
+    // Fixed at Study construction and never mutated by train_native/simulate_native
+    // (only `setup` is), so it is safe to read once regardless of which arm runs.
+    let stochastic = Some(study.stochastic_summary().clone());
+    let hydro_models = Some(study.hydro_models_summary().clone());
+    let provenance = Some(study.provenance().clone());
 
     match RunPhasePlan::resolve(study.training_enabled(), should_simulate) {
         RunPhasePlan::TrainedThenSimulated => {
@@ -1427,9 +1432,9 @@ pub(crate) fn run_via_study(
                 total_time_ms: result.total_time_ms,
                 output_dir,
                 simulation,
-                stochastic: Some(study.stochastic_summary().clone()),
-                hydro_models: Some(study.hydro_models_summary().clone()),
-                provenance: Some(study.provenance().clone()),
+                stochastic,
+                hydro_models,
+                provenance,
             })
         }
         RunPhasePlan::SimulateFromPolicy => {
@@ -1450,9 +1455,9 @@ pub(crate) fn run_via_study(
                 total_time_ms: 0,
                 output_dir,
                 simulation,
-                stochastic: Some(study.stochastic_summary().clone()),
-                hydro_models: Some(study.hydro_models_summary().clone()),
-                provenance: Some(study.provenance().clone()),
+                stochastic,
+                hydro_models,
+                provenance,
             })
         }
         RunPhasePlan::Nothing => Ok(RunSummary {
@@ -1464,9 +1469,9 @@ pub(crate) fn run_via_study(
             total_time_ms: 0,
             output_dir,
             simulation: None,
-            stochastic: Some(study.stochastic_summary().clone()),
-            hydro_models: Some(study.hydro_models_summary().clone()),
-            provenance: Some(study.provenance().clone()),
+            stochastic,
+            hydro_models,
+            provenance,
         }),
     }
 }

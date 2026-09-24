@@ -67,11 +67,10 @@ fn operational_violation_objective_costs() {
     // Per-block: penalty * block_hours / COST_SCALE_FACTOR.
     let result = build_active_violations_template();
     let t = &result.templates[0];
-    let n_blks = 2;
     let indexer = &result.geometry_per_stage[0];
 
     let block_hours = [720.0, 48.0];
-    for (blk, &hours) in block_hours.iter().enumerate().take(n_blks) {
+    for (blk, &hours) in block_hours.iter().enumerate() {
         let expected = 1000.0 * hours / COST_SCALE_FACTOR;
         for &start in &[
             indexer.outflow_below_slack.start,

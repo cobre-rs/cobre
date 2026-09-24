@@ -1239,10 +1239,10 @@ pub(super) fn fill_evaporation_entries(
                     coefficients.len(),
                     stage_idx
                 );
-                match coefficients.get(stage_idx) {
-                    Some(c) => *c,
-                    None => continue,
-                }
+                let Some(c) = coefficients.get(stage_idx) else {
+                    continue;
+                };
+                *c
             }
             EvaporationModel::None => {
                 debug_assert!(

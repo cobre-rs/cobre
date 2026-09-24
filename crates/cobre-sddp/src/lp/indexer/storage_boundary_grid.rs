@@ -70,7 +70,7 @@ impl StorageBoundaryGrid {
     }
 
     /// The four private fields, in declaration order, for the canonical
-    /// byte-encoding snapshot (ADR-041) — the no-`..` destructure fails to
+    /// byte-encoding snapshot — the no-`..` destructure fails to
     /// compile the moment a field is added, so the digest cannot silently
     /// drop it.
     #[cfg(any(test, feature = "test-support"))]

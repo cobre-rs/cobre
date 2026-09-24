@@ -574,7 +574,7 @@ fn parallel_evap_hydro_models(system: &cobre_core::System) -> PrepareHydroModels
 
 /// Parallel, 2-stage, 3-block-per-stage study with an active linearized
 /// evaporation model on its one hydro: isolates the parallel multi-block
-/// evaporation slot (R7), a combination no committed deck exercises. The
+/// evaporation slot, a combination no committed deck exercises. The
 /// three distinct block durations (200, 244, 300 h) make a slack priced at
 /// one block's hours distinguishable from one priced at the stage's 744 h.
 #[must_use]

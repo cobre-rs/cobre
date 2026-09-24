@@ -1,4 +1,4 @@
-//! Template snapshot manifest over every committed deck (ADR-041): a compare
+//! Template snapshot manifest over every committed deck: a compare
 //! test that fails on any moved, added, or removed `(deck, group)` line, and
 //! an ignored regeneration test that rewrites the manifest.
 //!

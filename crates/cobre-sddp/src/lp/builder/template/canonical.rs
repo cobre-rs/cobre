@@ -320,7 +320,7 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry) {
 
 /// Encode every fact of [`StageTemplates`] — the LP templates plus every
 /// other field of the struct and the nested types it holds, destructured
-/// exhaustively (ADR-041) so an added field fails to compile rather than
+/// exhaustively so an added field fails to compile rather than
 /// silently escaping the digest.
 pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &mut FactGroups) {
     let StageTemplates {

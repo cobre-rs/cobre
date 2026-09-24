@@ -527,13 +527,14 @@ fn d05_fpha_constant_head() {
 
     // ρ_eq = 1.0 is LP-neutral here: D05's FPHA hyperplane encodes
     // gen_h = 1.0 × turbined_m3s, matching the override scalar.
+    let case = copy_case_dir(case_dir);
     write_energy_productivity_override(
-        &case_dir.join("system/hydro_energy_productivity.parquet"),
+        &case.path().join("system/hydro_energy_productivity.parquet"),
         0,
         1.0,
     );
 
-    let result = run_deterministic(case_dir);
+    let result = run_deterministic(case.path());
     assert_cost(result.final_lb, D05_EXPECTED_COST, 1e-6, "D05");
     assert!(
         result.iterations <= 10,
@@ -631,13 +632,14 @@ fn d06_fpha_variable_head() {
 
     // ρ_eq value is irrelevant to D06 economics — assertions depend only on
     // FPHA hyperplane evaluation, not on ρ_eq.
+    let case = copy_case_dir(case_dir);
     write_energy_productivity_override(
-        &case_dir.join("system/hydro_energy_productivity.parquet"),
+        &case.path().join("system/hydro_energy_productivity.parquet"),
         0,
         1.0,
     );
 
-    let result = run_deterministic(case_dir);
+    let result = run_deterministic(case.path());
     assert_cost(result.final_lb, D06_EXPECTED_COST, 1e-4, "D06");
     assert!(
         result.iterations <= 10,
@@ -3911,13 +3913,14 @@ fn test_fpha_variable_head_case_bit_exact() {
 
     // rho_eq is irrelevant to D06 economics (see d06_fpha_variable_head above);
     // pinned to the same neutral value so this golden's setup matches exactly.
+    let case = copy_case_dir(case_dir);
     write_energy_productivity_override(
-        &case_dir.join("system/hydro_energy_productivity.parquet"),
+        &case.path().join("system/hydro_energy_productivity.parquet"),
         0,
         1.0,
     );
 
-    let result = run_deterministic(case_dir);
+    let result = run_deterministic(case.path());
 
     assert_eq!(
         result.final_lb.to_bits(),

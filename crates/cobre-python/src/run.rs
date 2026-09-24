@@ -38,9 +38,9 @@ use crate::errors::{
     BOUNDARY_CUT_ERROR_PREFIX, CONFIG_OVERRIDE_ERROR_PREFIX, CONFIG_PARSE_ERROR_PREFIX,
     CONFIG_READ_ERROR_PREFIX, ErrorSource, HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX,
     INTERNAL_ERROR_PREFIX, OUTPUT_WRITE_ERROR_PREFIX, POLICY_CHECKPOINT_ERROR_PREFIX,
-    POLICY_VALIDATION_ERROR_PREFIX, SCENARIO_SOURCE_ERROR_PREFIX, SIMULATION_ERROR_PREFIX,
-    SIMULATION_WRITER_INIT_ERROR_PREFIX, STOCHASTIC_PREPROCESSING_ERROR_PREFIX,
-    TRAINING_ERROR_PREFIX, convert_error,
+    POLICY_VALIDATION_ERROR_PREFIX, SCENARIO_SOURCE_ERROR_PREFIX, SETUP_VALIDATION_ERROR_PREFIX,
+    SIMULATION_ERROR_PREFIX, SIMULATION_WRITER_INIT_ERROR_PREFIX,
+    STOCHASTIC_PREPROCESSING_ERROR_PREFIX, TRAINING_ERROR_PREFIX, convert_error,
 };
 use cobre_io::LoadError;
 
@@ -855,6 +855,21 @@ fn load_effective_config(
     }
 }
 
+/// Adds [`SETUP_VALIDATION_ERROR_PREFIX`] only for `SddpError::Validation`;
+/// every other setup-phase error keeps today's message and class.
+#[allow(clippy::needless_pass_by_value)]
+fn setup_error_message(err: SddpError, phase_prefix: Option<&str>) -> String {
+    let body = match phase_prefix {
+        Some(prefix) => format!("{prefix}: {err}"),
+        None => err.to_string(),
+    };
+    if matches!(err, SddpError::Validation(_)) {
+        format!("{SETUP_VALIDATION_ERROR_PREFIX}: {body}")
+    } else {
+        body
+    }
+}
+
 /// Everything the front half of the solve lifecycle produces: the live
 /// [`StudySetup`] plus the adjacent immutable state that `run_via_study` and the
 /// `Study` pyclass both consume. [`build_study_setup`] is the sole producer (the
@@ -924,8 +939,8 @@ pub(crate) fn build_study_setup(
     // Resolve the boundary-derived state requirements once; carried onto the
     // construction config below so both the layout and the boundary-load reject
     // see them. Mirrors the CLI run path.
-    let boundary_requirements =
-        resolve_boundary_state_requirements(case_dir, &config).map_err(|e| e.to_string())?;
+    let boundary_requirements = resolve_boundary_state_requirements(case_dir, &config)
+        .map_err(|e| setup_error_message(e, None))?;
 
     let seed = config
         .training
@@ -945,7 +960,7 @@ pub(crate) fn build_study_setup(
         &training_source,
         boundary_requirements.inflow_lag_depth(),
     )
-    .map_err(|e| format!("{STOCHASTIC_PREPROCESSING_ERROR_PREFIX}: {e}"))?;
+    .map_err(|e| setup_error_message(e, Some(STOCHASTIC_PREPROCESSING_ERROR_PREFIX)))?;
     timings.stochastic_fit_seconds = stochastic_start.elapsed().as_secs_f64();
     let system = result.system;
     let estimation_report = result.estimation_report;
@@ -958,7 +973,7 @@ pub(crate) fn build_study_setup(
         config.exports.fpha_deviation_points,
         Some(&mut hydro_timings),
     )
-    .map_err(|e| format!("{HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX}: {e}"))?;
+    .map_err(|e| setup_error_message(e, Some(HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX)))?;
     timings.production_fit_seconds = hydro_timings.production_fit_seconds;
     timings.evaporation_fit_seconds = hydro_timings.evaporation_fit_seconds;
 
@@ -966,7 +981,7 @@ pub(crate) fn build_study_setup(
         .simulation_scenario_source(&case_dir.join("config.json"))
         .map_err(|e| format!("{SCENARIO_SOURCE_ERROR_PREFIX}: {e}"))?;
     let mut construction =
-        StudyParams::from_config(&config, Vec::new()).map_err(|e| e.to_string())?;
+        StudyParams::from_config(&config, Vec::new()).map_err(|e| setup_error_message(e, None))?;
     construction.boundary = boundary_requirements;
     construction.scalar_parameters = artifacts.scalar_parameters;
     let setup = StudySetup::from_broadcast_params(
@@ -977,7 +992,7 @@ pub(crate) fn build_study_setup(
         &training_source,
         &simulation_source,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| setup_error_message(e, None))?;
 
     let mut provenance_report = build_provenance_report(
         estimation_path,

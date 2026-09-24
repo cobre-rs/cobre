@@ -8,8 +8,11 @@ Run with (from the repo root):
 """
 
 import pathlib
+import shutil
 import sys
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 
@@ -186,3 +189,57 @@ def test_io_failure_raises_caseio_error(tmp_path: pathlib.Path) -> None:
             cobre.run.run(str(case_dir), output_dir=str(out))
     finally:
         os.chmod(out, 0o700)
+
+
+def test_setup_validation_failure_raises_validation_error(tmp_path: pathlib.Path) -> None:
+    """A gap stopping rule rejected under sampled forward selection is a setup-time
+    validation failure and raises ValidationError, also a ValueError.
+    """
+    import cobre.errors  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    case_dir = pathlib.Path(__file__).resolve().parents[3] / "examples" / "1dtoy"
+    if not case_dir.exists():
+        pytest.skip(f"examples/1dtoy not found at {case_dir}")
+
+    overrides = {"training.stopping_rules": [{"type": "gap", "tolerance": 1000.0}]}
+
+    with pytest.raises(cobre.errors.ValidationError, match="gap stopping rule is inadmissible"):
+        cobre.run.run(str(case_dir), output_dir=str(tmp_path), config_overrides=overrides)
+
+    # The same failure is catchable as the builtin ValueError (dual base intact).
+    with pytest.raises(ValueError):
+        cobre.run.run(str(case_dir), output_dir=str(tmp_path), config_overrides=overrides)
+
+
+def test_preprocessing_validation_failure_raises_validation_error(tmp_path: pathlib.Path) -> None:
+    """An FPHA hyperplane with a non-positive gamma_q is a preprocessing-phase
+    validation failure and raises ValidationError, not SolverError.
+    """
+    import cobre.errors  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "examples"
+        / "deterministic"
+        / "d06-fpha-variable-head"
+    )
+    if not src.exists():
+        pytest.skip(f"{src} not found")
+
+    case_dir = tmp_path / "case"
+    shutil.copytree(src, case_dir)
+
+    hyperplanes_path = case_dir / "system" / "fpha_hyperplanes.parquet"
+    table = pq.read_table(hyperplanes_path)
+    field_index = table.schema.get_field_index("gamma_q")
+    table = table.set_column(
+        field_index,
+        "gamma_q",
+        pa.array([0.0] * table.num_rows, type=table.schema.field(field_index).type),
+    )
+    pq.write_table(table, hyperplanes_path, compression="zstd")
+
+    with pytest.raises(cobre.errors.ValidationError, match="gamma_q must be > 0"):
+        cobre.run.run(str(case_dir), output_dir=str(tmp_path / "out"))

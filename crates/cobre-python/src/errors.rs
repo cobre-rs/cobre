@@ -95,7 +95,8 @@ impl LeafClass {
 }
 
 /// `ValidationError(CobreError, ValueError)` — schema / parse / constraint /
-/// config-override load failures.
+/// config-override load failures, and study-setup configuration-validation
+/// failures.
 static VALIDATION_ERROR: LeafClass = LeafClass::new(
     "ValidationError",
     BuiltinBase::Value,
@@ -267,6 +268,10 @@ pub(crate) const CONFIG_PARSE_ERROR_PREFIX: &str = "config parse error";
 /// Prefix minted for config file read failures (classified as `ValidationError`).
 pub(crate) const CONFIG_READ_ERROR_PREFIX: &str = "config read error";
 
+/// Prefix minted for study-setup configuration-validation failures (classified
+/// as `ValidationError`).
+pub(crate) const SETUP_VALIDATION_ERROR_PREFIX: &str = "setup validation error";
+
 /// Prefix minted for warm-start/resume policy validation failures (classified
 /// as `PolicyIncompatibleError`).
 pub(crate) const POLICY_VALIDATION_ERROR_PREFIX: &str = "policy validation error";
@@ -308,6 +313,7 @@ fn message_prefix_to_pyerr(py: Python<'_>, msg: &str) -> PyErr {
     } else if msg.starts_with(CONFIG_OVERRIDE_ERROR_PREFIX)
         || msg.starts_with(CONFIG_PARSE_ERROR_PREFIX)
         || msg.starts_with(CONFIG_READ_ERROR_PREFIX)
+        || msg.starts_with(SETUP_VALIDATION_ERROR_PREFIX)
     {
         validation_error(py, msg)
     } else if msg.starts_with(POLICY_VALIDATION_ERROR_PREFIX) {
@@ -407,7 +413,8 @@ pub(crate) fn register_errors(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ErrorSource, INTERNAL_ERROR, LeafClass, SIMULATION_ERROR, SOLVER_ERROR, convert_error_with,
+        ErrorSource, INTERNAL_ERROR, LeafClass, SIMULATION_ERROR, SOLVER_ERROR, VALIDATION_ERROR,
+        convert_error_with,
     };
     use cobre_sddp::SddpError;
     use pyo3::prelude::*;
@@ -515,6 +522,57 @@ mod tests {
             assert_leaf(py, &err, &INTERNAL_ERROR);
             let rendered: String = err.value(py).str().unwrap().extract().unwrap();
             assert_eq!(rendered, msg);
+        });
+    }
+
+    /// A "setup validation error: " prefixed message maps to `ValidationError`.
+    #[test]
+    fn convert_error_setup_validation_prefix() {
+        Python::initialize();
+        Python::attach(|py| {
+            let msg = "setup validation error: configuration validation error: x".to_string();
+            let err = convert_error_with(py, ErrorSource::Message(msg.clone()));
+            assert_leaf(py, &err, &VALIDATION_ERROR);
+            let rendered: String = err.value(py).str().unwrap().extract().unwrap();
+            assert_eq!(rendered, msg);
+        });
+    }
+
+    /// The outermost "setup validation error: " prefix wins over a nested phase
+    /// prefix; a phase prefix with no setup-validation wrapper still falls
+    /// through to `SolverError`; and a training-phase `Validation` error (routed
+    /// through `ErrorSource::Sddp`, never through this string-prefix path) stays
+    /// `SolverError`.
+    #[test]
+    fn setup_validation_prefix_beats_nested_phase_prefix() {
+        Python::initialize();
+        Python::attach(|py| {
+            let setup_msg = "setup validation error: hydro model preprocessing error: \
+                              configuration validation error: x"
+                .to_string();
+            let setup_err = convert_error_with(py, ErrorSource::Message(setup_msg.clone()));
+            assert_leaf(py, &setup_err, &VALIDATION_ERROR);
+            let setup_rendered: String = setup_err.value(py).str().unwrap().extract().unwrap();
+            assert_eq!(setup_rendered, setup_msg);
+
+            let nested_msg = "hydro model preprocessing error: solver error: x".to_string();
+            let nested_err = convert_error_with(py, ErrorSource::Message(nested_msg.clone()));
+            assert_leaf(py, &nested_err, &SOLVER_ERROR);
+            let nested_rendered: String = nested_err.value(py).str().unwrap().extract().unwrap();
+            assert_eq!(nested_rendered, nested_msg);
+
+            let training_msg = "training error: configuration validation error: x".to_string();
+            let training_err = convert_error_with(
+                py,
+                ErrorSource::Sddp {
+                    error: &SddpError::Validation("x".to_string()),
+                    message: training_msg.clone(),
+                },
+            );
+            assert_leaf(py, &training_err, &SOLVER_ERROR);
+            let training_rendered: String =
+                training_err.value(py).str().unwrap().extract().unwrap();
+            assert_eq!(training_rendered, training_msg);
         });
     }
 }

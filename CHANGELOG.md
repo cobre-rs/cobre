@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **BREAKING — Python: a study-setup validation failure now raises
+  `cobre.errors.ValidationError`, matching the CLI.** Configuration problems
+  detected while building a study (for example a gap stopping rule under
+  sampled forward selection, or an FPHA hyperplane or inflow-model estimate
+  that setup rejects) previously raised `cobre.errors.SolverError`, a
+  `RuntimeError`; they now raise `ValidationError`, a `ValueError`, so code
+  that caught `RuntimeError` for them must catch `ValueError` or
+  `CobreError`. Solver and training failures keep their class.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

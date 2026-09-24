@@ -9932,6 +9932,44 @@ mod pumping_water_tests {
         assert_eq!(col_upper[flow_col], q_max);
     }
 
+    /// Each parallel evaporation block prices its violation slacks at the hours of
+    /// water its flow column moves through the water row, so a slack that shifts a
+    /// whole stage of water costs a whole stage of hours.
+    #[test]
+    #[ignore = "known defect: parallel multi-block evaporation couples only block 0 and prices its slack at block 0's hours"]
+    fn parallel_multi_block_evap_slack_price_matches_water_it_moves() {
+        let durations = [300.0_f64, 444.0];
+        let (csc, _rl, _ru, (_cl, _cu, obj), layout) =
+            build_fpha_evap_case(BlockMode::Parallel, &durations);
+        let local = EvapLocal::new(0);
+        let water_row = layout.rows.water_balance.start;
+        let zeta = durations.iter().sum::<f64>() * M3S_TO_HM3;
+
+        let mut coupled = 0.0;
+        for blk in 0..layout.n_blks {
+            let block = BlockIdx::new(blk);
+            let coupling = csc_at(&csc, layout.evap_flow_col(local, block), water_row);
+            coupled += coupling;
+            let hours_moved = coupling / M3S_TO_HM3;
+            for (col, cost, name) in [
+                (layout.evap_f_plus_col(local, block), 7.0, "f_evap_plus"),
+                (layout.evap_f_minus_col(local, block), 11.0, "f_evap_minus"),
+            ] {
+                let expected = cost * hours_moved;
+                assert!(
+                    (obj[col] - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+                    "block {blk}: {name} must cost {cost} per hour of water its flow moves \
+                     ({hours_moved} h), expected {expected}, got {}",
+                    obj[col]
+                );
+            }
+        }
+        assert!(
+            (coupled - zeta).abs() <= 1e-12,
+            "evaporation flows must move exactly ζ = {zeta} on the water row, got {coupled}"
+        );
+    }
+
     // ── Commissioning-dormant FPHA plant (A.1 regression) ────────────────────
 
     /// A commissioning FPHA plant with a future `entry_stage_id`: resolution is

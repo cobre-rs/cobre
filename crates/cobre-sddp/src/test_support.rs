@@ -2158,9 +2158,46 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 ///
 /// Panics if `node_pos` (or its resolved stage) is out of range, or if the
 /// template is absent after [`StageSolvePrep::run`].
-#[allow(clippy::expect_used)]
 #[must_use]
 pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> StageTemplate {
+    let raw_noise = oracle_raw_noise(setup, node_pos);
+    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise)
+}
+
+/// [`capture_patched_node_template`] with a caller-chosen standardized inflow
+/// draw (one entry per hydro) in place of the node's own; load-bus and NCS draws
+/// are zero, so those resolve to their means.
+///
+/// # Panics
+///
+/// Panics if `inflow_eta` is not `hydro_count` long, if `node_pos` (or its
+/// resolved stage) is out of range, or if the template is absent after
+/// [`StageSolvePrep::run`].
+#[must_use]
+pub fn capture_patched_node_template_with_inflow_noise(
+    setup: &StudySetup,
+    node_pos: NodePos,
+    inflow_eta: &[f64],
+) -> StageTemplate {
+    let n_hydros = setup.stage_data.state.hydro_count;
+    assert_eq!(
+        inflow_eta.len(),
+        n_hydros,
+        "inflow_eta must hold one standardized draw per hydro"
+    );
+    let n_load = setup.stage_data.stage_templates.n_load_buses;
+    let n_ncs = setup.stochastic.n_stochastic_ncs();
+    let mut raw_noise = vec![0.0_f64; n_hydros + n_load + n_ncs];
+    raw_noise[..n_hydros].copy_from_slice(inflow_eta);
+    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise)
+}
+
+#[allow(clippy::expect_used)]
+fn capture_patched_node_template_with_raw_noise(
+    setup: &StudySetup,
+    node_pos: NodePos,
+    raw_noise: &[f64],
+) -> StageTemplate {
     let stage = setup.node_graph.nodes[node_pos].stage;
     let base = setup.stage_data.stage_templates.templates[stage.0].clone();
     let mut solver = TemplateCaptureSolver {
@@ -2195,14 +2232,13 @@ pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> S
         k_max: space.k_max,
     });
 
-    let raw_noise = oracle_raw_noise(setup, node_pos);
     let ctx = setup.stage_ctx();
     let training_ctx = setup.training_ctx();
     let params = StageSolvePrepParams {
         state_source: StateSource(&setup.initial_state),
         load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
-        raw_noise: &raw_noise,
+        raw_noise,
     };
     StageSolvePrep::run(
         &mut solver,

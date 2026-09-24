@@ -1812,3 +1812,41 @@ fn test_anticipated_thermals_lp_roundtrip_k2_with_discount_rate() {
          (rel_err={rel_err:.2e}), got {actual_obj:.15}"
     );
 }
+
+/// A decision taken at stage 1 is priced in stage-1 units, like every other
+/// stage-1 cost: `D(3) / D(1)`, so the θ cascade's `D(1)` brings it to `D(3)` at
+/// the root instead of `D(1)·D(3)`.
+#[test]
+#[ignore = "known defect: the anticipated decision cost uses the absolute delivery discount, not one relative to its decision stage"]
+fn test_anticipated_decision_after_stage_zero_is_priced_relative_to_its_own_stage() {
+    let k = 2_usize;
+    let annual_rate = 0.06_f64;
+    let total_hours = 2.0 * 360.0_f64;
+
+    let system = build_hydro_one_ant_system(4, k as u32, annual_rate);
+    let result = build_stage_templates_resolving_layout(
+        &system,
+        no_penalty_config(),
+        &PrecomputedPar::default(),
+        &PrecomputedNormal::default(),
+        &default_production(&system),
+        &default_evaporation(&system),
+        &ResolvedParameters::default(),
+    )
+    .expect("K=2 discount build ok");
+
+    let per_stage_factor = 1.0 / (1.0 + annual_rate).powf(31.0 / 365.25);
+    let decision_stage = 1;
+    let delivery_stage = decision_stage + k;
+    let relative_discount = per_stage_factor.powi((delivery_stage - decision_stage) as i32);
+    let expected_obj = 50.0 * total_hours * relative_discount / COST_SCALE_FACTOR;
+
+    let actual_obj = result.templates[decision_stage].objective[rt_col_ant_dec_start(k)];
+    let rel_err = (actual_obj - expected_obj).abs() / expected_obj.abs().max(f64::EPSILON);
+    assert!(
+        rel_err < 1e-12,
+        "stage {decision_stage} anticipated_decision objective must be \
+         50 * {total_hours} * D({delivery_stage})/D({decision_stage}) / COST_SCALE_FACTOR = \
+         {expected_obj:.15} (rel_err={rel_err:.2e}), got {actual_obj:.15}"
+    );
+}

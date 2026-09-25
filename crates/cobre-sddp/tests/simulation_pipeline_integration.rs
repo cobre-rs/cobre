@@ -519,7 +519,6 @@ fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
 fn simulate_single_rank_4_scenarios_produces_4_results() {
     let n_stages = 2;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
     let stochastic = make_stochastic_context(n_stages);
@@ -550,8 +549,6 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -658,7 +655,6 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
 fn simulate_infeasible_returns_lp_infeasible_error() {
     let n_stages = 2;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -689,8 +685,6 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -788,7 +782,6 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
 fn simulate_infeasible_at_scenario2_stage3() {
     let n_stages = 4;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -819,8 +812,6 @@ fn simulate_infeasible_at_scenario2_stage3() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -915,7 +906,6 @@ fn simulate_infeasible_at_scenario2_stage3() {
 fn simulate_channel_closed_returns_error() {
     let n_stages = 2;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -948,8 +938,6 @@ fn simulate_channel_closed_returns_error() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1041,7 +1029,6 @@ fn simulate_channel_closed_returns_error() {
 fn simulate_total_cost_equals_sum_of_stage_costs() {
     let n_stages = 3;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
     let stochastic = make_stochastic_context(n_stages);
@@ -1077,8 +1064,6 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1173,7 +1158,6 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
 fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
     let n_stages = 1;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1204,8 +1188,6 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1301,7 +1283,6 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
 fn simulate_channel_receives_results_in_scenario_order() {
     let n_stages = 1;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1332,8 +1313,6 @@ fn simulate_channel_receives_results_in_scenario_order() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1424,7 +1403,6 @@ fn test_simulation_parallel_cost_determinism() {
     let n_stages = 2;
     let n_scenarios = 20u32;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1456,8 +1434,6 @@ fn test_simulation_parallel_cost_determinism() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1557,8 +1533,6 @@ fn test_simulation_parallel_cost_determinism() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1678,7 +1652,6 @@ fn simulate_emits_progress_events() {
 
     let n_stages = 2;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1710,8 +1683,6 @@ fn simulate_emits_progress_events() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1828,7 +1799,6 @@ fn simulate_emits_progress_events() {
 fn simulate_no_events_when_sender_is_none() {
     let n_stages = 2;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1859,8 +1829,6 @@ fn simulate_no_events_when_sender_is_none() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1961,7 +1929,6 @@ fn simulate_progress_events_received_before_return() {
     let n_stages = 1;
     let n_scenarios = 10;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1993,8 +1960,6 @@ fn simulate_progress_events_received_before_return() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2103,7 +2068,6 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
     let n_stages = 1;
     let n_scenarios = 5_u32;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2138,8 +2102,6 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2249,7 +2211,6 @@ fn simulate_emits_simulation_finished_as_last_event() {
     let n_stages = 1;
     let n_scenarios = 6_u32;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2281,8 +2242,6 @@ fn simulate_emits_simulation_finished_as_last_event() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2403,7 +2362,6 @@ fn simulate_progress_scenario_cost_is_finite() {
 
     let n_stages = 1;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2435,8 +2393,6 @@ fn simulate_progress_scenario_cost_is_finite() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2543,7 +2499,6 @@ fn simulate_frozen_path_issues_zero_add_rows() {
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
     // For MockSolver the frozen content is irrelevant; reuse the minimal template.
     let frozen: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2573,8 +2528,6 @@ fn simulate_frozen_path_issues_zero_add_rows() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2674,7 +2627,6 @@ fn simulate_fallback_path_issues_expected_add_rows() {
     let n_stages = 2;
     let n_scenarios = 3u32;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2704,8 +2656,6 @@ fn simulate_fallback_path_issues_expected_add_rows() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2804,7 +2754,6 @@ fn simulate_fallback_path_issues_expected_add_rows() {
 fn simulate_frozen_length_mismatch_returns_error() {
     let n_stages = 3;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2837,8 +2786,6 @@ fn simulate_frozen_length_mismatch_returns_error() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2943,7 +2890,6 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
     let n_stages = 1;
     let n_scenarios = 1u32;
     let templates: Vec<StageTemplate> = vec![minimal_template_1_0()];
-    let base_rows: Vec<usize> = vec![2]; // 2 structural rows in the template
 
     let state = state_layout_for(1, 0);
 
@@ -3010,8 +2956,6 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -3152,7 +3096,6 @@ fn simulate_with_empty_stage_bases_cold_starts() {
     let n_stages = 2;
     let n_scenarios = 3u32;
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -3182,8 +3125,6 @@ fn simulate_with_empty_stage_bases_cold_starts() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -3381,7 +3322,6 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
     );
 
     let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
-    let base_rows: Vec<usize> = vec![0; n_stages];
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(node_graph.n_pools, 1, 1, 10, &vec![0; node_graph.n_pools]);
     let stochastic = make_stochastic_context(n_stages);
@@ -3418,8 +3358,6 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
         &StageContext {
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

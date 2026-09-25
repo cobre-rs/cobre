@@ -22,8 +22,9 @@ fn stage_templates_load_balance_row_starts_correct() {
         "load_balance_row_starts length must match templates length"
     );
 
-    // N=2 hydros, L=0: row_load_balance_start = row_water_balance_start + n_state(2).
-    let expected_row_start = result.base_rows[0] + 2; // base_rows[0] = row_water_balance_start
+    // N=2 hydros, L=0: row_water_balance_start = n_hydros (z_inflow occupies rows
+    // [0, n_hydros)); row_load_balance_start = row_water_balance_start + n_hydros.
+    let expected_row_start = result.n_hydros + result.n_hydros;
     assert_eq!(
         result.load_balance_row_starts[0], expected_row_start,
         "load_balance_row_starts[0] must equal row_water_balance_start + n_hydros"

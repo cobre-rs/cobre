@@ -222,8 +222,6 @@ mod tests {
             geometry_per_stage: &[],
             templates,
             state_boxes: &[],
-            base_rows: &[],
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -375,33 +373,31 @@ mod tests {
         );
 
         // Forward-pass layout capacity:
-        //   N + M*B + N
-        // with M = 0 and B = 0 in the LB patch buffer (no load patches).
-        let expected_capacity = hydro_count + hydro_count;
+        //   M*B + N
+        // with M = 0 and B = 0 in the LB patch buffer (no load patches); the A*K
+        // anticipated-state slots size the column region only, never this row region.
+        let expected_capacity = hydro_count;
         assert_eq!(
             scratch.patch_buf.indices.len(),
             expected_capacity,
-            "patch_buf indices length must include A*K slots for anticipated state",
+            "patch_buf indices length must equal M*B + N regardless of A*K",
         );
         assert_eq!(
             scratch.patch_buf.lower.len(),
             expected_capacity,
-            "patch_buf lower length must include A*K slots for anticipated state",
+            "patch_buf lower length must equal M*B + N regardless of A*K",
         );
         assert_eq!(
             scratch.patch_buf.upper.len(),
             expected_capacity,
-            "patch_buf upper length must include A*K slots for anticipated state",
+            "patch_buf upper length must equal M*B + N regardless of A*K",
         );
 
-        // forward_patch_count starts at `N` before any load or
-        // z-inflow patches have been filled — exactly the slot count that
-        // `fill_forward_patches` will write into.
-        let expected_pre_fill_count = hydro_count;
+        // forward_patch_count is 0 before any load or z-inflow patch has been filled.
         assert_eq!(
             scratch.patch_buf.forward_patch_count(),
-            expected_pre_fill_count,
-            "forward_patch_count must include the A*K anticipated-state slots",
+            0,
+            "forward_patch_count must be zero before any fill call",
         );
     }
 
@@ -435,8 +431,8 @@ mod tests {
             &stage_ctx,
         );
 
-        // With A=0 and K=0, capacity reduces to N + N (z-inflow) = 2*N.
-        let expected_capacity = hydro_count + hydro_count;
+        // With A=0 and K=0, row capacity is still M*B + N = 0 + N = N.
+        let expected_capacity = hydro_count;
         assert_eq!(
             scratch.patch_buf.indices.len(),
             expected_capacity,

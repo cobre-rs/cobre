@@ -397,7 +397,6 @@ fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
 struct Fixture {
     n_stages: usize,
     templates: Vec<StageTemplate>,
-    base_rows: Vec<usize>,
     state: StateSpace,
     initial_state: Vec<f64>,
     stochastic: StochasticContext,
@@ -411,8 +410,6 @@ impl Fixture {
     fn new(n_stages: usize) -> Self {
         let state = state_layout_for(1, 0);
         let templates = vec![minimal_template(); n_stages];
-        // base_row: the AR-dynamics row offset is 1 (1 dual-relevant row)
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let horizon = HorizonMode::Finite {
@@ -423,7 +420,6 @@ impl Fixture {
         Self {
             n_stages,
             templates,
-            base_rows,
             state,
             initial_state,
             stochastic,
@@ -620,8 +616,6 @@ fn train_simulate_write_cycle() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -829,8 +823,6 @@ fn train_simulate_write_cycle() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1338,7 +1330,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     solver.set_primal(slack_col, sentinel_m3s);
 
     let templates = vec![t0.clone(); n_stages];
-    let base_rows = vec![templates_result.base_rows[0]; n_stages];
     // Every stage clones `t0`, so stage-0 geometry must be replicated across all
     // stages for extraction to read the stage-correct slack columns.
     let equipment_geometry = vec![templates_result.geometry_per_stage[0].clone(); n_stages];
@@ -1355,8 +1346,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &templates_result.noise_scale,
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1596,8 +1585,6 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,

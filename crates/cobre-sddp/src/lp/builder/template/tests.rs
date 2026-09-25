@@ -1818,8 +1818,6 @@ fn stage_templates_empty_is_all_empty_with_n_hydros() {
     assert_eq!(empty.n_load_buses, 0, "n_load_buses must be 0");
 
     assert!(empty.templates.is_empty(), "templates");
-    assert!(empty.base_rows.is_empty(), "base_rows");
-    assert!(empty.noise_scale.is_empty(), "noise_scale");
     assert!(empty.zeta_per_stage.is_empty(), "zeta_per_stage");
     assert!(
         empty.block_hours_per_stage.is_empty(),
@@ -3966,8 +3964,8 @@ fn chronological_water_balance_telescopes_to_parallel() {
         );
     }
 
-    // The telescoped RHS recovers the parallel RHS: Σ_k τ_k·(base − withdrawal) =
-    // ζ·(base − withdrawal).
+    // The telescoped RHS recovers the parallel RHS: Σ_k −(τ_k·withdrawal) =
+    // −(ζ·withdrawal).
     let chr_rhs_sum: f64 = (0..n_blks)
         .map(|k| chr_t.row_lower[chr_layout.rows.water_balance.start + h * n_blks + k])
         .sum();

@@ -393,9 +393,9 @@ fn test_multi_segment_deficit_load_balance_coefficients() {
     );
 }
 
-/// Water balance RHS = ζ * (`deterministic_base` - `water_withdrawal_m3s`). With
-/// no PAR data base=0, so for withdrawal=10 the RHS is
-/// `744 * 3600/1_000_000 * (0 - 10) = -2.6784`.
+/// Water balance RHS = -(ζ * `water_withdrawal_m3s`); the realized inflow
+/// couples through the z-inflow column rather than a template RHS term. For
+/// withdrawal=10 the RHS is `-(744 * 3600/1_000_000 * 10) = -2.6784`.
 #[test]
 fn withdrawal_rhs_subtracted_from_water_balance() {
     let withdrawal = 10.0_f64;
@@ -415,8 +415,7 @@ fn withdrawal_rhs_subtracted_from_water_balance() {
     let row_water = 1_usize; // row_water_balance_start = N = 1
     let total_hours = 744.0_f64;
     let zeta = total_hours * 3_600.0 / 1_000_000.0;
-    // base = 0 (no PAR data)
-    let expected_rhs = zeta * (0.0 - withdrawal);
+    let expected_rhs = -(zeta * withdrawal);
     assert!(
         (t.row_lower[row_water] - expected_rhs).abs() < 1e-12,
         "water balance row_lower: expected {expected_rhs}, got {}",

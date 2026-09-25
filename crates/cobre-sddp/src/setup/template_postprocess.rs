@@ -1,4 +1,4 @@
-//! Template post-processing: discount factors, LP scaling, and noise pre-scaling.
+//! Template post-processing: discount factors and LP scaling.
 
 use cobre_core::{EntityId, HorizonGraph, Stage, System};
 
@@ -55,7 +55,7 @@ pub(crate) fn compute_cumulative_discount_factors(per_stage: &[f64]) -> Vec<f64>
     cumulative
 }
 
-/// Apply discount factors, LP scaling, and noise pre-scaling to stage templates.
+/// Apply discount factors and LP scaling to stage templates.
 ///
 /// Returns a [`ScalingReport`] with pre/post coefficient ranges.
 pub(crate) fn postprocess_templates(
@@ -206,23 +206,7 @@ pub(crate) fn postprocess_templates(
         });
     }
 
-    let scaling_report = build_scaling_report(cost_scale_factor, stage_scaling_reports);
-
-    // Pre-scale noise_scale by row_scale so the perturbation (noise_scale * eta)
-    // shares the units of the already-row-scaled row bounds; otherwise
-    // transform_inflow_noise produces a mixed-scale RHS (scaled base + unscaled perturbation).
-    let n_hydros_noise = stage_templates.n_hydros;
-    for (s_idx, tmpl) in stage_templates.templates.iter().enumerate() {
-        if !tmpl.row_scale.is_empty() {
-            let base_row = stage_templates.base_rows[s_idx];
-            for h in 0..n_hydros_noise {
-                stage_templates.noise_scale[s_idx * n_hydros_noise + h] *=
-                    tmpl.row_scale[base_row + h];
-            }
-        }
-    }
-
-    scaling_report
+    build_scaling_report(cost_scale_factor, stage_scaling_reports)
 }
 
 #[cfg(test)]
@@ -405,7 +389,6 @@ mod tests {
         stage_templates
             .templates
             .push(scaled_storage_template(PHYSICAL_UPPER));
-        stage_templates.base_rows.push(0);
         stage_templates
             .geometry_per_stage
             .push(StageGeometry::default());

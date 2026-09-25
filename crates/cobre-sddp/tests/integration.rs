@@ -502,7 +502,6 @@ fn iteration_limit(limit: u64) -> StoppingRuleSet {
 struct Fixture {
     n_stages: usize,
     templates: Vec<StageTemplate>,
-    base_rows: Vec<usize>,
     state: StateSpace,
     initial_state: Vec<f64>,
     stochastic: StochasticContext,
@@ -516,8 +515,6 @@ impl Fixture {
     fn new(n_stages: usize) -> Self {
         let state = state_layout_for(1, 0);
         let templates = vec![minimal_template(); n_stages];
-        // base_row = n_dual_relevant + n_hydros = 1 + 1 = 2 (z_inflow rows follow state rows)
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let horizon = HorizonMode::Finite {
@@ -528,7 +525,6 @@ impl Fixture {
         Self {
             n_stages,
             templates,
-            base_rows,
             state,
             initial_state,
             stochastic,
@@ -560,8 +556,6 @@ fn run_one_deterministic_pass(
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -674,8 +668,6 @@ fn train_converges_with_mock_solver() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -795,8 +787,6 @@ fn train_lb_monotonically_nondecreasing() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -905,8 +895,6 @@ fn train_emits_correct_event_sequence() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -999,8 +987,6 @@ fn train_stops_at_iteration_limit() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1102,8 +1088,6 @@ fn train_stops_on_graceful_shutdown() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1195,8 +1179,6 @@ fn train_propagates_infeasible_error() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1331,8 +1313,6 @@ fn d17_level1_cut_selection_convergence() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1466,8 +1446,6 @@ fn d17_level1_cut_selection_reconstruction() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1607,8 +1585,6 @@ fn d18_lml1_cut_selection_convergence() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1787,8 +1763,6 @@ fn frozen_backward_pass_smoke_test() {
     let stage_ctx = StageContext {
         geometry_per_stage: &[],
         templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,

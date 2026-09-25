@@ -37,8 +37,8 @@ pub(crate) enum LoadNoise {
     Absent,
 }
 
-/// How the water-balance noise buffers this solve reads
-/// (`scratch.noise_buf`, `scratch.z_inflow_rhs_buf`) are populated.
+/// How the water-balance noise buffer this solve reads
+/// (`scratch.z_inflow_rhs_buf`) is populated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InflowNoise {
     /// Fill the buffers from `raw_noise` (forward, backward, simulation).
@@ -179,13 +179,6 @@ impl StageSolvePrep {
             pinned_state,
             &ctx.template(stage).col_scale,
             producer_box,
-        );
-        patch_buf.fill_forward_patches(
-            training_ctx.state,
-            pinned_state,
-            &scratch.noise_buf,
-            ctx.base_row(stage),
-            &ctx.template(stage).row_scale,
         );
         if params.load_noise == LoadNoise::Present && ctx.n_load_buses > 0 {
             let grid = BlockGrid::new(load_blocks, training_ctx.study_dims.max_deficit_segments);

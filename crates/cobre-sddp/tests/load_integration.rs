@@ -387,7 +387,6 @@ fn test_stochastic_load_training_completes() {
 
     let state = state_layout_for(1, 0);
     let templates = vec![minimal_template(); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -433,8 +432,6 @@ fn test_stochastic_load_training_completes() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses,
@@ -532,7 +529,6 @@ fn test_deterministic_load_training_matches_baseline() {
 
     let state = state_layout_for(1, 0);
     let templates = vec![minimal_template(); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -549,8 +545,6 @@ fn test_deterministic_load_training_matches_baseline() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -648,7 +642,6 @@ fn test_stochastic_load_seed_determinism() {
         let stochastic = build_context_with_load(n_stages, 500.0, 50.0);
         let state = state_layout_for(1, 0);
         let templates = vec![minimal_template(); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -692,8 +685,6 @@ fn test_stochastic_load_seed_determinism() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses,

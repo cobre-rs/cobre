@@ -1663,7 +1663,6 @@ mod by_node_scratch {
         let state_layout_fixture = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state_layout_fixture.n_state;
         let forward_passes = 2_u32;
 
@@ -1699,8 +1698,6 @@ mod by_node_scratch {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1806,7 +1803,6 @@ mod by_node_scratch {
         let state_layout_fixture = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state_layout_fixture.n_state;
         let forward_passes = 2_u32;
 
@@ -1842,8 +1838,6 @@ mod by_node_scratch {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

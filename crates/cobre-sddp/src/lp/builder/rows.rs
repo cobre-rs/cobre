@@ -49,20 +49,20 @@ pub(super) fn fill_stage_rows(
     (row_lower, row_upper)
 }
 
-/// Fill water-balance row bounds: static RHS = ζ · (`deterministic_base_h` −
-/// `water_withdrawal_m3s_h`); the PAR(p) noise innovation is added at solve time.
+/// Fill water-balance row bounds: static RHS = `−(ζ · water_withdrawal_m3s_h)`.
+/// The realized inflow (deterministic base + noise) enters through the water
+/// row's own `z_h` coupling entry ([`super::entries::push_z_inflow_coupling`]),
+/// never the RHS.
 ///
 /// A `PreFilling` hydro's row is the frozen identity `v_h − v_h_in = 0` (matrix
-/// entries by [`super::entries::fill_state_and_water_entries`]), so its RHS is `0`,
-/// NOT `ζ·(base − withdrawal)`: its base inflow rides the routed `z_h` column on
-/// the short-circuit target row, and its withdrawal DEMAND transfers to that
-/// target's RHS below. The solve-time noise patch is neutralized by zeroing the
-/// hydro's `noise_scale`, so the `0` RHS survives; a nonzero RHS here would break
-/// the frozen identity even with the noise patch zeroed.
+/// entries by [`super::entries::fill_state_and_water_entries`]), so its RHS is
+/// `0`: its own row carries no `z_h` coupling (the coupling routes to the
+/// short-circuit target instead), and its withdrawal DEMAND transfers to that
+/// target's RHS below.
 ///
 /// In `BlockMode::Chronological` the single per-hydro RHS splits into `K` per-block
-/// row bounds `τ_k·(base − withdrawal)` (block-major, mirroring the entries side);
-/// summing them recovers the parallel `ζ·(base − withdrawal)` since `Σ_k τ_k = ζ`.
+/// row bounds `−(τ_k·withdrawal)` (block-major, mirroring the entries side);
+/// summing them recovers the parallel `−(ζ·withdrawal)` since `Σ_k τ_k = ζ`.
 fn fill_water_balance_rows(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
@@ -89,7 +89,6 @@ fn fill_parallel_water_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    let has_par = ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == layout.n_h;
     for h_idx in 0..layout.n_h {
         let row = layout.rows.water_balance.start + h_idx;
         if super::entries::is_prefilling(ctx, stage, h_idx) {
@@ -97,17 +96,12 @@ fn fill_parallel_water_rows(
             row_upper[row] = 0.0;
             continue;
         }
-        let base = if has_par {
-            ctx.par_lp.deterministic_base(stage_idx, h_idx)
-        } else {
-            0.0
-        };
         let withdrawal = ctx
             .resolved
             .bounds
             .hydro_bounds(h_idx, stage_idx)
             .water_withdrawal_m3s;
-        let rhs = layout.zeta * (base - withdrawal);
+        let rhs = -(layout.zeta * withdrawal);
         row_lower[row] = rhs;
         row_upper[row] = rhs;
     }
@@ -139,8 +133,8 @@ fn fill_parallel_water_rows(
 }
 
 /// Per-block water-balance RHS for chronological mode: each Operating/Filling hydro
-/// gets `K` rows `τ_k·(base − withdrawal)` (block-major `row_water + h·K + (k−1)`),
-/// with `τ_k` replacing `ζ` so `Σ_k` recovers the parallel total. A `PreFilling`
+/// gets `K` rows `−(τ_k·withdrawal)` (block-major `row_water + h·K + (k−1)`), with
+/// `τ_k` replacing `ζ` so `Σ_k` recovers the parallel total. A `PreFilling`
 /// hydro gets `K` frozen-identity rows with RHS `0` (block-major), and its
 /// withdrawal transfers per block (`−τ_k·withdrawal_h`) to the short-circuit
 /// target's block rows, mirroring the entries side.
@@ -153,7 +147,6 @@ fn fill_chronological_water_rows(
     row_upper: &mut [f64],
 ) {
     let n_blks = layout.n_blks;
-    let has_par = ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == layout.n_h;
     for h_idx in 0..layout.n_h {
         if super::entries::is_prefilling(ctx, stage, h_idx) {
             for blk in 0..n_blks {
@@ -163,11 +156,6 @@ fn fill_chronological_water_rows(
             }
             continue;
         }
-        let base = if has_par {
-            ctx.par_lp.deterministic_base(stage_idx, h_idx)
-        } else {
-            0.0
-        };
         let withdrawal = ctx
             .resolved
             .bounds
@@ -176,7 +164,7 @@ fn fill_chronological_water_rows(
         for blk in 0..n_blks {
             let row = layout.rows.water_balance.start + h_idx * n_blks + blk;
             let tau_k = stage.blocks[blk].duration_hours * super::M3S_TO_HM3;
-            let rhs = tau_k * (base - withdrawal);
+            let rhs = -(tau_k * withdrawal);
             row_lower[row] = rhs;
             row_upper[row] = rhs;
         }

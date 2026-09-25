@@ -285,11 +285,9 @@ fn fill_parallel_water_entries(
 ) {
     let n_h = layout.n_h;
     let n_blks = layout.n_blks;
-    let lag_order = layout.lag_order;
     let zeta = layout.zeta;
     let row_water = layout.rows.water_balance.start;
     let col_storage_in_start = layout.col_storage_in_start();
-    let col_inflow_lags_start = layout.col_inflow_lags_start();
 
     for h_idx in 0..n_h {
         let hydro = &ctx.hydros[h_idx];
@@ -347,15 +345,7 @@ fn fill_parallel_water_entries(
                 }
             }
         }
-        if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == n_h {
-            let psi = ctx.par_lp.psi_slice(stage_idx, h_idx);
-            for (lag, &psi_val) in psi.iter().enumerate() {
-                if psi_val != 0.0 && lag < lag_order {
-                    let col = col_inflow_lags_start + lag * n_h + h_idx;
-                    col_entries[col].push((row, -zeta * psi_val));
-                }
-            }
-        }
+        push_z_inflow_coupling(stage, layout, h_idx, h_idx, col_entries);
     }
 
     // The PreFilling `continue` below keeps the frozen identity row free of slack/flow
@@ -570,10 +560,7 @@ fn fill_chronological_water_entries(
 ) {
     let n_h = layout.n_h;
     let n_blks = layout.n_blks;
-    let lag_order = layout.lag_order;
     let row_water = layout.rows.water_balance.start;
-    let col_inflow_lags_start = layout.col_inflow_lags_start();
-    let has_par = ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == n_h;
 
     for h_idx in 0..n_h {
         let hydro = &ctx.hydros[h_idx];
@@ -612,7 +599,8 @@ fn fill_chronological_water_entries(
             }
         }
 
-        let psi = has_par.then(|| ctx.par_lp.psi_slice(stage_idx, h_idx));
+        push_z_inflow_coupling(stage, layout, h_idx, h_idx, col_entries);
+
         for k in 1..=n_blks {
             let blk = k - 1;
             let row = row_water + h_idx * n_blks + blk;
@@ -652,15 +640,6 @@ fn fill_chronological_water_entries(
                 for &d_idx in sources {
                     col_entries[layout.diversion_col(HydroSys::new(d_idx), BlockIdx::new(blk))]
                         .push((row, -tau_k));
-                }
-            }
-
-            if let Some(psi) = psi {
-                for (lag, &psi_val) in psi.iter().enumerate() {
-                    if psi_val != 0.0 && lag < lag_order {
-                        let col = col_inflow_lags_start + lag * n_h + h_idx;
-                        col_entries[col].push((row, -tau_k * psi_val));
-                    }
                 }
             }
 
@@ -870,6 +849,36 @@ fn resolve_chrono_arrival_density(
     chosen.unwrap_or_else(uniform)
 }
 
+/// Couple `z_h` (hydro `h_idx`'s realized-inflow column) onto `target_idx`'s water
+/// row(s): the hydro's own route (`target_idx == h_idx`) or the
+/// [`fill_prefilling_shortcircuit`] route (`target_idx == d_idx`). Emitted for every
+/// non-`PreFilling` hydro regardless of a PAR model (`z_h` is then pinned to `0` by
+/// its own row).
+///
+/// Parallel pushes the single stage-total `−ζ` (a `Σ_k −τ_k` loop would inflate
+/// `z_h`'s routed-entry count, pinned by
+/// `prefilling_upstream_inflow_lands_on_balance_row_only`); Chronological splits into
+/// per-block `−τ_k` (`Σ_k τ_k = ζ`).
+fn push_z_inflow_coupling(
+    stage: &Stage,
+    layout: &StageLayout,
+    h_idx: usize,
+    target_idx: usize,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let z_h = layout.col_z_inflow_start() + h_idx;
+    let row_water = layout.rows.water_balance.start;
+    match stage.block_mode {
+        BlockMode::Parallel => col_entries[z_h].push((row_water + target_idx, -layout.zeta)),
+        BlockMode::Chronological => {
+            for blk in 0..layout.n_blks {
+                let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                col_entries[z_h].push((row_water + target_idx * layout.n_blks + blk, -tau_k));
+            }
+        }
+    }
+}
+
 /// Re-route an absent `PreFilling` hydro `h`'s water interactions onto the FIRST
 /// non-`PreFilling` downstream hydro `d` ([`resolve_shortcircuit_target`]): in `Parallel`
 /// onto `d`'s single row, in `Chronological` onto `d`'s block rows with the stage-total
@@ -887,6 +896,9 @@ fn resolve_chrono_arrival_density(
 /// matrix and RHS agree. A skipped intermediate `PreFilling` hydro contributes zero
 /// releases, so a chain re-routes each link's inflow to `d` exactly once. Sink case (no
 /// non-`PreFilling` downstream): nothing routed, no panic.
+///
+/// The `z_h` coupling itself is [`push_z_inflow_coupling`], shared with both
+/// water writers' own-row route.
 fn fill_prefilling_shortcircuit(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
@@ -900,26 +912,13 @@ fn fill_prefilling_shortcircuit(
     };
     let n_blks = layout.n_blks;
     let row_water = layout.rows.water_balance.start;
-    let z_h = layout.col_z_inflow_start() + h_idx;
 
     let row_d_for = |blk: usize| match stage.block_mode {
         BlockMode::Parallel => row_water + d_idx,
         BlockMode::Chronological => row_water + d_idx * n_blks + blk,
     };
 
-    // Parallel pushes the single stage-total `−ζ` (a `Σ_k −τ_k` loop would inflate
-    // `z_h`'s routed-entry count, pinned by
-    // `prefilling_upstream_inflow_lands_on_balance_row_only`); Chronological splits into
-    // per-block `−τ_k` (`Σ_k τ_k = ζ`).
-    match stage.block_mode {
-        BlockMode::Parallel => col_entries[z_h].push((row_water + d_idx, -layout.zeta)),
-        BlockMode::Chronological => {
-            for blk in 0..n_blks {
-                let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
-                col_entries[z_h].push((row_water + d_idx * n_blks + blk, -tau_k));
-            }
-        }
-    }
+    push_z_inflow_coupling(stage, layout, h_idx, d_idx, col_entries);
 
     for blk in 0..n_blks {
         let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
@@ -5028,9 +5027,9 @@ mod pumping_water_tests {
 
     /// Pin the two structural water-row coefficients `fill_state_and_water_entries`
     /// writes for a two-reservoir cascade: the cascade-upstream `−tau_h` and the
-    /// AR-lag `−ζ·ψ`. Both are the weakest-backstopped coefficients in the water
-    /// row — a sign flip on either silently mis-routes water and produces wrong
-    /// bounds, yet outside this test they are exercised only by a slow parity
+    /// `z`-inflow coupling `−ζ`. Both are the weakest-backstopped coefficients in
+    /// the water row — a sign flip on either silently mis-routes water and produces
+    /// wrong bounds, yet outside this test they are exercised only by a slow parity
     /// D-case whose hash-mismatch failure mode does not localize to the water row.
     ///
     /// Cascade `H_up`(id 1) → `H_down`(id 2), both constant-productivity. On the
@@ -5042,7 +5041,7 @@ mod pumping_water_tests {
     /// `M3S_TO_HM3` (never a literal) so the assertion cannot drift from the
     /// production constant.
     #[test]
-    fn cascade_upstream_tau_and_ar_lag_land_on_downstream_water_row() {
+    fn cascade_upstream_tau_and_z_inflow_land_on_downstream_water_row() {
         use cobre_core::scenario::InflowModel;
 
         // Assemble the production water-row fill into a CSC. The generic-constraint
@@ -5130,10 +5129,11 @@ mod pumping_water_tests {
             );
         }
 
-        // AR-lag −ζ·ψ: self-contained block. An AR(1) PrecomputedPar carrying a
-        // nonzero psi for the downstream hydro makes the AR-lag water term fire
-        // (the default fixture has psi == 0, so the term is otherwise dormant).
-        // psi[0] for the downstream hydro is constructed to equal phi exactly:
+        // z-inflow coupling: self-contained block. An AR(1) PrecomputedPar carrying
+        // a nonzero psi for the downstream hydro proves the water row carries no
+        // lag entry EVEN when a PAR model is present (the default fixture has
+        // psi == 0, which would leave the absence vacuous). psi[0] for the
+        // downstream hydro is constructed to equal phi exactly:
         // the classical conversion psi = phi * s_m / s_lag collapses to phi when
         // both the study stage and its pre-study lag stage carry the same std.
         let phi = 0.6_f64;
@@ -5220,8 +5220,14 @@ mod pumping_water_tests {
         let ar_row = i32::try_from(ar_layout.rows.water_balance.start + down_idx).unwrap();
         assert_eq!(
             ar_coeff_at(lag_col, ar_row),
-            -(ar_layout.zeta * psi_val),
-            "downstream inflow-lag column must carry -(zeta * psi) on its water row"
+            0.0,
+            "downstream inflow-lag column must carry no entry on its water row"
+        );
+        let z_col = ar_layout.col_z_inflow_start() + down_idx;
+        assert_eq!(
+            ar_coeff_at(z_col, ar_row),
+            -ar_layout.zeta,
+            "downstream z-inflow column must carry -zeta on its own water row"
         );
     }
 

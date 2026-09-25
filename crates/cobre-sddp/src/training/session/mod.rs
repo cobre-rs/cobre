@@ -1920,7 +1920,6 @@ mod tests {
 
     fn make_stage_ctx<'a>(
         templates: &'a [StageTemplate],
-        base_rows: &'a [usize],
         block_counts: &'a [usize],
         state_boxes: &'a [StateBox],
     ) -> StageContext<'a> {
@@ -1928,8 +1927,6 @@ mod tests {
             geometry_per_stage: &[],
             templates,
             state_boxes,
-            base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1994,7 +1991,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2007,7 +2003,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2072,7 +2068,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2088,7 +2083,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2164,7 +2159,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2181,7 +2175,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2230,7 +2224,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2247,7 +2240,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2299,7 +2292,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2314,7 +2306,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2357,7 +2349,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2372,7 +2363,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2430,7 +2421,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2447,7 +2437,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2917,7 +2907,6 @@ mod tests {
         let node_graph = interior_branching_node_graph();
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2937,7 +2926,7 @@ mod tests {
         let comm = Rank0Of2;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);
@@ -2994,7 +2983,6 @@ mod tests {
         let node_graph = interior_branching_node_graph();
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -3014,7 +3002,7 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);
@@ -3050,7 +3038,6 @@ mod tests {
         let node_graph = trunk_terminal_fan_node_graph();
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -3070,7 +3057,7 @@ mod tests {
         let comm = Rank0Of2;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);

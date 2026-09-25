@@ -2018,7 +2018,7 @@ fn d33_per_stage_block_count_varies() {
     );
 
     // `block_hours_per_stage[t].len()` is the block count of stage `t`
-    // (`compute_noise_scale` collects one `duration_hours` per block of the
+    // (`compute_stage_hours` collects one `duration_hours` per block of the
     // stage), which equals `block_counts_per_stage[t]` threaded through the
     // pipeline.
     let block_counts: Vec<usize> = setup
@@ -3695,7 +3695,7 @@ fn test_observation_free_case_bit_exact_pre_epic() {
 
     assert_eq!(
         result.final_lb.to_bits(),
-        0x4166_3c9e_e81a_835au64,
+        0x4166_3c9e_e81a_8359u64,
         "D43 final_lb must reproduce its pre-windowing value bit-for-bit: got {} ({:#018x})",
         result.final_lb,
         result.final_lb.to_bits()

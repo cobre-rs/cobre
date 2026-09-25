@@ -72,17 +72,6 @@ fn to_bits(v: &[f64]) -> Vec<u64> {
 // site below: keeps a later change to an ownership set confined to one
 // function instead of every check site.
 
-fn water_chunk(geom: &StageGeometry, n_hydros: usize, h: usize) -> Range<usize> {
-    assert_eq!(
-        geom.water_balance.len() % n_hydros,
-        0,
-        "water_balance row count must be a multiple of the hydro count"
-    );
-    let per = geom.water_balance.len() / n_hydros;
-    let start = geom.water_balance.start + h * per;
-    start..start + per
-}
-
 fn z_row(geom: &StageGeometry, h: usize) -> usize {
     geom.z_inflow_row_start + h
 }
@@ -157,7 +146,6 @@ fn check_inflow(
     dim: usize,
     h: usize,
     geom: &StageGeometry,
-    n_hydros: usize,
     changed: &ChangedIndices,
     violations: &mut Vec<String>,
 ) {
@@ -167,13 +155,11 @@ fn check_inflow(
             changed.cols
         ));
     }
-    let chunk = water_chunk(geom, n_hydros, h);
     let z = z_row(geom, h);
     for &row in &changed.rows {
-        if !(chunk.contains(&row) || row == z) {
+        if row != z {
             violations.push(format!(
-                "{deck} node={pos} dim={dim} (inflow h={h}): row {row} outside water chunk \
-                 {chunk:?} and z row {z}"
+                "{deck} node={pos} dim={dim} (inflow h={h}): row {row} outside z row {z}"
             ));
         }
     }
@@ -276,9 +262,7 @@ fn sweep_setup(
 
             if dim < n_hydros {
                 *vacuity.entry((mode_tag, "inflow")).or_insert(0) += 1;
-                check_inflow(
-                    deck_key, pos, dim, dim, geom, n_hydros, &changed, violations,
-                );
+                check_inflow(deck_key, pos, dim, dim, geom, &changed, violations);
             } else if dim < n_hydros + n_load {
                 *vacuity.entry((mode_tag, "load")).or_insert(0) += 1;
                 let bus_pos = setup.stage_data.stage_templates.load_bus_indices[dim - n_hydros];
@@ -309,7 +293,7 @@ fn sweep_setup(
 
 /// On every deck, each noise dimension, on its own, changes only the bounds
 /// the layout assigns to that dimension's entity. Ownership is defined by
-/// row/column families (`water_chunk`/`z_row`/`load_chunk`/`ncs_chunk`
+/// row/column families (`z_row`/`load_chunk`/`ncs_chunk`
 /// above), never by the patch buffers themselves.
 #[test]
 fn every_noise_dimension_patches_only_its_own_entity() {

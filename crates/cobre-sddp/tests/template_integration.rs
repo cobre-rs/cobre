@@ -3,8 +3,8 @@
 //! Covers structural (column/row counts, CSC validity), objective coefficient
 //! wiring, and constraint-matrix entries for hydro / FPHA / evaporation /
 //! water-withdrawal / multi-segment deficit / generic constraints / operational
-//! violation slacks / inflow non-negativity / stochastic load balance and PAR
-//! max-order derivation.
+//! violation slacks / inflow non-negativity / stochastic load balance / PAR
+//! max-order derivation / water-balance z-inflow coupling.
 
 #![allow(
     clippy::doc_markdown,
@@ -4397,3 +4397,5 @@ mod stochastic_load;
 mod turbined_cost;
 #[path = "template_integration/violations_par_anticipated.rs"]
 mod violations_par_anticipated;
+#[path = "template_integration/water_balance_coupling.rs"]
+mod water_balance_coupling;

@@ -1006,7 +1006,7 @@ pub fn anticipated_slot_over(thermal_id: i32, ring_slot: u32, start: i32, end: i
 /// `patch_opening_bounds` does (`training/backward/lp_setup.rs`): delegates
 /// verbatim to `StageSolvePrep::run` with the backward-opening variation
 /// point (`LoadNoise::Present`, `InflowNoise::Transform`) — no probe-side
-/// reimplementation of the patch pipeline (lag-folded water-balance RHS, NCS
+/// reimplementation of the patch pipeline (the z-inflow column's RHS, NCS
 /// availability).
 pub fn patch_backward_opening_for_probe<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,

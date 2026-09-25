@@ -308,8 +308,6 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         state_boxes: &[],
         geometry_per_stage: std::slice::from_ref(&geom),
         templates: &[],
-        base_rows: &[0],
-        noise_scale: &[],
         n_hydros,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,

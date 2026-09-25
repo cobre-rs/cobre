@@ -621,13 +621,6 @@ mod cut_subgradient_parity {
             "N=1, L=0: n_state must be 1 (storage only, no lags)"
         );
 
-        // Guards ROW_WATER_BALANCE: with no state-fixing prefix (storage_fixing =
-        // 0..0), water-balance is at row 1 (z_inflow at row 0).
-        assert_eq!(
-            result.base_rows[0], 1,
-            "Phase 1: water-balance must be at row 1 (z_inflow at row 0, no state-fixing prefix)"
-        );
-
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
         solver.load_model(template);
 

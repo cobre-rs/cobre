@@ -16,7 +16,7 @@ Available context structs:
 
 | Struct                | File                                             | Purpose                                                                                                                            | Mutability              |
 | --------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `StageContext`        | `cobre-sddp/src/workspace/context.rs`            | Per-stage templates, base rows, layout                                                                                             | Immutable (`&`)         |
+| `StageContext`        | `cobre-sddp/src/workspace/context.rs`            | Per-stage templates, layout                                                                                             | Immutable (`&`)         |
 | `TrainingContext`     | `cobre-sddp/src/workspace/context.rs`            | Horizon, indexer, stochastic, initial state, the runtime node graph                                                                | Immutable (`&`)         |
 | `ScratchBuffers`      | `cobre-sddp/src/workspace/workspace.rs`          | Per-worker noise/patch scratch space                                                                                               | Mutable (`&mut`)        |
 | `SolverWorkspace`     | `cobre-sddp/src/workspace/workspace.rs`          | Solver + scratch + patch buffer                                                                                                    | Mutable (`&mut`)        |

@@ -196,8 +196,6 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
     objectives_buf: &mut Vec<f64>,
 ) -> Result<(), SddpError> {
     let n_hydros = ctx.n_hydros;
-    let base_row = ctx.base_row(StageIdx(0));
-    let template0 = ctx.template(StageIdx(0));
     let initial_state = training_ctx.initial_state;
     let opening_tree = training_ctx.stochastic.opening_tree();
     // Enumerate the ROOT NODE's own Ω, not the stage-0 generated tree: an External
@@ -288,13 +286,9 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
             &mut scratch.effective_eta_buf,
         );
 
-        scratch.noise_buf.clear();
         scratch.z_inflow_rhs_buf.clear();
         for h in 0..n_hydros {
             let eta_eff = scratch.effective_eta_buf[h];
-            scratch
-                .noise_buf
-                .push(template0.row_lower[base_row + h] + ctx.noise_scale[h] * eta_eff);
             let z_rhs = if has_valid_par {
                 par_lp.deterministic_base(0, h) + par_lp.sigma(0, h) * eta_eff
             } else {
@@ -959,13 +953,11 @@ mod tests {
     /// `TrainingContext` pair, mirroring how `StudySetup` owns `StageData` and
     /// lends `stage_ctx()`/`training_ctx()`. Every simple test shares this shape
     /// (single 1-block stage, no load buses/NCS/anticipated thermals); only the
-    /// template, base row, noise scale, `n_hydros`, opening tree, inflow method,
-    /// and initial state differ per test.
+    /// template, `n_hydros`, opening tree, inflow method, and initial state
+    /// differ per test.
     struct SimpleLbFixture {
         templates: Vec<StageTemplate>,
         state_boxes: Vec<StateBox>,
-        base_rows: Vec<usize>,
-        noise_scale: Vec<f64>,
         n_hydros: usize,
         state: StateSpace,
         cut_state_layouts: Vec<CutStateProjection>,
@@ -980,8 +972,6 @@ mod tests {
     impl SimpleLbFixture {
         fn new(
             template: StageTemplate,
-            base_row: usize,
-            noise_scale: Vec<f64>,
             n_hydros: usize,
             hydro_count: usize,
             opening_tree: OpeningTree,
@@ -995,8 +985,6 @@ mod tests {
             Self {
                 state_boxes: permissive_state_boxes(state.n_state, 1),
                 templates: vec![template],
-                base_rows: vec![base_row],
-                noise_scale,
                 n_hydros,
                 cut_state_layouts,
                 study_dims: test_support::study_dims(),
@@ -1013,9 +1001,7 @@ mod tests {
             StageContext {
                 state_boxes: &self.state_boxes,
                 templates: &self.templates,
-                base_rows: &self.base_rows,
                 geometry_per_stage: &[],
-                noise_scale: &self.noise_scale,
                 n_hydros: self.n_hydros,
                 cost_scale_factor: 1_000_000.0,
                 n_load_buses: 0,
@@ -1070,8 +1056,6 @@ mod tests {
     fn one_opening_expectation_lb_equals_single_objective() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(1),
@@ -1123,8 +1107,6 @@ mod tests {
     fn three_openings_expectation_lb_equals_mean() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(3),
@@ -1177,8 +1159,6 @@ mod tests {
     fn two_openings_pure_cvar_alpha_half_lb_equals_worst() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(2),
@@ -1238,8 +1218,6 @@ mod tests {
     fn two_openings_cvar_alpha_one_equals_expectation() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(2),
@@ -1314,8 +1292,6 @@ mod tests {
     fn infeasible_solve_maps_to_sddp_infeasible() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(1),
@@ -1366,8 +1342,6 @@ mod tests {
     fn broadcast_failure_maps_to_communication_error() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(1),
@@ -1425,8 +1399,6 @@ mod tests {
         {
             let fixture = SimpleLbFixture::new(
                 minimal_template(),
-                1,
-                vec![],
                 0,
                 1,
                 simple_opening_tree(1),
@@ -1479,8 +1451,6 @@ mod tests {
         {
             let fixture = SimpleLbFixture::new(
                 minimal_template(),
-                1,
-                vec![],
                 0,
                 1,
                 simple_opening_tree(1),
@@ -1534,14 +1504,12 @@ mod tests {
     /// Integration: full round-trip with `LocalComm` and 2 openings.
     ///
     /// Verifies that the function correctly integrates with `build_cut_row_batch`
-    /// (`cut_batch` with 0 cuts still produces the right result), `fill_forward_patches`,
+    /// (`cut_batch` with 0 cuts still produces the right result), `fill_z_inflow_patches`,
     /// and `RiskMeasure::Expectation`.
     #[test]
     fn integration_two_openings_local_backend_expectation() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(2),
@@ -1599,8 +1567,6 @@ mod tests {
     fn integration_monotonicity_more_cuts_yields_higher_or_equal_lb() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(2),
@@ -1682,8 +1648,6 @@ mod tests {
     fn test_lb_none_method_unchanged() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(2),
@@ -1740,8 +1704,6 @@ mod tests {
     fn test_lb_truncation_no_crash() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(1),
@@ -1792,8 +1754,6 @@ mod tests {
     fn test_lb_truncation_with_penalty_no_crash() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(1),
@@ -2002,7 +1962,6 @@ mod tests {
             row_scale: Vec::new(),
         };
         let templates = vec![template];
-        let base_rows = vec![0_usize];
 
         let state = test_support::state_layout(0, 0);
         let ncs_max_gen = vec![100.0_f64; n_ncs];
@@ -2018,9 +1977,7 @@ mod tests {
         let ctx = StageContext {
             state_boxes: &state_boxes,
             templates: &templates,
-            base_rows: &base_rows,
             geometry_per_stage: &[],
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2110,19 +2067,16 @@ mod tests {
     /// [`evaluate_lower_bound`] calls.
     ///
     /// Calls `evaluate_lower_bound` twice on the same `noise_scratch` and
-    /// verifies that `noise_buf.capacity()` does not decrease on the second call
-    /// (i.e., no reallocation occurred). This guards against regressions that
-    /// would re-introduce per-iteration heap allocation on the lower-bound hot
-    /// path.
+    /// verifies that `z_inflow_rhs_buf.capacity()` does not decrease on the
+    /// second call (i.e., no reallocation occurred). This guards against
+    /// regressions that would re-introduce per-iteration heap allocation on
+    /// the lower-bound hot path.
     #[test]
     fn lb_eval_scratch_reuses_buffers_across_calls() {
-        // Use n_hydros = 1 so that noise_buf gets populated (capacity grows to 1
-        // after the first call). The template must have at least 1 row to avoid
-        // index-out-of-bounds in fill_forward_patches when n_hydros = 1.
+        // Use n_hydros = 1 so that z_inflow_rhs_buf gets populated (capacity
+        // grows to 1 after the first call).
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
-            vec![1.0],
             1,
             1,
             simple_opening_tree(1),
@@ -2167,10 +2121,10 @@ mod tests {
             .unwrap();
         }
 
-        let cap_after_first = noise_scratch.noise_buf.capacity();
+        let cap_after_first = noise_scratch.z_inflow_rhs_buf.capacity();
         assert!(
             cap_after_first > 0,
-            "noise_buf must have nonzero capacity after first call (n_hydros = 1)"
+            "z_inflow_rhs_buf must have nonzero capacity after first call (n_hydros = 1)"
         );
 
         let mut solver2 = MockSolver::with_objectives(vec![20.0]);
@@ -2194,10 +2148,10 @@ mod tests {
             .unwrap();
         }
 
-        let cap_after_second = noise_scratch.noise_buf.capacity();
+        let cap_after_second = noise_scratch.z_inflow_rhs_buf.capacity();
         assert_eq!(
             cap_after_second, cap_after_first,
-            "noise_buf capacity must be stable across calls (first={cap_after_first}, second={cap_after_second}); \
+            "z_inflow_rhs_buf capacity must be stable across calls (first={cap_after_first}, second={cap_after_second}); \
              a decrease indicates reallocation on the lower-bound hot path"
         );
     }
@@ -2205,11 +2159,11 @@ mod tests {
     // ── Filling phase-gating inheritance (template-driven, no per-opening patch) ─
     //
     // Filling gating is stage-deterministic (a function of `stage.id` + `FillingConfig`),
-    // so it lives entirely in the per-stage `StageTemplate` and `noise_scale` the lower
-    // bound already loads — it inherits filling structure by construction, with no
-    // per-opening patch (unlike NCS, whose per-opening stochastic draw forces a
-    // re-patch). Hand-wiring a filling patch here would duplicate template structure
-    // into the hot path; the source-text guard below fails that edit.
+    // so it lives entirely in the per-stage `StageTemplate` the lower bound already
+    // loads — it inherits filling structure by construction, with no per-opening
+    // patch (unlike NCS, whose per-opening stochastic draw forces a re-patch).
+    // Hand-wiring a filling patch here would duplicate template structure into the
+    // hot path; the source-text guard below fails that edit.
 
     /// Build the per-stage templates for a study whose hydros exercise filling at
     /// stage 0, via the SAME `build_stage_templates` (`geometry_per_stage`) path
@@ -2219,11 +2173,11 @@ mod tests {
     /// cascade), on a single bus:
     /// - `H_A` (id 3): `start_stage_id = 0`, `entry_stage_id = 1`. At stage 0 it is
     ///   in the terminal `Filling` stage (`entry − 1 == 0`), so stage 0 carries the
-    ///   `filling_target`/`σ_fill` row+column family. Its noise is NOT zeroed
-    ///   (Filling keeps PAR noise).
+    ///   `filling_target`/`σ_fill` row+column family. Its own z-inflow coupling is
+    ///   NOT routed away (Filling keeps PAR noise).
     /// - `H_B` (id 4): `start_stage_id = 2`, `entry_stage_id = 4`. At stage 0
-    ///   (`id 0 < start 2`) it is `PreFilling`, so `compute_noise_scale` zeros its
-    ///   stage-0 `noise_scale` entry.
+    ///   (`id 0 < start 2`) it is `PreFilling`, so its z-inflow column carries no
+    ///   entry on any water row (a sink: neither hydro declares a downstream).
     ///
     /// Returns the built [`StageTemplates`] plus the system indices of the two
     /// hydros (id-sorted, so `H_A`→0, `H_B`→1).
@@ -2356,7 +2310,7 @@ mod tests {
             .collect();
 
         // White-noise inflow models (non-zero std so the Operating/Filling
-        // noise_scale is non-zero where the PreFilling zeroing is the contrast).
+        // z-inflow coupling is real where the PreFilling routing is the contrast).
         let inflow_models: Vec<InflowModel> = [EntityId(3), EntityId(4)]
             .into_iter()
             .flat_map(|hid| {
@@ -2606,13 +2560,13 @@ mod tests {
     /// per-stage `filling_target`/`σ_fill` family at EVERY Filling stage (the
     /// per-stage widening, not only the terminal `entry − 1` stage) and the renamed
     /// `filled_min_storage_floor`/`σ^{v-}` operating-floor family — and the
-    /// `PreFilling` hydro's stage-0 `noise_scale` entry is `0.0`.
+    /// `PreFilling` hydro's own z-inflow column carries no water-row entry.
     ///
     /// The lower bound's `StageContext.templates[0]` is bound to
-    /// `stage_ctx.templates[0]` and `noise_scale` to `stage_ctx.noise_scale` — the
-    /// SAME objects the forward/backward passes load. So inspecting the
-    /// `build_stage_templates` output IS inspecting what the lower bound consumes:
-    /// there is no separate lower-bound template build to diverge.
+    /// `stage_ctx.templates[0]` — the SAME object the forward/backward passes
+    /// load. So inspecting the `build_stage_templates` output IS inspecting what
+    /// the lower bound consumes: there is no separate lower-bound template build
+    /// to diverge.
     #[test]
     fn lower_bound_template_matches_forward_for_filling_stage() {
         let (templates, h_a, h_b) = filling_study_templates();
@@ -2703,28 +2657,45 @@ mod tests {
             geom4.filled_min_storage_floor
         );
 
-        // PreFilling noise-scale zeroing: H_B is PreFilling at stage 0 (id 0 <
-        // start 2), so its stage-0 noise_scale entry is exactly 0.0 — the
-        // frozen-storage-identity freeze (the PreFilling row-pinning contract,
-        // unrelated to the frozen-template LP mode) the lower bound inherits via
-        // `stage_ctx.noise_scale`. H_A is Filling at stage 0 (not PreFilling), so its
-        // entry is NOT zeroed — the contrast that makes the zeroing non-vacuous.
-        let stage0_noise_a = templates.noise_scale[h_a];
-        let stage0_noise_b = templates.noise_scale[h_b];
+        // PreFilling z-inflow routing: H_B is PreFilling at stage 0 (id 0 <
+        // start 2), so its own z-inflow column carries no entry on any water
+        // row — the frozen-storage-identity freeze (the PreFilling row-pinning
+        // contract) the lower bound inherits via the loaded template. Neither
+        // hydro declares a downstream, so H_B's coupling routes nowhere (a
+        // sink), never onto H_A's row. H_A is Filling at stage 0 (not
+        // PreFilling), so its OWN z-inflow column carries `-zeta` on its own
+        // water row — the contrast that makes the routing check non-vacuous.
+        let state = test_support::state_layout(n_hydros, 0);
+        let raw_at = |col: usize, row: usize| -> f64 {
+            let start = usize::try_from(tpl0.col_starts[col]).unwrap();
+            let end = usize::try_from(tpl0.col_starts[col + 1]).unwrap();
+            tpl0.row_indices[start..end]
+                .iter()
+                .zip(&tpl0.values[start..end])
+                .filter(|&(&r, _)| usize::try_from(r).unwrap() == row)
+                .map(|(_, &v)| v)
+                .sum()
+        };
+        let z_col_a = state.z_inflow.start + h_a;
+        let z_col_b = state.z_inflow.start + h_b;
+        let water_row_a = geom0.water_balance.start + h_a;
         assert_eq!(
-            stage0_noise_b, 0.0,
-            "PreFilling hydro H_B must have a zeroed stage-0 noise_scale, got {stage0_noise_b}"
+            raw_at(z_col_a, water_row_a),
+            -templates.zeta_per_stage[0],
+            "Filling hydro H_A's own z-inflow column must carry -zeta on its own water row"
         );
-        assert!(
-            stage0_noise_a > 0.0,
-            "control: Filling hydro H_A keeps a non-zero stage-0 noise_scale ({stage0_noise_a}) \
-             so the PreFilling zeroing is a real contrast, not vacuous"
-        );
+        for row in geom0.water_balance.clone() {
+            assert_eq!(
+                raw_at(z_col_b, row),
+                0.0,
+                "PreFilling hydro H_B's z-inflow column must carry no entry on water row {row}"
+            );
+        }
     }
 
     /// AC2: the lower-bound evaluation code references NO filling-specific symbol —
-    /// filling structure arrives ONLY via the loaded template and the `noise_scale`
-    /// vector, never via a hand-written per-opening patch.
+    /// filling structure arrives ONLY via the loaded template, never via a
+    /// hand-written per-opening patch.
     ///
     /// Modeled on the `builder_never_references_dual_extraction` guard: a
     /// future "simplification" that hand-wires a filling patch into `lb_init_rank0`
@@ -2742,9 +2713,9 @@ mod tests {
         // `σ_fill`/`filling_target` family and the renamed `filled_min_storage_floor`
         // (`σ^{v-}`) operating-floor family. There is no `filling_retention` needle:
         // the retention family was removed (the Filling phase keeps PAR noise via
-        // `noise_scale`, not a retention row), so referencing it would itself be a
-        // stale symbol — the rename/removal is mirrored here so the guard cannot rot
-        // back to the abandoned family name.
+        // its own z-inflow coupling, not a retention row), so referencing it would
+        // itself be a stale symbol — the rename/removal is mirrored here so the
+        // guard cannot rot back to the abandoned family name.
         let needles: [String; 4] = [
             ["filling", "_phase"].concat(),
             ["Phase", "::"].concat(),
@@ -2772,7 +2743,7 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "lower-bound production code must reference NO filling-gating symbol (filling \
-             structure arrives only via the loaded template + noise_scale vector, never a \
+             structure arrives only via the loaded template, never a \
              hand-written per-opening patch); offending symbols: {offenders:?}"
         );
     }
@@ -2803,9 +2774,10 @@ mod tests {
             "σ_fill slack column must be a real column of templates[0]"
         );
 
-        // The per-opening water-balance noise patch reads `noise_scale` — including
-        // H_B's PreFilling-zeroed stage-0 entry — exactly as the forward/backward
-        // passes do, so the bound sees the same stage-0 constraints.
+        // The per-opening z-inflow patch reads the loaded template's own z-inflow
+        // coupling — H_B's PreFilling row carries none — exactly as the
+        // forward/backward passes do, so the bound sees the same stage-0
+        // constraints.
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new");
         let comm = LocalComm;
 
@@ -2822,9 +2794,7 @@ mod tests {
         let ctx = StageContext {
             state_boxes: &state_boxes,
             templates: &templates.templates,
-            base_rows: &templates.base_rows,
             geometry_per_stage: &templates.geometry_per_stage,
-            noise_scale: &templates.noise_scale,
             n_hydros: 2,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2920,7 +2890,6 @@ mod tests {
 
         let template = test_support::transit_bucket_only_template(state.theta + 1, state.n_state);
         let templates = vec![template];
-        let base_rows = vec![0_usize];
         let fcf = make_fcf(1, state.n_state);
         let initial_state = vec![7.0_f64, 11.0];
         let mut patch_buf = PatchBuffer::new(0, 0, 0, 0, state.n_buckets, 0, 0);
@@ -2934,9 +2903,7 @@ mod tests {
         let ctx = StageContext {
             state_boxes: &state_boxes,
             templates: &templates,
-            base_rows: &base_rows,
             geometry_per_stage: &[],
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -3238,8 +3205,6 @@ mod tests {
     fn lb_init_rank0_resolves_root_pool_by_stage_not_array_position() {
         let mut fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
-            vec![],
             0,
             1,
             simple_opening_tree(1),

@@ -42,25 +42,17 @@ pub struct StageTemplates {
     /// Per-stage admissible box for every outgoing state dimension, populated by
     /// `postprocess_templates` after scaling. Length equals `templates.len()`.
     pub(crate) state_boxes: Vec<StateBox>,
-    /// Row index of the first water-balance constraint in each stage's LP (the
-    /// noise-injection `base_row`). Length equals `templates.len()`.
-    pub base_rows: Vec<usize>,
-    /// Pre-computed noise scale `ζ_stage * σ_{stage,hydro}`, flat stage-major:
-    /// `noise_scale[stage * n_hydros + hydro]`, length `n_study_stages * n_hydros`.
-    ///
-    /// The full water-balance patch is `ζ*base + ζ*σ*η`: `ζ*base` is already encoded
-    /// in the template's `row_lower`/`row_upper`, and the caller adds `ζ*σ*η` at solve
-    /// time using this scale.
-    pub noise_scale: Vec<f64>,
     /// Per-stage time-conversion factor `ζ = total_hours * M3S_TO_HM3`, length
-    /// `templates.len()`. Inverts the water-balance RHS back to inflow:
-    /// `inflow_m3s = rhs_hm3 / zeta_per_stage[stage]`.
+    /// `templates.len()`: converts an m³/s flow rate to hm³ over the stage
+    /// (`volume_hm3 = flow_m3s * zeta_per_stage[stage]`), the coefficient a
+    /// parallel-mode water row's `z_inflow` coupling applies
+    /// (`push_z_inflow_coupling` in `lp/builder/entries.rs`).
     pub zeta_per_stage: Vec<f64>,
     /// Per-stage block durations in hours (`block_hours_per_stage[stage]` is length
     /// `n_blocks`). Converts load-balance duals $/MW → $/`MWh`:
     /// `spot_price = dual / block_hours`.
     pub block_hours_per_stage: Vec<Vec<f64>>,
-    /// Number of hydro plants (N) used to stride into `noise_scale`.
+    /// Number of hydro plants (N).
     pub n_hydros: usize,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`,
     /// [`ResolvedParameters::cost_scale_factor`]). Every non-theta objective
@@ -158,16 +150,14 @@ pub struct StageTemplates {
 }
 
 impl StageTemplates {
-    /// All-empty [`StageTemplates`] for a study with zero stages. `n_hydros` (the
-    /// stride into `noise_scale`) and `cost_scale_factor` carry through; both are
-    /// system-level values well-defined even with no stages.
+    /// All-empty [`StageTemplates`] for a study with zero stages. `n_hydros` and
+    /// `cost_scale_factor` carry through; both are system-level values
+    /// well-defined even with no stages.
     #[must_use]
     pub(crate) fn empty(n_hydros: usize, cost_scale_factor: f64) -> Self {
         Self {
             templates: Vec::new(),
             state_boxes: Vec::new(),
-            base_rows: Vec::new(),
-            noise_scale: Vec::new(),
             zeta_per_stage: Vec::new(),
             block_hours_per_stage: Vec::new(),
             n_hydros,
@@ -372,9 +362,6 @@ impl StageGeometry {
 pub(super) struct StageBuildOutput {
     /// Structural LP template for the stage.
     pub template: StageTemplate,
-    /// Row index of the first water-balance constraint (the `PatchBuffer`
-    /// noise-injection `base_row`).
-    pub stage_base_row: usize,
     /// Row index of the first load-balance constraint (load-noise patches).
     pub load_balance_row_start: usize,
     /// Active generic-constraint row metadata for the stage.
@@ -407,7 +394,6 @@ pub(super) fn build_single_stage_template(
     stage_idx: usize,
 ) -> StageBuildOutput {
     let layout = StageLayout::new(ctx, state, stage, stage_idx);
-    let stage_base_row = layout.rows.water_balance.start;
     let load_balance_row_start = layout.rows.load_balance.start;
 
     let (col_lower, mut col_upper, mut objective) =
@@ -479,7 +465,6 @@ pub(super) fn build_single_stage_template(
 
     StageBuildOutput {
         template,
-        stage_base_row,
         load_balance_row_start,
         gc_entries: layout.generic_constraint_rows,
         ncs_col_start: layout.equipment.col_ncs_start,
@@ -809,7 +794,6 @@ pub fn build_stage_templates(
         diversion_upstream_output,
         &study_stages,
         &ctx,
-        par_lp,
         n_hydros,
         n_load_buses,
         n_study,
@@ -1252,7 +1236,6 @@ fn assemble_stage_templates_output(
     diversion_upstream_output: HashMap<EntityId, Vec<usize>>,
     study_stages: &[&Stage],
     ctx: &TemplateBuildCtx<'_>,
-    par_lp: &PrecomputedPar,
     n_hydros: usize,
     n_load_buses: usize,
     n_study: usize,
@@ -1260,7 +1243,6 @@ fn assemble_stage_templates_output(
     // Index `s` of every parallel Vec must refer to the same stage, so preserve the
     // per-stage push order.
     let mut templates = Vec::with_capacity(n_study);
-    let mut base_rows = Vec::with_capacity(n_study);
     let mut load_balance_row_starts = Vec::with_capacity(n_study);
     let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
     let mut ncs_col_starts = Vec::with_capacity(n_study);
@@ -1273,7 +1255,6 @@ fn assemble_stage_templates_output(
     let mut n_pumping: usize = 0;
     for (s, out) in stage_outputs.into_iter().enumerate() {
         templates.push(out.template);
-        base_rows.push(out.stage_base_row);
         load_balance_row_starts.push(out.load_balance_row_start);
         generic_constraint_row_entries.push(out.gc_entries);
         ncs_col_starts.push(out.ncs_col_start);
@@ -1294,8 +1275,7 @@ fn assemble_stage_templates_output(
         geometry_per_stage.push(out.equipment_geometry);
     }
 
-    let (noise_scale, zeta_per_stage, block_hours_per_stage) =
-        scaling::compute_noise_scale(study_stages, ctx.hydros, n_hydros, par_lp);
+    let (zeta_per_stage, block_hours_per_stage) = scaling::compute_stage_hours(study_stages);
 
     let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
         .map(|s| {
@@ -1311,8 +1291,6 @@ fn assemble_stage_templates_output(
     StageTemplates {
         templates,
         state_boxes: Vec::new(),
-        base_rows,
-        noise_scale,
         zeta_per_stage,
         block_hours_per_stage,
         n_hydros,

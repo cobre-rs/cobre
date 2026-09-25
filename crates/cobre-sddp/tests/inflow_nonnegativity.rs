@@ -490,8 +490,6 @@ fn base_stage_context<'a>(
         state_boxes,
         geometry_per_stage: &[],
         templates: &fx.stage_templates.templates,
-        base_rows: &fx.stage_templates.base_rows,
-        noise_scale: &fx.stage_templates.noise_scale,
         n_hydros: fx.stage_templates.n_hydros,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: fx.stage_templates.n_load_buses,

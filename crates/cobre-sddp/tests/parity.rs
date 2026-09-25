@@ -1173,7 +1173,6 @@ mod determinism {
     struct Fixture3H {
         n_stages: usize,
         templates: Vec<StageTemplate>,
-        base_rows: Vec<usize>,
         state: StateSpace,
         initial_state: Vec<f64>,
         stochastic: StochasticContext,
@@ -1193,8 +1192,6 @@ mod determinism {
             let n_stages = 5;
             let state = state_layout_for(3, 0);
             let templates = vec![template_3h(); n_stages];
-            // base_row = n_state + n_hydros = 3 + 3 = 6 (first water-balance row).
-            let base_rows = vec![6usize; n_stages];
             let initial_state = vec![0.0_f64; state.n_state];
             let stochastic = make_stochastic_context_3h_branching(n_stages, branching_factor);
             let horizon = HorizonMode::Finite {
@@ -1205,7 +1202,6 @@ mod determinism {
             Self {
                 n_stages,
                 templates,
-                base_rows,
                 state,
                 initial_state,
                 stochastic,
@@ -1280,8 +1276,6 @@ mod determinism {
         let stage_ctx = StageContext {
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1422,8 +1416,6 @@ mod determinism {
                     &StageContext {
                         geometry_per_stage: &[],
                         templates: &fx.templates,
-                        base_rows: &fx.base_rows,
-                        noise_scale: &[],
                         n_hydros: 0,
                         cost_scale_factor: 1_000_000.0,
                         n_load_buses: 0,

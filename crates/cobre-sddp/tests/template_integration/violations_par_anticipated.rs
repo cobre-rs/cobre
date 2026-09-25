@@ -310,33 +310,20 @@ fn max_par_order_z_inflow_row_has_twelve_lag_entries() {
 #[allow(clippy::cast_precision_loss)] // fixture values are small integers; no precision is lost
 fn parameter_coefficient_persists_across_stage_template_uses() {
     // Realistic-scale system: N=3, L=2, M=2, B_max=3.
-    // Row capacity = N + M*B_max + N = 3 + 2*3 + 3 = 12.
+    // Row capacity = M*B_max + N = 2*3 + 3 = 9.
     let n: usize = 3;
     let l: usize = 2;
     let m: usize = 2;
     let b_max: usize = 3;
 
-    let capacity_formula = n + m * b_max + n;
+    let capacity_formula = m * b_max + n;
     let mut buf = PatchBuffer::new(n, l, m, b_max, 0, 0, 0);
 
     assert_eq!(
         buf.indices.len(),
         capacity_formula,
-        "PatchBuffer capacity must equal N + M*B_max + N; \
+        "PatchBuffer capacity must equal M*B_max + N; \
          formula change indicates new patch categories were added"
-    );
-
-    let n_state = n * (1 + l);
-    let state: Vec<f64> = (0..n_state).map(|i| (i + 1) as f64 * 10.0).collect();
-    let noise: Vec<f64> = (0..n).map(|h| h as f64 * 0.5).collect();
-    let base_row: usize = n; // water_balance_start = N
-
-    buf.fill_forward_patches(
-        &StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]),
-        &state,
-        &noise,
-        base_row,
-        &[],
     );
 
     // Load — 2 load buses, 2 active blocks (< max 3). The per-stage grid
@@ -359,12 +346,12 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     buf.fill_z_inflow_patches(z_inflow_row_start, &z_inflow_rhs, &[]);
 
     // The count uses b_active, not B_max: any generic-constraint patching would push
-    // it past the N + M*B_max + N capacity into an out-of-bounds write.
-    let expected_count = n + m * b_active + n;
+    // it past the M*B_max + N capacity into an out-of-bounds write.
+    let expected_count = m * b_active + n;
     assert_eq!(
         buf.forward_patch_count(),
         expected_count,
-        "forward_patch_count must equal N + M*b_active + N; \
+        "forward_patch_count must equal M*b_active + N; \
          any generic-constraint patching would alter this count"
     );
 

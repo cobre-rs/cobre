@@ -525,7 +525,6 @@ impl BackwardPassState {
     /// Panics if any of the following debug preconditions are violated:
     ///
     /// - `inputs.ctx.templates.len() != num_stages`
-    /// - `inputs.ctx.base_rows.len() != num_stages`
     /// - `inputs.risk_measures.len() != num_stages`
     /// - `inputs.frozen.len() != n_pools`
     fn run_sampled_backward<S, C: Communicator>(
@@ -539,7 +538,6 @@ impl BackwardPassState {
         let num_stages = training_ctx.horizon.num_stages();
 
         debug_assert_eq!(inputs.ctx.templates.len(), num_stages);
-        debug_assert_eq!(inputs.ctx.base_rows.len(), num_stages);
         debug_assert_eq!(inputs.risk_measures.len(), num_stages);
         debug_assert_eq!(
             inputs.frozen.len(),
@@ -2319,7 +2317,6 @@ mod tests {
             patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
-                noise_buf: Vec::new(),
                 inflow_m3s_buf: Vec::new(),
                 lag_matrix_buf: Vec::new(),
                 par_inflow_buf: Vec::new(),
@@ -2594,7 +2591,6 @@ mod tests {
         // `ctx.templates`; mirror that here so `frozen` does not alias the
         // `&templates` borrow held by `ctx`.
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state.n_state;
         let forward_passes = 2_u32;
 
@@ -2619,8 +2615,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2763,7 +2757,6 @@ mod tests {
         stochastic: &cobre_stochastic::StochasticContext,
         state: &StateSpace,
         templates: &[StageTemplate],
-        base_rows: &[usize],
         n_stages: usize,
         records: &[TrajectoryRecord],
     ) -> (usize, usize, usize) {
@@ -2800,8 +2793,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates,
-            base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2967,7 +2958,6 @@ mod tests {
 
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
         let trial_states = vec![vec![10.0], vec![20.0], vec![30.0]];
 
         let hetero_records =
@@ -2981,7 +2971,6 @@ mod tests {
             &stochastic,
             &state,
             &templates,
-            &base_rows,
             n_stages,
             &hetero_records,
         );
@@ -2990,7 +2979,6 @@ mod tests {
             &stochastic,
             &state,
             &templates,
-            &base_rows,
             n_stages,
             &homo_records,
         );
@@ -3159,7 +3147,6 @@ mod tests {
         stochastic: &cobre_stochastic::StochasticContext,
         state: &StateSpace,
         templates: &[StageTemplate],
-        base_rows: &[usize],
         n_stages: usize,
         records: &[TrajectoryRecord],
         scheduler: BackwardScheduler,
@@ -3213,8 +3200,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates,
-            base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -3426,7 +3411,6 @@ mod tests {
         let n_stages = 3_usize;
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
         let frozen_templates: Vec<StageTemplate> = (0..node_graph.n_pools)
             .map(|p| templates[node_graph.pool_stage[p].0].clone())
             .collect();
@@ -3455,8 +3439,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -3856,7 +3838,6 @@ mod tests {
 
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
         let trial_states = vec![vec![10.0], vec![20.0], vec![30.0], vec![40.0]];
         let f = trial_states.len();
 
@@ -3887,7 +3868,6 @@ mod tests {
                 &stochastic,
                 &state,
                 &templates,
-                &base_rows,
                 n_stages,
                 &records_a,
                 scheduler,
@@ -3898,7 +3878,6 @@ mod tests {
                 &stochastic,
                 &state,
                 &templates,
-                &base_rows,
                 n_stages,
                 &records_b,
                 scheduler,
@@ -3951,7 +3930,6 @@ mod tests {
         let state_layout_fixture = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state_layout_fixture.n_state;
         let forward_passes = 2_u32;
 
@@ -3976,8 +3954,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -4103,7 +4079,6 @@ mod tests {
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state.n_state;
         let forward_passes = 2_u32;
 
@@ -4128,8 +4103,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -4765,9 +4738,7 @@ mod tests {
         let stage_ctx = StageContext {
             templates: &setup.stage_data.stage_templates.templates,
             state_boxes: &setup.stage_data.stage_templates.state_boxes,
-            base_rows: &setup.stage_data.stage_templates.base_rows,
             geometry_per_stage: &setup.stage_data.stage_templates.geometry_per_stage,
-            noise_scale: &setup.stage_data.stage_templates.noise_scale,
             n_hydros: setup.stage_data.stage_templates.n_hydros,
             cost_scale_factor: setup.stage_data.stage_templates.cost_scale_factor,
             n_load_buses: setup.stage_data.stage_templates.n_load_buses,

@@ -326,8 +326,6 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
     let StageTemplates {
         templates,
         state_boxes,
-        base_rows,
-        noise_scale,
         zeta_per_stage,
         block_hours_per_stage,
         n_hydros,
@@ -357,7 +355,6 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
         put_f64_slice(state_boxes_buf, upper);
     }
 
-    put_usize_slice(group(groups, "layout.base_rows"), base_rows);
     put_usize_slice(
         group(groups, "layout.load_balance_row_starts"),
         load_balance_row_starts,
@@ -376,8 +373,6 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
         put_usize(geometry_buf, stage);
         put_geometry(geometry_buf, geometry);
     }
-
-    put_f64_slice(group(groups, "stochastic.noise_scale"), noise_scale);
 
     let buf = group(groups, "stochastic.load_buses");
     put_usize(buf, *n_load_buses);
@@ -511,7 +506,6 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "layout.base_rows",
                 "layout.geometry",
                 "layout.load_balance_row_starts",
                 "layout.ncs_cols",
@@ -536,7 +530,6 @@ mod tests {
                 "solver_meta.n_transfer",
                 "state_boxes",
                 "stochastic.load_buses",
-                "stochastic.noise_scale",
                 "time_value.cumulative_discount_factors",
                 "time_value.discount_factors",
             ]

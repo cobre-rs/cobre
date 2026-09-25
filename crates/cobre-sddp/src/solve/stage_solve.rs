@@ -437,8 +437,6 @@ mod tests {
             geometry_per_stage: &[],
             templates,
             state_boxes: &[],
-            base_rows: &[],
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

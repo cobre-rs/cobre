@@ -284,14 +284,11 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     let stochastic = make_stochastic_context();
     let template = minimal_forward_template();
     let templates = vec![template.clone()];
-    let base_rows = vec![0_usize];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
     let ctx = StageContext {
         state_boxes: &state_boxes,
         templates: &templates,
-        base_rows: &base_rows,
         geometry_per_stage: &[],
-        noise_scale: &[1.0],
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -355,13 +352,6 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
         &mut reference_scratch,
     );
     reference_patch_buf.fill_col_state_patches(&state, &current_state, &template.col_scale, None);
-    reference_patch_buf.fill_forward_patches(
-        &state,
-        &current_state,
-        &reference_scratch.noise_buf,
-        ctx.base_rows[0],
-        &template.row_scale,
-    );
     reference_patch_buf.fill_z_inflow_patches(
         0,
         &reference_scratch.z_inflow_rhs_buf,
@@ -416,7 +406,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     assert_eq!(
         owner_solver.row_bounds_calls.len(),
         1,
-        "the minimal fixture patches exactly one noise row"
+        "the minimal fixture patches exactly one z-inflow row"
     );
 }
 
@@ -561,9 +551,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     let ctx = StageContext {
         state_boxes: &state_boxes,
         templates: &templates,
-        base_rows: &[0],
         geometry_per_stage: &[],
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -707,7 +695,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
 /// `LoadNoise::Absent` + `InflowNoise::PreBuilt` — the lower bound's own
 /// parameterization — must skip both `transform_load_noise` and
 /// `transform_inflow_noise`, reading whatever the caller pre-populated in
-/// `scratch.noise_buf`/`z_inflow_rhs_buf`/`load_rhs_buf` verbatim, even when
+/// `scratch.z_inflow_rhs_buf`/`load_rhs_buf` verbatim, even when
 /// the fixture HAS load buses and a real PAR(0) inflow model that `Present`/
 /// `Transform` would otherwise patch.
 #[test]
@@ -716,14 +704,11 @@ fn run_skips_load_and_inflow_transform_under_absent_and_prebuilt() {
     let stochastic = make_stochastic_context();
     let template = minimal_forward_template();
     let templates = vec![template];
-    let base_rows = vec![0_usize];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
     let ctx = StageContext {
         state_boxes: &state_boxes,
         templates: &templates,
-        base_rows: &base_rows,
         geometry_per_stage: &[],
-        noise_scale: &[1.0],
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 1,
@@ -774,7 +759,6 @@ fn run_skips_load_and_inflow_transform_under_absent_and_prebuilt() {
     // Sentinel pre-fill: Absent/PreBuilt must leave every one of these untouched,
     // since `transform_load_noise`/`transform_inflow_noise` each `.clear()` their
     // target buffer unconditionally before refilling it.
-    scratch.noise_buf = vec![111.0];
     scratch.z_inflow_rhs_buf = vec![222.0];
     scratch.load_rhs_buf = vec![777.0];
 
@@ -797,11 +781,6 @@ fn run_skips_load_and_inflow_transform_under_absent_and_prebuilt() {
     );
 
     assert_eq!(
-        scratch.noise_buf,
-        vec![111.0],
-        "InflowNoise::PreBuilt must not recompute noise_buf"
-    );
-    assert_eq!(
         scratch.z_inflow_rhs_buf,
         vec![222.0],
         "InflowNoise::PreBuilt must not recompute z_inflow_rhs_buf"
@@ -819,6 +798,6 @@ fn run_skips_load_and_inflow_transform_under_absent_and_prebuilt() {
     assert_eq!(
         solver.row_bounds_calls.len(),
         1,
-        "the forward/z-inflow row patch still runs, reading the pre-built buffers verbatim"
+        "the z-inflow row patch still runs, reading the pre-built buffer verbatim"
     );
 }

@@ -14,7 +14,7 @@ use crate::{
     setup::node_graph::{NodeGraph, StageIdx},
 };
 
-/// Immutable per-stage LP layout and noise scaling parameters.
+/// Immutable per-stage LP layout parameters.
 ///
 /// Read-only parameters shared by the forward pass, backward pass, and
 /// simulation pipeline. Slice fields are indexed by study stage `t` unless
@@ -25,16 +25,12 @@ pub struct StageContext<'a> {
     pub templates: &'a [StageTemplate],
     /// Per-stage admissible box for the outgoing state vector.
     pub state_boxes: &'a [StateBox],
-    /// Row index of the first water-balance row in each stage template.
-    pub base_rows: &'a [usize],
     /// Per-stage equipment geometry: `geometry_per_stage[t]` holds stage `t`'s
     /// column and row ranges; a single global stage-0 geometry would carry
     /// `n_blks`-striped bases that misread any stage with a differing block count.
     /// Empty `&[]` in tests without a stage table — the reader falls back to
     /// `StageGeometry::default`.
     pub geometry_per_stage: &'a [StageGeometry],
-    /// Noise scaling factors, layout: `[stage * n_hydros + hydro]`.
-    pub noise_scale: &'a [f64],
     /// Hydro plants with LP variables.
     pub n_hydros: usize,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`),
@@ -137,13 +133,6 @@ impl StageContext<'_> {
     #[must_use]
     pub fn state_box(&self, t: StageIdx) -> &StateBox {
         &self.state_boxes[t.0]
-    }
-
-    /// Row index of the first water-balance row at stage `t`.
-    #[inline]
-    #[must_use]
-    pub fn base_row(&self, t: StageIdx) -> usize {
-        self.base_rows[t.0]
     }
 
     /// Stage `t`'s equipment geometry, or `None` in a test fixture built

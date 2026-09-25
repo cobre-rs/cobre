@@ -16,7 +16,7 @@ fn empty_stages_returns_empty() {
     )
     .expect("constant productivity ok");
     assert!(result.templates.is_empty());
-    assert!(result.base_rows.is_empty());
+    assert!(result.zeta_per_stage.is_empty());
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn one_stage_one_template() {
     )
     .expect("constant productivity ok");
     assert_eq!(result.templates.len(), 1);
-    assert_eq!(result.base_rows.len(), 1);
+    assert_eq!(result.zeta_per_stage.len(), 1);
 }
 
 #[test]
@@ -198,28 +198,6 @@ fn n_transfer_is_n_times_lag_order() {
     .expect("constant productivity ok");
     let t = &result.templates[0];
     assert_eq!(t.n_transfer, 2, "n_transfer = N*L");
-}
-
-#[test]
-fn base_row_is_n_dual_relevant_plus_n_hydros() {
-    let system = one_hydro_system(2, 2);
-    let result = build_stage_templates_resolving_layout(
-        &system,
-        no_penalty_config(),
-        &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
-        &default_production(&system),
-        &default_evaporation(&system),
-        &ResolvedParameters::default(),
-    )
-    .expect("constant productivity ok");
-    for (s, (&br, t)) in result.base_rows.iter().zip(&result.templates).enumerate() {
-        assert_eq!(
-            br,
-            t.n_dual_relevant + t.n_hydro,
-            "base_rows[{s}] must equal n_dual_relevant + n_hydro"
-        );
-    }
 }
 
 #[test]

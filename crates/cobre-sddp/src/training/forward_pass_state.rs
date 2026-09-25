@@ -1204,7 +1204,6 @@ mod tests {
             patch_buf: PatchBuffer::new(state.hydro_count, state.max_par_order, 0, 0, 0, 0, 0),
             current_state: Vec::with_capacity(state.n_state),
             scratch: ScratchBuffers {
-                noise_buf: Vec::with_capacity(state.hydro_count),
                 inflow_m3s_buf: Vec::with_capacity(state.hydro_count),
                 lag_matrix_buf: Vec::with_capacity(state.max_par_order * state.hydro_count),
                 par_inflow_buf: Vec::with_capacity(state.hydro_count),
@@ -1398,9 +1397,7 @@ mod tests {
         n_scenarios: usize,
         state: StateSpace,
         templates: Vec<StageTemplate>,
-        base_rows: Vec<usize>,
         initial_state: Vec<f64>,
-        noise_scale: Vec<f64>,
         fcf: FutureCostFunction,
         horizon: HorizonMode,
         stochastic: cobre_stochastic::StochasticContext,
@@ -1420,9 +1417,7 @@ mod tests {
             let solution = fixed_solution_1_0();
             let solver = MockSolver::always_ok(solution);
             let templates = vec![minimal_template_1_0(); n_stages];
-            let base_rows = vec![0_usize; n_stages];
             let initial_state = vec![0.0_f64; state.n_state];
-            let noise_scale = vec![0.0_f64; n_stages * state.hydro_count];
             let fcf = FutureCostFunction::new(n_stages, state.n_state, 2, 10, &vec![0; n_stages]);
             let horizon = HorizonMode::Finite {
                 num_stages: n_stages,
@@ -1443,9 +1438,7 @@ mod tests {
                 n_scenarios,
                 state,
                 templates,
-                base_rows,
                 initial_state,
-                noise_scale,
                 fcf,
                 horizon,
                 stochastic,
@@ -1483,8 +1476,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1564,8 +1555,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1662,8 +1651,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1809,8 +1796,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1947,8 +1932,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2238,9 +2221,7 @@ mod tests {
         let stages = make_stage_1_2_hydros();
         let stochastic = make_stochastic_context_2_hydros_1_stage(&stages);
         let templates = vec![minimal_template_2_hydros()];
-        let base_rows = vec![0_usize];
         let initial_state = vec![0.0_f64; state.n_state];
-        let noise_scale = vec![0.0_f64; state.hydro_count];
         let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0_u32]);
         let horizon = HorizonMode::Finite { num_stages: 1 };
 
@@ -2249,8 +2230,6 @@ mod tests {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 2,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2546,7 +2525,6 @@ mod tests {
 
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); 2];
-        let base_rows = vec![0_usize; 2];
         let initial_state = vec![0.0_f64; state.n_state];
         let fcf = FutureCostFunction::new(
             node_graph.n_pools,
@@ -2556,14 +2534,11 @@ mod tests {
             &vec![0; node_graph.n_pools],
         );
         let horizon = HorizonMode::Finite { num_stages: 2 };
-        let noise_scale = vec![0.0_f64; 2 * state.hydro_count];
         let state_boxes = permissive_state_boxes(state.n_state, 2);
         let ctx = StageContext {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

@@ -844,7 +844,6 @@ mod lb_conformance {
         let state_layout = state_layout_for(1, 0);
         let template = minimal_template();
         let templates = vec![template];
-        let base_rows = vec![1_usize];
         let fcf = make_fcf(2, state_layout.n_state);
         let initial_state = vec![0.0_f64; state_layout.n_state];
         let mut patch_buf = PatchBuffer::new(
@@ -864,9 +863,7 @@ mod lb_conformance {
         let ctx = StageContext {
             state_boxes: &[],
             templates: &templates,
-            base_rows: &base_rows,
             geometry_per_stage: &[],
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

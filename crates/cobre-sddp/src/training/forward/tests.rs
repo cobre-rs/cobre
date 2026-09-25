@@ -545,7 +545,6 @@ fn single_workspace(solver: MockSolver, state: &StateSpace) -> SolverWorkspace<M
         patch_buf: PatchBuffer::new(state.hydro_count, state.max_par_order, 0, 0, 0, 0, 0),
         current_state: Vec::with_capacity(state.n_state),
         scratch: ScratchBuffers {
-            noise_buf: Vec::with_capacity(state.hydro_count),
             inflow_m3s_buf: Vec::with_capacity(state.hydro_count),
             lag_matrix_buf: Vec::with_capacity(state.max_par_order * state.hydro_count),
             par_inflow_buf: Vec::with_capacity(state.hydro_count),
@@ -656,7 +655,6 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
     let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -670,8 +668,6 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -790,7 +786,6 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
     let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -804,8 +799,6 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -928,7 +921,6 @@ fn cost_statistics_accumulated_correctly() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
     let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -942,8 +934,6 @@ fn cost_statistics_accumulated_correctly() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1541,7 +1531,6 @@ fn run_one_iteration(
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(3);
     let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -1552,8 +1541,6 @@ fn run_one_iteration(
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1705,7 +1692,6 @@ fn test_forward_pass_parallel_cost_agreement() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let n_scenarios = 10;
 
@@ -1714,8 +1700,6 @@ fn test_forward_pass_parallel_cost_agreement() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1864,7 +1848,6 @@ fn test_forward_pass_work_distribution() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let n_scenarios = 10usize;
     let n_workers = 4usize;
@@ -1880,8 +1863,6 @@ fn test_forward_pass_work_distribution() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -2118,67 +2099,29 @@ fn make_stochastic_1h_1s(mean_m3s: f64, std_m3s: f64) -> StochasticContext {
     .unwrap()
 }
 
-/// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
-/// row at position `base_row_idx`.
-///
-/// This is a three-row template:
-/// - Row 0: storage fixing row
-/// - Row 1: z-inflow definition row (at N*(1+L) = 1)
-/// - Row 2: water-balance row (`base_rows`[t] = 2)
-///
-/// `row_lower[2]` encodes the deterministic inflow base (ζ * `mean_m3s`).
-fn minimal_template_1_0_with_base(base_rhs: f64) -> StageTemplate {
-    StageTemplate {
-        num_cols: 4,
-        num_rows: 3,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 0.0, base_rhs],
-        row_upper: vec![0.0, 0.0, base_rhs],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }
-}
-
 /// Helper that runs `run_forward_pass` with 1 scenario, 1 stage, and returns
-/// the `noise_buf` from the workspace after the call.
+/// the `z_inflow_rhs_buf` from the workspace after the call.
 fn run_single_stage_forward(
     stochastic: &StochasticContext,
     inflow_method: InflowNonNegativityMethod,
-    base_rhs: f64,
-    noise_scale_val: f64,
 ) -> Vec<f64> {
     let state = test_support::state_layout(1, 0);
     let solution = fixed_solution(4, 0.0, state.theta, 0.0);
     let solver = MockSolver::always_ok(solution);
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
     let horizon = HorizonMode::Finite { num_stages: 1 };
-    let template = minimal_template_1_0_with_base(base_rhs);
+    let template = minimal_template_1_0();
     let templates = vec![template];
-    let base_rows = vec![2usize];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(1);
     let mut ws = single_workspace(solver, &state);
     let mut basis_store = BasisStore::new(1, 1);
-    let noise_scale = vec![noise_scale_val];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let ctx = StageContext {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &noise_scale,
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -2262,74 +2205,57 @@ fn run_single_stage_forward(
     )
     .unwrap();
 
-    ws.scratch.noise_buf.clone()
+    ws.scratch.z_inflow_rhs_buf.clone()
 }
 
 #[test]
 fn truncation_clamps_negative_inflow_noise() {
     // Deterministic base = -1000 m³/s (always produces negative inflow).
-    // sigma = 1.0. For AR(0): zeta * mean = base_rhs, zeta * sigma = noise_scale.
-    // Use zeta = 1.0 for simplicity (noise_scale = sigma).
     let mean_m3s = -1000.0_f64;
     let sigma = 1.0_f64;
-    let zeta = 1.0_f64;
-    let base_rhs = zeta * mean_m3s;
-    let noise_scale_val = zeta * sigma;
 
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
 
-    let noise_buf_truncation = run_single_stage_forward(
-        &stochastic,
-        InflowNonNegativityMethod::Truncation,
-        base_rhs,
-        noise_scale_val,
-    );
+    let z_inflow_truncation =
+        run_single_stage_forward(&stochastic, InflowNonNegativityMethod::Truncation);
 
-    assert_eq!(noise_buf_truncation.len(), 1, "noise_buf must have 1 entry");
-    // After truncation: noise_buf[0] = base_rhs + noise_scale * eta_clamped.
-    // eta_clamped = max(eta, eta_min) where eta_min = (0 - mean) / sigma = 1000.
-    // noise_buf[0] = -1000 + 1 * 1000 = 0.0 (exactly, no rounding).
+    assert_eq!(
+        z_inflow_truncation.len(),
+        1,
+        "z_inflow_rhs_buf must have 1 entry"
+    );
+    // After truncation: z_inflow_rhs[0] = mean + sigma * eta_clamped, the
+    // realized inflow in m3/s (no zeta). eta_clamped = max(eta, eta_min) where
+    // eta_min = (0 - mean) / sigma = 1000, so z_inflow_rhs[0] = 0.0 exactly.
     assert!(
-        noise_buf_truncation[0] >= 0.0,
-        "after truncation, noise_buf[0] must be >= 0 (inflow cannot be negative), got {}",
-        noise_buf_truncation[0]
+        z_inflow_truncation[0] >= 0.0,
+        "after truncation, z_inflow_rhs[0] must be >= 0 (inflow cannot be negative), got {}",
+        z_inflow_truncation[0]
     );
 }
 
 /// Truncation does not clamp when inflow is positive.
 ///
 /// With a very large positive mean (`mean_m3s = 1000.0`) and small sigma,
-/// the PAR inflow is always positive for any sampled noise. The noise buffer
-/// must be identical to the no-truncation path.
+/// the PAR inflow is always positive for any sampled noise. The z-inflow
+/// buffer must be identical to the no-truncation path.
 #[test]
 fn truncation_no_clamp_when_inflow_positive() {
     let mean_m3s = 1000.0_f64;
     let sigma = 1.0_f64;
-    let zeta = 1.0_f64;
-    let base_rhs = zeta * mean_m3s;
-    let noise_scale_val = zeta * sigma;
 
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
 
-    let noise_buf_truncation = run_single_stage_forward(
-        &stochastic,
-        InflowNonNegativityMethod::Truncation,
-        base_rhs,
-        noise_scale_val,
-    );
-    let noise_buf_none = run_single_stage_forward(
-        &stochastic,
-        InflowNonNegativityMethod::None,
-        base_rhs,
-        noise_scale_val,
-    );
+    let z_inflow_truncation =
+        run_single_stage_forward(&stochastic, InflowNonNegativityMethod::Truncation);
+    let z_inflow_none = run_single_stage_forward(&stochastic, InflowNonNegativityMethod::None);
 
-    assert_eq!(noise_buf_truncation.len(), 1);
-    assert_eq!(noise_buf_none.len(), 1);
+    assert_eq!(z_inflow_truncation.len(), 1);
+    assert_eq!(z_inflow_none.len(), 1);
     assert_eq!(
-        noise_buf_truncation[0].to_bits(),
-        noise_buf_none[0].to_bits(),
-        "when inflow is positive, truncation must not alter the noise buffer (expected identical bits)"
+        z_inflow_truncation[0].to_bits(),
+        z_inflow_none[0].to_bits(),
+        "when inflow is positive, truncation must not alter the z-inflow buffer (expected identical bits)"
     );
 }
 
@@ -2373,7 +2299,6 @@ fn none_method_unchanged_with_truncation_code_present() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
     let stochastic = make_stochastic_context_1_hydro_3_stages();
@@ -2387,8 +2312,6 @@ fn none_method_unchanged_with_truncation_code_present() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -2618,7 +2541,6 @@ fn test_forward_pass_parallel_infeasibility() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let n_scenarios = 10usize;
     let n_workers = 4usize;
@@ -2643,8 +2565,6 @@ fn test_forward_pass_parallel_infeasibility() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -2759,7 +2679,6 @@ fn forward_pass_load_noise_positive_realization() {
         patch_buf,
         current_state: Vec::with_capacity(state.n_state),
         scratch: ScratchBuffers {
-            noise_buf: Vec::with_capacity(1),
             inflow_m3s_buf: Vec::with_capacity(1),
             lag_matrix_buf: Vec::with_capacity(0),
             par_inflow_buf: Vec::with_capacity(1),
@@ -2795,8 +2714,7 @@ fn forward_pass_load_noise_positive_realization() {
         worker_timing_buf: WorkerPhaseTimings::default(),
     };
 
-    let templates = vec![minimal_template_1_0_with_base(100.0)];
-    let base_rows = vec![2usize];
+    let templates = vec![minimal_template_1_0()];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(1);
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
@@ -2811,8 +2729,6 @@ fn forward_pass_load_noise_positive_realization() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[1.0],
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses,
@@ -2885,7 +2801,7 @@ fn forward_pass_load_noise_positive_realization() {
         ws.scratch.load_rhs_buf[0]
     );
 
-    let load_start = 1;
+    let load_start = 0;
     assert_eq!(
         ws.patch_buf.lower[load_start], ws.scratch.load_rhs_buf[0],
         "patch_buf lower must equal load_rhs_buf[0]"
@@ -2924,7 +2840,6 @@ fn forward_pass_load_noise_clamped_to_zero() {
         patch_buf,
         current_state: Vec::with_capacity(state.n_state),
         scratch: ScratchBuffers {
-            noise_buf: Vec::with_capacity(1),
             inflow_m3s_buf: Vec::with_capacity(1),
             lag_matrix_buf: Vec::with_capacity(0),
             par_inflow_buf: Vec::with_capacity(1),
@@ -2960,8 +2875,7 @@ fn forward_pass_load_noise_clamped_to_zero() {
         worker_timing_buf: WorkerPhaseTimings::default(),
     };
 
-    let templates = vec![minimal_template_1_0_with_base(100.0)];
-    let base_rows = vec![2usize];
+    let templates = vec![minimal_template_1_0()];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(1);
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
@@ -2976,8 +2890,6 @@ fn forward_pass_load_noise_clamped_to_zero() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[1.0],
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses,
@@ -3050,7 +2962,7 @@ fn forward_pass_load_noise_clamped_to_zero() {
         ws.scratch.load_rhs_buf[0]
     );
 
-    let load_start = 1;
+    let load_start = 0;
     assert_eq!(
         ws.patch_buf.lower[load_start], 0.0,
         "patch lower must be 0.0 (clamped)"
@@ -3074,7 +2986,6 @@ fn forward_pass_no_load_buses_unchanged() {
         minimal_template_1_0(),
         minimal_template_1_0(),
     ];
-    let base_rows = vec![2usize, 2, 2];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(3);
     let fcf = FutureCostFunction::new(3, state.n_state, 1, 10, &[0; 3]);
@@ -3086,8 +2997,6 @@ fn forward_pass_no_load_buses_unchanged() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0, // skip inflow noise loop (minimal_template_1_0 has 1 row)
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -3149,13 +3058,14 @@ fn forward_pass_no_load_buses_unchanged() {
     )
     .unwrap();
 
-    // With n_load_buses=0, active_load_patches stays 0.
-    // forward_patch_count = N = 1.
-    // The PatchBuffer was constructed for 1 hydro (single_workspace uses state.hydro_count=1).
+    // With n_load_buses=0, active_load_patches stays 0. active_z_inflow_patches
+    // also stays 0 here: the fixture's stochastic context carries no real PAR
+    // model, so fill_z_inflow_patches's has_valid_par guard never fires.
     assert_eq!(
         ws.patch_buf.forward_patch_count(),
-        1,
-        "forward_patch_count must be N=1 when n_load_buses=0, got {}",
+        0,
+        "forward_patch_count must be 0 when n_load_buses=0 and no PAR model drives z_inflow, \
+         got {}",
         ws.patch_buf.forward_patch_count()
     );
     assert!(
@@ -3699,7 +3609,6 @@ mod dcs_forward {
         let state = test_support::state_layout(1, 0);
         let core = fwd_core_template();
         let templates = vec![core.clone(), core.clone()];
-        let base_rows = vec![0_usize, 0_usize];
         let stochastic = super::make_stochastic_context_1_hydro_3_stages();
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let fcf = fwd_pool();
@@ -3726,8 +3635,6 @@ mod dcs_forward {
             geometry_per_stage: &[],
             templates: &templates,
             state_boxes: &state_boxes,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -4065,7 +3972,6 @@ mod transit_bucket_copy_gap {
             test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, 1, vec![1]);
         let template = transit_bucket_template();
         let templates = vec![template.clone()];
-        let base_rows = vec![0_usize];
         let stochastic = super::make_stochastic_context_1_hydro_3_stages();
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let fcf = FutureCostFunction::new(1, state.n_state, 1, 1, &[0]);
@@ -4085,8 +3991,6 @@ mod transit_bucket_copy_gap {
             geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             state_boxes: &state_boxes,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

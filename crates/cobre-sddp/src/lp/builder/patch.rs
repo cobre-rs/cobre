@@ -4,7 +4,7 @@ use crate::lp::indexer::{BlockGrid, BlockIdx, StateDim, StateSpace};
 /// Pre-allocated row-bound and column-bound patch arrays for one SDDP stage LP solve.
 ///
 /// Reused across all iterations. The row-bound region (`indices`/`lower`/`upper`,
-/// length `N + M*B + N`) holds only the noise, load, and z-inflow patches; state
+/// length `M*B + N`) holds only the load and z-inflow patches; state
 /// fixing (storage, AR lags, travel-time buckets, anticipated state) is applied
 /// exclusively via column bounds and lives in the column-bound region
 /// (`col_indices`/`col_lower`/`col_upper`, length `N*(1+L) + n_buckets + A*K`).
@@ -76,14 +76,16 @@ pub struct PatchBuffer {
 }
 
 impl PatchBuffer {
-    /// Construct a [`PatchBuffer`] sized to `N + M*B + N` row patches and
+    /// Construct a [`PatchBuffer`] sized to `M*B + N` row patches and
     /// `N*(1+L) + n_buckets + A*K` column patches, zero-initialised.
     ///
-    /// Both regions are populated before each LP solve via [`fill_forward_patches`]
-    /// / [`fill_load_patches`] (row) and `fill_col_state_patches` (column). Pass `0`
-    /// for `n_load_buses`/`max_blocks` when there is no stochastic load, for
-    /// `n_buckets` when there are no travel-time buckets, and for
-    /// `n_anticipated`/`k_max` when there are no anticipated thermals.
+    /// The row region holds load patches at `[0, M*B)` followed by `N` z-inflow
+    /// patches, populated before each LP solve via [`fill_load_patches`] /
+    /// [`fill_z_inflow_patches`]; the column region is populated by
+    /// `fill_col_state_patches`. Pass `0` for `n_load_buses`/`max_blocks` when
+    /// there is no stochastic load, for `n_buckets` when there are no
+    /// travel-time buckets, and for `n_anticipated`/`k_max` when there are no
+    /// anticipated thermals.
     ///
     /// # Examples
     ///
@@ -91,41 +93,41 @@ impl PatchBuffer {
     /// use cobre_sddp::lp::builder::PatchBuffer;
     ///
     /// // 3-hydro AR(2) system, no stochastic load, no buckets, no anticipated thermals
-    /// // Row capacity = N + M*B + N = 3 + 0 + 3 = 6
+    /// // Row capacity = M*B + N = 0 + 3 = 3
     /// // Col capacity = N*(1+L) + n_buckets + A*K = 3*(1+2) + 0 + 0 = 9
     /// let buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
-    /// assert_eq!(buf.indices.len(), 6);
+    /// assert_eq!(buf.indices.len(), 3);
     /// assert_eq!(buf.col_indices.len(), 9);
     ///
     /// // 3-hydro AR(2) system with 2 stochastic load buses, up to 3 blocks
-    /// // Row capacity = N + M*B + N = 3 + 6 + 3 = 12
+    /// // Row capacity = M*B + N = 6 + 3 = 9
     /// let buf_load = PatchBuffer::new(3, 2, 2, 3, 0, 0, 0);
-    /// assert_eq!(buf_load.indices.len(), 12);
+    /// assert_eq!(buf_load.indices.len(), 9);
     ///
     /// // Production scale: N = 160, L = 12, no stochastic load
-    /// // Row capacity = N + N = 160 + 160 = 320
+    /// // Row capacity = M*B + N = 0 + 160 = 160
     /// let big = PatchBuffer::new(160, 12, 0, 0, 0, 0, 0);
-    /// assert_eq!(big.indices.len(), 320);
+    /// assert_eq!(big.indices.len(), 160);
     ///
     /// // Edge case: no lags (L = 0)
-    /// // Row capacity = N + N = 5 + 5 = 10
+    /// // Row capacity = M*B + N = 0 + 5 = 5
     /// let no_lag = PatchBuffer::new(5, 0, 0, 0, 0, 0, 0);
-    /// assert_eq!(no_lag.indices.len(), 10);
+    /// assert_eq!(no_lag.indices.len(), 5);
     ///
     /// // Anticipated thermals: 1 plant, K=2 — row capacity unchanged (A*K is col-only)
-    /// // Row capacity = N + N = 3 + 3 = 6
+    /// // Row capacity = M*B + N = 0 + 3 = 3
     /// let ant = PatchBuffer::new(3, 2, 0, 0, 0, 1, 2);
-    /// assert_eq!(ant.indices.len(), 6);
+    /// assert_eq!(ant.indices.len(), 3);
     ///
     /// // Travel-time buckets: n_buckets=4 — row capacity unchanged (bucket state is col-only)
     /// // Col capacity = N*(1+L) + n_buckets + A*K = 3*3 + 4 + 0 = 13
     /// let transit_buckets = PatchBuffer::new(3, 2, 0, 0, 4, 0, 0);
     /// assert_eq!(transit_buckets.col_indices.len(), 13);
-    /// assert_eq!(transit_buckets.indices.len(), 6);
+    /// assert_eq!(transit_buckets.indices.len(), 3);
     /// ```
     ///
-    /// [`fill_forward_patches`]: PatchBuffer::fill_forward_patches
     /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
+    /// [`fill_z_inflow_patches`]: PatchBuffer::fill_z_inflow_patches
     #[must_use]
     pub fn new(
         hydro_count: usize,
@@ -136,7 +138,7 @@ impl PatchBuffer {
         n_anticipated: usize,
         k_max: usize,
     ) -> Self {
-        let capacity = hydro_count + n_load_buses * max_blocks + hydro_count;
+        let capacity = n_load_buses * max_blocks + hydro_count;
         let col_capacity = hydro_count * (1 + max_par_order) + n_buckets + n_anticipated * k_max;
         Self {
             indices: vec![0; capacity],
@@ -154,49 +156,6 @@ impl PatchBuffer {
             k_max,
             active_load_patches: 0,
             active_z_inflow_patches: 0,
-        }
-    }
-
-    /// Fill `N` noise patches for a forward-pass solve: row
-    /// `base_row + h` ← `noise[h]` (equality) for `h ∈ [0, N)`.
-    ///
-    /// `noise[h]` is NOT prescaled by `row_scale` — it already combines the
-    /// row-scaled `template.row_lower` with a pre-scaled noise term, so applying
-    /// `row_scale` again would double-scale the base component (`_row_scale` is
-    /// accepted for API symmetry, never applied).
-    ///
-    /// # Panics
-    ///
-    /// Panics in debug builds if `state.len() != layout.n_state` or
-    /// `noise.len() != layout.hydro_count`.
-    pub fn fill_forward_patches(
-        &mut self,
-        layout: &StateSpace,
-        state: &[f64],
-        noise: &[f64],
-        base_row: usize,
-        _row_scale: &[f64],
-    ) {
-        debug_assert_eq!(
-            state.len(),
-            layout.n_state,
-            "state slice length {got} != n_state {expected}",
-            got = state.len(),
-            expected = layout.n_state,
-        );
-        debug_assert!(
-            noise.len() == layout.hydro_count || noise.is_empty(),
-            "noise slice length {got} must equal hydro_count {expected} or be empty",
-            got = noise.len(),
-            expected = layout.hydro_count,
-        );
-
-        for (h, &nv) in noise.iter().enumerate() {
-            // AR dynamics row `base_row + h`, NOT the inflow-lag (inflow_lags)
-            // column `N + ℓ·N + h`, despite the shared `+ h` shape.
-            self.indices[h] = base_row + h;
-            self.lower[h] = nv;
-            self.upper[h] = nv;
         }
     }
 
@@ -298,7 +257,7 @@ impl PatchBuffer {
     }
 
     /// Fill `n_load_buses * n_blocks` load-balance equality patches into
-    /// the row buffer at offset `N`, addressed via [`BlockGrid::flat`] (the single
+    /// the row buffer at offset `0`, addressed via [`BlockGrid::flat`] (the single
     /// owner of block-major strides). `load_rhs` is bus-major, block-minor matching
     /// `bus_positions` order; values are prescaled by `row_scale[row]` when
     /// `row_scale` is non-empty (pass `&[]` for no scaling).
@@ -342,8 +301,7 @@ impl PatchBuffer {
             mb = self.max_blocks,
         );
 
-        let load_start = self.hydro_count;
-        let mut slot = load_start;
+        let mut slot = 0;
 
         for (i, &bus_pos) in bus_positions.iter().enumerate() {
             for blk in 0..n_blocks {
@@ -386,7 +344,7 @@ impl PatchBuffer {
             return;
         }
 
-        let z_inflow_start = self.hydro_count + self.active_load_patches;
+        let z_inflow_start = self.active_load_patches;
 
         for (h, &rhs) in z_inflow_rhs.iter().enumerate().take(n) {
             let slot = z_inflow_start + h;
@@ -404,12 +362,12 @@ impl PatchBuffer {
         self.active_z_inflow_patches = n;
     }
 
-    /// Active row-patch count (noise + load + z-inflow) for the full forward-pass
+    /// Active row-patch count (load + z-inflow) for the full forward-pass
     /// slice passed to `set_row_bounds`.
     #[must_use]
     #[inline]
     pub fn forward_patch_count(&self) -> usize {
-        self.hydro_count + self.active_load_patches + self.active_z_inflow_patches
+        self.active_load_patches + self.active_z_inflow_patches
     }
 
     /// Column-bound region capacity (`N*(1+L) + n_buckets + A*K` state-fixing slots).
@@ -431,13 +389,8 @@ impl PatchBuffer {
 )]
 mod tests {
     use super::{PatchBuffer, StateBox};
-    use crate::lp::indexer::{BlockGrid, StateSpace};
+    use crate::lp::indexer::BlockGrid;
     use crate::test_support::{state_layout, state_layout_full, state_layout_with_transit_buckets};
-
-    /// Convenience: make a role-(a) state layout without repeating N/L everywhere.
-    fn idx(n: usize, l: usize) -> StateSpace {
-        state_layout(n, l)
-    }
 
     /// Every dimension unbounded — the pin-time box-membership assert is vacuous.
     fn unbounded_state_box(n_state: usize) -> StateBox {
@@ -451,7 +404,7 @@ mod tests {
     // Capacity formulas (row + column buffers) across scales
     // -------------------------------------------------------------------------
 
-    /// Row capacity is `N + n_load_buses*max_blocks + N` and column capacity is
+    /// Row capacity is `n_load_buses*max_blocks + N` and column capacity is
     /// `N*(1+L) + n_buckets + A*K`. All formulas are exercised at zero /
     /// unit-anticipated / bucket / combined / production scales in one table
     /// so each scale stays legible via the tuple-naming failure message.
@@ -462,11 +415,11 @@ mod tests {
             (
                 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize,
             ),
-            (3, 2, 0, 0, 0, 0, 0, 6, 9),
+            (3, 2, 0, 0, 0, 0, 0, 3, 9),
             (0, 0, 0, 0, 0, 1, 2, 0, 2),
             (0, 0, 0, 0, 3, 0, 0, 0, 3),
-            (3, 2, 0, 0, 4, 2, 3, 6, 19),
-            (160, 12, 0, 0, 0, 0, 0, 320, 2080),
+            (3, 2, 0, 0, 4, 2, 3, 3, 19),
+            (160, 12, 0, 0, 0, 0, 0, 160, 2080),
         ];
 
         for (n, l, n_load_buses, max_blocks, n_buckets, a, k, expected_row_cap, expected_col_cap) in
@@ -542,104 +495,24 @@ mod tests {
         );
     }
 
-    /// forward_patch_count without fill_z_inflow_patches returns N.
+    /// `forward_patch_count` is zero before any row-patch fill call.
     #[test]
-    fn forward_patch_count_without_z_inflow_fill() {
+    fn forward_patch_count_zero_before_any_fill() {
         let buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
-        // forward_patch_count = N + 0 + 0 = 3
-        assert_eq!(buf.forward_patch_count(), 3);
+        assert_eq!(buf.forward_patch_count(), 0);
     }
 
-    /// Noise indices start at slot 0.
-    ///
-    /// `fill_forward_patches` writes only noise patches at `[0, N)`.
-    #[test]
-    fn fill_forward_patches_writes_only_noise() {
-        let mut buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
-        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
-
-        // Noise at slots 0..3: base_row + h = 50 + h
-        assert_eq!(buf.indices[0], 50);
-        assert_eq!(buf.indices[1], 51);
-        assert_eq!(buf.indices[2], 52);
-        assert_eq!(buf.lower[0], 0.1);
-        assert_eq!(buf.upper[0], 0.1);
-        assert_eq!(buf.lower[1], 0.2);
-        assert_eq!(buf.upper[1], 0.2);
-        assert_eq!(buf.lower[2], 0.3);
-        assert_eq!(buf.upper[2], 0.3);
-    }
-
-    #[test]
-    fn fill_forward_patches_all_equality_constraints() {
-        // Every patch must satisfy lower == upper (equality constraint)
-        let mut buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
-        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
-
-        for i in 0..buf.forward_patch_count() {
-            assert_eq!(
-                buf.lower[i],
-                buf.upper[i],
-                "patch {i}: lower {lo} != upper {up}",
-                lo = buf.lower[i],
-                up = buf.upper[i],
-            );
-        }
-    }
-
-    /// After fill_forward_patches, forward_patch_count == N (no load, no z_inflow).
-    #[test]
-    fn forward_patches_zero_lags_only_noise() {
-        let n = 2;
-        let mut buf = PatchBuffer::new(n, 0, 0, 0, 0, 0, 0);
-        let state = [5.0, 7.0];
-        let noise = [0.5, 0.6];
-        buf.fill_forward_patches(&idx(n, 0), &state, &noise, 10, &[]);
-
-        // forward_patch_count = N = 2 (noise only; no load, no z-inflow)
-        assert_eq!(buf.forward_patch_count(), 2);
-
-        // Noise at slots 0, 1
-        assert_eq!(buf.indices[0], 10); // base_row + 0 = 10
-        assert_eq!(buf.lower[0], 0.5);
-        assert_eq!(buf.indices[1], 11); // base_row + 1 = 11
-        assert_eq!(buf.lower[1], 0.6);
-    }
-
+    /// Production scale: row capacity is `M*B + N = 0 + 160 = 160`, and
+    /// `forward_patch_count` counts the `N` z-inflow patches once filled.
     #[test]
     fn production_scale_forward_patch_count() {
-        // Without fill_z_inflow_patches, forward_patch_count = N = 160.
-        // Row buffer capacity = N + N = 320.
-        let buf = PatchBuffer::new(160, 12, 0, 0, 0, 0, 0);
-        assert_eq!(buf.forward_patch_count(), 160);
-        assert_eq!(buf.indices.len(), 320);
-    }
-
-    #[test]
-    #[allow(clippy::cast_precision_loss)] // fixture: values are small integers, no precision lost
-    fn production_scale_fill_forward_patches_smoke() {
         let n = 160;
-        let l = 12;
-        let mut buf = PatchBuffer::new(n, l, 0, 0, 0, 0, 0);
-        let n_state = n * (1 + l);
-        let state: Vec<f64> = (0..n_state).map(|i| i as f64).collect();
-        let noise: Vec<f64> = (0..n).map(|h| h as f64 * 0.01).collect();
-        buf.fill_forward_patches(&idx(n, l), &state, &noise, 500, &[]);
+        let mut buf = PatchBuffer::new(n, 12, 0, 0, 0, 0, 0);
+        assert_eq!(buf.indices.len(), 160);
 
-        // Noise starts at slot 0 (no storage/inflow_lags/anticipated in row buffer).
-        assert_eq!(buf.indices[0], 500); // base_row + 0 = 500
-        assert_eq!(buf.lower[0], 0.0); // noise[0]
-        assert_eq!(buf.indices[159], 659); // base_row + 159 = 659
-        assert_eq!(buf.lower[159], 159.0 * 0.01);
-
-        // All patches must be equality constraints
-        for i in 0..buf.forward_patch_count() {
-            assert_eq!(buf.lower[i], buf.upper[i], "patch {i} not equality");
-        }
+        let z_rhs = vec![0.0_f64; n];
+        buf.fill_z_inflow_patches(500, &z_rhs, &[]);
+        assert_eq!(buf.forward_patch_count(), 160);
     }
 
     #[test]
@@ -656,23 +529,23 @@ mod tests {
     // Load-balance unit tests
     // -------------------------------------------------------------------------
 
-    /// AC (capacity): `PatchBuffer::new(2, 1, 1, 3, 0, 0, 0)` → row capacity = N + M*B + N = 2 + 3 + 2 = 7.
+    /// AC (capacity): `PatchBuffer::new(2, 1, 1, 3, 0, 0, 0)` → row capacity = M*B + N = 3 + 2 = 5.
     #[test]
     fn new_with_load_allocates_correct_capacity() {
         let buf = PatchBuffer::new(2, 1, 1, 3, 0, 0, 0);
-        // N + M*B + N = 2 + 1*3 + 2 = 7
-        assert_eq!(buf.indices.len(), 7);
-        assert_eq!(buf.lower.len(), 7);
-        assert_eq!(buf.upper.len(), 7);
+        // M*B + N = 1*3 + 2 = 5
+        assert_eq!(buf.indices.len(), 5);
+        assert_eq!(buf.lower.len(), 5);
+        assert_eq!(buf.upper.len(), 5);
     }
 
     /// Load-balance row indices follow `row = load_row_start + bus_positions[i] * n_blocks + blk`.
     ///
-    /// With `n_load_buses=2, n_blocks=2, bus_positions=[0,1], load_row_start=100`, N=0:
-    /// load patches start at slot N=0 so indices[0..4] = [100, 101, 102, 103].
+    /// With `n_load_buses=2, n_blocks=2, bus_positions=[0,1], load_row_start=100`:
+    /// load patches start at slot 0 so indices[0..4] = [100, 101, 102, 103].
     #[test]
     fn fill_load_patches_correct_indices() {
-        // N=0, L=0, M=2, B=2, A=0, K=0 → row capacity = 0 + 2*2 + 0 = 4
+        // N=0, L=0, M=2, B=2, A=0, K=0 → row capacity = M*B + N = 2*2 + 0 = 4
         let mut buf = PatchBuffer::new(0, 0, 2, 2, 0, 0, 0);
         let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
         let bus_positions = [0_usize, 1];
@@ -706,9 +579,6 @@ mod tests {
     #[test]
     fn fill_load_patches_equality_constraints() {
         let mut buf = PatchBuffer::new(3, 2, 2, 3, 0, 0, 0);
-        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
@@ -728,87 +598,27 @@ mod tests {
 
     /// `forward_patch_count` includes load-balance patches after `fill_load_patches`.
     ///
-    /// N=3, M=2, n_blocks=3 → forward_patch_count = N + M*n_blocks = 3 + 6 = 9.
+    /// M=2, n_blocks=3 → forward_patch_count = M*n_blocks = 6 (no z-inflow fill).
     #[test]
     fn forward_patch_count_includes_load() {
         let mut buf = PatchBuffer::new(3, 2, 2, 3, 0, 0, 0);
-        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
         buf.fill_load_patches(20, BlockGrid::new(3, 1), &load_rhs, &bus_positions, &[]);
 
-        assert_eq!(buf.forward_patch_count(), 9); // N=3 + M*n_blocks=6
+        assert_eq!(buf.forward_patch_count(), 6); // M*n_blocks=6
     }
 
-    /// When `n_load_buses == 0`, `forward_patch_count` equals `N`.
+    /// When `n_load_buses == 0`, `forward_patch_count` equals `N` once
+    /// `fill_z_inflow_patches` has run (the sole inflow-noise site).
     #[test]
-    fn zero_load_buses_no_load_patches() {
+    fn zero_load_buses_forward_patch_count_is_z_inflow_only() {
         let mut buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
-        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(3, 2), &state, &noise, 50, &[]);
+        let z_rhs = [0.1_f64, 0.2, 0.3];
+        buf.fill_z_inflow_patches(50, &z_rhs, &[]);
 
-        // No fill_load_patches call: forward_patch_count = N = 3
         assert_eq!(buf.forward_patch_count(), 3);
-    }
-
-    // -------------------------------------------------------------------------
-    // Anticipated col-patch unit tests (col-side path only)
-    // -------------------------------------------------------------------------
-
-    /// fill_forward_patches with N=0, A=1, K=2 writes zero noise patches
-    /// (N=0 hydros → no noise entries in row buffer).
-    #[test]
-    fn fill_forward_patches_zero_hydros_zero_noise_patches() {
-        // N=0, A=1, K=2 anticipated-only state layout.
-        let state_layout = state_layout_full(0, 0, 1, 2, vec![2]);
-
-        let mut state = vec![0.0_f64; state_layout.n_state];
-        state[state_layout.commit_out.start] = 7.0;
-        state[state_layout.commit_out.start + 1] = 11.0;
-
-        // N=0, A=1, K=2 → row capacity = 0 + 0 + 0 = 0
-        let mut buf = PatchBuffer::new(0, 0, 0, 0, 0, 1, 2);
-
-        // forward_patch_count = N = 0 (state goes in col buffer, not row buffer)
-        assert_eq!(
-            buf.forward_patch_count(),
-            0,
-            "forward_patch_count before fill"
-        );
-
-        buf.fill_forward_patches(&state_layout, &state, &[], 0, &[]);
-
-        assert_eq!(
-            buf.forward_patch_count(),
-            0,
-            "forward_patch_count after fill"
-        );
-    }
-
-    /// fill_forward_patches with N=3, A=0, K=0 still writes exactly N noise patches at [0, N).
-    #[test]
-    fn fill_forward_patches_no_anticipated_noise_at_slot_zero() {
-        let n = 3;
-        let l = 2;
-        let mut buf = PatchBuffer::new(n, l, 0, 0, 0, 0, 0);
-        let state = [10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let noise = [0.1, 0.2, 0.3];
-        buf.fill_forward_patches(&idx(n, l), &state, &noise, 50, &[]);
-
-        // forward_patch_count = N = 3 (no load, no z-inflow)
-        assert_eq!(buf.forward_patch_count(), 3);
-
-        // Noise at slots 0..N (no storage/inflow_lags/anticipated in row buffer).
-        assert_eq!(buf.indices[0], 50); // base_row + 0 = 50
-        assert_eq!(buf.lower[0], 0.1);
-        assert_eq!(buf.indices[1], 51);
-        assert_eq!(buf.lower[1], 0.2);
-        assert_eq!(buf.indices[2], 52);
-        assert_eq!(buf.lower[2], 0.3);
     }
 
     // -------------------------------------------------------------------------

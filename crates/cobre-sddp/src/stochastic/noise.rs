@@ -60,8 +60,13 @@ pub(crate) fn has_par_model(stochastic: &StochasticContext, n_hydros: usize) -> 
     par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros
 }
 
-/// Transform raw inflow noise `η` into patched water-balance RHS values,
-/// applying [`compute_effective_eta`] clamping under truncation.
+/// Transform raw inflow noise `η` into the pure z-inflow anchor rate
+/// (`z_inflow_rhs_buf`), applying [`compute_effective_eta`] clamping under
+/// truncation.
+// Rationale: clippy::similar_names flags the role-(a) `state` handle (bound from
+// `training_ctx.state`) next to the `stage` index; both are established names, so
+// renaming either to satisfy the heuristic would obscure intent.
+#[allow(clippy::similar_names)]
 pub(crate) fn transform_inflow_noise(
     raw_noise: &[f64],
     stage: StageIdx,
@@ -70,33 +75,11 @@ pub(crate) fn transform_inflow_noise(
     training_ctx: &TrainingContext<'_>,
     scratch: &mut ScratchBuffers,
 ) {
-    compute_water_balance_rhs(raw_noise, stage, current_state, ctx, training_ctx, scratch);
-}
-
-/// Compute the water-balance RHS (`noise_buf`) and the pure z-inflow anchor
-/// rate (`z_inflow_rhs_buf`) for one stage.
-// Rationale: clippy::similar_names flags the role-(a) `state` handle (bound from
-// `training_ctx.state`) next to the `stage` index; both are established names, so
-// renaming either to satisfy the heuristic would obscure intent.
-#[allow(clippy::similar_names)]
-pub(crate) fn compute_water_balance_rhs(
-    raw_noise: &[f64],
-    stage: StageIdx,
-    current_state: &[f64],
-    ctx: &StageContext<'_>,
-    training_ctx: &TrainingContext<'_>,
-    scratch: &mut ScratchBuffers,
-) {
     let n_hydros = ctx.n_hydros;
-    let stage_offset = stage.0 * n_hydros;
-    let base_row = ctx.base_row(stage);
-    let template_row_lower = &ctx.template(stage).row_lower;
-    let noise_scale = ctx.noise_scale;
     let inflow_method = training_ctx.inflow_method;
     let stochastic = training_ctx.stochastic;
     let state = training_ctx.state;
 
-    scratch.noise_buf.clear();
     scratch.z_inflow_rhs_buf.clear();
 
     let par_lp = stochastic.par();
@@ -155,12 +138,7 @@ pub(crate) fn compute_water_balance_rhs(
     );
 
     for (h, &eta_eff) in scratch.effective_eta_buf.iter().enumerate() {
-        let base_rhs = template_row_lower[base_row + h];
-        scratch
-            .noise_buf
-            .push(base_rhs + noise_scale[stage_offset + h] * eta_eff);
-
-        // Z-inflow RHS in m3/s: no zeta, no withdrawal (unlike the water-balance RHS above).
+        // Z-inflow RHS in m3/s: no zeta, no withdrawal.
         if has_par {
             let base = par_lp.deterministic_base(stage.0, h);
             let sigma = par_lp.sigma(stage.0, h);
@@ -644,10 +622,8 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /// Build a minimal `StageTemplate` with just `row_lower` populated.
-    ///
-    /// Only `row_lower` is accessed by `transform_inflow_noise`.  All other
-    /// fields are set to their zero/empty defaults.
+    /// Build a minimal placeholder `StageTemplate` for the `templates` field
+    /// `StageContext` requires; `transform_inflow_noise` does not read it.
     fn make_minimal_template(row_lower: Vec<f64>) -> StageTemplate {
         let n = row_lower.len();
         StageTemplate {
@@ -675,7 +651,6 @@ mod tests {
     /// Build a `ScratchBuffers` with the given pre-filled `zero_targets_buf`.
     fn make_scratch(n_hydros: usize) -> ScratchBuffers {
         ScratchBuffers {
-            noise_buf: Vec::with_capacity(n_hydros),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -1019,22 +994,17 @@ mod tests {
         let state = test_support::state_layout(1, 0);
         let current_state = vec![0.0; layout.n_state];
 
-        // noise_scale[0] = 1.0, base_rhs = 5.0, eta = -3.0
-        // expected: 5.0 + 1.0 * (-3.0) = 2.0
+        // sigma = 1.0, base = 0.0 (the fixture's AR(0) white-noise model), eta = -3.0
+        // expected z_inflow_rhs: 0.0 + 1.0 * (-3.0) = -3.0
         let raw_noise = vec![-3.0_f64];
-        let noise_scale = vec![1.0_f64];
-        // Template with row_lower = [0.0, 5.0]; base_row = 1.
-        let template = make_minimal_template(vec![0.0, 5.0]);
+        let template = make_minimal_template(vec![0.0]);
         let templates = vec![template];
-        let base_rows = vec![1_usize];
         let inflow_method = InflowNonNegativityMethod::None;
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let ctx = StageContext {
             state_boxes: &[],
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1088,8 +1058,8 @@ mod tests {
             &mut scratch,
         );
 
-        assert_eq!(scratch.noise_buf.len(), 1);
-        assert!((scratch.noise_buf[0] - 2.0).abs() < 1e-12);
+        assert_eq!(scratch.z_inflow_rhs_buf.len(), 1);
+        assert!((scratch.z_inflow_rhs_buf[0] - (-3.0)).abs() < 1e-12);
     }
 
     // ── transform_inflow_noise: Truncation ───────────────────────────────────
@@ -1108,19 +1078,14 @@ mod tests {
 
         // Very negative eta guarantees negative inflow (AR(0) with sigma=1).
         let raw_noise = vec![-5.0_f64];
-        let noise_scale = vec![1.0_f64];
-        // Template with row_lower = [0.0]; base_row = 0.
         let template = make_minimal_template(vec![0.0]);
         let templates = vec![template];
-        let base_rows = vec![0_usize];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let ctx = StageContext {
             state_boxes: &[],
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1174,13 +1139,13 @@ mod tests {
             &mut scratch,
         );
 
-        assert_eq!(scratch.noise_buf.len(), 1);
-        // The patched RHS = base_rhs + noise_scale * clamped_eta.
-        // After clamping, the inflow contribution must be >= 0: RHS >= base_rhs = 0.
+        assert_eq!(scratch.z_inflow_rhs_buf.len(), 1);
+        // z_inflow_rhs = base + sigma * clamped_eta = the realized inflow (m3/s).
+        // After clamping, the realized inflow must be >= 0.
         assert!(
-            scratch.noise_buf[0] >= -1e-10,
-            "truncation must yield non-negative RHS, got {}",
-            scratch.noise_buf[0]
+            scratch.z_inflow_rhs_buf[0] >= -1e-10,
+            "truncation must yield non-negative realized inflow, got {}",
+            scratch.z_inflow_rhs_buf[0]
         );
     }
 
@@ -1194,19 +1159,14 @@ mod tests {
 
         // eta = 3.0 → inflow = 1.0 * 3.0 = 3.0 > 0 → no clamping.
         let raw_noise = vec![3.0_f64];
-        let noise_scale = vec![2.0_f64];
-        // Template with row_lower = [5.0]; base_row = 0.
-        let template = make_minimal_template(vec![5.0]);
+        let template = make_minimal_template(vec![0.0]);
         let templates = vec![template];
-        let base_rows = vec![0_usize];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let ctx = StageContext {
             state_boxes: &[],
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1260,12 +1220,12 @@ mod tests {
             &mut scratch,
         );
 
-        assert_eq!(scratch.noise_buf.len(), 1);
-        // Expected: 5.0 + 2.0 * 3.0 = 11.0 (no clamping).
+        assert_eq!(scratch.z_inflow_rhs_buf.len(), 1);
+        // Expected z_inflow_rhs: 0.0 + 1.0 * 3.0 = 3.0 (no clamping).
         assert!(
-            (scratch.noise_buf[0] - 11.0).abs() < 1e-12,
-            "expected 11.0, got {}",
-            scratch.noise_buf[0]
+            (scratch.z_inflow_rhs_buf[0] - 3.0).abs() < 1e-12,
+            "expected 3.0, got {}",
+            scratch.z_inflow_rhs_buf[0]
         );
     }
 

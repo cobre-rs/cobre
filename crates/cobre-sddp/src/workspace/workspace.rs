@@ -616,7 +616,6 @@ impl ByNodeScratch {
 /// through [`ScratchBuffers::new`] rather than construct or mutate one field-by-field.
 #[allow(clippy::struct_field_names)]
 pub struct ScratchBuffers {
-    pub(crate) noise_buf: Vec<f64>,
     pub(crate) inflow_m3s_buf: Vec<f64>,
     pub(crate) lag_matrix_buf: Vec<f64>,
     pub(crate) par_inflow_buf: Vec<f64>,
@@ -675,8 +674,7 @@ pub struct ScratchBuffers {
     pub(crate) trajectory_costs_buf: Vec<f64>,
 
     /// Per-worker raw-noise scratch for the forward-pass sampler and simulation
-    /// worker loop. Distinct from [`ScratchBuffers::noise_buf`] (the backward
-    /// inflow-patch path); the two never overlap within one `SolverWorkspace`.
+    /// worker loop.
     pub(crate) raw_noise_buf: Vec<f64>,
 
     /// Per-worker gather and correlate scratch for a correlation group wider
@@ -791,7 +789,6 @@ impl ScratchBuffers {
             ..
         } = s;
         Self {
-            noise_buf: Vec::with_capacity(hydro_count),
             inflow_m3s_buf: Vec::with_capacity(hydro_count),
             lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
             par_inflow_buf: Vec::with_capacity(hydro_count),
@@ -1205,11 +1202,11 @@ mod tests {
 
     #[test]
     fn test_workspace_buffer_dimensions() {
-        // N=3, L=2, M=0, B=0 → patch_buf length = N + M*B + N = 3 + 0 + 3 = 6
+        // N=3, L=2, M=0, B=0 → patch_buf length = M*B + N = 0 + 3 = 3
         // n_state=9 → current_state capacity = 9
         let pool = WorkspacePool::new(0, 4, 9, sizing(3, 2, 0), || MockSolver);
         for ws in &pool.workspaces {
-            assert_eq!(ws.patch_buf.indices.len(), 6, "patch_buf length");
+            assert_eq!(ws.patch_buf.indices.len(), 3, "patch_buf length");
             assert_eq!(ws.current_state.capacity(), 9, "current_state capacity");
             assert_eq!(ws.current_state.len(), 0, "current_state starts empty");
         }

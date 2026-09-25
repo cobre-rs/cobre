@@ -407,7 +407,6 @@ fn ac_train_completes_with_iteration_limit() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -448,8 +447,6 @@ fn ac_train_completes_with_iteration_limit() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -513,7 +510,6 @@ fn ac_train_returns_partial_on_infeasible() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -554,8 +550,6 @@ fn ac_train_returns_partial_on_infeasible() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -630,7 +624,6 @@ fn ac_train_emits_correct_event_sequence() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -673,8 +666,6 @@ fn ac_train_emits_correct_event_sequence() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -835,7 +826,6 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -878,8 +868,6 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1012,7 +1000,6 @@ fn ac_train_result_fields_populated() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1053,8 +1040,6 @@ fn ac_train_result_fields_populated() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1118,7 +1103,6 @@ fn ac_train_with_no_event_sender() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1159,8 +1143,6 @@ fn ac_train_with_no_event_sender() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1221,7 +1203,6 @@ fn ac_total_time_ms_is_non_negative() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1262,8 +1243,6 @@ fn ac_total_time_ms_is_non_negative() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1330,7 +1309,6 @@ fn cut_selection_none_skips_step() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1373,8 +1351,6 @@ fn cut_selection_none_skips_step() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1447,7 +1423,6 @@ fn cut_selection_level1_runs_at_frequency() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1493,8 +1468,6 @@ fn cut_selection_level1_runs_at_frequency() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1576,7 +1549,6 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1622,8 +1594,6 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1720,7 +1690,6 @@ fn existing_train_tests_pass_with_none() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1761,8 +1730,6 @@ fn existing_train_tests_pass_with_none() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1826,7 +1793,6 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1873,8 +1839,6 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -1957,7 +1921,6 @@ fn start_iteration_resumes_from_offset() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1998,8 +1961,6 @@ fn start_iteration_resumes_from_offset() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -2065,7 +2026,6 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -2106,8 +2066,6 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,
@@ -2825,7 +2783,6 @@ fn template_freeze_event_emitted() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -2868,8 +2825,6 @@ fn template_freeze_event_emitted() {
         state_boxes: &state_boxes,
         geometry_per_stage: &[],
         templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 0,

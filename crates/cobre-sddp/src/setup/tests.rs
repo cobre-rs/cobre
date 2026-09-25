@@ -657,7 +657,6 @@ fn accessor_methods_return_expected_values() {
     .expect("setup");
 
     assert_eq!(setup.stage_data.stage_templates.templates.len(), n_stages);
-    assert_eq!(setup.stage_data.stage_templates.base_rows.len(), n_stages);
 
     assert_eq!(setup.loop_params.seed, 42);
     assert_eq!(setup.loop_params.forward_passes, 2);
@@ -816,16 +815,6 @@ fn stage_ctx_fields_match_study_setup() {
         ctx.templates.len(),
         setup.stage_data.stage_templates.templates.len(),
         "templates length mismatch"
-    );
-    assert_eq!(
-        ctx.base_rows.len(),
-        setup.stage_data.stage_templates.base_rows.len(),
-        "base_rows length mismatch"
-    );
-    assert_eq!(
-        ctx.noise_scale.len(),
-        setup.stage_data.stage_templates.noise_scale.len(),
-        "noise_scale length mismatch"
     );
     assert_eq!(
         ctx.n_hydros,

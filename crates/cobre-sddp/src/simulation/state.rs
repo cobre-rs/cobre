@@ -197,7 +197,6 @@ impl SimulationState {
     /// Panics if any of the following debug preconditions are violated:
     ///
     /// - `inputs.ctx.templates.len() != num_stages`
-    /// - `inputs.ctx.base_rows.len() != num_stages`
     /// - `inputs.training_ctx.initial_state.len() != state.n_state`
     pub(crate) fn run<S, C: Communicator>(
         &mut self,
@@ -336,12 +335,6 @@ fn debug_assert_inputs(
         num_stages,
         "templates.len()={} != num_stages={num_stages}",
         ctx.templates.len()
-    );
-    debug_assert_eq!(
-        ctx.base_rows.len(),
-        num_stages,
-        "base_rows.len()={} != num_stages={num_stages}",
-        ctx.base_rows.len()
     );
     debug_assert_eq!(
         n_initial, n_state,

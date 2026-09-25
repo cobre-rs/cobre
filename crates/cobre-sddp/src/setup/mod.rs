@@ -2662,8 +2662,7 @@ fn reject_recombining_node_enumeration(node_graph: &NodeGraph) -> Result<(), Sdd
 }
 
 /// The first stage and hydro where inflow noise lands on a chronological stage
-/// with two or more blocks, whose per-block water-balance rows the noise patch
-/// does not address.
+/// with two or more blocks, a combination not yet supported.
 pub(crate) fn chronological_multi_block_inflow_noise<'s>(
     system: &'s System,
     par: &PrecomputedPar,

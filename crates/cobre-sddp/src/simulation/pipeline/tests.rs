@@ -515,7 +515,6 @@ fn single_workspace_with_load_buses(
         patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1, 0, 0, 0),
         current_state: Vec::with_capacity(1),
         scratch: ScratchBuffers {
-            noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -564,7 +563,6 @@ fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0), // N=1, L=0
         current_state: Vec::with_capacity(1),
         scratch: ScratchBuffers {
-            noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -781,7 +779,6 @@ fn simulation_load_patches_applied() {
         row_scale: Vec::new(),
     };
     let templates = vec![template];
-    let base_rows = vec![1usize]; // water-balance rows start at row 1
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -810,7 +807,6 @@ fn simulation_load_patches_applied() {
     let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize];
-    let noise_scale = vec![1.0_f64]; // 1 hydro, 1 stage
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -821,8 +817,6 @@ fn simulation_load_patches_applied() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses,
@@ -928,7 +922,7 @@ fn simulation_load_patches_applied() {
         "formula consistency: d={d_observed}, eta_back={eta_back}, recomputed={recomputed}"
     );
 
-    let load_start = 1; // n_hydros = 1
+    let load_start = 0; // load patches start at slot 0
     assert_eq!(
         workspaces[0].patch_buf.lower[load_start], workspaces[0].scratch.load_rhs_buf[0],
         "patch_buf lower at load slot must equal load_rhs_buf[0]"
@@ -955,14 +949,15 @@ fn simulation_load_patches_applied() {
 }
 
 /// when `n_load_buses == 0`,
-/// `load_rhs_buf` remains empty and `forward_patch_count` equals `N`.
+/// `load_rhs_buf` remains empty and `forward_patch_count` equals the number of
+/// z-inflow patches filled.
 ///
-/// With N=1, L=0: `forward_patch_count = 1`.
+/// With `ctx.n_hydros = 0`, `fill_z_inflow_patches` fills zero patches (an empty
+/// `z_inflow_rhs`), so `forward_patch_count = 0`.
 #[test]
 fn simulation_no_load_buses_unchanged() {
     let n_stages = 1;
     let templates = vec![minimal_template_1_0()];
-    let base_rows = vec![0usize];
 
     let stochastic = make_stochastic_context(n_stages);
     let state = test_support::state_layout(1, 0);
@@ -995,8 +990,6 @@ fn simulation_no_load_buses_unchanged() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1079,8 +1072,8 @@ fn simulation_no_load_buses_unchanged() {
     );
     assert_eq!(
         workspaces[0].patch_buf.forward_patch_count(),
-        1,
-        "forward_patch_count must be N=1 when n_load_buses=0, got {}",
+        0,
+        "forward_patch_count must be 0 when n_load_buses=0 and n_hydros=0, got {}",
         workspaces[0].patch_buf.forward_patch_count()
     );
 }
@@ -1091,7 +1084,6 @@ fn simulation_no_load_buses_unchanged() {
 fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let n_stages = 1;
     let templates = vec![minimal_template_1_0()];
-    let base_rows = vec![0usize];
 
     let stochastic = make_stochastic_context(n_stages);
     let state = test_support::state_layout(1, 0);
@@ -1140,8 +1132,6 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1228,12 +1218,13 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
 }
 
 /// When load noise is present,
-/// `noise_buf` still contains only inflow values (not contaminated by load noise).
+/// `z_inflow_rhs_buf` still contains only inflow values (not contaminated by
+/// load noise).
 ///
-/// `noise_buf` contains inflow realizations for the `n_hydros` hydros.
-/// After simulate runs with `n_hydros=1` and `n_load_buses=1`, `noise_buf`
-/// must have exactly 1 entry (inflow), while `load_rhs_buf` has 1 entry
-/// (load).  The two buffers must not overlap.
+/// `z_inflow_rhs_buf` contains inflow realizations for the `n_hydros` hydros.
+/// After simulate runs with `n_hydros=1` and `n_load_buses=1`,
+/// `z_inflow_rhs_buf` must have exactly 1 entry (inflow), while
+/// `load_rhs_buf` has 1 entry (load).  The two buffers must not overlap.
 #[test]
 fn simulation_inflow_extraction_unaffected() {
     let n_stages = 1;
@@ -1258,7 +1249,6 @@ fn simulation_inflow_extraction_unaffected() {
         row_scale: Vec::new(),
     };
     let templates = vec![template];
-    let base_rows = vec![1usize];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -1286,7 +1276,6 @@ fn simulation_inflow_extraction_unaffected() {
     let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize];
-    let noise_scale = vec![1.0_f64];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -1297,8 +1286,6 @@ fn simulation_inflow_extraction_unaffected() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses,
@@ -1376,24 +1363,23 @@ fn simulation_inflow_extraction_unaffected() {
     .unwrap();
 
     assert_eq!(
-        workspaces[0].scratch.noise_buf.len(),
+        workspaces[0].scratch.z_inflow_rhs_buf.len(),
         1,
-        "noise_buf must have 1 entry (1 hydro), not contaminated by load noise: len={}",
-        workspaces[0].scratch.noise_buf.len()
+        "z_inflow_rhs_buf must have 1 entry (1 hydro), not contaminated by load noise: len={}",
+        workspaces[0].scratch.z_inflow_rhs_buf.len()
     );
-    // The inflow noise must be a reasonable value near mean_rhs=100.
-    // With noise_scale=1.0 and mean_rhs=100 (from row_lower[base_rows[0]+0]=100):
-    //   noise_buf[0] = 100.0 + 1.0 * eta_inflow
-    // For any |eta_inflow| <= 5 this remains in [75, 125] for practical draws.
+    // The inflow noise must be a reasonable value near the model's mean_m3s=100.0,
+    // sigma=20.0: z_inflow_rhs_buf[0] = 100.0 + 20.0 * eta_inflow.
     assert!(
-        workspaces[0].scratch.noise_buf[0] > 50.0 && workspaces[0].scratch.noise_buf[0] < 200.0,
-        "noise_buf[0] must be a reasonable inflow value near 100.0, got {}",
-        workspaces[0].scratch.noise_buf[0]
+        workspaces[0].scratch.z_inflow_rhs_buf[0] > 0.0
+            && workspaces[0].scratch.z_inflow_rhs_buf[0] < 200.0,
+        "z_inflow_rhs_buf[0] must be a reasonable inflow value near 100.0, got {}",
+        workspaces[0].scratch.z_inflow_rhs_buf[0]
     );
     assert_eq!(
         workspaces[0].scratch.load_rhs_buf.len(),
         n_load_buses,
-        "load_rhs_buf must have 1 entry alongside noise_buf"
+        "load_rhs_buf must have 1 entry alongside z_inflow_rhs_buf"
     );
 }
 
@@ -1546,32 +1532,6 @@ fn make_stochastic_1h_1s(mean_m3s: f64, std_m3s: f64) -> StochasticContext {
     .unwrap()
 }
 
-/// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
-///
-/// Used by truncation tests so that the water-balance base RHS is configurable.
-fn minimal_template_1_0_with_base(base_rhs: f64) -> StageTemplate {
-    StageTemplate {
-        num_cols: 3,
-        num_rows: 1,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![base_rhs],
-        row_upper: vec![base_rhs],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }
-}
-
 /// Build a workspace with `zero_targets_buf` pre-populated to `hydro_count` zeros.
 ///
 /// The standard `single_workspace` helper leaves `zero_targets_buf` empty because
@@ -1589,7 +1549,6 @@ fn single_workspace_with_hydros(
         patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0, 0, 0, 0),
         current_state: Vec::with_capacity(hydro_count),
         scratch: ScratchBuffers {
-            noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -1633,25 +1592,19 @@ fn single_workspace_with_hydros(
 ///
 /// With `InflowNonNegativityMethod::Truncation` active, the simulation pipeline
 /// must clamp `eta` to the floor that produces zero inflow.  As a result,
-/// `noise_buf[0] = base_rhs + noise_scale * eta_clamped >= 0.0` for all
+/// `z_inflow_rhs_buf[0] = mean + sigma * eta_clamped >= 0.0` for all
 /// scenarios processed.
 ///
-/// Concretely (zeta=1): `base_rhs = -1000`, `noise_scale = 1`.
-/// `eta_floor` = (0 - mean) / sigma = 1000. So `noise_buf`\[0\] = -1000 + 1\*1000 = 0.
+/// `eta_floor` = (0 - mean) / sigma = 1000. So `z_inflow_rhs_buf`\[0\] =
+/// -1000 + 1\*1000 = 0.
 #[test]
 fn simulation_truncation_clamps_negative_inflow_noise() {
     let mean_m3s = -1000.0_f64;
     let sigma = 1.0_f64;
-    let zeta = 1.0_f64; // simplified: treat zeta=1
-    let base_rhs = zeta * mean_m3s;
-    let noise_scale_val = zeta * sigma;
 
     let n_stages = 1;
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
-    let template = minimal_template_1_0_with_base(base_rhs);
-    let templates = vec![template];
-    let base_rows = vec![0_usize];
-    let noise_scale = vec![noise_scale_val];
+    let templates = vec![minimal_template_1_0()];
 
     let state = test_support::state_layout(1, 0);
     let fcf = FutureCostFunction::new(n_stages, state.n_state, 1, 10, &vec![0; n_stages]);
@@ -1682,8 +1635,6 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1760,16 +1711,17 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     )
     .unwrap();
 
-    // noise_buf holds the last scenario-stage's value; truncation clamps it >= 0.
+    // z_inflow_rhs_buf holds the last scenario-stage's value; truncation clamps
+    // it >= 0.
     assert_eq!(
-        workspaces[0].scratch.noise_buf.len(),
+        workspaces[0].scratch.z_inflow_rhs_buf.len(),
         1,
-        "noise_buf must have exactly 1 entry for 1 hydro"
+        "z_inflow_rhs_buf must have exactly 1 entry for 1 hydro"
     );
     assert!(
-        workspaces[0].scratch.noise_buf[0] >= 0.0,
-        "after truncation, noise_buf[0] must be >= 0 (inflow cannot be negative), got {}",
-        workspaces[0].scratch.noise_buf[0]
+        workspaces[0].scratch.z_inflow_rhs_buf[0] >= 0.0,
+        "after truncation, z_inflow_rhs_buf[0] must be >= 0 (inflow cannot be negative), got {}",
+        workspaces[0].scratch.z_inflow_rhs_buf[0]
     );
 }
 
@@ -1777,22 +1729,16 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
 /// raw (potentially negative) noise values.
 ///
 /// With `mean_m3s = -1000.0` and `std_m3s = 1.0`, the PAR inflow is always
-/// deeply negative.  The `None` path must NOT clamp eta, so the noise buffer
-/// value must be negative (`base_rhs` + `noise_scale` \* `raw_eta` << 0).
+/// deeply negative.  The `None` path must NOT clamp eta, so the z-inflow
+/// buffer value must be negative (`mean` + `sigma` \* `raw_eta` << 0).
 #[test]
 fn simulation_none_method_produces_raw_negative_noise() {
     let mean_m3s = -1000.0_f64;
     let sigma = 1.0_f64;
-    let zeta = 1.0_f64;
-    let base_rhs = zeta * mean_m3s;
-    let noise_scale_val = zeta * sigma;
 
     let n_stages = 1;
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
-    let template = minimal_template_1_0_with_base(base_rhs);
-    let templates = vec![template];
-    let base_rows = vec![0_usize];
-    let noise_scale = vec![noise_scale_val];
+    let templates = vec![minimal_template_1_0()];
 
     let state = test_support::state_layout(1, 0);
     let fcf = FutureCostFunction::new(n_stages, state.n_state, 1, 10, &vec![0; n_stages]);
@@ -1823,8 +1769,6 @@ fn simulation_none_method_produces_raw_negative_noise() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -1902,16 +1846,16 @@ fn simulation_none_method_produces_raw_negative_noise() {
     .unwrap();
 
     assert_eq!(
-        workspaces[0].scratch.noise_buf.len(),
+        workspaces[0].scratch.z_inflow_rhs_buf.len(),
         1,
-        "noise_buf must have exactly 1 entry for 1 hydro"
+        "z_inflow_rhs_buf must have exactly 1 entry for 1 hydro"
     );
-    // With None, no clamping occurs.  base_rhs=-1000 and noise_scale=1, so
-    // noise_buf[0] = -1000 + 1 * eta.  For |eta| < 5 this remains << 0.
+    // With None, no clamping occurs.  mean=-1000 and sigma=1, so
+    // z_inflow_rhs_buf[0] = -1000 + 1 * eta.  For |eta| < 5 this remains << 0.
     assert!(
-        workspaces[0].scratch.noise_buf[0] < 0.0,
-        "with None method, noise_buf[0] must be negative (raw eta applied), got {}",
-        workspaces[0].scratch.noise_buf[0]
+        workspaces[0].scratch.z_inflow_rhs_buf[0] < 0.0,
+        "with None method, z_inflow_rhs_buf[0] must be negative (raw eta applied), got {}",
+        workspaces[0].scratch.z_inflow_rhs_buf[0]
     );
 }
 
@@ -2116,7 +2060,6 @@ mod dcs_simulation {
             ..StageGeometry::default()
         }];
         let templates = vec![core];
-        let base_rows = vec![0_usize];
         let stochastic = super::make_stochastic_context(1);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let fcf = sim_pool();
@@ -2132,7 +2075,6 @@ mod dcs_simulation {
         let mut ws = sim_active_workspace();
         ws.current_state.clear();
         ws.current_state.push(X_HAT);
-        ws.scratch.noise_buf.clear();
         ws.scratch.load_rhs_buf.clear();
         ws.scratch.z_inflow_rhs_buf.clear();
         ws.scratch.ncs_col_upper_buf.clear();
@@ -2147,8 +2089,6 @@ mod dcs_simulation {
             geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             state_boxes: &state_boxes,
-            base_rows: &base_rows,
-            noise_scale: &[1.0],
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
@@ -2614,7 +2554,6 @@ mod anticipated_ring_matches_forward_propagation {
         );
         ws.current_state.clear();
         ws.current_state.extend_from_slice(&[10.0, 20.0]);
-        ws.scratch.noise_buf.clear();
         ws.scratch.load_rhs_buf.clear();
         ws.scratch.z_inflow_rhs_buf.clear();
         ws.scratch.ncs_col_upper_buf.clear();
@@ -2708,7 +2647,6 @@ mod anticipated_ring_matches_forward_propagation {
         let num_cols = state.theta + 1;
         let template = ring_template(num_cols, state.n_state);
         let templates = vec![template.clone(), template.clone(), template];
-        let base_rows = vec![0_usize; N_STAGES];
         let stochastic = super::make_stochastic_context(N_STAGES);
         let horizon = HorizonMode::Finite {
             num_stages: N_STAGES,
@@ -2728,8 +2666,6 @@ mod anticipated_ring_matches_forward_propagation {
             geometry_per_stage: &[],
             templates: &templates,
             state_boxes: &state_boxes,
-            base_rows: &base_rows,
-            noise_scale: &[],
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,

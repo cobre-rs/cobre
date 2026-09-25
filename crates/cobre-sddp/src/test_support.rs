@@ -77,7 +77,9 @@ use crate::setup::node_graph::{
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
 use crate::time_value::TimeValue;
-use crate::training::backward::{extract_state_duals_only, write_opening_outcome};
+use crate::training::backward::{
+    extract_state_duals_only, fill_external_opening_noise, write_opening_outcome,
+};
 use crate::training::stage_solve_prep::{
     InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
 };
@@ -2136,6 +2138,99 @@ impl SolverInterface for TemplateCaptureSolver {
     }
 }
 
+/// Recording [`SolverInterface`] wrapping a real solver: every method forwards
+/// to `inner`, while `load_model`/`set_row_bounds`/`set_col_bounds` also mirror
+/// the bound-patch onto `current` (the bookkeeping [`TemplateCaptureSolver`]
+/// performs standalone), and `solve` snapshots `current` into `recorded`
+/// before forwarding — so `recorded` ends up holding the exact LP a caller
+/// (e.g. [`evaluate_lower_bound`]) solves, one entry per `solve` call.
+struct BoundRecordingSolver<S: SolverInterface> {
+    inner: S,
+    current: Option<StageTemplate>,
+    recorded: Vec<StageTemplate>,
+}
+
+impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
+    type Profile = S::Profile;
+
+    fn apply_profile(&mut self, profile: &Self::Profile) {
+        self.inner.apply_profile(profile);
+    }
+
+    fn load_model(&mut self, template: &StageTemplate) {
+        self.current = Some(template.clone());
+        self.inner.load_model(template);
+    }
+
+    fn add_rows(&mut self, rows: &RowBatch) {
+        self.inner.add_rows(rows);
+    }
+
+    #[allow(clippy::expect_used)]
+    fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
+        let t = self
+            .current
+            .as_mut()
+            .expect("BoundRecordingSolver: load_model precedes set_row_bounds");
+        for (k, &i) in indices.iter().enumerate() {
+            t.row_lower[i] = lower[k];
+            t.row_upper[i] = upper[k];
+        }
+        self.inner.set_row_bounds(indices, lower, upper);
+    }
+
+    #[allow(clippy::expect_used)]
+    fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
+        let t = self
+            .current
+            .as_mut()
+            .expect("BoundRecordingSolver: load_model precedes set_col_bounds");
+        for (k, &i) in indices.iter().enumerate() {
+            t.col_lower[i] = lower[k];
+            t.col_upper[i] = upper[k];
+        }
+        self.inner.set_col_bounds(indices, lower, upper);
+    }
+
+    #[allow(clippy::expect_used)]
+    fn solve(&mut self, basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError> {
+        let current = self
+            .current
+            .clone()
+            .expect("BoundRecordingSolver: load_model precedes solve");
+        self.recorded.push(current);
+        self.inner.solve(basis)
+    }
+
+    fn get_basis(&mut self, out: &mut Basis) {
+        self.inner.get_basis(out);
+    }
+
+    fn statistics(&self) -> SolverStatistics {
+        self.inner.statistics()
+    }
+
+    fn statistics_into(&self, out: &mut SolverStatistics) {
+        self.inner.statistics_into(out);
+    }
+
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn solver_name_version(&self) -> String {
+        self.inner.solver_name_version()
+    }
+
+    fn record_reconstruction_stats(&mut self) {
+        self.inner.record_reconstruction_stats();
+    }
+
+    fn reset_solver_state(&mut self) {
+        self.inner.reset_solver_state();
+    }
+}
+
 /// The `[hydro | load-bus | NCS]` raw-noise vector length:
 /// `hydro_count + n_load_buses + n_stochastic_ncs`.
 #[must_use]
@@ -2241,12 +2336,14 @@ pub fn capture_patched_node_template_at(
 /// Opening `opening`'s raw `[hydro | load-bus | NCS]` noise vector at
 /// `node_pos`: a `Generated` node's own draw from
 /// [`StochasticContext::opening_tree`]; an `External` node's sole opening
-/// (`0`), which equals [`oracle_raw_noise`].
+/// (`0`) assembled through [`fill_external_opening_noise`], the same routine
+/// the backward pass and the lower bound read.
 ///
 /// # Panics
 ///
-/// Panics if `opening >= node_pos`'s opening count, or (for an `External`
-/// node) if `opening != 0`.
+/// Panics if `opening >= node_pos`'s opening count, if (for an `External`
+/// node) `opening != 0`, or if [`fill_external_opening_noise`] fails.
+#[allow(clippy::expect_used)]
 #[must_use]
 pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize) -> Vec<f64> {
     let stage = setup.node_graph.nodes[node_pos].stage;
@@ -2263,7 +2360,19 @@ pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize)
             .to_vec(),
         OpeningSource::External => {
             assert_eq!(opening, 0, "an External node has exactly one opening");
-            oracle_raw_noise(setup, node_pos)
+            let training_ctx = setup.training_ctx();
+            let ctx = setup.stage_ctx();
+            let mut buf = Vec::new();
+            fill_external_opening_noise(
+                &training_ctx,
+                &ctx,
+                stage,
+                openings.offset,
+                setup.node_graph.node_ids[node_pos],
+                &mut buf,
+            )
+            .expect("node_opening_noise: fill_external_opening_noise must succeed");
+            buf
         }
     }
 }
@@ -2404,6 +2513,27 @@ pub fn no_cut_root_lower_bound<S: SolverInterface>(
         &mut bundle,
         &LocalBackend,
     )
+}
+
+/// The lower bound's fully-patched root-opening templates, one entry per root
+/// opening in opening order — the exact LP [`no_cut_root_lower_bound`] solves
+/// for each, recorded via [`BoundRecordingSolver`] so the patch buffer stays
+/// sized however [`no_cut_root_lower_bound`] sizes it.
+///
+/// # Errors
+///
+/// Returns whatever [`no_cut_root_lower_bound`] returns.
+pub fn lower_bound_root_templates<S: SolverInterface>(
+    setup: &StudySetup,
+    solver: S,
+) -> Result<Vec<StageTemplate>, SddpError> {
+    let mut recorder = BoundRecordingSolver {
+        inner: solver,
+        current: None,
+        recorded: Vec::new(),
+    };
+    no_cut_root_lower_bound(setup, &mut recorder)?;
+    Ok(recorder.recorded)
 }
 
 // ── Branching value oracle: fixtures ─────────────────────────────────────────

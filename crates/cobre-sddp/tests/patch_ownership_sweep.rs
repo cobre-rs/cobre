@@ -5,7 +5,9 @@
 //! (`every_noise_dimension_patches_only_its_own_entity`) then uses that
 //! capture to assert, over every committed deck plus a stochastic and a
 //! chronological-noise in-code fixture, that each noise dimension patches
-//! only the row/column family its own entity owns.
+//! only the row/column family its own entity owns. A third pair of tests pins
+//! the lower bound's root-opening LPs to the forward pass's own patched root
+//! templates, bound by bound.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -18,12 +20,12 @@ use std::path::Path;
 use cobre_core::{BlockMode, EntityId};
 use cobre_sddp::StudySetup;
 use cobre_sddp::lp::StageGeometry;
-use cobre_sddp::setup::NodePos;
+use cobre_sddp::setup::{NodePos, StageIdx};
 use cobre_sddp::test_support::{
-    capture_patched_node_template, capture_patched_node_template_at, node_opening_noise,
-    oracle_initial_state, raw_noise_len, stage_state_box_bounds,
+    capture_patched_node_template, capture_patched_node_template_at, lower_bound_root_templates,
+    node_opening_noise, oracle_initial_state, raw_noise_len, stage_state_box_bounds,
 };
-use cobre_solver::StageTemplate;
+use cobre_solver::{ActiveSolver, StageTemplate};
 
 use common::decks::{SLOW_DECKS, committed_decks};
 use common::in_code_studies::{
@@ -364,6 +366,187 @@ fn every_noise_dimension_patches_only_its_own_entity() {
     assert!(
         violations.is_empty(),
         "patch-ownership violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+// ── Lower bound vs. forward root LP ──────────────────────────────────────────
+
+fn root_node(setup: &StudySetup) -> NodePos {
+    let graph = &setup.node_graph;
+    (0..graph.nodes.len())
+        .map(NodePos)
+        .find(|&pos| graph.nodes[pos].stage == StageIdx(0))
+        .expect("study must have a stage-0 node")
+}
+
+fn compare_bound_vec(
+    deck: &str,
+    opening: usize,
+    kind: &str,
+    lower_bound: &[f64],
+    forward: &[f64],
+    skip: Option<&Range<usize>>,
+    violations: &mut Vec<String>,
+) {
+    assert_eq!(
+        lower_bound.len(),
+        forward.len(),
+        "{deck} opening={opening} {kind}: length mismatch"
+    );
+    for (i, (&lb, &fwd)) in lower_bound.iter().zip(forward).enumerate() {
+        if skip.is_some_and(|range| range.contains(&i)) {
+            continue;
+        }
+        if lb.to_bits() != fwd.to_bits() {
+            violations.push(format!(
+                "{deck} opening={opening} {kind}[{i}]: lower_bound={lb} forward={fwd}"
+            ));
+        }
+    }
+}
+
+/// Compares, for every root opening of `setup`, the lower bound's recorded
+/// root template ([`lower_bound_root_templates`]) against the forward pass's
+/// own patched root template at the same opening's draw
+/// ([`node_opening_noise`] through `capture_patched_node_template_at`) on
+/// `col_lower`/`col_upper`/`row_lower`/`row_upper` by `to_bits`;
+/// `skip_load_rows` excludes the root stage's `load_balance` row range from
+/// the row comparisons. Appends one line per mismatch to `violations`;
+/// returns the number of openings compared.
+fn compare_lower_bound_to_forward_root_lp(
+    deck: &str,
+    setup: &StudySetup,
+    skip_load_rows: bool,
+    violations: &mut Vec<String>,
+) -> usize {
+    let root = root_node(setup);
+    let root_stage = setup.node_graph.nodes[root].stage.0;
+    let load_balance =
+        &setup.stage_data.stage_templates.geometry_per_stage[root_stage].load_balance;
+    let row_skip = skip_load_rows.then_some(load_balance);
+    let n_openings = setup.node_graph.nodes[root].openings.len;
+    let initial_state = oracle_initial_state(setup);
+
+    let recorded = lower_bound_root_templates(
+        setup,
+        ActiveSolver::new().expect("ActiveSolver::new must succeed"),
+    )
+    .expect("lower_bound_root_templates must succeed");
+    assert_eq!(
+        recorded.len(),
+        n_openings,
+        "{deck}: lower bound recorded {} root templates but the root has {n_openings} openings",
+        recorded.len()
+    );
+
+    for (j, lb_template) in recorded.iter().enumerate() {
+        let raw_noise = node_opening_noise(setup, root, j);
+        let forward = capture_patched_node_template_at(setup, root, &raw_noise, &initial_state);
+
+        compare_bound_vec(
+            deck,
+            j,
+            "col_lower",
+            &lb_template.col_lower,
+            &forward.col_lower,
+            None,
+            violations,
+        );
+        compare_bound_vec(
+            deck,
+            j,
+            "col_upper",
+            &lb_template.col_upper,
+            &forward.col_upper,
+            None,
+            violations,
+        );
+        compare_bound_vec(
+            deck,
+            j,
+            "row_lower",
+            &lb_template.row_lower,
+            &forward.row_lower,
+            row_skip,
+            violations,
+        );
+        compare_bound_vec(
+            deck,
+            j,
+            "row_upper",
+            &lb_template.row_upper,
+            &forward.row_upper,
+            row_skip,
+            violations,
+        );
+    }
+    n_openings
+}
+
+/// Runs [`compare_lower_bound_to_forward_root_lp`] over every committed deck
+/// (skipping `SLOW_DECKS` unless `slow-tests`), `stochastic_parallel_study()`,
+/// and the chronological-noise study; returns the total openings compared
+/// and every mismatch line.
+fn sweep_lower_bound_vs_forward_root_lp(skip_load_rows: bool) -> (usize, Vec<String>) {
+    let slow_tests_enabled = cfg!(feature = "slow-tests");
+    let mut violations: Vec<String> = Vec::new();
+    let mut n_compared = 0usize;
+
+    for deck in committed_decks() {
+        if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
+            continue;
+        }
+        let setup = fresh_setup_with(&deck.dir, |_| {});
+        n_compared += compare_lower_bound_to_forward_root_lp(
+            &deck.key,
+            &setup,
+            skip_load_rows,
+            &mut violations,
+        );
+    }
+
+    let (stochastic_system, stochastic_config) = stochastic_parallel_study();
+    let stochastic_setup = build_setup_in_code(stochastic_system, &stochastic_config);
+    n_compared += compare_lower_bound_to_forward_root_lp(
+        "in-code/stochastic-parallel",
+        &stochastic_setup,
+        skip_load_rows,
+        &mut violations,
+    );
+
+    let (chronological_system, chronological_config) =
+        chronological_noise_study(&ChronologicalNoiseSpec::default());
+    let chronological_setup = build_setup_in_code(chronological_system, &chronological_config);
+    n_compared += compare_lower_bound_to_forward_root_lp(
+        "in-code/chronological-noise",
+        &chronological_setup,
+        skip_load_rows,
+        &mut violations,
+    );
+
+    (n_compared, violations)
+}
+
+#[test]
+fn lower_bound_root_lp_matches_the_forward_root_lp_outside_load_rows() {
+    let (n_compared, violations) = sweep_lower_bound_vs_forward_root_lp(true);
+    assert!(n_compared >= 1, "vacuity guard: no root opening compared");
+    assert!(
+        violations.is_empty(),
+        "lower-bound vs forward root LP mismatches (outside load rows):\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+#[ignore = "the lower bound leaves stage-0 load-balance rows unpatched"]
+fn lower_bound_root_lp_matches_the_forward_root_lp() {
+    let (n_compared, violations) = sweep_lower_bound_vs_forward_root_lp(false);
+    assert!(n_compared >= 1, "vacuity guard: no root opening compared");
+    assert!(
+        violations.is_empty(),
+        "lower-bound vs forward root LP mismatches:\n{}",
         violations.join("\n")
     );
 }

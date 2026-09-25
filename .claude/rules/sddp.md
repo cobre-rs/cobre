@@ -2280,11 +2280,18 @@ base is safe here only because a load-time rule rejects a `block_id` bound row
 on an anticipated thermal — see `cobre-io`'s
 `check_block_id_on_anticipated_thermal`),
 `thermal_bounds(thermal_idx, delivery_stage).cost_per_mwh` for its cost,
-`delivery_total_hours[delivery_stage]` and
-`delivery_cumulative_discount_factors[delivery_stage]` for its present-value objective,
+`delivery_total_hours[delivery_stage]` for its hours,
+`TimeValue::relative_delivery_discount(stage_idx, delivery_stage)` (the delivery
+stage's cumulative discount over the decision stage's, `D(m)/D(t)`, one
+division) for its discount, so the objective `cost * hours * D(m)/D(t)` is in
+stage-`t` units like every other stage-`t` cost,
 and `is_anticipated_decision_active_for_delivery` (the plant's window at
-`delivery_stage`) for its dormancy — each at the plant's own genuine delivery
-stage, never at `stage_idx`. The delivered commitment is a hard equality with
+`delivery_stage`) for its dormancy — each read at the plant's own genuine
+delivery stage (the discount relative to the decision stage), never at
+`stage_idx` alone. Pricing with the absolute `D(m)` discounts a decision taken
+after stage 0 twice (once in its own coefficient and once through the
+discounted future cost) and still compiles, since the two agree at stage 0
+(`D(0) = 1`). The delivered commitment is a hard equality with
 no slack (the fishing coupling pins the plant's delivery-stage generation to
 the committed value), so relatively-complete recourse requires the committed
 value always lie within the delivery stage's own generation bounds. A
@@ -2319,6 +2326,7 @@ overlay-ignoring base read safe, must update BOTH readers; updating only one
 prices a commitment against a different bound than its own box permits.
 
 Read: `lp/builder/columns.rs` (`fill_anticipated_columns`),
+`time_value.rs` (`TimeValue::relative_delivery_discount`),
 `lp/builder/state_box.rs` (`fill_commitment_hold_box`, the box reader of the same
 delivery-anchored base),
 `lp/indexer/anticipated_gate.rs` (`is_anticipated_decision_active_for_delivery`),
@@ -2328,6 +2336,8 @@ delivery-anchored base),
 `validation/semantic/block_bounds.rs`
 (`check_block_id_on_anticipated_thermal`, the rule the base read's safety
 depends on). Pinned by
+`test_anticipated_decision_after_stage_zero_is_priced_relative_to_its_own_stage`
+(a decision after stage 0 priced relative to its own stage),
 `test_anticipated_decision_delivery_anchored_bounds` (stage-varying delivery
 bounds/cost, mutation-verified against the decision-anchored read), the
 end-to-end

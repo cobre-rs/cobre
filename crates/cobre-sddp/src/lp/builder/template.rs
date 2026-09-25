@@ -17,6 +17,7 @@ use crate::setup::resolve_post_study_artifacts;
 use crate::setup::template_postprocess::{
     compute_cumulative_discount_factors, compute_per_stage_discount_factors,
 };
+use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, M3S_TO_HM3, StateBox, columns, entries, rows, scaling};
@@ -1226,7 +1227,7 @@ fn build_template_build_ctx<'a>(
         study_stage_ids,
         delivery_stage_ids,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
-        delivery_cumulative_discount_factors,
+        time_value: TimeValue::new(delivery_cumulative_discount_factors),
         delivery_total_hours,
         filling_v_target,
         arc_stage_weights,

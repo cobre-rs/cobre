@@ -285,8 +285,9 @@ slot never straddles a fixed window).
 
 **Owner-ratified: no objective term.** The revision that decided a
 já-comandada charged its fuel at that decision — the same convention this
-study applies to its own in-study decisions (cost and discount read at the
-delivery stage, charged on the decision column). Re-charging a fixed value
+study applies to its own in-study decisions (cost read at the delivery stage
+and discounted relative to the decision stage, `D(m)/D(t)`, charged on the
+decision column). Re-charging a fixed value
 here would double-count across revisions of a rolling study chain. Its effect
 on this study is exactly its displacement value, which the boundary fold (§6)
 prices. Outputs report the MW (§8); no cost output ever books it.

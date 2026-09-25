@@ -2252,6 +2252,7 @@ mod zero_cost_tests {
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
     use crate::resolved_parameters::ResolvedParameters;
     use crate::setup::PostStudyResolved;
+    use crate::time_value::TimeValue;
 
     use super::super::columns::{ColumnBufs, fill_stage_columns, fill_thermal_columns};
     use super::super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
@@ -2432,7 +2433,7 @@ mod zero_cost_tests {
                 // Sized to cover every active plant's delivery stage
                 // (`stage_idx + K_i < n_stages`); `fill_anticipated_columns`
                 // indexes these by delivery stage when pricing the decision column.
-                delivery_cumulative_discount_factors: vec![1.0; self.bounds.n_stages() + k_max],
+                time_value: TimeValue::new(vec![1.0; self.bounds.n_stages() + k_max]),
                 delivery_total_hours: vec![744.0; self.bounds.n_stages() + k_max],
                 // No hydros ⇒ no filling targets.
                 filling_v_target: BTreeMap::new(),
@@ -3532,6 +3533,7 @@ mod pumping_water_tests {
     use crate::resolved_parameters::ResolvedParameters;
     use crate::setup::PostStudyResolved;
     use crate::test_support::make_unit_group;
+    use crate::time_value::TimeValue;
 
     use super::super::M3S_TO_HM3;
     use super::super::columns::{ColumnBufs, fill_pumping_columns, fill_stage_columns};
@@ -4203,7 +4205,7 @@ mod pumping_water_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; N_STAGES],
+                time_value: TimeValue::new(vec![1.0; N_STAGES]),
                 delivery_total_hours: vec![744.0; N_STAGES],
                 // These single-stage fixtures decouple `stage.id` from
                 // `stage_idx` (every phase is exercised at `stage_idx = 0` against

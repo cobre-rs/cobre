@@ -76,6 +76,7 @@ use crate::setup::node_graph::{
 };
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
+use crate::time_value::TimeValue;
 use crate::training::backward::{extract_state_duals_only, write_opening_outcome};
 use crate::training::stage_solve_prep::{
     InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
@@ -556,7 +557,7 @@ pub fn geometry(
         study_stage_ids: Vec::new(),
         delivery_stage_ids: Vec::new(),
         has_penalty: dims.has_inflow_penalty,
-        delivery_cumulative_discount_factors: vec![1.0],
+        time_value: TimeValue::new(vec![1.0]),
         delivery_total_hours: vec![744.0],
         filling_v_target: BTreeMap::new(),
         arc_stage_weights: HashMap::new(),

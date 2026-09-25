@@ -29,6 +29,7 @@ use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResol
 use crate::resolved_parameters::ResolvedParameters;
 use crate::setup::PostStudyResolved;
 use crate::test_support::{make_unit_group, state_layout};
+use crate::time_value::TimeValue;
 
 use super::super::test_support::{state_layout_for, zero_hydro_penalties};
 use super::{
@@ -249,7 +250,7 @@ impl ZeroEntityFixtures {
             has_penalty: false,
             // Tests that use ZeroEntityFixtures don't exercise discount
             // factors; provide n_stages = 1 element vecs that won't panic.
-            delivery_cumulative_discount_factors: vec![1.0],
+            time_value: TimeValue::new(vec![1.0]),
             delivery_total_hours: vec![744.0],
             filling_v_target: BTreeMap::new(),
         }
@@ -726,7 +727,7 @@ impl UsefulVolumeFixtures {
             study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             delivery_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0; n_stages],
+            time_value: TimeValue::new(vec![1.0; n_stages]),
             delivery_total_hours: vec![744.0; n_stages],
             filling_v_target: BTreeMap::new(),
         }
@@ -1152,7 +1153,7 @@ impl TwoHydroFixtures {
             study_stage_ids: vec![],
             delivery_stage_ids: vec![],
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0],
+            time_value: TimeValue::new(vec![1.0]),
             delivery_total_hours: vec![744.0],
             filling_v_target: BTreeMap::new(),
         }
@@ -1485,7 +1486,7 @@ impl FphaMixFixtures {
             study_stage_ids: vec![],
             delivery_stage_ids: vec![],
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0],
+            time_value: TimeValue::new(vec![1.0]),
             delivery_total_hours: vec![744.0],
             filling_v_target: BTreeMap::new(),
         }
@@ -1663,7 +1664,7 @@ impl FillingMembershipFixtures {
             study_stage_ids: vec![],
             delivery_stage_ids: vec![],
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0],
+            time_value: TimeValue::new(vec![1.0]),
             delivery_total_hours: vec![744.0],
             filling_v_target: BTreeMap::new(),
         }
@@ -2789,7 +2790,7 @@ impl AntFixturesWithNStages {
             study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             delivery_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0; n_stages],
+            time_value: TimeValue::new(vec![1.0; n_stages]),
             delivery_total_hours: vec![744.0; n_stages],
             filling_v_target: BTreeMap::new(),
         }
@@ -3044,7 +3045,7 @@ impl PumpingFixtures {
             study_stage_ids: vec![],
             delivery_stage_ids: vec![],
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0; n_stages],
+            time_value: TimeValue::new(vec![1.0; n_stages]),
             delivery_total_hours: vec![744.0; n_stages],
             filling_v_target: BTreeMap::new(),
         }
@@ -3778,7 +3779,7 @@ impl TwoHydroMultiBusFixtures {
             study_stage_ids: vec![],
             delivery_stage_ids: vec![],
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0],
+            time_value: TimeValue::new(vec![1.0]),
             delivery_total_hours: vec![744.0],
             filling_v_target: BTreeMap::new(),
         }
@@ -4027,7 +4028,7 @@ impl FphaMultiBusFixtures {
             study_stage_ids: vec![],
             delivery_stage_ids: vec![],
             has_penalty: false,
-            delivery_cumulative_discount_factors: vec![1.0],
+            time_value: TimeValue::new(vec![1.0]),
             delivery_total_hours: vec![744.0],
             filling_v_target: BTreeMap::new(),
         }

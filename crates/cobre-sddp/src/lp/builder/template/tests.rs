@@ -1724,7 +1724,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         study_stage_ids: ctx_a.study_stage_ids.clone(),
         delivery_stage_ids: ctx_a.delivery_stage_ids.clone(),
         has_penalty: ctx_a.has_penalty,
-        delivery_cumulative_discount_factors: ctx_a.delivery_cumulative_discount_factors.clone(),
+        time_value: ctx_a.time_value.clone(),
         delivery_total_hours: ctx_a.delivery_total_hours.clone(),
         filling_v_target: ctx_a.filling_v_target.clone(),
         arc_stage_weights: ctx_a.arc_stage_weights.clone(),
@@ -2052,7 +2052,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
 }
 
 // ── Delivery-axis extended vectors (delivery_stage_ids / delivery_total_hours /
-// delivery_cumulative_discount_factors) ────────────────────────────────────
+// time_value) ────────────────────────────────────────────────────────────
 
 /// Two post-study stages following the discounted 3-stage study horizon,
 /// mirroring [`cobre_core::model::post_study`]'s doc fixture. No thermal
@@ -2206,12 +2206,12 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         post_study.stages[0].duration_hours
     );
     assert_eq!(
-        ctx.delivery_cumulative_discount_factors[3],
+        ctx.time_value.relative_delivery_discount(0, 3),
         ctx.post_study_resolved.cumulative_discount_factors[0]
     );
 }
 
-/// `delivery_cumulative_discount_factors` is bit-identical to
+/// `TimeValue`'s delivery-axis factors are bit-identical to
 /// `compute_cumulative_discount_factors` run over the study's own per-stage
 /// factors concatenated with the post-study per-stage factors — the same
 /// identity `continued_cumulative_discount_matches_extended_horizon`
@@ -2270,9 +2270,12 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     extended_per_stage.extend_from_slice(&per_stage_post);
     let extended_cumulative = compute_cumulative_discount_factors(&extended_per_stage);
 
+    let recomputed: Vec<f64> = (0..extended_cumulative.len())
+        .map(|m| ctx.time_value.relative_delivery_discount(0, m))
+        .collect();
     assert_eq!(
-        ctx.delivery_cumulative_discount_factors, extended_cumulative,
-        "delivery_cumulative_discount_factors must be bit-identical to \
+        recomputed, extended_cumulative,
+        "TimeValue's delivery-axis factors must be bit-identical to \
          compute_cumulative_discount_factors over study++post per-stage factors"
     );
 }

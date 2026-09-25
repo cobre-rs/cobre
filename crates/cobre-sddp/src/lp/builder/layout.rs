@@ -23,6 +23,7 @@ use crate::indexer::{
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::setup::PostStudyResolved;
+use crate::time_value::TimeValue;
 
 use super::delivery_ring::for_each_ring_residue;
 use super::template::StageGeometry;
@@ -146,16 +147,16 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) delivery_stage_ids: Vec<i32>,
     /// Whether any penalty method is active.
     pub(crate) has_penalty: bool,
-    /// Present-value multiplier at each DELIVERY stage, length
+    /// Present-value discounting at each DELIVERY stage, length
     /// `n_study_stages + n_post` — the study's own per-stage factors
-    /// concatenated with `post_study_resolved.cumulative_discount_factors`. The
-    /// strict predicate `stage_idx + K_i < n_stages` keeps every delivery
-    /// lookup in range.
-    pub(crate) delivery_cumulative_discount_factors: Vec<f64>,
+    /// concatenated with `post_study_resolved.cumulative_discount_factors`, the
+    /// first entry exactly `1.0`. The strict predicate `stage_idx + K_i <
+    /// n_stages` keeps every delivery lookup in range.
+    pub(crate) time_value: TimeValue,
     /// Σ `block.duration_hours` per DELIVERY stage, length
     /// `n_study_stages + n_post` — the study's own per-stage hours
     /// concatenated with `post_study_resolved.total_hours` (same in-range
-    /// guarantee as `delivery_cumulative_discount_factors`).
+    /// guarantee as [`Self::time_value`]).
     pub(crate) delivery_total_hours: Vec<f64>,
     /// Per-stage minimum target-storage trajectory, keyed `(hydro_idx, stage_id)
     /// → V_target` \[hm³\]. Computed once by a backward fold from the dead volume

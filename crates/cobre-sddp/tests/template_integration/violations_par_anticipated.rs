@@ -2,6 +2,11 @@
 
 use super::*;
 
+use super::common::in_code_studies::discounted_anticipated_study;
+use super::common::{build_setup_in_code, run_simulation};
+use cobre_io::Config;
+use cobre_io::config::{SimulationConfig as IoSimulationConfig, SimulationSelection};
+
 #[test]
 fn min_outflow_active_col_bounds() {
     let result = build_active_violations_template();
@@ -1803,7 +1808,6 @@ fn test_anticipated_thermals_lp_roundtrip_k2_with_discount_rate() {
 /// stage-1 cost: `D(3) / D(1)`, so the θ cascade's `D(1)` brings it to `D(3)` at
 /// the root instead of `D(1)·D(3)`.
 #[test]
-#[ignore = "known defect: the anticipated decision cost uses the absolute delivery discount, not one relative to its decision stage"]
 fn test_anticipated_decision_after_stage_zero_is_priced_relative_to_its_own_stage() {
     let k = 2_usize;
     let annual_rate = 0.06_f64;
@@ -1834,5 +1838,91 @@ fn test_anticipated_decision_after_stage_zero_is_priced_relative_to_its_own_stag
         "stage {decision_stage} anticipated_decision objective must be \
          50 * {total_hours} * D({delivery_stage})/D({decision_stage}) / COST_SCALE_FACTOR = \
          {expected_obj:.15} (rel_err={rel_err:.2e}), got {actual_obj:.15}"
+    );
+}
+
+/// Every active in-study anticipated decision is priced relative to its own
+/// decision stage's discount, `D(t + 2)/D(t)` — never the absolute delivery
+/// discount `D(t + 2)`.
+#[test]
+fn discounted_anticipated_study_prices_each_decision_relative_to_its_stage() {
+    let (system, config) = discounted_anticipated_study();
+    let setup = build_setup_in_code(system, &config);
+    let stage_ctx = setup.stage_ctx();
+    let d = stage_ctx.cumulative_discount_factors;
+
+    let mut checked_after_stage_zero = false;
+    for t in 0..stage_ctx.templates.len() {
+        let decision_col = stage_ctx.geometry_per_stage[t].anticipated_decision.start;
+        let template = &stage_ctx.templates[t];
+        if template.col_upper[decision_col] == 0.0 {
+            continue;
+        }
+        let unscaled = template.objective[decision_col] * stage_ctx.cost_scale_factor
+            / template.col_scale[decision_col];
+        let expected = 50.0 * 720.0 * d[t + 2] / d[t];
+        let rel_err = (unscaled - expected).abs() / expected.abs().max(1e-12);
+        assert!(
+            rel_err < 1e-12,
+            "stage {t}: unscaled anticipated decision objective must be \
+             50 * 720 * D({})/D({t}) = {expected:.15}, got {unscaled:.15} (rel_err={rel_err:.2e})",
+            t + 2,
+        );
+        checked_after_stage_zero |= t >= 1;
+    }
+    assert!(
+        checked_after_stage_zero,
+        "vacuity guard: no active anticipated decision at t >= 1 was checked"
+    );
+}
+
+/// The simulation books the anticipated decision's present value at its
+/// delivery stage: `anticipated_thermal_cost * discount_factor` (both read at
+/// the decision stage) equals `cost * hours * D(delivery) * decision_mw`.
+#[test]
+fn discounted_anticipated_simulation_books_present_value_at_delivery() {
+    let (system, config) = discounted_anticipated_study();
+    // The fixture's own config leaves simulation disabled (it backs the
+    // training-side LP/manifest snapshot); enable it here, sampling a single
+    // deterministic scenario (std_m3s == 0.0, branching_factor == 1).
+    let config = Config {
+        simulation: IoSimulationConfig {
+            enabled: true,
+            io_channel_capacity: 8,
+            selection: Some(SimulationSelection::Sampled { num_scenarios: 1 }),
+            ..IoSimulationConfig::default()
+        },
+        ..config
+    };
+    let mut setup = build_setup_in_code(system, &config);
+    let scenario_results = run_simulation(&mut setup, 5);
+    let scenario = &scenario_results[0];
+    let d: Vec<f64> = setup.stage_ctx().cumulative_discount_factors.to_vec();
+
+    let mut positive_after_stage_zero = false;
+    for (t, stage) in scenario.stages.iter().enumerate() {
+        let Some(thermal) = stage.thermals.iter().find(|th| th.is_anticipated) else {
+            continue;
+        };
+        let Some(x) = thermal.anticipated_decision_mw else {
+            continue;
+        };
+        let cost = &stage.costs[0];
+        let lhs = cost.anticipated_thermal_cost * cost.discount_factor;
+        let rhs = 50.0 * 720.0 * d[t + 2] * x;
+        let tol = 1e-9 * rhs.abs().max(1.0);
+        assert!(
+            (lhs - rhs).abs() < tol,
+            "stage {t}: anticipated_thermal_cost * discount_factor must book the present \
+             value at delivery: 50 * 720 * D({}) * {x} = {rhs}, got {lhs}",
+            t + 2,
+        );
+        if t >= 1 && x > 0.0 {
+            positive_after_stage_zero = true;
+        }
+    }
+    assert!(
+        positive_after_stage_zero,
+        "vacuity guard: no stage t >= 1 has a positive anticipated decision"
     );
 }

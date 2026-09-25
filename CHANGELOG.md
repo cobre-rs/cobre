@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stage.** It was previously priced for one block's hours while its flow moved
   the whole stage's water.
 
+- **An anticipated thermal decision taken after the study's first stage is no
+  longer discounted twice under a positive discount rate.** The decision's
+  cost was priced by the absolute delivery-stage discount; every other
+  stage-`t` cost is in stage-`t` units and the future-cost function already
+  carries it back to the root through that stage's own discount, so a
+  decision after stage 0 paid its discount twice. It is now priced relative
+  to its own decision stage, `D(delivery)/D(decision)`.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

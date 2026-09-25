@@ -38,6 +38,7 @@ use crate::resolved_parameters::ResolvedParameters;
 use crate::setup::PostStudyResolved;
 use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 use crate::test_support;
+use crate::time_value::TimeValue;
 
 // -------------------------------------------------------------------------
 // HydroReverseLookup per-stage membership
@@ -7679,7 +7680,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         study_stage_ids: Vec::new(),
         delivery_stage_ids: Vec::new(),
         has_penalty: false,
-        delivery_cumulative_discount_factors: vec![1.0],
+        time_value: TimeValue::new(vec![1.0]),
         delivery_total_hours: vec![730.0],
         filling_v_target: BTreeMap::new(),
         arc_stage_weights: HashMap::new(),

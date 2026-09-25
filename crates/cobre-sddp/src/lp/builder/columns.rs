@@ -565,13 +565,14 @@ pub(super) fn fill_thermal_columns(
 /// `ctx.post_study_resolved.anticipated_bound` supplies `(cost, min_mw,
 /// max_mw)` from the post-study table ALONE — no intersection with a second
 /// declaration, since `post_study_stages.json` is the sole post-horizon bound
-/// surface. Both branches read delivery
-/// hours/discount from the EXTENDED `ctx.delivery_total_hours`/
-/// `ctx.delivery_cumulative_discount_factors` vectors and bound the ring slot
-/// [`for_each_ring_residue`] resolves for the decision's own delivery target
-/// (`ring_index(delivery_stage) mod k_max`). A missing post-study cell — a deck error the loader rejects
-/// upstream, never reported here — degrades to the same dormant `[0, 0]`
-/// treatment an inactive plant gets.
+/// surface. Both branches read delivery hours from the EXTENDED
+/// `ctx.delivery_total_hours` vector, price via
+/// `ctx.time_value.relative_delivery_discount(stage_idx, delivery_stage)`, and
+/// bound the ring slot [`for_each_ring_residue`] resolves for the decision's
+/// own delivery target (`ring_index(delivery_stage) mod k_max`). A missing
+/// post-study cell — a deck error the loader rejects upstream, never reported
+/// here — degrades to the same dormant `[0, 0]` treatment an inactive plant
+/// gets.
 ///
 /// Active (`is_anticipated_decision_active_for_delivery`) is evaluated at the decision's
 /// OWN delivery stage; `delivery_stage == n_delivery` is INACTIVE (strict gate) — pricing
@@ -579,8 +580,10 @@ pub(super) fn fill_thermal_columns(
 /// row is emitted iff the decision is active (lockstep: zero-bound iff no def row),
 /// regardless of whether the post-study branch below resolves a price.
 ///
-/// The decision objective is the present-value commit cost UNSCALED — the caller divides
-/// every non-theta entry by `COST_SCALE_FACTOR`.
+/// The decision objective is priced in the DECISION stage's own units —
+/// `cost * delivery_hours * D(delivery)/D(decision)`, UNSCALED — so the θ
+/// cascade discounts it back to the root exactly once instead of twice; the
+/// caller divides every non-theta entry by `COST_SCALE_FACTOR`.
 pub(super) fn fill_anticipated_columns(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
@@ -655,8 +658,11 @@ pub(super) fn fill_anticipated_columns(
                 bufs.col_upper[decision_col] = max_mw;
 
                 let delivery_hours = ctx.delivery_total_hours[delivery_stage];
-                let d_factor = ctx.delivery_cumulative_discount_factors[delivery_stage];
-                bufs.objective[decision_col] = cost * delivery_hours * d_factor;
+                bufs.objective[decision_col] = cost
+                    * delivery_hours
+                    * ctx
+                        .time_value
+                        .relative_delivery_discount(stage_idx, delivery_stage);
             } else {
                 bufs.col_lower[decision_col] = 0.0;
                 bufs.col_upper[decision_col] = 0.0;
@@ -1335,6 +1341,7 @@ mod interior_storage_bound_tests {
     };
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::state_layout_for;
@@ -1608,7 +1615,7 @@ mod interior_storage_bound_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0],
+                time_value: TimeValue::new(vec![1.0]),
                 delivery_total_hours: vec![744.0],
                 filling_v_target: BTreeMap::new(),
             }
@@ -1853,6 +1860,7 @@ mod diversion_bound_tests {
     use crate::indexer::HydroCellIndex;
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{state_layout_for, two_block_stage, zero_hydro_penalties};
@@ -2111,7 +2119,7 @@ mod diversion_bound_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0],
+                time_value: TimeValue::new(vec![1.0]),
                 delivery_total_hours: vec![744.0],
                 filling_v_target: BTreeMap::new(),
             }
@@ -2262,6 +2270,7 @@ mod filling_phase_gating_tests {
     use crate::indexer::{BlockIdx, FphaCellLocal, HydroCell, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{
@@ -2541,7 +2550,7 @@ mod filling_phase_gating_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0],
+                time_value: TimeValue::new(vec![1.0]),
                 delivery_total_hours: vec![744.0],
                 filling_v_target: BTreeMap::new(),
             }
@@ -3406,6 +3415,7 @@ mod anticipated_objective_tests {
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
     use crate::resolved_parameters::ResolvedParameters;
     use crate::setup::PostStudyResolved;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{
@@ -3558,7 +3568,7 @@ mod anticipated_objective_tests {
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0, 0.9, 0.81, 0.729, 0.6561, 0.59049],
+                time_value: TimeValue::new(vec![1.0, 0.9, 0.81, 0.729, 0.6561, 0.59049]),
                 delivery_total_hours: vec![744.0; N_STAGES],
                 filling_v_target: BTreeMap::new(),
             }
@@ -3648,12 +3658,14 @@ mod anticipated_objective_tests {
                 "standard thermal objective must be priced at col {col}",
             );
         }
-        // The anticipated decision column carries the NPV commitment cost
-        // cost_per_mwh(delivery) * total_hours[delivery] * cumulative_discount[delivery].
+        // The anticipated decision column carries the commit cost, in stage-0
+        // units: cost_per_mwh(delivery) * total_hours[delivery] * relative_discount.
         let decision_col = layout.anticipated.col_anticipated_decision_start;
         let expected_npv = DELIVERY_COST_PER_MWH
             * ctx.delivery_total_hours[DELIVERY_STAGE]
-            * ctx.delivery_cumulative_discount_factors[DELIVERY_STAGE];
+            * ctx
+                .time_value
+                .relative_delivery_discount(STAGE_IDX, DELIVERY_STAGE);
         assert_eq!(
             objective[decision_col], expected_npv,
             "anticipated decision objective must equal the NPV commitment cost",
@@ -3841,7 +3853,7 @@ mod anticipated_objective_tests {
                 study_stage_ids: (0..self.n_stages as i32).collect(),
                 delivery_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: self.discount.clone(),
+                time_value: TimeValue::new(self.discount.clone()),
                 delivery_total_hours: self.hours.clone(),
                 filling_v_target: BTreeMap::new(),
             }
@@ -3908,7 +3920,7 @@ mod anticipated_objective_tests {
         );
         let expected_obj = cost
             * ctx.delivery_total_hours[delivery]
-            * ctx.delivery_cumulative_discount_factors[delivery];
+            * ctx.time_value.relative_delivery_discount(0, delivery);
         assert_eq!(
             objective[decision_col], expected_obj,
             "decision objective must be priced at its OWN delivery stage \
@@ -4200,7 +4212,7 @@ mod anticipated_objective_tests {
                 study_stage_ids: (0..i32::try_from(PSA_N_STAGES).unwrap()).collect(),
                 delivery_stage_ids: self.delivery_stage_ids.clone(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: self.delivery_discount.clone(),
+                time_value: TimeValue::new(self.delivery_discount.clone()),
                 delivery_total_hours: self.delivery_hours.clone(),
                 filling_v_target: BTreeMap::new(),
             }
@@ -4234,7 +4246,7 @@ mod anticipated_objective_tests {
         );
         let expected_obj = cost
             * ctx.delivery_total_hours[delivery]
-            * ctx.delivery_cumulative_discount_factors[delivery];
+            * ctx.time_value.relative_delivery_discount(0, delivery);
         assert_eq!(
             objective[decision_col], expected_obj,
             "objective must equal cost * hours * discount at the delivery stage"
@@ -4266,10 +4278,10 @@ mod anticipated_objective_tests {
         );
         let expected_obj = 42.0
             * ctx.delivery_total_hours[delivery]
-            * ctx.delivery_cumulative_discount_factors[delivery];
+            * ctx.time_value.relative_delivery_discount(1, delivery);
         assert_eq!(
             objective[decision_col], expected_obj,
-            "objective must equal the post-study cell's cost * delivery hours * delivery discount"
+            "objective must equal the post-study cell's cost * delivery hours * relative discount"
         );
     }
 
@@ -4353,6 +4365,7 @@ mod block_family_slack_tests {
     use crate::indexer::{BlockIdx, HydroCell, HydroCellIndex, HydroSys};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{state_layout_for, two_block_stage, zero_hydro_penalties};
@@ -4719,7 +4732,7 @@ mod block_family_slack_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0],
+                time_value: TimeValue::new(vec![1.0]),
                 delivery_total_hours: vec![BLOCK_HOURS[0] + BLOCK_HOURS[1]],
                 filling_v_target: BTreeMap::new(),
             }
@@ -4887,6 +4900,7 @@ mod evaporation_slack_objective_tests {
     use crate::indexer::{BlockIdx, EvapLocal, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{state_layout_for, zero_hydro_penalties};
@@ -5170,7 +5184,7 @@ mod evaporation_slack_objective_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0],
+                time_value: TimeValue::new(vec![1.0]),
                 delivery_total_hours: vec![744.0],
                 filling_v_target: BTreeMap::new(),
             }
@@ -5304,6 +5318,7 @@ mod contract_column_tests {
     use crate::indexer::HydroCellIndex;
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::state_layout_for;
@@ -5492,7 +5507,7 @@ mod contract_column_tests {
                 study_stage_ids: vec![],
                 delivery_stage_ids: vec![],
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; N_STAGES],
+                time_value: TimeValue::new(vec![1.0; N_STAGES]),
                 delivery_total_hours: vec![744.0; N_STAGES],
                 filling_v_target: BTreeMap::new(),
             }
@@ -5625,6 +5640,7 @@ mod thermal_block_bound_tests {
     use crate::indexer::HydroCellIndex;
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage};
@@ -5838,7 +5854,7 @@ mod thermal_block_bound_tests {
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; N_STAGES],
+                time_value: TimeValue::new(vec![1.0; N_STAGES]),
                 delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
                 filling_v_target: BTreeMap::new(),
             }
@@ -6050,6 +6066,7 @@ mod line_contract_pumping_block_bound_tests {
     use crate::indexer::HydroCellIndex;
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage};
@@ -6402,7 +6419,7 @@ mod line_contract_pumping_block_bound_tests {
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; N_STAGES],
+                time_value: TimeValue::new(vec![1.0; N_STAGES]),
                 delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
                 filling_v_target: BTreeMap::new(),
             }
@@ -6786,6 +6803,7 @@ mod hydro_block_bound_tests {
     use crate::indexer::{BlockIdx, FphaCellLocal, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::rows::fill_operational_violation_rows;
@@ -7149,7 +7167,7 @@ mod hydro_block_bound_tests {
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; N_STAGES],
+                time_value: TimeValue::new(vec![1.0; N_STAGES]),
                 delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
                 filling_v_target: BTreeMap::new(),
             }
@@ -7847,6 +7865,7 @@ mod cell_column_bound_tests {
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::test_support::make_unit_group;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{
@@ -8262,7 +8281,7 @@ mod cell_column_bound_tests {
                 study_stage_ids: (0..self.n_stages as i32).collect(),
                 delivery_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; self.n_stages],
+                time_value: TimeValue::new(vec![1.0; self.n_stages]),
                 delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); self.n_stages],
                 filling_v_target: BTreeMap::new(),
             }
@@ -9053,6 +9072,7 @@ mod ncs_objective_tests {
     use crate::indexer::HydroCellIndex;
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::time_value::TimeValue;
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage};
@@ -9226,7 +9246,7 @@ mod ncs_objective_tests {
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                delivery_cumulative_discount_factors: vec![1.0; N_STAGES],
+                time_value: TimeValue::new(vec![1.0; N_STAGES]),
                 delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
                 filling_v_target: BTreeMap::new(),
             }

@@ -1,7 +1,7 @@
 //! Declaration-order permutation invariance of every committed deck's
-//! stage-LP template facts: the permanent successor to the build-twice check,
-//! subsuming it by running in-process over the full fact set
-//! ([`template_fact_groups`]) instead of one seeded pair per golden case.
+//! stage-LP template facts: permuting a deck's input entity declaration order
+//! leaves every stage-LP template fact group ([`template_fact_groups`])
+//! byte-identical.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

@@ -1,7 +1,11 @@
 //! Generalized patched-template capture (`capture_patched_node_template_at`,
 //! `raw_noise_len`, `node_opening_noise`) must agree with the existing
 //! node-capture helpers and must produce the raw-noise length every opening
-//! of a node expects.
+//! of a node expects. The one-hot patch-ownership sweep
+//! (`every_noise_dimension_patches_only_its_own_entity`) then uses that
+//! capture to assert, over every committed deck plus a stochastic in-code
+//! fixture, that each noise dimension patches only the row/column family its
+//! own entity owns.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -11,7 +15,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
 
-use cobre_core::BlockMode;
+use cobre_core::{BlockMode, EntityId};
 use cobre_sddp::StudySetup;
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::NodePos;
@@ -88,9 +92,33 @@ fn load_chunk(geom: &StageGeometry, bus_pos: usize) -> Range<usize> {
     start..start + geom.n_blks
 }
 
-fn ncs_chunk(ncs_col_start: usize, n_blks: usize, slot: usize) -> Range<usize> {
-    let start = ncs_col_start + slot * n_blks;
+fn ncs_chunk(ncs_col_start: usize, n_blks: usize, sys_idx: usize) -> Range<usize> {
+    let start = ncs_col_start + sys_idx * n_blks;
     start..start + n_blks
+}
+
+/// Maps stochastic NCS slot `r` (`setup.stochastic.ncs_entity_ids()[r]`) to its
+/// dense system index — its position in `system_ncs_ids`, the deck's own
+/// `non_controllable_sources()` in canonical order — the same lookup
+/// `build_ncs_entity_data` uses to size the `pub(crate)`
+/// `StudySetup::ncs_stochastic_dense_col`, unreachable from this integration
+/// test, so this mirrors it through the public `System`/`StochasticContext`
+/// accessors instead. Indexing `r` directly into `system_ncs_ids` is the
+/// wrong-but-compiling alternative: `ncs_entity_ids` sorts by ID alone while
+/// `non_controllable_sources` sorts by `(operational_start_date, id)`, so the
+/// two orders diverge whenever the system's NCS entities disagree on start date.
+fn ncs_dense_col_map(system_ncs_ids: &[EntityId], setup: &StudySetup) -> Vec<usize> {
+    setup
+        .stochastic
+        .ncs_entity_ids()
+        .iter()
+        .map(|id| {
+            system_ncs_ids
+                .iter()
+                .position(|sys_id| sys_id == id)
+                .expect("stochastic NCS entity id must exist in the system's NCS list")
+        })
+        .collect()
 }
 
 /// LP row/column indices whose bounds differ between two templates (compared
@@ -177,47 +205,28 @@ fn check_load(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn check_ncs(
     deck: &str,
     pos: NodePos,
     dim: usize,
+    sys_idx: usize,
     ncs_col_start: usize,
     n_blks: usize,
-    n_ncs: usize,
     changed: &ChangedIndices,
     violations: &mut Vec<String>,
 ) {
     if !changed.rows.is_empty() {
         violations.push(format!(
-            "{deck} node={pos} dim={dim} (ncs): unexpected row changes {:?}",
+            "{deck} node={pos} dim={dim} (ncs sys_idx={sys_idx}): unexpected row changes {:?}",
             changed.rows
         ));
     }
-    let Some(&first) = changed.cols.first() else {
-        return;
-    };
-    let Some(rel) = first.checked_sub(ncs_col_start) else {
-        violations.push(format!(
-            "{deck} node={pos} dim={dim} (ncs): column {first} precedes the NCS family start \
-             {ncs_col_start}"
-        ));
-        return;
-    };
-    let slot = rel / n_blks;
-    if slot >= n_ncs {
-        violations.push(format!(
-            "{deck} node={pos} dim={dim} (ncs): column {first} falls outside the {n_ncs}-slot \
-             NCS family starting at {ncs_col_start}"
-        ));
-        return;
-    }
-    let chunk = ncs_chunk(ncs_col_start, n_blks, slot);
+    let chunk = ncs_chunk(ncs_col_start, n_blks, sys_idx);
     for &col in &changed.cols {
         if !chunk.contains(&col) {
             violations.push(format!(
-                "{deck} node={pos} dim={dim} (ncs): column {col} outside single ncs chunk \
-                 {chunk:?}"
+                "{deck} node={pos} dim={dim} (ncs sys_idx={sys_idx}): column {col} outside \
+                 single ncs chunk {chunk:?}"
             ));
         }
     }
@@ -229,6 +238,7 @@ fn check_ncs(
 fn sweep_setup(
     deck_key: &str,
     setup: &StudySetup,
+    ncs_dense_col: &[usize],
     violations: &mut Vec<String>,
     vacuity: &mut BTreeMap<(&'static str, &'static str), usize>,
 ) {
@@ -244,7 +254,6 @@ fn sweep_setup(
         let geom = &setup.stage_data.stage_templates.geometry_per_stage[stage];
         let mode_tag = block_mode_tag(geom.block_mode);
         let ncs_col_start = setup.stage_data.stage_templates.ncs_col_starts[stage];
-        let n_ncs_dense = setup.stage_data.stage_templates.n_ncs;
 
         let (lo, hi) = stage_state_box_bounds(setup, stage.saturating_sub(1));
         let incoming_state: Vec<f64> = initial_state
@@ -276,13 +285,20 @@ fn sweep_setup(
                 check_load(deck_key, pos, dim, bus_pos, geom, &changed, violations);
             } else {
                 *vacuity.entry((mode_tag, "ncs")).or_insert(0) += 1;
+                let r = dim - n_hydros - n_load;
+                let sys_idx = *ncs_dense_col.get(r).unwrap_or_else(|| {
+                    panic!(
+                        "{deck_key}: no dense-column mapping for stochastic NCS slot {r} \
+                         (dim {dim}); pass an ncs_dense_col sized to n_stochastic_ncs"
+                    )
+                });
                 check_ncs(
                     deck_key,
                     pos,
                     dim,
+                    sys_idx,
                     ncs_col_start,
                     geom.n_blks,
-                    n_ncs_dense,
                     &changed,
                     violations,
                 );
@@ -306,14 +322,21 @@ fn every_noise_dimension_patches_only_its_own_entity() {
             continue;
         }
         let setup = fresh_setup_with(&deck.dir, |_| {});
-        sweep_setup(&deck.key, &setup, &mut violations, &mut vacuity);
+        sweep_setup(&deck.key, &setup, &[], &mut violations, &mut vacuity);
     }
 
     let (stochastic_system, stochastic_config) = stochastic_parallel_study();
+    let system_ncs_ids: Vec<EntityId> = stochastic_system
+        .non_controllable_sources()
+        .iter()
+        .map(|n| n.id)
+        .collect();
     let stochastic_setup = build_setup_in_code(stochastic_system, &stochastic_config);
+    let ncs_dense_col = ncs_dense_col_map(&system_ncs_ids, &stochastic_setup);
     sweep_setup(
         "in-code/stochastic-parallel",
         &stochastic_setup,
+        &ncs_dense_col,
         &mut violations,
         &mut vacuity,
     );

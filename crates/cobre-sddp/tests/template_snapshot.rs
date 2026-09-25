@@ -66,15 +66,17 @@ fn fact_lines(key: &str, setup: &StudySetup) -> Vec<String> {
         .collect()
 }
 
-/// Per-field simulation digest for a fixed deck subset, trained under
-/// `HiGHS` only. The `#[cfg(not(feature = "highs"))]` sibling below keeps
-/// `lines()` compiling under a CLP-only build; `lines()` itself skips
-/// training outside `slow-tests`.
-#[cfg(feature = "highs")]
+/// Per-field simulation digest for a fixed deck subset, trained under `HiGHS`
+/// only. `lines()` skips training outside `highs`+`slow-tests` via a runtime
+/// `cfg!` check, so the digest code below compiles and lints under a
+/// CLP-only build too; only the `HighsSolver` import and call are gated on
+/// `feature = "highs"`.
 mod sim_view {
     use std::collections::BTreeMap;
+    use std::path::Path;
 
     use cobre_sddp::{SimulationScenarioResult, StudySetup};
+    #[cfg(feature = "highs")]
     use cobre_solver::highs::HighsSolver;
     use serde_json::{Map, Value};
     use sha2::{Digest, Sha256};
@@ -207,6 +209,16 @@ mod sim_view {
             .collect()
     }
 
+    #[cfg(feature = "highs")]
+    fn train_and_simulate(dir: &Path) -> (StudySetup, Vec<SimulationScenarioResult>) {
+        super::common::parity_hash::train_and_simulate_at_dir(dir, HighsSolver::new)
+    }
+
+    #[cfg(not(feature = "highs"))]
+    fn train_and_simulate(_dir: &Path) -> (StudySetup, Vec<SimulationScenarioResult>) {
+        unreachable!("lines() only calls train_and_simulate under feature = \"highs\"")
+    }
+
     pub(super) fn lines() -> Vec<String> {
         if !cfg!(all(feature = "highs", feature = "slow-tests")) {
             return Vec::new();
@@ -215,20 +227,10 @@ mod sim_view {
             .into_iter()
             .filter(|deck| SIM_VIEW_DECKS.contains(&deck.key.as_str()))
             .flat_map(|deck| {
-                let (setup, results) = super::common::parity_hash::train_and_simulate_at_dir(
-                    &deck.dir,
-                    HighsSolver::new,
-                );
+                let (setup, results) = train_and_simulate(&deck.dir);
                 sim_digest_lines(&deck.key, &setup, results)
             })
             .collect()
-    }
-}
-
-#[cfg(not(feature = "highs"))]
-mod sim_view {
-    pub(super) fn lines() -> Vec<String> {
-        Vec::new()
     }
 }
 

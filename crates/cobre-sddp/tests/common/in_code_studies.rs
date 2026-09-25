@@ -1,6 +1,10 @@
-//! In-code `System`/`Config` fixtures for the template snapshot manifest
-//! (`tests/template_snapshot.rs`): each isolates a stage-LP builder axis no
-//! committed deck combines.
+//! In-code `System`/`Config` fixtures for the stage-LP builder test suite.
+//! `discounted_anticipated_study` and `parallel_multiblock_evaporation_study`
+//! back the template snapshot manifest (`tests/template_snapshot.rs`), each
+//! isolating a stage-LP builder axis no committed deck combines.
+//! `stochastic_parallel_study` backs the one-hot patch-ownership sweep
+//! (`tests/patch_ownership_sweep.rs`), supplying the stochastic load and NCS
+//! noise no committed deck exercises.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 

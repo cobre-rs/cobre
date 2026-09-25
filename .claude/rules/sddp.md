@@ -947,6 +947,32 @@ A checkpoint predating `FORMAT_VERSION` is pinned by
 `boundary_load_rejects_pre_format_version_checkpoint`, also in
 `tests/boundary_self_describing_clean_break.rs`.
 
+### A policy written by another Cobre version is refused first
+
+The first check of `validate_policy_load`, for every `PolicyLoadKind` and
+ahead of its check matrix, refuses a source whose recorded `cobre_version`
+(the checkpoint's `manifest.bin` `CheckpointManifest` root) is not exactly
+`POLICY_COBRE_VERSION`, the version this build stamps into every checkpoint
+it writes: the trainer's `write_checkpoint` and `cobre.write_policy_checkpoint`,
+which ignores a caller-supplied version. The refusal is
+`SddpError::PolicyVersionMismatch`, naming both versions. Only same-version
+loads are supported; a looser rule (a version range, a `major.minor` match,
+a per-study predicate) is the wrong-but-compiling alternative, since cuts
+and stored bases of another version describe that version's LP. The version
+is checkpoint provenance, not a study-global fact, so reading it from the
+root on a `BoundaryInjection` load does not widen the season-descriptor
+carve-out below. Every step after `validate_policy_load` (the check matrix,
+the boundary rebind, FCF construction and stored-basis decoding) sees only
+same-version checkpoints.
+
+Read: `policy/policy_load.rs` (`validate_policy_load`, `POLICY_COBRE_VERSION`).
+Pinned by `policy_version_refused_for_every_kind`,
+`policy_version_checked_before_the_layout` and
+`policy_version_refused_at_boundary_load` in `policy/policy_load.rs`, and by
+`warm_start_refuses_a_policy_written_by_another_version` and
+`boundary_policy_written_by_another_version_is_refused_at_run` in
+`crates/cobre-cli/tests/cli_validate.rs`.
+
 ### Boundary loads gate on season-cycle and PAR-order identity before reconciling
 
 The inflow-lag family's join maps a lag depth `d` to a calendar season (`d`

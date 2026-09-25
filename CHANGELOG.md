@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — a policy loads only in the Cobre version that wrote it.**
+  Warm-start, resume, simulation-only and boundary-cut loads refuse a policy
+  checkpoint whose recorded Cobre version differs from the running one; the
+  error names both versions and asks you to retrain the policy, or re-export
+  the boundary policy, with the running version. The CLI reports it as a
+  validation error and Python raises `cobre.errors.PolicyIncompatibleError`.
+  `cobre.write_policy_checkpoint` now always records the running version (a
+  `cobre_version` given in `metadata` is ignored).
+
 ### Fixed
 
 - **BREAKING — Python: a study-setup validation failure now raises

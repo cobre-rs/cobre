@@ -21,7 +21,10 @@ import shutil
 
 import pytest
 
-from test_policy_load_validation import _copy_case_with_renamed_hydro
+from test_policy_load_validation import (
+    _copy_case_with_renamed_hydro,
+    _restamp_policy_version,
+)
 
 _REPO_ROOT = pathlib.Path(__file__).parents[3]
 VALID_CASE = str(_REPO_ROOT / "examples" / "1dtoy")
@@ -138,4 +141,37 @@ def test_boundary_load_rejects_a_mismatched_source(tmp_path: pathlib.Path) -> No
     assert str(mismatched_hydro_id) in str(exc_info.value), (
         f"expected the reject message to name hydro {mismatched_hydro_id}: "
         f"{exc_info.value}"
+    )
+
+
+def test_boundary_load_rejects_a_source_written_by_another_version(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A self-boundary source restamped to record another cobre version is
+    refused with `PolicyIncompatibleError`, naming both versions (the
+    same-version self-boundary is
+    `test_boundary_load_reports_source_date_and_reconciliation`).
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    source_output = tmp_path / "source"
+    cobre.run.run(VALID_CASE, output_dir=str(source_output))
+    source_policy_dir = source_output / "policy"
+
+    other_version = _restamp_policy_version(source_policy_dir)
+
+    target_case = tmp_path / "target"
+    shutil.copytree(VALID_CASE, target_case)
+    _set_boundary_policy(target_case, source_policy_dir)
+
+    with pytest.raises(
+        cobre.errors.PolicyIncompatibleError,
+        match=f"written by cobre {other_version}",
+    ) as exc_info:
+        cobre.run.run(str(target_case), output_dir=str(tmp_path / "target_output"))
+
+    assert cobre.__version__ in str(exc_info.value), (
+        f"expected the running version in the message: {exc_info.value}"
     )

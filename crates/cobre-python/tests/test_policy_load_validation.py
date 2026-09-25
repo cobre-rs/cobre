@@ -83,6 +83,23 @@ def _copy_case_with_renamed_hydro(
     pq.write_table(table, inflow_path, compression="zstd")
 
 
+def _restamp_policy_version(policy_dir: pathlib.Path) -> str:
+    """Rewrite the cobre version in ``policy_dir/manifest.bin`` to another
+    string of the same byte length (the FlatBuffers string keeps its layout;
+    the manifest carries no checksum) and return it."""
+    import cobre  # noqa: PLC0415
+
+    manifest = policy_dir / "manifest.bin"
+    data = manifest.read_bytes()
+    running = cobre.__version__.encode()
+    assert data.count(running) == 1, (
+        "the running version must occur once in manifest.bin"
+    )
+    other = (b"8" if running.startswith(b"9") else b"9") + running[1:]
+    manifest.write_bytes(data.replace(running, other))
+    return other.decode()
+
+
 def test_load_policy_removed_optout_kwarg_raises_typeerror(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -128,3 +145,34 @@ def test_load_policy_mismatched_entity_manifest_raises_valueerror(
 
     with pytest.raises(ValueError, match="policy validation error"):
         study.load_policy(output_dir=str(mismatched_run_dir))
+
+
+def test_load_policy_written_by_another_version_raises_policy_incompatible(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A policy checkpoint recording a cobre version other than the running
+    one raises `PolicyIncompatibleError`, naming both versions.
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    run_dir = tmp_path / "run"
+    cobre.run.run(VALID_CASE, output_dir=str(run_dir))
+
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path / "study_dir"))
+    study.load_policy(output_dir=str(run_dir))
+
+    other_version = _restamp_policy_version(run_dir / "policy")
+
+    fresh_study = cobre.Study(
+        VALID_CASE, output_dir=str(tmp_path / "fresh_study_dir")
+    )
+    with pytest.raises(
+        cobre.errors.PolicyIncompatibleError,
+        match=f"written by cobre {other_version}",
+    ) as exc_info:
+        fresh_study.load_policy(output_dir=str(run_dir))
+
+    assert cobre.__version__ in str(exc_info.value), (
+        f"expected the running version in the message: {exc_info.value}"
+    )

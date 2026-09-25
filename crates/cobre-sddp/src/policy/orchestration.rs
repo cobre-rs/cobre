@@ -26,6 +26,7 @@ use cobre_io::scenarios::estimation::EstimationReport;
 use cobre_io::scenarios::resolve_model_stage_seasons;
 use cobre_stochastic::StochasticContext;
 
+use crate::POLICY_COBRE_VERSION;
 use crate::TrainingResult;
 use crate::policy_export::{
     borrow_cut_records, build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -309,7 +310,7 @@ pub fn write_checkpoint(
 
     let metadata = CheckpointManifest {
         format_version: FORMAT_VERSION,
-        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+        cobre_version: POLICY_COBRE_VERSION.to_string(),
         created_at: cobre_io::now_iso8601(),
         num_stages: n_stages as u32,
         graph_manifest: setup.build_graph_manifest(),

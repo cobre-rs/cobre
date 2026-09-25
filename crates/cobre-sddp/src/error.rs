@@ -97,6 +97,19 @@ pub enum SddpError {
         /// The version number expected by the current binary.
         expected: u32,
     },
+
+    /// A policy checkpoint was written by a different cobre version than the
+    /// running one; only same-version policies load.
+    #[error(
+        "policy was written by cobre {policy_version}, but this is cobre {running}; a policy \
+         loads only in the cobre version that wrote it: retrain it, or re-export it, with \
+         cobre {running}",
+        running = crate::POLICY_COBRE_VERSION
+    )]
+    PolicyVersionMismatch {
+        /// The `cobre_version` the checkpoint's manifest records.
+        policy_version: String,
+    },
 }
 
 impl From<EstimationError> for SddpError {
@@ -203,6 +216,16 @@ mod tests {
         assert!(msg.contains('5'), "{msg}");
         assert!(msg.contains("42"), "{msg}");
         assert!(msg.contains('3'), "{msg}");
+    }
+
+    #[test]
+    fn display_policy_version_mismatch_names_both_versions() {
+        let err = SddpError::PolicyVersionMismatch {
+            policy_version: "0.0.1".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("0.0.1"), "{msg}");
+        assert!(msg.contains(crate::POLICY_COBRE_VERSION), "{msg}");
     }
 
     #[test]

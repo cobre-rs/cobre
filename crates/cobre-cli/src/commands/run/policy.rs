@@ -91,7 +91,9 @@ fn load_and_validate_checkpoint(
         slots: &current_manifest,
         graph: &current_graph,
     };
-    let proof = validate_policy_load::<FullFcf>(&source, &current).map_err(CliError::from)?;
+    let proof =
+        validate_policy_load::<FullFcf>(&checkpoint.metadata.cobre_version, &source, &current)
+            .map_err(CliError::from)?;
 
     if ctx.is_root && !ctx.quiet {
         for msg in &proof.warnings {

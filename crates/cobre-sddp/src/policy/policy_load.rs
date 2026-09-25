@@ -2,7 +2,8 @@
 //!
 //! [`validate_policy_load`] is the single entry point for compatibility
 //! validation; every load path (full-FCF warm-start/resume/simulation-only and
-//! boundary-cut injection) routes through it and returns a [`PolicyLoadProof`]
+//! boundary-cut injection) routes through it, which first refuses a policy
+//! written by another Cobre version, and returns a [`PolicyLoadProof`]
 //! kind-typed to [`FullFcf`] or [`BoundaryInjection`] — the only way to obtain
 //! one, so [`FutureCostFunction::new_with_warm_start`],
 //! [`FutureCostFunction::from_deserialized`], and [`inject_boundary_cuts`]
@@ -48,6 +49,10 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::path::Path;
+
+/// The version this build stamps into every checkpoint it writes, and the
+/// only one [`validate_policy_load`] accepts.
+pub const POLICY_COBRE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The constant every unmarked policy checkpoint (no `cost_scale_factor`
 /// provenance) was unconditionally scaled at. A pool or checkpoint whose
@@ -235,22 +240,33 @@ pub struct PolicyLoadProof<K: PolicyLoadKind> {
     _kind: PhantomData<K>,
 }
 
-/// Validate that `source`'s state layout is compatible with `current`'s, per
-/// `K`'s check matrix ([`FullFcf`], [`BoundaryInjection`]). `col_scale`/scaling
-/// is never a compatibility dimension: a state variable's identity and physical
-/// unit are independent of how the LP happens to scale its column. This is the
-/// single entry point for policy-load validation — its success is the only way
-/// to construct a [`PolicyLoadProof<K>`], so every load path routes through it.
+/// Validate that `source` was written by this build's [`POLICY_COBRE_VERSION`]
+/// — checked first, for every `K` — and that `source`'s state layout is
+/// compatible with `current`'s, per `K`'s check matrix ([`FullFcf`],
+/// [`BoundaryInjection`]). `col_scale`/scaling is never a compatibility
+/// dimension: a state variable's identity and physical unit are independent of
+/// how the LP happens to scale its column. This is the single entry point for
+/// policy-load validation — its success is the only way to construct a
+/// [`PolicyLoadProof<K>`], so every load path routes through it.
 ///
 /// # Errors
 ///
-/// Returns [`SddpError::Validation`] under [`FullFcf`] on a
-/// `state_dimension` mismatch, a `num_stages` mismatch, or a per-slot
-/// identity mismatch (see [`compare_manifest_slot_identity`]).
+/// Returns [`SddpError::PolicyVersionMismatch`] if `source_cobre_version` does
+/// not exactly match [`POLICY_COBRE_VERSION`]. Otherwise returns
+/// [`SddpError::Validation`] under [`FullFcf`] on a `state_dimension`
+/// mismatch, a `num_stages` mismatch, or a per-slot identity mismatch (see
+/// [`compare_manifest_slot_identity`]).
 pub fn validate_policy_load<K: PolicyLoadKind>(
+    source_cobre_version: &str,
     source: &PolicyStageManifest<'_>,
     current: &PolicyStageManifest<'_>,
 ) -> Result<PolicyLoadProof<K>, SddpError> {
+    if source_cobre_version != POLICY_COBRE_VERSION {
+        return Err(SddpError::PolicyVersionMismatch {
+            policy_version: source_cobre_version.to_string(),
+        });
+    }
+
     if K::CHECK_STATE_DIMENSION && source.state_dimension != current.state_dimension {
         return Err(SddpError::Validation(format!(
             "policy state_dimension mismatch: policy has {}, current system has {} (a lag-state \
@@ -981,7 +997,9 @@ fn check_topology_subset(
 ///
 /// # Errors
 ///
-/// Returns [`SddpError::Validation`] if:
+/// Returns [`SddpError::PolicyVersionMismatch`] if the resolved checkpoint's
+/// recorded `cobre_version` does not exactly match [`POLICY_COBRE_VERSION`].
+/// Otherwise returns [`SddpError::Validation`] if:
 /// - The checkpoint cannot be read
 /// - Every pool in the checkpoint carries
 ///   [`STAGE_CUTS_PRICED_STATE_DATE_SENTINEL`] (a pre-dated checkpoint);
@@ -1111,7 +1129,11 @@ pub fn load_boundary_cuts(
         slots: current_manifest,
         graph: &empty_graph,
     };
-    let proof = validate_policy_load::<BoundaryInjection>(&source, &current)?;
+    let proof = validate_policy_load::<BoundaryInjection>(
+        &checkpoint.metadata.cobre_version,
+        &source,
+        &current,
+    )?;
     debug_assert!(
         proof.warnings.is_empty(),
         "BoundaryInjection sets every CHECK_* flag false, so validate_policy_load never \
@@ -1289,8 +1311,8 @@ mod tests {
 
     use super::{
         BoundaryInjection, BoundaryLoadRequest, BoundaryReconciliationReport,
-        BoundaryStateRequirements, CutPool, FullFcf, NodeId, NodePos, PolicyStageManifest,
-        TypedVec, ValidatedBoundaryCuts, boundary_policy_required_lag_depth,
+        BoundaryStateRequirements, CutPool, FullFcf, NodeId, NodePos, POLICY_COBRE_VERSION,
+        PolicyStageManifest, TypedVec, ValidatedBoundaryCuts, boundary_policy_required_lag_depth,
         check_season_compatibility, compare_manifest_slot_identity, inject_boundary_cuts,
         load_boundary_cuts, validate_policy_load,
     };
@@ -3101,6 +3123,112 @@ mod tests {
 
     // ── validate_policy_load tests ────────────────────────────────────────────
 
+    /// `POLICY_COBRE_VERSION` as the source version passes the version gate
+    /// under both `FullFcf` and `BoundaryInjection`.
+    #[test]
+    fn policy_version_accepted_for_every_kind() {
+        let slots = storage_manifest(1, 2);
+        let source = psm(2, 12, &slots);
+        let current = psm(2, 12, &slots);
+
+        assert!(validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current).is_ok());
+        assert!(
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current)
+                .is_ok()
+        );
+    }
+
+    /// A source version other than `POLICY_COBRE_VERSION` is refused under
+    /// both kinds, naming the recorded version.
+    #[test]
+    fn policy_version_refused_for_every_kind() {
+        assert_ne!(POLICY_COBRE_VERSION, "0.0.1");
+        let slots = storage_manifest(1, 2);
+        let source = psm(2, 12, &slots);
+        let current = psm(2, 12, &slots);
+
+        let full_fcf_result = validate_policy_load::<FullFcf>("0.0.1", &source, &current);
+        assert!(
+            matches!(
+                full_fcf_result,
+                Err(SddpError::PolicyVersionMismatch { ref policy_version }) if policy_version == "0.0.1"
+            ),
+            "a different-version source must be refused under FullFcf: {full_fcf_result:?}"
+        );
+
+        let boundary_result = validate_policy_load::<BoundaryInjection>("0.0.1", &source, &current);
+        assert!(
+            matches!(
+                boundary_result,
+                Err(SddpError::PolicyVersionMismatch { ref policy_version }) if policy_version == "0.0.1"
+            ),
+            "a different-version source must be refused under BoundaryInjection: {boundary_result:?}"
+        );
+    }
+
+    /// A version differing only by a suffix, or an empty string, is refused —
+    /// the check is plain string equality, never a prefix or semver match.
+    #[test]
+    fn policy_version_refused_when_only_a_suffix_differs() {
+        let slots = storage_manifest(1, 2);
+        let source = psm(2, 12, &slots);
+        let current = psm(2, 12, &slots);
+        let suffixed = format!("{POLICY_COBRE_VERSION}-rc.1");
+
+        for version in [suffixed.as_str(), ""] {
+            let result = validate_policy_load::<FullFcf>(version, &source, &current);
+            assert!(
+                matches!(result, Err(SddpError::PolicyVersionMismatch { .. })),
+                "{version:?} must be refused: {result:?}"
+            );
+        }
+    }
+
+    /// The version gate runs before the `state_dimension`/`num_stages`/slot
+    /// check matrix: a mismatched version AND a mismatched `state_dimension`
+    /// returns the version variant, not `Validation`.
+    #[test]
+    fn policy_version_checked_before_the_layout() {
+        let slots = storage_manifest(1, 2);
+        let source = psm(10, 12, &slots);
+        let current = psm(8, 12, &slots);
+
+        let result = validate_policy_load::<FullFcf>("0.0.1", &source, &current);
+
+        assert!(
+            matches!(result, Err(SddpError::PolicyVersionMismatch { .. })),
+            "the version gate must win over the state_dimension gate: {result:?}"
+        );
+    }
+
+    /// A boundary source recording a different version is refused by
+    /// `load_boundary_cuts`, before per-slot reconciliation runs.
+    #[test]
+    fn policy_version_refused_at_boundary_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let metadata = cobre_io::CheckpointManifest {
+            cobre_version: "0.0.1".to_string(),
+            ..test_support::checkpoint_metadata(1, chain_graph_manifest(1), producer_block())
+        };
+        write_checkpoint_with_manifest_metadata(tmp.path(), 1, 2, &[10.0, 20.0], &[], &metadata);
+
+        let result = load_boundary_cuts(&BoundaryLoadRequest::new(
+            tmp.path(),
+            fixture_priced_date(0),
+            2,
+            &[],
+            NEUTRAL_LOADING_FACTOR,
+        ));
+
+        assert!(
+            matches!(
+                result,
+                Err(SddpError::PolicyVersionMismatch { ref policy_version }) if policy_version == "0.0.1"
+            ),
+            "a different-version boundary source must be refused before reconciliation: {result:?}"
+        );
+    }
+
     /// Identical `state_dimension`, `num_stages`, and slot-for-slot matching
     /// manifests pass `FullFcf` with no warnings.
     #[test]
@@ -3109,7 +3237,8 @@ mod tests {
         let source = psm(2, 12, &slots);
         let current = psm(2, 12, &slots);
 
-        let report = validate_policy_load::<FullFcf>(&source, &current).unwrap();
+        let report =
+            validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current).unwrap();
 
         assert!(
             report.warnings.is_empty(),
@@ -3127,7 +3256,7 @@ mod tests {
         let source = psm(10, 12, &slots);
         let current = psm(8, 12, &slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(result.is_err(), "state_dimension mismatch must reject");
         let msg = result.unwrap_err().to_string();
@@ -3149,7 +3278,8 @@ mod tests {
         let source = psm(14, 12, &slots);
         let current = psm(17, 12, &slots);
 
-        let result = validate_policy_load::<BoundaryInjection>(&source, &current);
+        let result =
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(
             result.is_ok(),
@@ -3165,7 +3295,7 @@ mod tests {
         let source = psm(14, 12, &slots);
         let current = psm(17, 12, &slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(
             result.is_err(),
@@ -3186,7 +3316,8 @@ mod tests {
         let source = psm(10, 12, &slots);
         let current = psm(10, 24, &slots);
 
-        let full_fcf_result = validate_policy_load::<FullFcf>(&source, &current);
+        let full_fcf_result =
+            validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
         assert!(
             full_fcf_result.is_err(),
             "num_stages mismatch must reject FullFcf"
@@ -3196,7 +3327,8 @@ mod tests {
         assert!(msg.contains("12"), "should include source value: {msg}");
         assert!(msg.contains("24"), "should include current value: {msg}");
 
-        let boundary_result = validate_policy_load::<BoundaryInjection>(&source, &current);
+        let boundary_result =
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current);
         assert!(
             boundary_result.is_ok(),
             "num_stages is unchecked under BoundaryInjection: {boundary_result:?}"
@@ -3212,7 +3344,7 @@ mod tests {
         let source = psm(10, 12, &slots);
         let current = psm(8, 24, &slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(result.is_err(), "both-dimension mismatch must reject");
         let msg = result.unwrap_err().to_string();
@@ -3231,7 +3363,7 @@ mod tests {
         let source = psm(2, 12, &source_slots);
         let current = psm(2, 12, &current_slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(result.is_err(), "slot identity mismatch must reject");
         let msg = result.unwrap_err().to_string();
@@ -3259,7 +3391,8 @@ mod tests {
         let source = psm(2, 12, &source_slots);
         let current = psm(2, 6, &current_slots);
 
-        let result = validate_policy_load::<BoundaryInjection>(&source, &current);
+        let result =
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(
             result.is_ok(),
@@ -3292,6 +3425,7 @@ mod tests {
 
         let current_narrow = vec![storage_slot(1), anticipated_slot_at(9, 0, first_month)];
         let full_fcf = validate_policy_load::<FullFcf>(
+            POLICY_COBRE_VERSION,
             &psm(lane_era.len() as u32, 12, &lane_era),
             &psm(current_narrow.len() as u32, 12, &current_narrow),
         );
@@ -3362,7 +3496,8 @@ mod tests {
         let source = psm(2, 12, &[]);
         let current = psm(2, 12, &current_slots);
 
-        let report = validate_policy_load::<FullFcf>(&source, &current).unwrap();
+        let report =
+            validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current).unwrap();
 
         assert_eq!(report.warnings.len(), 1, "absence must surface one warning");
         assert!(

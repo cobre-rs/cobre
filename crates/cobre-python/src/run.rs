@@ -870,6 +870,19 @@ fn setup_error_message(err: SddpError, phase_prefix: Option<&str>) -> String {
     }
 }
 
+/// Maps a boundary-cut load error to its message prefix: [`SddpError::PolicyVersionMismatch`]
+/// gets [`POLICY_VALIDATION_ERROR_PREFIX`] (so it raises `PolicyIncompatibleError`), every
+/// other boundary-load error keeps [`BOUNDARY_CUT_ERROR_PREFIX`].
+#[allow(clippy::needless_pass_by_value)]
+fn boundary_cut_error_message(err: SddpError) -> String {
+    let prefix = if matches!(err, SddpError::PolicyVersionMismatch { .. }) {
+        POLICY_VALIDATION_ERROR_PREFIX
+    } else {
+        BOUNDARY_CUT_ERROR_PREFIX
+    };
+    format!("{prefix}: {err}")
+}
+
 /// Everything the front half of the solve lifecycle produces: the live
 /// [`StudySetup`] plus the adjacent immutable state that `run_via_study` and the
 /// `Study` pyclass both consume. [`build_study_setup`] is the sole producer (the
@@ -1070,7 +1083,8 @@ pub(crate) fn build_study_setup(
 /// # Errors
 ///
 /// Returns `Err(String)` formatted as `"policy validation error: {e}"` on a
-/// `state_dimension`, `num_stages`, or entity-manifest mismatch.
+/// version mismatch, or on a `state_dimension`, `num_stages`, or
+/// entity-manifest mismatch.
 fn validate_loaded_policy(
     checkpoint: &mut cobre_io::PolicyCheckpoint,
     system: &System,
@@ -1115,7 +1129,7 @@ fn validate_loaded_policy(
         slots: &current_manifest,
         graph: &current_graph,
     };
-    let proof = validate_policy_load::<FullFcf>(&source, &current)
+    let proof = validate_policy_load::<FullFcf>(&checkpoint.metadata.cobre_version, &source, &current)
         .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
 
     for msg in &proof.warnings {
@@ -1289,7 +1303,7 @@ pub(crate) fn apply_training_policy_mode(
     // terminal pool.
     if let Some(ref bp) = config.policy.boundary {
         let recon = reconcile_boundary_policy(setup, system, bp, case_dir)
-            .map_err(|e| format!("{BOUNDARY_CUT_ERROR_PREFIX}: {e}"))?;
+            .map_err(boundary_cut_error_message)?;
         inject_boundary_cuts(setup, &recon.cuts);
         let cut_count = recon.cuts.len();
         eprintln!(

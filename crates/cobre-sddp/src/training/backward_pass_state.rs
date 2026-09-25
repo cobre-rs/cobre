@@ -1311,7 +1311,7 @@ fn resolve_backward_scheduler(
 /// "Backward opening order is warm-start-only"). Delegates to the shared
 /// [`crate::setup::node_graph::assemble_outcome_weights`] primitive — the
 /// single owner of this fill, shared with
-/// `lower_bound::assemble_outcome_weights`.
+/// `lower_bound::assemble_root_outcome_weights`.
 fn assemble_successor_outcome_weights(
     node_graph: &NodeGraph,
     node_pos: NodePos,

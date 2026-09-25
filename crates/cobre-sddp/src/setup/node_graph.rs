@@ -711,7 +711,7 @@ fn build_declared_node_graph(
 /// Single owner for the backward pass
 /// (`training::backward_pass_state::assemble_successor_outcome_weights`) and
 /// the lower-bound root evaluation
-/// (`training::lower_bound::assemble_outcome_weights`) — both delegate here so
+/// (`training::lower_bound::assemble_root_outcome_weights`) — both delegate here so
 /// the length precompute, weight formula, and fill order can never diverge
 /// between the two call sites.
 pub(crate) fn assemble_outcome_weights(

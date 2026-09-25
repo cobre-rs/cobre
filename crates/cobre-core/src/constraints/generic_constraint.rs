@@ -131,10 +131,11 @@ pub enum VariableRef {
     /// represent net evaporative outflow; negative values represent net rainfall
     /// input absorbed by the reservoir. `Some(k)` selects block `k`; `None`
     /// selects block 0. On a parallel stage every block shares one stage-level
-    /// evaporation slot on the stage endpoints, so every `Some(k)`/`None`
-    /// reference resolves to that same slot. In chronological mode with `K > 1`
-    /// each block has its own slot, so a `None` reference is rejected by
-    /// generic-constraint validation — a block must be named.
+    /// evaporation slot on the stage endpoints, so `None`/`Some(0)` resolve to
+    /// that slot; generic-constraint validation rejects `Some(k)` for `k >= 1`
+    /// there. In chronological mode with `K > 1` each block has its own slot, so
+    /// a `None` reference is rejected by generic-constraint validation — a block
+    /// must be named.
     HydroEvaporation {
         /// Hydro plant identifier.
         hydro_id: EntityId,

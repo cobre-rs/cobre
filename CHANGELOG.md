@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   basis silently or started cold. The CLI reports it as a validation error
   and Python raises `cobre.errors.PolicyIncompatibleError`.
 
+- **BREAKING — a generic constraint naming an evaporation block other than 0
+  on a parallel stage with two or more blocks is rejected at validation.**
+  Such a stage evaporates once per stage; reference block 0 or no block.
+
 ### Fixed
 
 - **BREAKING — Python: a study-setup validation failure now raises

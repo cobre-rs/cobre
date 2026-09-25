@@ -22,12 +22,13 @@ use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 /// the two endpoints (`0`, `K`) exist — the `storage_internal` family is empty — so
 /// an interior `Some(..)` reference resolves outside the storage family and is
 /// rejected. A `None` selector is the stage endpoint (`S⁰` / `Sᴷ`), which always
-/// exists, so it always passes. `HydroEvaporation{Some(b)}` addresses one of the
-/// `K` per-block evaporation columns (present in both modes), so only out-of-range
-/// `b >= K` is rejected there; a bare `HydroEvaporation{None}` is the stage
-/// evaporation in parallel mode (every block shares the same endpoints) but is
-/// ambiguous on a chronological stage with `K > 1` (the blocks differ), so it is
-/// rejected there — a block must be named.
+/// exists, so it always passes. On a `Parallel` stage with `K > 1`,
+/// `HydroEvaporation` is one stage-level quantity: `None` and `Some(0)` resolve to
+/// it and pass, while `Some(1..K)` names a block the collapse discards and is
+/// rejected. On a `Chronological` stage each block keeps its own evaporation
+/// column, so any in-range `Some(b)` passes, but a bare `HydroEvaporation{None}`
+/// with `K > 1` is ambiguous (the blocks differ) and is rejected — a block must
+/// be named.
 ///
 /// An out-of-range `block_id` (`b >= K`) is rejected on every stage: it would
 /// otherwise resolve to no column and silently drop the term.
@@ -170,8 +171,11 @@ fn add_constraint_error(
 }
 
 /// Dispatch a term to its per-block validity check. Storage boundaries get the
-/// full interior + out-of-range check; evaporation gets out-of-range only (its `K`
-/// per-block columns exist in both modes); every other variant is unrestricted.
+/// full interior + out-of-range check; evaporation gets the out-of-range check
+/// plus, on a `Parallel` stage with `K > 1`, a reject for any block past the
+/// stage-level slot (`Some(1..K)`) and, on a `Chronological` stage with `K > 1`,
+/// a reject for the ambiguous bare reference; every other variant is
+/// unrestricted.
 fn validate_block_ref(
     constraint: &GenericConstraint,
     variable: &VariableRef,
@@ -195,6 +199,22 @@ fn validate_block_ref(
                     "Constraint \"{}\": per-block evaporation reference \
                      `hydro_evaporation({b})` at stage {stage_id} references block {b} \
                      which does not exist at stage {stage_id} (K = {k})",
+                    constraint.name
+                ),
+            );
+        }
+        VariableRef::HydroEvaporation {
+            block_id: Some(b), ..
+        } if block_mode == BlockMode::Parallel && k > 1 && *b >= 1 => {
+            add_constraint_error(
+                ctx,
+                constraint,
+                format!(
+                    "Constraint \"{}\": per-block evaporation reference \
+                     `hydro_evaporation({b})` at stage {stage_id} names a block past \
+                     the stage-level evaporation, which requires chronological block \
+                     mode (stage {stage_id} is parallel with {k} blocks); use block 0 \
+                     or no block",
                     constraint.name
                 ),
             );
@@ -677,10 +697,36 @@ mod tests {
     }
 
     #[test]
-    fn parallel_k3_evaporation_block_accepted() {
-        // Per-block evaporation columns exist in both modes, so a valid block is fine.
+    fn parallel_k3_evaporation_block_past_the_stage_slot_rejected() {
         let data = make_data_storage_ref(BlockMode::Parallel, 3, evaporation(Some(2)));
+        let errors = interior_errors(&data);
+        assert_eq!(errors.len(), 1, "expected one error, got: {errors:?}");
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("hydro_evaporation(2)")
+                && msg.contains("parallel with 3 blocks")
+                && msg.contains("block 0"),
+            "message should name the block, the parallel mode and block count, \
+             and the fix, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parallel_k3_evaporation_block_zero_accepted() {
+        let data = make_data_storage_ref(BlockMode::Parallel, 3, evaporation(Some(0)));
         assert!(interior_errors(&data).is_empty());
+    }
+
+    #[test]
+    fn parallel_evaporation_block_reference_skipped_where_inactive() {
+        // A block-past-the-slot reference the constraint never activates on this
+        // stage (no bound row) emits no LP row, so it must not be rejected.
+        let mut data = make_data_storage_ref(BlockMode::Parallel, 3, evaporation(Some(2)));
+        data.generic_constraint_bounds.clear();
+        assert!(
+            interior_errors(&data).is_empty(),
+            "inactive (constraint, stage) pair must be skipped"
+        );
     }
 
     #[test]

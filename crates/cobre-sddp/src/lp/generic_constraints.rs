@@ -624,12 +624,14 @@ fn resolve_hydro_inflow(
 
 /// Resolve `HydroEvaporation` to the evaporation-outflow column for the matching
 /// hydro; empty vec when the hydro has no linearized evaporation at this stage, or
-/// when `block_id` names a block `>= n_blks`. `None` maps to block 0. On a parallel
-/// stage every named block resolves to the one stage-level slot
-/// (`evaporation_slot`/`evaporation_slot_count` collapse to it); on a chronological
-/// stage each block resolves to its own slot. `None` in chronological `K > 1`
+/// when `block_id` names a block `>= n_blks`. `None` maps to block 0. On a
+/// chronological stage each block resolves to its own slot; `None` in `K > 1`
 /// (where blocks differ) is rejected upstream by generic-constraint validation, so
-/// it is not reached here for a valid study.
+/// it is not reached here for a valid study. On a parallel stage `None`/`Some(0)`
+/// resolve to the one stage-level slot; `Some(k >= 1)` is rejected by the same
+/// validation, so the collapse below onto that slot for `k >= 1`
+/// (`evaporation_slot`/`evaporation_slot_count`) is reached only by a study that
+/// bypassed validation.
 fn resolve_hydro_evaporation(
     hydro_id: EntityId,
     block_id: Option<usize>,

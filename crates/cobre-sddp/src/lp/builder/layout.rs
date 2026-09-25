@@ -29,8 +29,9 @@ use super::delivery_ring::for_each_ring_residue;
 use super::template::StageGeometry;
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET,
-    GenericConstraintRowEntry, M3S_TO_HM3,
+    GenericConstraintRowEntry,
 };
+use crate::block_clock::BlockClock;
 use crate::generic_constraints::expression_is_block_independent;
 use crate::resolved_parameters::ResolvedParameters;
 
@@ -590,8 +591,8 @@ pub(crate) struct StageLayout<'a> {
     pub(crate) filling: FillingLayout,
     /// Total column count.
     pub(crate) num_cols: usize,
-    /// `total_stage_hours * M3S_TO_HM3`; the water-balance noise/inflow scale.
-    pub(crate) zeta: f64,
+    /// This stage's block-hours owner; the water-balance noise/inflow scale.
+    pub(crate) clock: BlockClock<'a>,
     /// Indices (into `ctx.hydros`) of hydros using FPHA at this stage.
     pub(crate) fpha_hydro_indices: Vec<HydroSys>,
     /// Inverse of `fpha_hydro_indices`: system hydro index → FPHA-local index,
@@ -1257,7 +1258,7 @@ impl<'a> StageLayout<'a> {
     pub(crate) fn new(
         ctx: &TemplateBuildCtx<'_>,
         state: &'a StateSpace,
-        stage: &Stage,
+        stage: &'a Stage,
         stage_idx: usize,
     ) -> Self {
         let n_blks = stage.blocks.len();
@@ -1480,7 +1481,7 @@ impl<'a> StageLayout<'a> {
         let num_cols = col.pos();
         row.alloc(generic.n_generic_rows);
         let num_rows = row.pos();
-        let zeta = stage.blocks.iter().map(|b| b.duration_hours).sum::<f64>() * M3S_TO_HM3;
+        let clock = BlockClock::new(stage);
 
         // The commitment-hold outgoing columns are sourced from their
         // stage-invariant state-region position (`state.commit_out.start`),
@@ -1585,7 +1586,7 @@ impl<'a> StageLayout<'a> {
             rows,
             filling,
             num_cols,
-            zeta,
+            clock,
             fpha_hydro_indices,
             fpha_local_index,
             fpha_cell_local_start,

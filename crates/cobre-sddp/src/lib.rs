@@ -16,6 +16,7 @@
     )
 )]
 
+pub(crate) mod block_clock;
 pub(crate) mod claim_scatter;
 pub mod config;
 pub mod convergence;

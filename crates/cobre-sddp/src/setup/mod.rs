@@ -94,6 +94,7 @@ use cobre_stochastic::{
 };
 
 use crate::{
+    block_clock::M3S_TO_HM3,
     config::{CutManagementConfig, EventParams},
     cut::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
@@ -103,7 +104,7 @@ use crate::{
     hydro_models::PrepareHydroModelsResult,
     inflow_method::InflowNonNegativityMethod,
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution, SpreadResolution},
-    lp::builder::{M3S_TO_HM3, StateBox, build_stage_templates},
+    lp::builder::{StateBox, build_stage_templates},
     lp::indexer::{
         AnticipatedLocal, CutStateProjection, HydroCellIndex, StateSpace, StudyDimensions,
     },

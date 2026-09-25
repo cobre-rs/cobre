@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use cobre_core::{BlockMode, EntityId, Stage, System, window_period_overlaps};
 
+use crate::block_clock::BlockClock;
 use crate::lead_time::{SpreadResolution, resolve_arrival_density_at, resolve_spread};
 
 /// Canonical bucket ordering, global bucket count, and per-stage reachability
@@ -58,7 +59,7 @@ pub(crate) fn study_stage_durations(system: &System) -> Vec<f64> {
         .stages()
         .iter()
         .filter(|s| s.id >= 0)
-        .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
+        .map(|s| BlockClock::new(s).total_hours())
         .collect()
 }
 

@@ -79,11 +79,6 @@ pub(crate) use template::models_from_normal;
 // Shared constants
 // ---------------------------------------------------------------------------
 
-/// Per-hour conversion factor from m³/s to hm³:
-/// `seconds_per_hour / m³_per_hm³ = 3600 / 1_000_000`. Callers multiply by
-/// `Block::duration_hours`: `volume_hm3 = flow_m3s * M3S_TO_HM3 * duration_hours`.
-pub(crate) const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
-
 /// Margin on the symmetric magnitude bound `[-q_max, +q_max]` of the evaporation
 /// outflow variable, absorbing linearization error where the area-volume curve
 /// exceeds the linear estimate near `v_max`. Symmetric because that error runs both

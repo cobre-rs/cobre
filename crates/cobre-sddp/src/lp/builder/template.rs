@@ -8,6 +8,7 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
+use crate::block_clock::BlockClock;
 #[cfg(any(test, feature = "test-support"))]
 use crate::error::SddpError;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet, ResolvedProductionModel};
@@ -21,7 +22,7 @@ use crate::setup::template_postprocess::{
 use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
-use super::{GenericConstraintRowEntry, M3S_TO_HM3, StateBox, columns, entries, rows, scaling};
+use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
     BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace,
     StorageBoundaryGrid, ThermalSys,
@@ -426,7 +427,7 @@ pub(super) fn build_single_stage_template(
         row_lower: &mut row_lower,
         row_upper: &mut row_upper,
     };
-    entries::fill_generic_constraint_entries(ctx, stage, stage_idx, &layout, &mut buffers);
+    entries::fill_generic_constraint_entries(ctx, stage_idx, &layout, &mut buffers);
 
     // Scale every monetary objective coefficient by 1/K for numerical
     // conditioning; outputs are unscaled at the reporting boundary.
@@ -843,7 +844,7 @@ pub fn build_stage_templates_resolving_layout(
 /// V_target[t] = min( V_target[t+1] − ζ_{t+1}·rate[t+1], min_storage_hm3 )
 /// ```
 ///
-/// `ζ_t = total_hours_per_stage[stage_idx]·M3S_TO_HM3`; `rate`/`min_storage` are
+/// `ζ_t = stage_zetas[stage_idx]`; `rate`/`min_storage` are
 /// the RESOLVED per-stage bounds. The clip at `min_storage` enforces that no floor
 /// exceeds the dead volume — dropping it would let an over-provisioned schedule
 /// demand a floor ABOVE the dead volume — the forbidden alternative.
@@ -858,7 +859,7 @@ pub fn build_stage_templates_resolving_layout(
 pub(super) fn build_filling_v_target(
     hydros: &[Hydro],
     bounds: &ResolvedBounds,
-    total_hours_per_stage: &[f64],
+    stage_zetas: &[f64],
     stage_id_to_idx: &HashMap<i32, usize>,
 ) -> BTreeMap<(usize, i32), f64> {
     let mut v_target: BTreeMap<(usize, i32), f64> = BTreeMap::new();
@@ -882,7 +883,7 @@ pub(super) fn build_filling_v_target(
         let mut t = last;
         while t > start {
             if let Some(&t_idx) = stage_id_to_idx.get(&t) {
-                let zeta_t = total_hours_per_stage[t_idx] * M3S_TO_HM3;
+                let zeta_t = stage_zetas[t_idx];
                 let rate_t = bounds.hydro_bounds(h_idx, t_idx).filling_min_rate_m3s;
                 running -= zeta_t * rate_t;
             }
@@ -1046,10 +1047,8 @@ fn build_template_build_ctx<'a>(
     let per_stage_discount =
         compute_per_stage_discount_factors(&study_stages, system.policy_graph());
     let cumulative_discount_factors = compute_cumulative_discount_factors(&per_stage_discount);
-    let total_hours_per_stage: Vec<f64> = study_stages
-        .iter()
-        .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
-        .collect();
+    let block_clocks: Vec<BlockClock<'_>> =
+        study_stages.iter().map(|s| BlockClock::new(s)).collect();
 
     debug_assert_eq!(
         cumulative_discount_factors.len(),
@@ -1057,9 +1056,9 @@ fn build_template_build_ctx<'a>(
         "cumulative_discount_factors length must equal n_study_stages"
     );
     debug_assert_eq!(
-        total_hours_per_stage.len(),
+        block_clocks.len(),
         study_stages.len(),
-        "total_hours_per_stage length must equal n_study_stages"
+        "block_clocks length must equal n_study_stages"
     );
 
     // Same canonical anticipated-local order `resolve_state_layout` derives
@@ -1087,9 +1086,9 @@ fn build_template_build_ctx<'a>(
     // Concatenate rather than recompute: `resolve_post_study_artifacts` already
     // establishes that the post-study half continues the study recurrence, so a
     // second derivation would risk diverging from it.
-    let delivery_total_hours: Vec<f64> = total_hours_per_stage
+    let delivery_total_hours: Vec<f64> = block_clocks
         .iter()
-        .copied()
+        .map(|c| c.total_hours())
         .chain(post_study_resolved.total_hours.iter().copied())
         .collect();
     let delivery_cumulative_discount_factors: Vec<f64> = cumulative_discount_factors
@@ -1140,10 +1139,11 @@ fn build_template_build_ctx<'a>(
 
     let stage_resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
 
+    let stage_zetas: Vec<f64> = block_clocks.iter().map(|c| c.zeta()).collect();
     let filling_v_target = build_filling_v_target(
         hydros,
         system.bounds(),
-        &total_hours_per_stage,
+        &stage_zetas,
         stage_resolver.index_map(),
     );
 

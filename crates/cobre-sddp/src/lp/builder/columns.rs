@@ -31,7 +31,7 @@ pub(super) fn fill_stage_columns(
     let mut col_lower = vec![0.0_f64; layout.num_cols];
     let mut col_upper = vec![f64::INFINITY; layout.num_cols];
     let mut objective = vec![0.0_f64; layout.num_cols];
-    let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+    let total_stage_hours: f64 = layout.clock.total_hours();
     let bufs = &mut ColumnBufs {
         col_lower: &mut col_lower,
         col_upper: &mut col_upper,
@@ -906,8 +906,8 @@ fn fill_evaporation_columns(
             // at the total stage hours; a chronological slot's slack is priced at
             // that block's own hours.
             let priced_hours = match stage.block_mode {
-                BlockMode::Parallel => stage.blocks.iter().map(|b| b.duration_hours).sum::<f64>(),
-                BlockMode::Chronological => stage.blocks[slot].duration_hours,
+                BlockMode::Parallel => layout.clock.total_hours(),
+                BlockMode::Chronological => layout.clock.hours(BlockIdx::new(slot)),
             };
             bufs.objective[col_f_plus] = hp.evaporation_violation_neg_cost * priced_hours;
             bufs.objective[col_f_minus] = hp.evaporation_violation_pos_cost * priced_hours;

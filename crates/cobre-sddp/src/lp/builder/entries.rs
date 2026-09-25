@@ -1,13 +1,13 @@
 use cobre_core::commissioning::{Phase, filling_phase};
 use cobre_core::{BlockMode, CoefficientRef, ContractType, EntityId, Stage};
 
+use crate::block_clock::BlockClock;
 use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
     BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, StateSpace,
 };
 
-use super::M3S_TO_HM3;
 use super::delivery_ring::{DeliveryRing, for_each_ring_residue};
 use super::fpha_cursor::for_each_fpha_plane;
 use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
@@ -285,7 +285,7 @@ fn fill_parallel_water_entries(
 ) {
     let n_h = layout.n_h;
     let n_blks = layout.n_blks;
-    let zeta = layout.zeta;
+    let zeta = layout.clock.zeta();
     let row_water = layout.rows.water_balance.start;
     let col_storage_in_start = layout.col_storage_in_start();
 
@@ -314,7 +314,7 @@ fn fill_parallel_water_entries(
         }
 
         for blk in 0..n_blks {
-            let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+            let tau_h = layout.clock.tau(BlockIdx::new(blk));
             for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
                 let col_turbine = layout.turbine_col(HydroCell::new(c), BlockIdx::new(blk));
                 col_entries[col_turbine].push((row, tau_h));
@@ -604,7 +604,7 @@ fn fill_chronological_water_entries(
         for k in 1..=n_blks {
             let blk = k - 1;
             let row = row_water + h_idx * n_blks + blk;
-            let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+            let tau_k = layout.clock.tau(BlockIdx::new(blk));
 
             col_entries
                 [layout.block_storage_col(HydroSys::new(h_idx), Boundary::from_index(k, n_blks))]
@@ -626,7 +626,6 @@ fn fill_chronological_water_entries(
                     fill_arc_release_chrono_block_entries(
                         ctx,
                         layout,
-                        stage,
                         u_idx,
                         h_idx,
                         stage_idx,
@@ -655,7 +654,7 @@ fn fill_chronological_water_entries(
         let local_idx = EvapLocal::new(local_idx);
         for k in 1..=n_blks {
             let blk = k - 1;
-            let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+            let tau_k = layout.clock.tau(BlockIdx::new(blk));
             let row = row_water + h.get() * n_blks + blk;
             col_entries[layout.evap_flow_col(local_idx, BlockIdx::new(blk))].push((row, tau_k));
         }
@@ -674,7 +673,6 @@ fn fill_chronological_water_entries(
 fn fill_arc_release_chrono_block_entries(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout,
-    stage: &Stage,
     u_idx: usize,
     h_idx: usize,
     stage_idx: usize,
@@ -684,7 +682,7 @@ fn fill_arc_release_chrono_block_entries(
 ) {
     let n_blks = layout.n_blks;
     let row_base = row_water + h_idx * n_blks;
-    let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+    let tau_k = layout.clock.tau(BlockIdx::new(blk));
 
     let Some(resolution) = ctx
         .arc_spread_chrono
@@ -713,9 +711,9 @@ fn fill_arc_release_chrono_block_entries(
             let aggregated: f64 = resolution
                 .block_deposits
                 .iter()
-                .zip(&stage.blocks)
-                .map(|(deposit_row, b)| {
-                    (b.duration_hours * M3S_TO_HM3 / layout.zeta) * deposit_row[d]
+                .zip((0..layout.n_blks).map(BlockIdx::new))
+                .map(|(deposit_row, k)| {
+                    (layout.clock.tau(k) / layout.clock.zeta()) * deposit_row[d]
                 })
                 .sum();
             debug_assert!(
@@ -806,7 +804,7 @@ fn resolve_chrono_arrival_density(
     n_blks: usize,
 ) -> Vec<f64> {
     let uniform = || {
-        let total: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let total = BlockClock::new(stage).total_hours();
         stage
             .blocks
             .iter()
@@ -869,10 +867,12 @@ fn push_z_inflow_coupling(
     let z_h = layout.col_z_inflow_start() + h_idx;
     let row_water = layout.rows.water_balance.start;
     match stage.block_mode {
-        BlockMode::Parallel => col_entries[z_h].push((row_water + target_idx, -layout.zeta)),
+        BlockMode::Parallel => {
+            col_entries[z_h].push((row_water + target_idx, -layout.clock.zeta()));
+        }
         BlockMode::Chronological => {
             for blk in 0..layout.n_blks {
-                let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                let tau_k = layout.clock.tau(BlockIdx::new(blk));
                 col_entries[z_h].push((row_water + target_idx * layout.n_blks + blk, -tau_k));
             }
         }
@@ -921,7 +921,7 @@ fn fill_prefilling_shortcircuit(
     push_z_inflow_coupling(stage, layout, h_idx, d_idx, col_entries);
 
     for blk in 0..n_blks {
-        let tau_k = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+        let tau_k = layout.clock.tau(BlockIdx::new(blk));
         let row_d = row_d_for(blk);
         for &up_id in ctx.cascade.upstream(hydro.id) {
             if let Some(&u_idx) = ctx.hydro_pos.get(&up_id) {
@@ -988,12 +988,11 @@ fn fill_filled_min_storage_floor_entries(
 
 /// Fill pumping-flow water-balance entries: per block, the pumped-flow column enters the
 /// SOURCE hydro's water row with `+tau_h` (outflow sign) and the DESTINATION's with
-/// `−tau_h` (inflow sign). `tau_h` is the identical `duration_hours * M3S_TO_HM3`
-/// expression turbine/spillage use, so the coefficient stays bit-identical across sites.
+/// `−tau_h` (inflow sign). `tau_h` is the same [`BlockClock::tau`](crate::block_clock::BlockClock::tau)
+/// value turbine/spillage use, so the coefficient stays bit-identical across sites.
 /// Structural entries are written for every station: a dormant station's column is `[0, 0]`.
 pub(super) fn fill_pumping_water_entries(
     ctx: &TemplateBuildCtx<'_>,
-    stage: &Stage,
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
@@ -1007,7 +1006,7 @@ pub(super) fn fill_pumping_water_entries(
         let source = ctx.hydro_pos.get(&station.source_hydro_id).copied();
         let destination = ctx.hydro_pos.get(&station.destination_hydro_id).copied();
         for blk in 0..n_blks {
-            let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+            let tau_h = layout.clock.tau(BlockIdx::new(blk));
             let col = grid.flat(
                 layout.equipment.col_pumping_start,
                 p_sys,
@@ -1299,7 +1298,6 @@ pub(super) struct LpMatrixBuffers<'a> {
 /// (the defense-in-depth fallback for referential-validation gaps).
 pub(super) fn fill_generic_constraint_entries(
     ctx: &TemplateBuildCtx<'_>,
-    stage: &Stage,
     stage_idx: usize,
     layout: &StageLayout,
     buffers: &mut LpMatrixBuffers<'_>,
@@ -1340,9 +1338,9 @@ pub(super) fn fill_generic_constraint_entries(
         // A collapsed stage-level row is priced by the stage's total hours (it stands in
         // for one row per block); the total is penalty-conserving either way.
         let block_hours = if entry.is_stage_level {
-            stage.blocks.iter().map(|b| b.duration_hours).sum()
+            layout.clock.total_hours()
         } else {
-            stage.blocks[entry.block_idx].duration_hours
+            layout.clock.hours(BlockIdx::new(entry.block_idx))
         };
 
         // The interval IS the constraint: shape derives from the null-pattern.
@@ -1614,7 +1612,7 @@ pub(super) fn build_stage_matrix_entries(
     fill_state_and_water_entries(ctx, stage, stage_idx, layout, &mut col_entries);
     fill_filling_target_entries(layout, &mut col_entries);
     fill_filled_min_storage_floor_entries(layout, &mut col_entries);
-    fill_pumping_water_entries(ctx, stage, layout, &mut col_entries);
+    fill_pumping_water_entries(ctx, layout, &mut col_entries);
     fill_anticipated_state_out_def_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_anticipated_slot_definition_entries(layout, &mut col_entries);
     fill_load_balance_entries(ctx, stage_idx, layout, &mut col_entries);
@@ -3521,6 +3519,7 @@ mod pumping_water_tests {
     };
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
+    use crate::block_clock::M3S_TO_HM3;
     use crate::hydro_models::{
         EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet,
         ResolvedProductionModel,
@@ -3535,7 +3534,6 @@ mod pumping_water_tests {
     use crate::test_support::make_unit_group;
     use crate::time_value::TimeValue;
 
-    use super::super::M3S_TO_HM3;
     use super::super::columns::{ColumnBufs, fill_pumping_columns, fill_stage_columns};
     use super::super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
     use super::super::rows::fill_stage_rows;
@@ -4210,14 +4208,14 @@ mod pumping_water_tests {
                 // These single-stage fixtures decouple `stage.id` from
                 // `stage_idx` (every phase is exercised at `stage_idx = 0` against
                 // one bounds row), so the filling window's stage ids all resolve to
-                // idx 0. The backward fold reads `total_hours_per_stage[0]` and
+                // idx 0. The backward fold reads `stage_zetas[0]` and
                 // `hydro_bounds(h, 0)` for every filling stage, matching how each
                 // stage is built. Covers ids 0..=8 — wider than any filling window
                 // under test (max entry = 4).
                 filling_v_target: super::super::template::build_filling_v_target(
                     &self.hydros,
                     &self.bounds,
-                    &[744.0; N_STAGES],
+                    &[744.0 * M3S_TO_HM3; N_STAGES],
                     &(0..=8_i32).map(|id| (id, 0_usize)).collect(),
                 ),
             }
@@ -4284,7 +4282,7 @@ mod pumping_water_tests {
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
-        fill_pumping_water_entries(&ctx, &stage, &layout, &mut col_entries);
+        fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
 
         let n_blks = layout.n_blks;
         let source_pos = ctx.hydro_pos[&EntityId(1)];
@@ -4318,7 +4316,7 @@ mod pumping_water_tests {
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
-        fill_pumping_water_entries(&ctx, &stage, &layout, &mut col_entries);
+        fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
 
         let n_blks = layout.n_blks;
         let dest_pos = ctx.hydro_pos[&EntityId(2)];
@@ -4349,7 +4347,7 @@ mod pumping_water_tests {
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
-        fill_pumping_water_entries(&ctx, &stage, &layout, &mut col_entries);
+        fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
 
         let n_blks = layout.n_blks;
         let source_pos = ctx.hydro_pos[&EntityId(1)];
@@ -4843,7 +4841,7 @@ mod pumping_water_tests {
                 row_lower: &mut row_lower,
                 row_upper: &mut row_upper,
             };
-            fill_generic_constraint_entries(&ctx, &stage, 0, &layout, &mut buffers);
+            fill_generic_constraint_entries(&ctx, 0, &layout, &mut buffers);
 
             // Mirror the production per-column row-sort (see
             // build_single_stage_template) before assembling the CSC.
@@ -5230,7 +5228,7 @@ mod pumping_water_tests {
         let z_col = ar_layout.col_z_inflow_start() + down_idx;
         assert_eq!(
             ar_coeff_at(z_col, ar_row),
-            -ar_layout.zeta,
+            -ar_layout.clock.zeta(),
             "downstream z-inflow column must carry -zeta on its own water row"
         );
     }
@@ -7704,7 +7702,7 @@ mod pumping_water_tests {
             row_upper: &mut row_upper,
         };
 
-        fill_generic_constraint_entries(&ctx, &stage, 0, &layout, &mut buffers);
+        fill_generic_constraint_entries(&ctx, 0, &layout, &mut buffers);
 
         // Each generic row `blk` lands on the station's flow column for that block,
         // with the flow (1.0) and power (consumption) terms aliasing the SAME column.
@@ -7818,7 +7816,7 @@ mod pumping_water_tests {
             row_upper: &mut row_upper,
         };
 
-        fill_generic_constraint_entries(&ctx, &stage, 0, &layout, &mut buffers);
+        fill_generic_constraint_entries(&ctx, 0, &layout, &mut buffers);
 
         assert_eq!(
             block_hours.len(),
@@ -7996,7 +7994,7 @@ mod pumping_water_tests {
             .position(|&h| h.get() == d_idx)
             .expect("D is Filling, so it carries a σ_fill target row");
         let offsets = PfuOffsets {
-            zeta: layout.zeta,
+            zeta: layout.clock.zeta(),
             z_u: layout.col_z_inflow_start() + u_idx,
             water_row_u: layout.rows.water_balance.start + u_idx,
             water_row_d: layout.rows.water_balance.start + d_idx,
@@ -8229,13 +8227,13 @@ mod pumping_water_tests {
             .bounds
             .hydro_bounds_mut(h2_idx, 0)
             .filling_min_rate_m3s = AC_RATE_M3S;
-        // The fixture-default total_hours_per_stage is 744; rebuild the ctx's
+        // The fixture-default stage_zetas is 744 · M3S_TO_HM3; rebuild the ctx's
         // V_target map with the AC ζ (720 h → ζ = 2.592) so the fold matches the AC.
         let ctx = TemplateBuildCtx {
             filling_v_target: super::super::template::build_filling_v_target(
                 &fixtures.hydros,
                 &fixtures.bounds,
-                &[AC_TOTAL_HOURS],
+                &[AC_TOTAL_HOURS * M3S_TO_HM3],
                 &(0..=8_i32).map(|id| (id, 0_usize)).collect(),
             ),
             ..fixtures.make_ctx()
@@ -8640,7 +8638,7 @@ mod pumping_water_tests {
         let h1_idx = fixtures.hydro_pos[&EntityId(1)];
         let h3_idx = fixtures.hydro_pos[&EntityId(3)];
         let offsets = ScOffsets {
-            zeta: layout.zeta,
+            zeta: layout.clock.zeta(),
             n_blks: layout.n_blks,
             h2_idx,
             water_row_h2: layout.rows.water_balance.start + h2_idx,
@@ -9048,7 +9046,7 @@ mod pumping_water_tests {
         let h1_idx = fixtures.hydro_pos[&EntityId(1)];
         let h3_idx = fixtures.hydro_pos[&EntityId(3)];
         let offsets = ScOffsets {
-            zeta: layout.zeta,
+            zeta: layout.clock.zeta(),
             n_blks: layout.n_blks,
             h2_idx,
             water_row_h2: layout.rows.water_balance.start + h2_idx,
@@ -9252,7 +9250,7 @@ mod pumping_water_tests {
         };
         let h3_idx = fixtures.hydro_pos[&EntityId(3)];
         let offsets = ChainOffsets {
-            zeta: layout.zeta,
+            zeta: layout.clock.zeta(),
             h1_idx,
             h2_idx,
             water_row_h1: layout.rows.water_balance.start + h1_idx,

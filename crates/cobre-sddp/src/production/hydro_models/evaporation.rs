@@ -18,6 +18,7 @@ use super::types::{
     LinearizedEvaporation,
 };
 use crate::SddpError;
+use crate::block_clock::BlockClock;
 // ── Evaporation model resolution ──────────────────────────────────────────────
 
 /// Resolve per-hydro linearized evaporation models from a pre-parsed
@@ -246,7 +247,7 @@ fn resolve_evaporation_core(
                     (midpoint_v, midpoint_area, midpoint_slope)
                 };
 
-            let stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+            let stage_hours: f64 = BlockClock::new(stage).total_hours();
 
             // A zero-duration stage no longer surfaces as a non-finite coefficient
             // below (the divisor is now the calendar month, never zero), so reject

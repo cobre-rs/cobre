@@ -28,6 +28,7 @@ use cobre_stochastic::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
+use crate::block_clock::M3S_TO_HM3;
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
@@ -3364,7 +3365,7 @@ fn vtarget_id_map(n_stages: usize) -> VTargetMap<i32, usize> {
 }
 
 /// The fixture: `start = 2`, `entry = 4`, `min_storage = 60`, per-stage ζ = 2.592
-/// (`total_hours = 720`, `M3S_TO_HM3 = 0.0036`), `rate = 5`. The backward fold
+/// (`720 * M3S_TO_HM3`), `rate = 5`. The backward fold
 /// pins `V_target[3] = 60` (the dead-volume anchor at L = entry − 1) and
 /// `V_target[2] = 60 − 2.592·5 = 47.04` (one stage of minimum accumulation
 /// below the anchor). No `V_target` is emitted at PreFilling (ids 0, 1) or
@@ -3374,10 +3375,10 @@ fn build_filling_v_target_backward_fold_ac_values() {
     let n_stages = 5;
     let hydros = vec![vtarget_filling_hydro(1, 2, 4)];
     let bounds = vtarget_bounds(n_stages, 60.0, 5.0);
-    // ζ_t = total_hours[t]·M3S_TO_HM3 = 720·0.0036 = 2.592 at every stage.
-    let total_hours = vec![720.0; n_stages];
+    // ζ = 720·M3S_TO_HM3 = 2.592 at every stage.
+    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
     let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
+        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
 
     // L = entry − 1 = 3: anchored at the dead volume.
     assert!(
@@ -3421,9 +3422,9 @@ fn build_filling_v_target_clips_at_min_storage_when_over_provisioned() {
     // A high rate (50 m³/s over ζ = 2.592 ⇒ 129.6 hm³/stage) far exceeds the
     // 30 hm³ dead volume, so the unclipped earliest floors go deeply negative.
     let bounds = vtarget_bounds(n_stages, min_storage, 50.0);
-    let total_hours = vec![720.0; n_stages];
+    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
     let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
+        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
 
     for stage_id in 1..=5 {
         let v = v_target[&(0, stage_id)];
@@ -3450,9 +3451,9 @@ fn build_filling_v_target_flat_when_rate_is_zero() {
     let n_stages = 5;
     let hydros = vec![vtarget_filling_hydro(1, 1, 4)]; // Filling ids {1,2,3}.
     let bounds = vtarget_bounds(n_stages, 45.0, 0.0);
-    let total_hours = vec![720.0; n_stages];
+    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
     let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
+        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
     for stage_id in 1..=3 {
         assert!(
             (v_target[&(0, stage_id)] - 45.0).abs() < 1e-9,
@@ -3471,9 +3472,9 @@ fn build_filling_v_target_empty_for_non_filling() {
     h.entry_stage_id = None;
     let hydros = vec![h];
     let bounds = vtarget_bounds(n_stages, 50.0, 5.0);
-    let total_hours = vec![720.0; n_stages];
+    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
     let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
+        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
     assert!(
         v_target.is_empty(),
         "non-filling hydro ⇒ empty V_target map"
@@ -3808,7 +3809,7 @@ fn block_layout_and_template(
     let tau: Vec<f64> = stage
         .blocks
         .iter()
-        .map(|b| b.duration_hours * super::super::M3S_TO_HM3)
+        .map(|b| b.duration_hours * M3S_TO_HM3)
         .collect();
     (layout, template, tau)
 }

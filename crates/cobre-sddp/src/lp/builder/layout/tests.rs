@@ -1184,7 +1184,8 @@ fn chronological_storage_internal_sizing() {
     let state = state_layout_for(&ctx);
     let anchor = state.control_region_start();
 
-    let parallel = StageLayout::new(&ctx, &state, &stage_with_blocks(BlockMode::Parallel, 3), 0);
+    let stage_parallel = stage_with_blocks(BlockMode::Parallel, 3);
+    let parallel = StageLayout::new(&ctx, &state, &stage_parallel, 0);
     assert_eq!(
         parallel.equipment.storage_internal.start, parallel.equipment.storage_internal.end,
         "parallel K=3 storage_internal is empty"
@@ -1198,12 +1199,8 @@ fn chronological_storage_internal_sizing() {
         "parallel turbine.start anchors at control_region_start()"
     );
 
-    let chrono_k1 = StageLayout::new(
-        &ctx,
-        &state,
-        &stage_with_blocks(BlockMode::Chronological, 1),
-        0,
-    );
+    let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
+    let chrono_k1 = StageLayout::new(&ctx, &state, &stage_chrono_k1, 0);
     assert_eq!(
         chrono_k1.equipment.storage_internal.start, chrono_k1.equipment.storage_internal.end,
         "chronological K=1 storage_internal is empty"
@@ -1217,12 +1214,8 @@ fn chronological_storage_internal_sizing() {
         "chronological K=1 turbine.start anchors at control_region_start()"
     );
 
-    let chrono_k3 = StageLayout::new(
-        &ctx,
-        &state,
-        &stage_with_blocks(BlockMode::Chronological, 3),
-        0,
-    );
+    let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
+    let chrono_k3 = StageLayout::new(&ctx, &state, &stage_chrono_k3, 0);
     assert_eq!(
         chrono_k3.equipment.storage_internal_start, anchor,
         "chronological K=3 storage_internal_start anchors at control_region_start()"
@@ -1248,12 +1241,8 @@ fn block_storage_col_resolves_all_boundaries() {
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
 
-    let chrono_k3 = StageLayout::new(
-        &ctx,
-        &state,
-        &stage_with_blocks(BlockMode::Chronological, 3),
-        0,
-    );
+    let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
+    let chrono_k3 = StageLayout::new(&ctx, &state, &stage_chrono_k3, 0);
     let h = 1;
     assert_eq!(
         chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Incoming),
@@ -1283,12 +1272,8 @@ fn block_storage_col_resolves_all_boundaries() {
         "both interior columns lie within the storage_internal range"
     );
 
-    let chrono_k1 = StageLayout::new(
-        &ctx,
-        &state,
-        &stage_with_blocks(BlockMode::Chronological, 1),
-        0,
-    );
+    let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
+    let chrono_k1 = StageLayout::new(&ctx, &state, &stage_chrono_k1, 0);
     assert!(
         chrono_k1.equipment.storage_internal.is_empty(),
         "K = 1 has no interior storage columns"
@@ -1317,7 +1302,8 @@ fn chronological_water_balance_row_count() {
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
 
-    let parallel = StageLayout::new(&ctx, &state, &stage_with_blocks(BlockMode::Parallel, 3), 0);
+    let stage_parallel = stage_with_blocks(BlockMode::Parallel, 3);
+    let parallel = StageLayout::new(&ctx, &state, &stage_parallel, 0);
     assert_eq!(
         parallel.rows.water_balance.end - parallel.rows.water_balance.start,
         2,
@@ -1328,12 +1314,8 @@ fn chronological_water_balance_row_count() {
         "parallel load_balance.start chains off water_balance.end"
     );
 
-    let chrono_k3 = StageLayout::new(
-        &ctx,
-        &state,
-        &stage_with_blocks(BlockMode::Chronological, 3),
-        0,
-    );
+    let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
+    let chrono_k3 = StageLayout::new(&ctx, &state, &stage_chrono_k3, 0);
     assert_eq!(
         chrono_k3.rows.water_balance.end - chrono_k3.rows.water_balance.start,
         6,
@@ -1344,12 +1326,8 @@ fn chronological_water_balance_row_count() {
         "chronological K=3 load_balance.start chains off water_balance.end"
     );
 
-    let chrono_k1 = StageLayout::new(
-        &ctx,
-        &state,
-        &stage_with_blocks(BlockMode::Chronological, 1),
-        0,
-    );
+    let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
+    let chrono_k1 = StageLayout::new(&ctx, &state, &stage_chrono_k1, 0);
     assert_eq!(
         chrono_k1.rows.water_balance.end - chrono_k1.rows.water_balance.start,
         2,

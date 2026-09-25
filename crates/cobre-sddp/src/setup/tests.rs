@@ -4,8 +4,8 @@ use super::{
     validate_par_shape,
 };
 use crate::SddpError;
+use crate::block_clock::M3S_TO_HM3;
 use crate::hydro_models::{PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel};
-use crate::lp::builder::M3S_TO_HM3;
 use crate::lp::indexer::StateSpace;
 use crate::test_support;
 use cobre_stochastic::ExternalScenarioLibrary;

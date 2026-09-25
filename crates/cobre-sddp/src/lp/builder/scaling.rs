@@ -5,9 +5,8 @@
 use cobre_core::Stage;
 use cobre_solver::StageTemplate;
 
+use crate::block_clock::BlockClock;
 use crate::indexer::StateSpace;
-
-use super::M3S_TO_HM3;
 
 /// Per-column geometric-mean scaling factors from a CSC matrix:
 /// `1 / sqrt(max|A_ij| * min|A_ij|)` over nonzeros, `1.0` for an empty column.
@@ -216,8 +215,7 @@ pub(super) fn compute_stage_hours(study_stages: &[&Stage]) -> (Vec<f64>, Vec<Vec
 
     for stage in study_stages {
         let block_hours: Vec<f64> = stage.blocks.iter().map(|b| b.duration_hours).collect();
-        let total_hours: f64 = block_hours.iter().sum();
-        zeta_per_stage.push(total_hours * M3S_TO_HM3);
+        zeta_per_stage.push(BlockClock::new(stage).zeta());
         block_hours_per_stage.push(block_hours);
     }
 

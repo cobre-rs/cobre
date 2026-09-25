@@ -604,11 +604,14 @@ pub(crate) struct StageLayout<'a> {
     pub(crate) fpha_cell_local_start: Vec<usize>,
     /// Hyperplane count per FPHA hydro at this stage.
     pub(crate) fpha_planes_per_hydro: Vec<usize>,
+    /// Evaporation slots per evaporating hydro at this stage: single-owner result
+    /// of [`evaporation_slot_count`] (`1` on a parallel stage, `n_blks` on a
+    /// chronological one) — the stride every evaporation column/row family uses.
+    pub(crate) n_evap_slots: usize,
     /// Indices (into `ctx.hydros`) of hydros with linearized evaporation at this stage.
     pub(crate) evap_hydro_indices: Vec<HydroSys>,
-    /// Per-`(evaporation hydro, block)` column/row indices, block-major
-    /// (`local * n_blks + blk`). At `n_blks == 1` the slot for evap hydro `i` is
-    /// `i`, parallel to `evap_hydro_indices`.
+    /// Per-`(evaporation hydro, slot)` column/row indices, slot-major
+    /// (`local * n_evap_slots + slot`), parallel to `evap_hydro_indices`.
     pub(crate) evap_indices: Vec<EvaporationIndices>,
     /// Per-row metadata for active generic constraint rows, one per active
     /// `(constraint, block)` pair in constraint-index-major order.
@@ -812,28 +815,46 @@ fn build_anticipated_fishing_row_pos(
     (row_pos, n_active)
 }
 
-/// Evaporation column/row indices per `(evaporation hydro, block)`, block-major
-/// (`local * n_blks + blk`) to mirror the block-strided generation columns.
-/// Within-triple columns at [`EVAP_FLOW_OFFSET`] / [`EVAP_F_PLUS_OFFSET`] /
+/// Evaporation slots per evaporating hydro: one stage-level slot on a parallel
+/// stage (its blocks share the stage endpoints), one per block on a
+/// chronological stage.
+pub(crate) fn evaporation_slot_count(block_mode: BlockMode, n_blks: usize) -> usize {
+    match block_mode {
+        BlockMode::Parallel => 1,
+        BlockMode::Chronological => n_blks,
+    }
+}
+
+/// The slot block `blk` reads, given the stage's slot count.
+pub(crate) fn evaporation_slot(slot_count: usize, blk: BlockIdx) -> BlockIdx {
+    if slot_count == 1 {
+        BlockIdx::new(0)
+    } else {
+        blk
+    }
+}
+
+/// Evaporation column/row indices per `(evaporation hydro, slot)`, slot-major
+/// (`local * n_evap_slots + slot`) to mirror the block-strided generation
+/// columns. Within-triple columns at [`EVAP_FLOW_OFFSET`] / [`EVAP_F_PLUS_OFFSET`] /
 /// [`EVAP_F_MINUS_OFFSET`], strided by [`EVAP_COLS_PER_HYDRO`]; one row per
-/// `(hydro, block)`. At `n_blks == 1` the slot for hydro `i` is `i`, so a reader
-/// indexing by the hydro-local index alone still lands on block 0.
+/// `(hydro, slot)`.
 fn build_evap_indices(
     n_evap_hydros: usize,
-    n_blks: usize,
+    n_evap_slots: usize,
     col_start: usize,
     row_start: usize,
 ) -> Vec<EvaporationIndices> {
-    let mut out = Vec::with_capacity(n_evap_hydros * n_blks);
+    let mut out = Vec::with_capacity(n_evap_hydros * n_evap_slots);
     for i in 0..n_evap_hydros {
-        for blk in 0..n_blks {
-            let slot = i * n_blks + blk;
-            let triple_base = col_start + slot * EVAP_COLS_PER_HYDRO;
+        for slot in 0..n_evap_slots {
+            let flat = i * n_evap_slots + slot;
+            let triple_base = col_start + flat * EVAP_COLS_PER_HYDRO;
             out.push(EvaporationIndices {
                 evaporation_flow_col: triple_base + EVAP_FLOW_OFFSET,
                 f_evap_plus_col: triple_base + EVAP_F_PLUS_OFFSET,
                 f_evap_minus_col: triple_base + EVAP_F_MINUS_OFFSET,
-                evap_row: row_start + slot,
+                evap_row: row_start + flat,
             });
         }
     }
@@ -1311,10 +1332,12 @@ impl<'a> StageLayout<'a> {
         let generation = col.alloc(n_fpha_cells * n_blks);
 
         // `evap_col_start` is the empty-block cursor `col_evap_start` reads; one
-        // `EVAP_COLS_PER_HYDRO` triple per `(evap hydro, block)`, block-strided by `n_blks`.
+        // `EVAP_COLS_PER_HYDRO` triple per `(evap hydro, slot)`, strided by
+        // `n_evap_slots` (`evaporation_slot_count`).
         let n_evap_hydros = evap_hydro_indices.len();
+        let n_evap_slots = evaporation_slot_count(stage.block_mode, n_blks);
         let evap_col_start = col.pos();
-        col.alloc(n_evap_hydros * n_blks * EVAP_COLS_PER_HYDRO);
+        col.alloc(n_evap_hydros * n_evap_slots * EVAP_COLS_PER_HYDRO);
         let post_equipment_col_start = evap_col_start;
 
         // ── Role-(b) constraint row ranges ───────────────────────────────────
@@ -1351,10 +1374,11 @@ impl<'a> StageLayout<'a> {
         // rows across cells.
         let fpha_rows_end = row.alloc(n_blks * total_fpha_rows).end;
 
-        // One row per `(evap hydro, block)`, so the block grows by `n_blks` — the
-        // cursor chain below MUST stay in lockstep or every downstream row shifts.
-        let evap_indices = build_evap_indices(n_evap_hydros, n_blks, evap_col_start, fpha_rows_end);
-        row.alloc(n_evap_hydros * n_blks);
+        // One row per `(evap hydro, slot)`, so the row block grows by `n_evap_slots`
+        // — the cursor chain below MUST stay in lockstep or every downstream row shifts.
+        let evap_indices =
+            build_evap_indices(n_evap_hydros, n_evap_slots, evap_col_start, fpha_rows_end);
+        row.alloc(n_evap_hydros * n_evap_slots);
         let post_equipment_row_start = row.pos();
 
         // Withdrawal slacks + the four operational-violation slack families (after
@@ -1565,6 +1589,7 @@ impl<'a> StageLayout<'a> {
             fpha_local_index,
             fpha_cell_local_start,
             fpha_planes_per_hydro,
+            n_evap_slots,
             evap_hydro_indices,
             evap_indices,
             generic_constraint_rows: generic.generic_constraint_rows,
@@ -1704,15 +1729,16 @@ impl<'a> StageLayout<'a> {
         )
     }
 
-    /// Base column of the `(evap hydro local_idx, block blk)` triple, block-major
-    /// (`(local_idx * n_blks + blk) * EVAP_COLS_PER_HYDRO`). Single owner of the
-    /// evaporation block stride; the three offset accessors add their offset to it.
-    /// The transposed `blk * n_evap_hydros + local_idx` stride compiles and silently
-    /// aliases one hydro's block onto another's.
+    /// Base column of the `(evap hydro local_idx, slot)` triple, slot-major
+    /// (`(local_idx * n_evap_slots + slot) * EVAP_COLS_PER_HYDRO`). Single owner of
+    /// the evaporation block stride; the three offset accessors add their offset to
+    /// it. The transposed `slot * n_evap_hydros + local_idx` stride compiles and
+    /// silently aliases one hydro's slot onto another's.
     #[inline]
-    fn evap_triple_base(&self, local_idx: usize, blk: BlockIdx) -> usize {
-        let blk = blk.get();
-        self.equipment.evap_col_start + (local_idx * self.n_blks + blk) * EVAP_COLS_PER_HYDRO
+    fn evap_triple_base(&self, local_idx: usize, slot: BlockIdx) -> usize {
+        let slot = slot.get();
+        debug_assert!(slot < self.n_evap_slots);
+        self.equipment.evap_col_start + (local_idx * self.n_evap_slots + slot) * EVAP_COLS_PER_HYDRO
     }
 
     /// Evaporation-outflow column for `(evap hydro local_idx, block blk)` (the
@@ -1824,8 +1850,8 @@ impl<'a> StageLayout<'a> {
         self.rows.load_balance.end
     }
 
-    /// Start of evaporation constraint rows (one per `(evap hydro, block)`,
-    /// block-major): `row_evap_start() + local_evap_idx * n_blks + blk`. The
+    /// Start of evaporation constraint rows (one per `(evap hydro, slot)`,
+    /// slot-major): `row_evap_start() + local_evap_idx * n_evap_slots + slot`. The
     /// evaporation row block follows the FPHA rows even when empty — reads
     /// `self.rows.fpha_rows_end`.
     #[inline]
@@ -1976,6 +2002,7 @@ impl<'a> StageLayout<'a> {
             deficit: &self.equipment.deficit,
             max_deficit_segments: self.equipment.max_deficit_segments,
             n_blks: self.n_blks,
+            n_evap_slots: self.n_evap_slots,
             evap_indices: &self.evap_indices,
             evap_hydro_indices: &self.evap_hydro_indices,
             fpha_hydro_indices: &self.fpha_hydro_indices,

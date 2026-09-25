@@ -28,6 +28,7 @@ use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::lead_time::{AnticipatedResolution, PointResolution};
 use crate::lp::builder::{
     GenericConstraintRowEntry, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
+    evaporation_slot_count,
 };
 use crate::lp::indexer::{
     FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex, HydroSys, StateSpace,
@@ -5777,8 +5778,9 @@ fn entity_counts_1_hydro() -> EntityCounts {
 ///
 /// Control-region layout for `state_layout(1, 0)` (`control_region_start == 4`):
 /// interior storage `S¹ … Sᴷ⁻¹` at `[4, 4 + (K−1))`, then turbine `[t0, t0 + K)`,
-/// spillage `[t0 + K, t0 + 2K)`, then `K` evaporation triples. In parallel mode the
-/// interior family is empty and turbine begins at 4.
+/// spillage `[t0 + K, t0 + 2K)`, then `evaporation_slot_count(block_mode, k)`
+/// evaporation triples. In parallel mode the interior family is empty and turbine
+/// begins at 4.
 fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry {
     use crate::lp::indexer::{EvaporationIndices, StorageBoundaryGrid};
     let n_interior = match block_mode {
@@ -5789,14 +5791,15 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
     let turbine_start = storage_internal_start + n_interior;
     let spillage_start = turbine_start + k;
     let evap_start = spillage_start + k;
-    let evap_indices: Vec<EvaporationIndices> = (0..k)
-        .map(|b| {
-            let base = evap_start + b * 3;
+    let n_evap_slots = evaporation_slot_count(block_mode, k);
+    let evap_indices: Vec<EvaporationIndices> = (0..n_evap_slots)
+        .map(|slot| {
+            let base = evap_start + slot * 3;
             EvaporationIndices {
                 evaporation_flow_col: base,
                 f_evap_plus_col: base + 1,
                 f_evap_minus_col: base + 2,
-                evap_row: b,
+                evap_row: slot,
             }
         })
         .collect();
@@ -6274,7 +6277,7 @@ fn extract_chronological_per_block_evaporation() {
 }
 
 /// Parallel mode: every block row's evaporation fields are `.to_bits()`-identical to
-/// the block-0 read.
+/// the single stage-level slot's read.
 #[test]
 fn extract_parallel_per_block_evaporation_byte_identical() {
     let k = 3_usize;
@@ -6283,16 +6286,19 @@ fn extract_parallel_per_block_evaporation_byte_identical() {
     let state = test_support::state_layout(1, 0);
     let ec = zero_energy_conversion(1, 1);
 
+    assert_eq!(
+        geom.evap_indices.len(),
+        1,
+        "a parallel stage reserves exactly one evaporation slot"
+    );
     let n_cols = geom.spillage.end + k * 3;
     let mut primal = vec![0.0_f64; n_cols];
     primal[0] = 40.0;
     primal[2] = 10.0;
-    for b in 0..k {
-        let ei = &geom.evap_indices[b];
-        primal[ei.evaporation_flow_col] = 1.0 + b as f64;
-        primal[ei.f_evap_plus_col] = 0.1 + b as f64;
-        primal[ei.f_evap_minus_col] = 0.2 + b as f64;
-    }
+    let ei = &geom.evap_indices[0];
+    primal[ei.evaporation_flow_col] = 1.0;
+    primal[ei.f_evap_plus_col] = 0.1;
+    primal[ei.f_evap_minus_col] = 0.2;
     let dual = vec![0.0_f64; 4];
 
     let spec = StageExtractionSpec {
@@ -6336,7 +6342,7 @@ fn extract_parallel_per_block_evaporation_byte_identical() {
     };
 
     let result = extract_stage_result(&view, &spec, 0);
-    // Block 0's triple is the parallel stage-level read.
+    // The single stage-level slot's triple is what every block row reads.
     let flow0 = 1.0_f64;
     let neg0 = 0.1_f64;
     let pos0 = 0.2_f64;

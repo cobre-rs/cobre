@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the study's own LP instead, so a valid checkpoint no longer risks a
   spurious basis-shape rejection on the first resumed solve.
 
+- **On a parallel stage with two or more blocks, an evaporating hydro now
+  evaporates as one stage-level quantity, its violation priced for the whole
+  stage.** It was previously priced for one block's hours while its flow moved
+  the whole stage's water.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

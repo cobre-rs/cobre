@@ -25,7 +25,9 @@ use cobre_core::EntityId;
 use cobre_core::HydroPastDefluence;
 
 use crate::energy_conversion::EnergyConversionSet;
-use crate::lp::builder::{GenericConstraintRowEntry, StageGeometry};
+use crate::lp::builder::{
+    GenericConstraintRowEntry, StageGeometry, evaporation_slot, evaporation_slot_count,
+};
 use crate::lp::indexer::{
     AnticipatedLocal, BlockGrid, BlockIdx, Boundary, EvapLocal, FillingTargetLocal, FloorLocal,
     FphaLocal, HydroCell, HydroCellIndex, HydroSys, StateSpace, StudyDimensions,
@@ -916,7 +918,7 @@ struct HydroStageContext {
     withdrawal_pos: f64,
     fpha_local: Option<FphaLocal>,
     /// Evaporation-local slot, `None` for a hydro with no evaporation at this stage;
-    /// the closure reads `evap_indices[evap_local * n_blks + b]` per block.
+    /// the closure reads `evap_indices[evap_local * n_evap_slots + slot]` per block.
     evap_local: Option<EvapLocal>,
     equivalent_productivity_mw_per_m3s: f64,
     accumulated_productivity_mw_per_m3s: f64,
@@ -979,9 +981,12 @@ impl HydroStageContext {
         let evap_local = lookup.evap[h];
         let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
             if let Some(lei) = evap_local {
-                // Block-major `evap_indices`; block 0 is the parallel-mode stage-level
-                // read. `extract_hydro_per_block` resolves each block's own triple.
-                let ei = &spec.geometry.evap_indices[lei.get() * spec.geometry.n_blks];
+                // Slot-major `evap_indices`; this reads the stage-level slot 0.
+                // `extract_hydro_per_block` resolves each chronological block's own
+                // triple; a parallel block routes through this same read.
+                let n_evap_slots =
+                    evaporation_slot_count(spec.geometry.block_mode, spec.geometry.n_blks);
+                let ei = &spec.geometry.evap_indices[lei.get() * n_evap_slots];
                 let evaporation_flow = view.primal[ei.evaporation_flow_col];
                 let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
                 let pos = view.primal[ei.f_evap_minus_col]; // f_evap_minus = over-evaporation
@@ -1137,13 +1142,17 @@ fn extract_hydro_per_block<'a>(
         let stored_energy_initial_mw = stored_energy_initial_mwh / ctx.stage_total_hours;
         let stored_energy_final_mw = stored_energy_final_mwh / ctx.stage_total_hours;
 
-        // Chronological block `b` reports its own block's evaporation triple
-        // (`evap_indices[local * n_blks + b]`); parallel keeps the stage-level block-0
-        // read. A hydro with no evaporation slot stays at the `ctx` defaults.
+        // Chronological block `b` reports its own slot's evaporation triple; parallel
+        // routes every block through the stage-level slot already resolved into
+        // `ctx` (`HydroStageContext::new`). A hydro with no evaporation slot stays
+        // at the `ctx` defaults.
         let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
             match (spec.geometry.block_mode, ctx.evap_local) {
                 (BlockMode::Chronological, Some(local)) => {
-                    let ei = &spec.geometry.evap_indices[local.get() * spec.geometry.n_blks + b];
+                    let n_evap_slots =
+                        evaporation_slot_count(spec.geometry.block_mode, spec.geometry.n_blks);
+                    let slot = evaporation_slot(n_evap_slots, BlockIdx::new(b));
+                    let ei = &spec.geometry.evap_indices[local.get() * n_evap_slots + slot.get()];
                     debug_assert!(
                         ei.evaporation_flow_col < view.primal.len()
                             && ei.f_evap_plus_col < view.primal.len()

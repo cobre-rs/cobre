@@ -3272,9 +3272,14 @@ fn column_accessors_match_open_coded_formulas() {
     // Multi-block, zero-entity layout: the block-major `col_*_start` fields
     // and `n_blks` are populated; the accessor reads the same fields the
     // open-coded formula reads, so this pins each accessor's arithmetic.
+    // Chronological so `n_evap_slots == n_blks`, giving the evaporation probe
+    // below the same multi-slot coverage as every other block-major family.
     let fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
-    let stage = PumpingFixtures::stage_with_blocks(4);
+    let stage = Stage {
+        block_mode: BlockMode::Chronological,
+        ..PumpingFixtures::stage_with_blocks(4)
+    };
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
     let n_blks = layout.n_blks;
@@ -3347,14 +3352,19 @@ fn column_accessors_match_open_coded_formulas() {
         }
     }
 
-    // Evaporation accessors: block-major (`local * n_blks + blk`) triple,
-    // EVAP_COLS_PER_HYDRO-strided. The three within-triple offsets must map
-    // flow→0, f_plus→1, f_minus→2.
+    // Evaporation accessors: slot-major (`local * n_evap_slots + slot`) triple,
+    // EVAP_COLS_PER_HYDRO-strided (chronological, so `n_evap_slots == n_blks`).
+    // The three within-triple offsets must map flow→0, f_plus→1, f_minus→2.
+    let n_evap_slots = layout.n_evap_slots;
+    assert_eq!(
+        n_evap_slots, n_blks,
+        "chronological: one evap slot per block"
+    );
     for local_idx in [0_usize, 1, 4] {
         let local = EvapLocal::new(local_idx);
         for blk in 0..n_blks {
-            let triple_base =
-                layout.equipment.evap_col_start + (local_idx * n_blks + blk) * EVAP_COLS_PER_HYDRO;
+            let triple_base = layout.equipment.evap_col_start
+                + (local_idx * n_evap_slots + blk) * EVAP_COLS_PER_HYDRO;
             assert_eq!(
                 layout.evap_flow_col(local, BlockIdx::new(blk)),
                 triple_base + EVAP_FLOW_OFFSET,

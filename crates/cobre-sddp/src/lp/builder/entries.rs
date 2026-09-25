@@ -1207,13 +1207,15 @@ pub(super) fn fill_fpha_entries(
     });
 }
 
-/// Fill the evaporation equality rows, one per `(evaporation hydro, block)`, encoding
+/// Fill the evaporation equality rows, one per `(evaporation hydro, slot)`, encoding
 /// `evaporation_flow − slope/2·Sᵏ⁻¹ − slope/2·Sᵏ + f_plus − f_minus = intercept_m3s`
 /// (`slope` = `volume_slope_m3s_per_hm3`; `intercept_m3s` set by `super::rows::fill_stage_rows`).
 ///
 /// Like FPHA, `slope/2` lands on BOTH storage columns to average the block-local storage
 /// `(Sᵏ⁻¹ + Sᵏ)/2`; chronological `K = 1` resolves both boundaries back to `(S⁰, Sᴷ)`,
-/// byte-identical to parallel.
+/// byte-identical to parallel. A parallel stage has exactly one slot, on the stage
+/// endpoints `(S⁰, Sᴷ)`; a chronological stage has one slot per block, each on that
+/// block's own `(Sᵏ⁻¹, Sᵏ)`.
 ///
 /// The evaporation flow's entry INTO the water-balance row lives with the water-balance
 /// fill, not here.
@@ -1225,6 +1227,7 @@ pub(super) fn fill_evaporation_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_blks = layout.n_blks;
+    let n_evap_slots = layout.n_evap_slots;
     let row_evap_start = layout.row_evap_start();
 
     for (local_idx, &h) in layout.evap_hydro_indices.iter().enumerate() {
@@ -1254,23 +1257,22 @@ pub(super) fn fill_evaporation_entries(
         };
 
         let half_slope = coeff.volume_slope_m3s_per_hm3 / 2.0;
-        for k in 1..=n_blks {
-            let blk = k - 1;
+        for slot in 0..n_evap_slots {
             let (col_v_in, col_v) = match stage.block_mode {
                 BlockMode::Parallel => (
                     layout.block_storage_col(h, Boundary::Incoming),
                     layout.block_storage_col(h, Boundary::Outgoing),
                 ),
                 BlockMode::Chronological => (
-                    layout.block_storage_col(h, Boundary::from_index(k - 1, n_blks)),
-                    layout.block_storage_col(h, Boundary::from_index(k, n_blks)),
+                    layout.block_storage_col(h, Boundary::from_index(slot, n_blks)),
+                    layout.block_storage_col(h, Boundary::from_index(slot + 1, n_blks)),
                 ),
             };
             let local = EvapLocal::new(local_idx);
-            let col_evaporation_flow = layout.evap_flow_col(local, BlockIdx::new(blk));
-            let col_f_plus = layout.evap_f_plus_col(local, BlockIdx::new(blk));
-            let col_f_minus = layout.evap_f_minus_col(local, BlockIdx::new(blk));
-            let row = row_evap_start + local_idx * n_blks + blk;
+            let col_evaporation_flow = layout.evap_flow_col(local, BlockIdx::new(slot));
+            let col_f_plus = layout.evap_f_plus_col(local, BlockIdx::new(slot));
+            let col_f_minus = layout.evap_f_minus_col(local, BlockIdx::new(slot));
+            let row = row_evap_start + local_idx * n_evap_slots + slot;
 
             col_entries[col_evaporation_flow].push((row, 1.0));
             col_entries[col_v_in].push((row, -half_slope));
@@ -9919,7 +9921,7 @@ mod pumping_water_tests {
         assert_eq!(csc_at(&csc, col_s_in, fpha_row), -FPHA_GAMMA_V / 2.0);
         assert_eq!(csc_at(&csc, col_s_out, fpha_row), -FPHA_GAMMA_V / 2.0);
 
-        // Single evaporation row (block 0 slot) on the stage endpoints.
+        // Single evaporation row (the stage slot) on the stage endpoints.
         let evap_row = layout.row_evap_start();
         assert_eq!(csc_at(&csc, col_s_in, evap_row), -EVAP_SLOPE / 2.0);
         assert_eq!(csc_at(&csc, col_s_out, evap_row), -EVAP_SLOPE / 2.0);
@@ -9942,7 +9944,6 @@ mod pumping_water_tests {
     /// evaporating hydro, its flow coupled into the single water row with `ζ`, and its
     /// violation slacks priced at the violation cost times the stage's total hours.
     #[test]
-    #[ignore = "known defect: a parallel multi-block stage allocates one evaporation slot per block and prices the coupled slot's violation slack at one block's hours"]
     fn parallel_multi_block_evap_slack_price_matches_water_it_moves() {
         let durations = [300.0_f64, 444.0];
         let (csc, _rl, _ru, (_cl, _cu, obj), layout) =

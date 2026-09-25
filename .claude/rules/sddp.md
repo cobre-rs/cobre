@@ -89,6 +89,31 @@ Read: `lp/builder/entries.rs` (`fill_fpha_entries` — pushes `−γᵥ/2` onto 
 incoming- and outgoing-storage columns), `lp/builder/rows.rs` (`fill_fpha_rows`),
 and `lp/builder/template.rs`.
 
+## Parallel evaporation is one stage-level slot
+
+On a parallel stage each evaporating hydro has **one** evaporation slot, on the
+stage endpoints `(S⁰, Sᴷ)`, coupled into the single water-balance row with
+`+ζ`; its violation slacks (`f_evap_plus`/`f_evap_minus`) are priced at the
+violation cost times the **total stage hours**
+(`stage.blocks.iter().map(|b| b.duration_hours).sum::<f64>()`). A chronological
+stage keeps one slot per block, each on that block's own `(Sᵏ⁻¹, Sᵏ)`, priced at
+that block's own hours. `evaporation_slot_count(block_mode, n_blks)` is the
+single owner of the slot count (`1` parallel, `n_blks` chronological); every
+column/row family and the generic-constraint resolver derive their stride from
+it — no consumer keeps a `* n_blks` evaporation stride on a parallel stage.
+
+Allocating one evaporation slot per BLOCK on a parallel stage is the
+wrong-but-compiling alternative: every extra slot beyond the first is a
+decoupled variable (no water-row or objective term ties it to anything), and
+the one coupled slot's violation slack is still priced at only ONE block's
+hours while its flow moves the WHOLE stage's water — understating the true
+violation cost by a factor of `K`.
+
+Read: `lp/builder/layout.rs` (`evaporation_slot_count`), `lp/builder/columns.rs`
+(`fill_evaporation_columns`).
+Pinned by `parallel_multi_block_evap_slack_price_matches_water_it_moves` and
+`parallel_multiblock_evaporation_study_has_one_priced_stage_slot`.
+
 ## Hydro-cell aggregation assumes one production map per cell
 
 `HydroCellIndex` partitions a plant's `unit_groups` into `bus_id`-equivalence

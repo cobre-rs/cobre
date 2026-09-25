@@ -126,8 +126,8 @@ impl RowFamily {
 /// `StageGeometry` does expose (`water_balance`, `filling_target`,
 /// `filled_min_storage_floor`, `load_balance`, `fpha`, `z_inflow_row_start`)
 /// plus counts derivable from `StageContext`/`StageGeometry`
-/// (`evap_hydro_indices.len() * n_blks`, `n_hydros * n_blks` per
-/// operational-violation family) — never a hand-copied row-fill formula.
+/// (`evap_indices.len()`, `n_hydros * n_blks` per operational-violation
+/// family) — never a hand-copied row-fill formula.
 /// Three families this walk cannot place directly are handled by
 /// construction: `transit_bucket_definition`'s size falls out of the
 /// `water_balance.end .. load_balance.start` gap regardless of its value; the
@@ -184,7 +184,7 @@ fn classify_stage_rows(
     );
     mark(&mut fam, geom.fpha.clone(), RowFamily::Fpha);
 
-    let evap_len = geom.evap_hydro_indices.len() * n_blks;
+    let evap_len = geom.evap_indices.len();
     let evap_range = geom.fpha.end..geom.fpha.end + evap_len;
     mark(&mut fam, evap_range.clone(), RowFamily::Evaporation);
 
@@ -292,7 +292,7 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
     let n_blks = dims.n_blks;
 
     let total_fpha_rows = 2 * n_blks + 3 * n_blks;
-    let evap_rows = n_blks; // one evap hydro
+    let evap_rows = geom.evap_indices.len(); // one evap hydro
     let opviol_rows = 4 * n_hydros * n_blks;
     // z_inflow (n_hydros) + water_balance (n_hydros, BlockMode::Parallel) +
     // load_balance + fpha + evaporation + 4 operational-violation families;

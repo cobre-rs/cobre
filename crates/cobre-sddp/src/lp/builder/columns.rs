@@ -1,6 +1,6 @@
 use cobre_core::commissioning::{Phase, commissioning_active, filling_phase};
 use cobre_core::{
-    ContractType, HydroBlockBounds, HydroUnitGroup, ResolvedHydroUnitGroupBounds, Stage,
+    BlockMode, ContractType, HydroBlockBounds, HydroUnitGroup, ResolvedHydroUnitGroupBounds, Stage,
 };
 
 use crate::hydro_models::{EvaporationModel, ResolvedProductionModel};
@@ -884,10 +884,10 @@ fn fill_evaporation_columns(
                 continue;
             }
         };
-        for blk in 0..layout.n_blks {
-            let col_evaporation_flow = layout.evap_flow_col(local_idx, BlockIdx::new(blk));
-            let col_f_plus = layout.evap_f_plus_col(local_idx, BlockIdx::new(blk));
-            let col_f_minus = layout.evap_f_minus_col(local_idx, BlockIdx::new(blk));
+        for slot in 0..layout.n_evap_slots {
+            let col_evaporation_flow = layout.evap_flow_col(local_idx, BlockIdx::new(slot));
+            let col_f_plus = layout.evap_f_plus_col(local_idx, BlockIdx::new(slot));
+            let col_f_minus = layout.evap_f_minus_col(local_idx, BlockIdx::new(slot));
             // Signed: a negative outflow reads as net rainfall input (inflow).
             bufs.col_lower[col_evaporation_flow] = -q_max_abs;
             bufs.col_upper[col_evaporation_flow] = q_max_abs;
@@ -895,10 +895,16 @@ fn fill_evaporation_columns(
             bufs.col_upper[col_f_plus] = f64::INFINITY;
             bufs.col_lower[col_f_minus] = 0.0;
             bufs.col_upper[col_f_minus] = f64::INFINITY;
-            // f_evap_plus = under-evaporation, f_evap_minus = over-evaporation.
-            let block_hours = stage.blocks[blk].duration_hours;
-            bufs.objective[col_f_plus] = hp.evaporation_violation_neg_cost * block_hours;
-            bufs.objective[col_f_minus] = hp.evaporation_violation_pos_cost * block_hours;
+            // f_evap_plus = under-evaporation, f_evap_minus = over-evaporation. A
+            // parallel slot's slack moves the whole stage's water, so it is priced
+            // at the total stage hours; a chronological slot's slack is priced at
+            // that block's own hours.
+            let priced_hours = match stage.block_mode {
+                BlockMode::Parallel => stage.blocks.iter().map(|b| b.duration_hours).sum::<f64>(),
+                BlockMode::Chronological => stage.blocks[slot].duration_hours,
+            };
+            bufs.objective[col_f_plus] = hp.evaporation_violation_neg_cost * priced_hours;
+            bufs.objective[col_f_minus] = hp.evaporation_violation_pos_cost * priced_hours;
         }
     }
 }

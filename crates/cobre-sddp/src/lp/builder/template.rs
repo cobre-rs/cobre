@@ -248,11 +248,12 @@ pub struct StageGeometry {
     pub excess: Range<usize>,
     /// FPHA-generation column range (one per FPHA hydro per block).
     pub generation: Range<usize>,
-    /// Per-`(evaporation hydro, block)` column/row indices, block-major
-    /// (`local_evap_idx * n_blks + blk`). Anchored at the `n_blks`-dependent
+    /// Per-`(evaporation hydro, slot)` column/row indices, slot-major
+    /// (`local_evap_idx * slots + slot`) — one slot per evaporating hydro on a
+    /// parallel stage, one per block on a chronological stage
+    /// (`evaporation_slot_count`). Anchored at the `n_blks`-dependent
     /// FPHA-generation-block end, so they shift under a non-uniform schedule —
-    /// this per-stage copy carries the stage-correct columns. A reader wanting a
-    /// hydro's block 0 indexes `local_evap_idx * n_blks`.
+    /// this per-stage copy carries the stage-correct columns.
     pub evap_indices: Vec<EvaporationIndices>,
     /// Inflow non-negativity slack column range (one per hydro, stage-level).
     pub inflow_slack: Range<usize>,

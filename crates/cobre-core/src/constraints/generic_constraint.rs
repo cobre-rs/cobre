@@ -18,8 +18,9 @@
 //! collapsed stage-level row for a block-independent expression, one row per
 //! block otherwise; stage-level stocks ([`VariableRef::HydroStorage`] and the
 //! storage-boundary variants at their stage endpoints S⁰/Sᴷ) resolve to a single
-//! fixed column; [`VariableRef::HydroEvaporation`] with `None` resolves to block 0
-//! (the stage evaporation in parallel mode). No variant sums over blocks.
+//! fixed column; [`VariableRef::HydroEvaporation`] resolves `None` to block 0, and
+//! on a parallel stage every named block resolves to that same single
+//! stage-level slot. No variant sums over blocks.
 //!
 //! [`VariableRef::HydroTurbined`] and [`VariableRef::HydroGeneration`] additionally
 //! carry `bus_id: Option<EntityId>`, selecting one cell of a plant split across
@@ -128,15 +129,17 @@ pub enum VariableRef {
     },
     /// Signed evaporation flow from a hydro reservoir (m³/s). Positive values
     /// represent net evaporative outflow; negative values represent net rainfall
-    /// input absorbed by the reservoir. `Some(k)` selects block `k`; `None` selects
-    /// block 0, which in parallel mode is the stage evaporation (every block shares
-    /// the same stage endpoints). In chronological mode with `K > 1` the blocks
-    /// differ, so a `None` reference is rejected by generic-constraint validation —
-    /// a block must be named.
+    /// input absorbed by the reservoir. `Some(k)` selects block `k`; `None`
+    /// selects block 0. On a parallel stage every block shares one stage-level
+    /// evaporation slot on the stage endpoints, so every `Some(k)`/`None`
+    /// reference resolves to that same slot. In chronological mode with `K > 1`
+    /// each block has its own slot, so a `None` reference is rejected by
+    /// generic-constraint validation — a block must be named.
     HydroEvaporation {
         /// Hydro plant identifier.
         hydro_id: EntityId,
-        /// Block selector; `None` = block 0 (the stage evaporation in parallel mode).
+        /// Block selector; `None` = block 0 (the stage-level slot on a parallel
+        /// stage).
         block_id: Option<usize>,
     },
     /// Water withdrawal from a hydro reservoir (m³/s). Stage-level, not block-specific.

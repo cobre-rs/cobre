@@ -2,6 +2,9 @@
 
 use super::*;
 
+use super::common::build_setup_in_code_with_models;
+use super::common::in_code_studies::parallel_multiblock_evaporation_study;
+
 #[test]
 fn evap_zero_hydros_layout_unchanged() {
     let system = one_hydro_system(1, 0);
@@ -1154,4 +1157,84 @@ fn evap_bound_prevents_dump_valve() {
         spillage > 1e-6,
         "spillage must be positive when excess water needs dumping, got {spillage}"
     );
+}
+
+/// On every stage of a parallel multi-block study, the StudySetup-built LP
+/// reserves exactly one evaporation slot per evaporating hydro, coupled with
+/// the stage's `ζ` on the water row, its violation slacks priced at the
+/// violation cost times the stage's total hours (744 h = 200 + 244 + 300), and
+/// its evaporation row's storage entries confined to the incoming/outgoing
+/// storage columns.
+#[test]
+fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
+    use cobre_sddp::indexer::Boundary;
+
+    let (system, config, hydro_models) = parallel_multiblock_evaporation_study();
+    let setup = build_setup_in_code_with_models(system, &config, hydro_models);
+    let templates = &setup.stage_data.stage_templates;
+    let total_stage_hours = 744.0_f64;
+
+    let unscale = |t: &StageTemplate, r: usize, c: usize, v: f64| -> f64 {
+        let rs = t.row_scale.get(r).copied().unwrap_or(1.0);
+        let cs = t.col_scale.get(c).copied().unwrap_or(1.0);
+        v / (rs * cs)
+    };
+    let unscale_objective = |t: &StageTemplate, c: usize| -> f64 {
+        let cs = t.col_scale.get(c).copied().unwrap_or(1.0);
+        t.objective[c] * templates.cost_scale_factor / cs
+    };
+
+    for (s, t) in templates.templates.iter().enumerate() {
+        let g = &templates.geometry_per_stage[s];
+        assert_eq!(
+            g.evap_indices.len(),
+            1,
+            "stage {s}: a parallel stage must reserve exactly one evaporation slot"
+        );
+        let ei = g.evap_indices[0];
+        let zeta = templates.zeta_per_stage[s];
+
+        let water_value = csc_entry(t, ei.evaporation_flow_col, g.water_balance.start)
+            .expect("evaporation flow column must have an entry on the water row");
+        let unscaled_water = unscale(
+            t,
+            g.water_balance.start,
+            ei.evaporation_flow_col,
+            water_value,
+        );
+        assert!(
+            (unscaled_water - zeta).abs() < 1e-12 * zeta.abs(),
+            "stage {s}: unscaled water-row coefficient must equal zeta = {zeta}, got {unscaled_water}"
+        );
+
+        let unscaled_f_plus = unscale_objective(t, ei.f_evap_plus_col);
+        let expected_f_plus = 7.0 * total_stage_hours;
+        assert!(
+            (unscaled_f_plus - expected_f_plus).abs() < 1e-12 * expected_f_plus,
+            "stage {s}: unscaled f_evap_plus objective must equal {expected_f_plus}, got {unscaled_f_plus}"
+        );
+
+        let unscaled_f_minus = unscale_objective(t, ei.f_evap_minus_col);
+        let expected_f_minus = 11.0 * total_stage_hours;
+        assert!(
+            (unscaled_f_minus - expected_f_minus).abs() < 1e-12 * expected_f_minus,
+            "stage {s}: unscaled f_evap_minus objective must equal {expected_f_minus}, got {unscaled_f_minus}"
+        );
+
+        let cols_at_evap_row: Vec<usize> = (0..t.num_cols)
+            .filter(|&c| csc_entry(t, c, ei.evap_row).is_some())
+            .collect();
+        let mut expected_cols = vec![
+            g.storage_boundary_grid.col(0, Boundary::Incoming),
+            g.storage_boundary_grid.col(0, Boundary::Outgoing),
+            ei.evaporation_flow_col,
+            ei.f_evap_plus_col,
+            ei.f_evap_minus_col,
+        ];
+        expected_cols.sort_unstable();
+        assert_eq!(
+            cols_at_evap_row, expected_cols,
+            "stage {s}: evaporation row's storage entries must be confined to the incoming/outgoing storage columns"
+        );
+    }
 }

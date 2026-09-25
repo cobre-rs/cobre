@@ -351,10 +351,11 @@ fn fill_fpha_rows(
 }
 
 /// Fill evaporation row bounds: equality `row_lower == row_upper == intercept_m3s`,
-/// one row per `(evap hydro, block)` (block-major `row_evap_start + local * n_blks +
-/// blk`, in lockstep with the entries side). The volume-dependent term lives in the
-/// matrix entries ([`super::entries::fill_evaporation_entries`]), so the row bounds
-/// encode only the constant intercept, replicated across the hydro's `K` block rows.
+/// one row per `(evap hydro, slot)` (slot-major `row_evap_start + local *
+/// n_evap_slots + slot`, in lockstep with the entries side). The volume-dependent
+/// term lives in the matrix entries ([`super::entries::fill_evaporation_entries`]),
+/// so the row bounds encode only the constant intercept, replicated across the
+/// hydro's evaporation slots.
 fn fill_evaporation_rows(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
@@ -362,7 +363,7 @@ fn fill_evaporation_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    let n_blks = layout.n_blks;
+    let n_evap_slots = layout.n_evap_slots;
     for (local_idx, &h) in layout.evap_hydro_indices.iter().enumerate() {
         match ctx.evaporation_models.model(h.get()) {
             EvaporationModel::Linearized { coefficients, .. } => {
@@ -372,8 +373,8 @@ fn fill_evaporation_rows(
                     coefficients.len()
                 );
                 let intercept_m3s = coefficients[stage_idx].intercept_m3s;
-                for blk in 0..n_blks {
-                    let row = layout.row_evap_start() + local_idx * n_blks + blk;
+                for slot in 0..n_evap_slots {
+                    let row = layout.row_evap_start() + local_idx * n_evap_slots + slot;
                     row_lower[row] = intercept_m3s;
                     row_upper[row] = intercept_m3s;
                 }

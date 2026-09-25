@@ -17,7 +17,7 @@ use super::{
     contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent,
 };
 use crate::hydro_models::{FphaPlane, ProductionModelSet, ResolvedProductionModel};
-use crate::lp::builder::StageGeometry;
+use crate::lp::builder::{StageGeometry, evaporation_slot_count};
 use crate::lp::indexer::{
     Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
 };
@@ -116,6 +116,7 @@ fn make_geom_with_contracts<'a>(
         deficit: &indexer.deficit,
         max_deficit_segments,
         n_blks: indexer.n_blks,
+        n_evap_slots: evaporation_slot_count(indexer.block_mode, indexer.n_blks),
         evap_indices: &indexer.evap_indices,
         evap_hydro_indices: &indexer.evap_hydro_indices,
         fpha_hydro_indices: &indexer.fpha_hydro_indices,
@@ -818,6 +819,7 @@ impl TurbineBusSelectorFixture {
             deficit: &self.empty,
             max_deficit_segments: 0,
             n_blks: Self::N_BLKS,
+            n_evap_slots: 0,
             evap_indices: &[],
             evap_hydro_indices: &[],
             fpha_hydro_indices: &self.no_fpha,
@@ -1008,6 +1010,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
         deficit: &empty,
         max_deficit_segments: 0,
         n_blks,
+        n_evap_slots: 0,
         evap_indices: &[],
         evap_hydro_indices: &[],
         fpha_hydro_indices: &fpha_hydro_indices,
@@ -1181,11 +1184,11 @@ fn hydro_evaporation_no_evap_model_returns_empty() {
     assert!(result.is_empty());
 }
 
-/// At `K = 3`, `HydroEvaporation{None}` resolves to the single block-0 column (one
-/// entry, NOT a sum over blocks); `Some(k)` selects distinct per-block columns and
-/// an out-of-range block resolves to empty.
+/// At `K = 3` on a parallel stage, `HydroEvaporation{None}` and every named block
+/// resolve to the SAME single stage-level slot (one entry, NOT a sum over blocks);
+/// an out-of-range block still resolves to empty.
 #[test]
-fn hydro_evaporation_none_resolves_block_zero_not_sum() {
+fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
     let evap_indexer = geometry(
         &GeometryDims {
             hydro_count: 2,
@@ -1216,6 +1219,12 @@ fn hydro_evaporation_none_resolves_block_zero_not_sum() {
     let state = StateSpace::new(2, 0, 0, Vec::new(), 0, 0, vec![], &[0, 0]);
     let geom = make_geom(&evap_indexer, &state, 3, &[]);
 
+    assert_eq!(
+        evap_indexer.evap_indices.len(),
+        1,
+        "a parallel stage reserves exactly one evaporation slot per evaporating hydro"
+    );
+
     let resolve = |block_id: Option<usize>| {
         call(
             VariableRef::HydroEvaporation {
@@ -1239,8 +1248,16 @@ fn hydro_evaporation_none_resolves_block_zero_not_sum() {
         "None resolves to one column, not a K-block sum"
     );
     assert_eq!(none, resolve(Some(0)), "None resolves to block 0");
-    assert_ne!(resolve(Some(0)), resolve(Some(1)));
-    assert_ne!(resolve(Some(1)), resolve(Some(2)));
+    assert_eq!(
+        resolve(Some(0)),
+        resolve(Some(1)),
+        "every block on a parallel stage names the same stage-level slot"
+    );
+    assert_eq!(
+        resolve(Some(1)),
+        resolve(Some(2)),
+        "every block on a parallel stage names the same stage-level slot"
+    );
     assert!(
         resolve(Some(3)).is_empty(),
         "out-of-range block resolves to empty"

@@ -31,6 +31,7 @@ use crate::indexer::{
     BlockGrid, BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace,
     StorageBoundaryGrid,
 };
+use crate::lp::builder::evaporation_slot;
 
 /// Borrowed LP-column geometry the generic-constraint resolver reads — the
 /// resolver's window onto a `StageLayout` (private to `builder`) without exposing it.
@@ -87,6 +88,9 @@ pub(crate) struct GenericResolverGeom<'a> {
     pub max_deficit_segments: usize,
     /// Per-stage block count (`K`); the `BlockGrid` flat/​deficit stride.
     pub n_blks: usize,
+    /// Evaporation slots per evaporating hydro at this stage
+    /// (`evaporation_slot_count`); the stride [`Self::evap_indices`] uses.
+    pub n_evap_slots: usize,
     /// Per-evaporation-hydro column indices, parallel to
     /// [`Self::evap_hydro_indices`].
     pub evap_indices: &'a [EvaporationIndices],
@@ -619,10 +623,11 @@ fn resolve_hydro_inflow(
 }
 
 /// Resolve `HydroEvaporation` to the evaporation-outflow column for the matching
-/// hydro; empty vec when the hydro has no linearized evaporation at this stage.
-/// `Some(k)` selects block `k` (empty when out of range); `None` selects block 0.
-/// In parallel mode every block's evaporation is linearized against the same stage
-/// endpoints, so block 0 is the stage evaporation; `None` in chronological `K > 1`
+/// hydro; empty vec when the hydro has no linearized evaporation at this stage, or
+/// when `block_id` names a block `>= n_blks`. `None` maps to block 0. On a parallel
+/// stage every named block resolves to the one stage-level slot
+/// (`evaporation_slot`/`evaporation_slot_count` collapse to it); on a chronological
+/// stage each block resolves to its own slot. `None` in chronological `K > 1`
 /// (where blocks differ) is rejected upstream by generic-constraint validation, so
 /// it is not reached here for a valid study.
 fn resolve_hydro_evaporation(
@@ -643,13 +648,16 @@ fn resolve_hydro_evaporation(
     else {
         return vec![];
     };
-    // `evap_indices` is block-major (`local * n_blks + blk`); `None` maps to block 0.
-    let base = local_idx * geom.n_blks;
     let blk = block_id.unwrap_or(0);
     if blk >= geom.n_blks {
         return vec![];
     }
-    vec![(geom.evap_indices[base + blk].evaporation_flow_col, 1.0)]
+    let slot = evaporation_slot(geom.n_evap_slots, BlockIdx::new(blk));
+    let base = local_idx * geom.n_evap_slots;
+    vec![(
+        geom.evap_indices[base + slot.get()].evaporation_flow_col,
+        1.0,
+    )]
 }
 
 /// Resolve `HydroOutflow` to turbine (every cell of the plant, summed) plus

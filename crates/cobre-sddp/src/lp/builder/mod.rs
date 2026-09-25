@@ -65,6 +65,7 @@ pub use template::{StageGeometry, StageTemplates, build_stage_templates};
 // --- Crate-internal re-exports ---
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
+pub(crate) use layout::{evaporation_slot, evaporation_slot_count};
 pub(crate) use scaling::{
     apply_col_scale, apply_commitment_hold_col_scale_unscale, apply_row_scale, compute_col_scale,
     compute_row_scale,
@@ -90,16 +91,11 @@ pub(crate) const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
 /// a positive one is evaporative outflow.
 pub(crate) const EVAPORATION_FLOW_SAFETY_MARGIN: f64 = 2.0;
 
-/// Number of LP columns per `(evaporating hydro, block)` triple: evaporation
-/// outflow, `f_evap_plus`, `f_evap_minus`. Base column for evap-local index `i`,
-/// block `blk` is `col_evap_start + (i * n_blks + blk) * EVAP_COLS_PER_HYDRO`
-/// (hydro-outer, block-middle, offset-inner). The transposed
-/// `blk * n_evap_hydros + i` stride compiles and silently aliases one hydro's
-/// block onto another's. Single owner of the stride — [`StageLayout`]'s
-/// evaporation accessors and the indexer's `EvaporationIndices` constructor both
-/// reference this const.
-///
-/// [`StageLayout`]: layout::StageLayout
+/// Number of LP columns per `(evaporating hydro, slot)` triple: evaporation
+/// outflow, `f_evap_plus`, `f_evap_minus`. `StageLayout::evap_triple_base` is
+/// the single owner of the base-column address; this const only fixes the
+/// per-triple column width the indexer's `EvaporationIndices` constructor and
+/// `StageLayout`'s evaporation accessors both multiply by.
 pub(crate) const EVAP_COLS_PER_HYDRO: usize = 3;
 
 /// Offset of the signed evaporation-outflow column within a hydro's evaporation

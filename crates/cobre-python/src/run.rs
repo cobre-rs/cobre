@@ -1174,16 +1174,17 @@ fn build_warm_start_fcf(
 /// Seed `setup`'s warm-start basis cache from a loaded checkpoint's stage bases.
 /// Empty bases (a checkpoint written without `store_basis`) leave iteration 1 to
 /// cold-start.
-fn seed_warm_start_basis_cache(setup: &mut StudySetup, checkpoint: &cobre_io::PolicyCheckpoint) {
+fn seed_warm_start_basis_cache(
+    setup: &mut StudySetup,
+    checkpoint: &cobre_io::PolicyCheckpoint,
+) -> Result<(), String> {
     if !checkpoint.stage_bases.is_empty() {
-        let basis_cache = build_basis_cache_from_checkpoint(
-            &checkpoint.stage_bases,
-            &checkpoint.stage_cuts,
-            &setup.node_graph.node_ids,
-            &setup.node_graph.node_pool_ids(),
-        );
+        let basis_cache =
+            build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
+                .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
         setup.set_warm_start_basis_cache(basis_cache);
     }
+    Ok(())
 }
 
 pub(crate) struct BoundaryReconciliation {
@@ -1275,7 +1276,7 @@ pub(crate) fn apply_training_policy_mode(
 
         let warm_fcf = build_warm_start_fcf(setup, &proof, &checkpoint, "warm-start")?;
         setup.replace_fcf(warm_fcf);
-        seed_warm_start_basis_cache(setup, &checkpoint);
+        seed_warm_start_basis_cache(setup, &checkpoint)?;
     } else if config.policy.mode == Resume {
         let policy_dir = output_dir.join(&setup.policy_path);
         if !policy_dir.exists() {
@@ -1295,7 +1296,7 @@ pub(crate) fn apply_training_policy_mode(
         let warm_fcf = build_warm_start_fcf(setup, &proof, &checkpoint, "resume")?;
         setup.replace_fcf(warm_fcf);
         setup.set_start_iteration(completed);
-        seed_warm_start_basis_cache(setup, &checkpoint);
+        seed_warm_start_basis_cache(setup, &checkpoint)?;
     }
 
     // Boundary cuts run AFTER warm-start/resume so the two compose: warm-start
@@ -1336,9 +1337,9 @@ pub(crate) fn apply_training_policy_mode(
 ///
 /// Returns a descriptive `Err(String)` when `policy_dir` does not exist (the
 /// `"Policy directory not found: ..."` message), when the checkpoint cannot be
-/// read, when policy validation fails, or when FCF reconstruction fails. The
-/// caller maps the message to a Python exception type via
-/// [`crate::errors::convert_error`].
+/// read, when policy validation fails, when FCF reconstruction fails, or when a
+/// stored basis does not match the study's LP. The caller maps the message to
+/// a Python exception type via [`crate::errors::convert_error`].
 pub(crate) fn reconstruct_policy_from_checkpoint(
     setup: &StudySetup,
     system: &System,
@@ -1365,12 +1366,9 @@ pub(crate) fn reconstruct_policy_from_checkpoint(
     )
     .map_err(|e| format!("FCF reconstruction error: {e}"))?;
 
-    let basis_cache = build_basis_cache_from_checkpoint(
-        &checkpoint.stage_bases,
-        &checkpoint.stage_cuts,
-        &setup.node_graph.node_ids,
-        &setup.node_graph.node_pool_ids(),
-    );
+    let basis_cache =
+        build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
+            .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
 
     let training_result = TrainingResult::new(
         checkpoint.metadata.producer.final_lower_bound,

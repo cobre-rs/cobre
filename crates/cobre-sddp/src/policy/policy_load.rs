@@ -374,6 +374,39 @@ pub fn compare_graph_manifest_identity(
 /// Build a basis cache from deserialized checkpoint basis records: one entry
 /// per canonical node position, `None` where no record matches.
 ///
+/// `node_dims[pos]` — built once per load from `setup`'s current LP
+/// templates — is `(template columns, template rows)` for node `pos`;
+/// [`build_basis_cache_for_nodes`] refuses a record whose column count
+/// differs, or whose row count falls outside `[template rows, template rows +
+/// its own recorded cut rows]`, before decoding it.
+///
+/// # Errors
+///
+/// Returns [`SddpError::StoredBasisDimensionMismatch`] when a stored record's
+/// column or row count does not fit its node's current LP dimensions.
+pub fn build_basis_cache_from_checkpoint(
+    stage_bases: &[OwnedPolicyBasisRecord],
+    stage_cuts: &[StageCutsReadResult],
+    setup: &StudySetup,
+) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
+    let node_dims: Vec<(usize, usize)> = setup
+        .node_graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let t = &setup.stage_data.stage_templates.templates[n.stage.0];
+            (t.num_cols, t.num_rows)
+        })
+        .collect();
+    build_basis_cache_for_nodes(
+        stage_bases,
+        stage_cuts,
+        &setup.node_graph.node_ids,
+        &setup.node_graph.node_pool_ids(),
+        &node_dims,
+    )
+}
+
 /// Each basis record is keyed by its own node ordinal (its `stage_id`), so
 /// leaves sharing a pool land in distinct node slots — no `>= num_stages` drop,
 /// no cross-node collision. `u8` status codes decode via
@@ -403,13 +436,21 @@ pub fn compare_graph_manifest_identity(
 /// `node_ids` / `node_pools` are the CURRENT study's, since a resume/warm-start
 /// continues the SAME node topology — never a value recovered from the
 /// checkpoint itself, whose wire carries no node id.
-#[must_use]
-pub fn build_basis_cache_from_checkpoint(
+///
+/// # Errors
+///
+/// Returns [`SddpError::StoredBasisDimensionMismatch`] when a stored record's
+/// column count differs from `node_dims[pos].0`, or its row count falls
+/// outside `[node_dims[pos].1, node_dims[pos].1 + its own num_cut_rows]` —
+/// checked against the RECORDED `num_cut_rows`, never the derived
+/// `base_row_count` below.
+fn build_basis_cache_for_nodes(
     stage_bases: &[OwnedPolicyBasisRecord],
     stage_cuts: &[StageCutsReadResult],
     node_ids: &TypedVec<NodePos, NodeId>,
     node_pools: &TypedVec<NodePos, usize>,
-) -> Vec<Option<CapturedBasis>> {
+    node_dims: &[(usize, usize)],
+) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
     let n_nodes = node_ids.len();
     let mut cache: Vec<Option<CapturedBasis>> = vec![None; n_nodes];
     for record in stage_bases {
@@ -420,6 +461,25 @@ pub fn build_basis_cache_from_checkpoint(
         if node.0 >= n_nodes {
             continue;
         }
+
+        let (expected_cols, expected_template_rows) = node_dims[node.0];
+        let found_cols = record.column_status.len();
+        let found_rows = record.row_status.len();
+        let found_cut_rows = record.num_cut_rows as usize;
+        if found_cols != expected_cols
+            || found_rows < expected_template_rows
+            || found_rows - expected_template_rows > found_cut_rows
+        {
+            return Err(SddpError::StoredBasisDimensionMismatch {
+                node_id: node_ids[node].0,
+                expected_cols,
+                found_cols,
+                expected_template_rows,
+                found_rows,
+                found_cut_rows,
+            });
+        }
+
         let col_status: Vec<BasisStatus> = record
             .column_status
             .iter()
@@ -453,7 +513,7 @@ pub fn build_basis_cache_from_checkpoint(
         debug_assert_eq!(
             cut_row_slots.len(),
             row_status.len() - base_row_count,
-            "build_basis_cache_from_checkpoint: cut_row_slots length must equal the trailing \
+            "build_basis_cache_for_nodes: cut_row_slots length must equal the trailing \
              cut-row count for the CapturedBasis invariant",
         );
 
@@ -468,7 +528,7 @@ pub fn build_basis_cache_from_checkpoint(
             node_id: node_ids[node],
         });
     }
-    cache
+    Ok(cache)
 }
 
 /// Positional identity of one state-vector slot; `was_active` is excluded —
@@ -3541,13 +3601,13 @@ mod tests {
     /// export→disk→load path losslessly — including the CLP-only `Superbasic`
     /// and `Fixed`, which the old `to_highs_code` path folded onto `Nonbasic`/
     /// `Lower`. Encode via `convert_basis_cache`, round-trip through the codec,
-    /// decode via `build_basis_cache_from_checkpoint`.
+    /// decode via `build_basis_cache_for_nodes`.
     #[test]
     fn basis_status_round_trips_through_export_and_load_for_every_variant() {
         use cobre_io::{PolicyBasisRecord, deserialize_stage_basis, serialize_stage_basis};
         use cobre_solver::{Basis, BasisStatus};
 
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
         use crate::TrainingResult;
         use crate::policy_export::convert_basis_cache;
         use crate::workspace::CapturedBasis;
@@ -3601,12 +3661,14 @@ mod tests {
         let buf = serialize_stage_basis(&record);
         let owned = deserialize_stage_basis(&buf).expect("codec round-trip must succeed");
 
-        let cache = build_basis_cache_from_checkpoint(
+        let cache = build_basis_cache_for_nodes(
             std::slice::from_ref(&owned),
             &[],
             &vec![NodeId(0)].into(),
             &vec![0].into(),
-        );
+            &[(7, 7)],
+        )
+        .expect("a same-shape record must load");
         let recovered = cache[0].as_ref().expect("stage 0 basis must be present");
 
         assert_eq!(
@@ -3629,7 +3691,7 @@ mod tests {
         use cobre_io::{PolicyBasisRecord, deserialize_stage_basis, serialize_stage_basis};
         use cobre_solver::BasisStatus;
 
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
 
         // HiGHS codes 0..=4, exactly what the pre-canonical writer stored on disk.
         let col_bytes: [u8; 5] = [0, 1, 2, 3, 4];
@@ -3645,12 +3707,14 @@ mod tests {
         let buf = serialize_stage_basis(&record);
         let owned = deserialize_stage_basis(&buf).expect("codec round-trip must succeed");
 
-        let cache = build_basis_cache_from_checkpoint(
+        let cache = build_basis_cache_for_nodes(
             std::slice::from_ref(&owned),
             &[],
             &vec![NodeId(0)].into(),
             &vec![0].into(),
-        );
+            &[(5, 5)],
+        )
+        .expect("a same-shape record must load");
         let recovered = cache[0].as_ref().expect("stage 0 basis must be present");
 
         let expected_col: Vec<BasisStatus> = col_bytes
@@ -3727,13 +3791,14 @@ mod tests {
     /// which for leaves 4/5/6 names no pool at all.
     #[test]
     fn build_basis_cache_from_checkpoint_keys_branching_graph_by_node() {
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
 
         let node_ids: TypedVec<NodePos, NodeId> = vec![10, 11, 12, 13, 14, 15, 16]
             .into_iter()
             .map(NodeId)
             .collect();
         let node_pools: TypedVec<NodePos, usize> = vec![0, 1, 2, 3, 3, 3, 3].into();
+        let node_dims = [(2, 3); 7];
         let stage_cuts = vec![
             pool_cuts(0, &[0]),
             pool_cuts(1, &[1]),
@@ -3750,8 +3815,14 @@ mod tests {
             node_basis(6, 2),
         ];
 
-        let cache =
-            build_basis_cache_from_checkpoint(&stage_bases, &stage_cuts, &node_ids, &node_pools);
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &node_dims,
+        )
+        .expect("every node's record fits its (2, 3) template");
 
         assert_eq!(cache.len(), 7, "cache is sized by n_nodes, not num_stages");
         for (node, slot) in cache.iter().enumerate() {
@@ -3783,20 +3854,147 @@ mod tests {
     /// pre-branching per-stage behavior — one basis per stage, keyed by ordinal.
     #[test]
     fn build_basis_cache_from_checkpoint_chain_is_identity_keyed() {
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
 
         let node_ids: TypedVec<NodePos, NodeId> = vec![0, 1, 2].into_iter().map(NodeId).collect();
         let node_pools: TypedVec<NodePos, usize> = vec![0, 1, 2].into();
+        let node_dims = [(2, 3); 3];
         let stage_cuts = vec![pool_cuts(0, &[0]), pool_cuts(1, &[3]), pool_cuts(2, &[9])];
         let stage_bases = vec![node_basis(0, 1), node_basis(1, 1), node_basis(2, 1)];
 
-        let cache =
-            build_basis_cache_from_checkpoint(&stage_bases, &stage_cuts, &node_ids, &node_pools);
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &node_dims,
+        )
+        .expect("every node's record fits its (2, 3) template");
 
         assert_eq!(cache.len(), 3);
         assert_eq!(cache[0].as_ref().unwrap().cut_row_slots, vec![0_u32]);
         assert_eq!(cache[1].as_ref().unwrap().cut_row_slots, vec![3_u32]);
         assert_eq!(cache[2].as_ref().unwrap().cut_row_slots, vec![9_u32]);
+    }
+
+    // ── stored-basis dimension check ──────────────────────────────────────────
+
+    /// A node-0 basis record with `cols` columns, `rows` total row entries, and
+    /// `num_cut` recorded cut rows.
+    fn dim_basis_record(cols: usize, rows: usize, num_cut: usize) -> OwnedPolicyBasisRecord {
+        OwnedPolicyBasisRecord {
+            stage_id: 0,
+            iteration: 0,
+            column_status: vec![1_u8; cols],
+            row_status: vec![1_u8; rows],
+            num_cut_rows: num_cut as u32,
+        }
+    }
+
+    /// A single node, keyed by its own id and pool 0.
+    fn single_node_ids_and_pools() -> (TypedVec<NodePos, NodeId>, TypedVec<NodePos, usize>) {
+        (vec![NodeId(0)].into(), vec![0].into())
+    }
+
+    #[test]
+    fn stored_basis_with_extra_column_is_refused() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(5, 3, 0)];
+
+        let err = build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+            .expect_err("a wider column count must be refused");
+
+        assert!(
+            matches!(
+                err,
+                SddpError::StoredBasisDimensionMismatch {
+                    expected_cols: 4,
+                    found_cols: 5,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn stored_basis_with_fewer_rows_than_the_template_is_refused() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 2, 0)];
+
+        let err = build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+            .expect_err("fewer rows than the template must be refused");
+
+        assert!(
+            matches!(
+                err,
+                SddpError::StoredBasisDimensionMismatch {
+                    expected_template_rows: 3,
+                    found_rows: 2,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn stored_basis_with_more_rows_than_recorded_cuts_allow_is_refused() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 6, 2)];
+
+        let err = build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+            .expect_err("more rows than the recorded cut count allows must be refused");
+
+        assert!(
+            matches!(
+                err,
+                SddpError::StoredBasisDimensionMismatch {
+                    expected_template_rows: 3,
+                    found_rows: 6,
+                    found_cut_rows: 2,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// The root-record shape: captured before the last backward pass appends
+    /// its cuts, so `row_status` carries fewer trailing rows than the
+    /// `num_cut_rows` recorded at export time — a shape the dimension check admits.
+    #[test]
+    fn stored_basis_captured_before_the_last_cuts_loads() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 4, 3)];
+
+        let cache =
+            build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+                .expect("a record within the bound must load");
+
+        assert!(cache[0].is_some(), "the node's basis must be present");
+    }
+
+    #[test]
+    fn stored_basis_with_every_recorded_cut_row_loads() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 5, 2)];
+
+        let cache =
+            build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+                .expect("a record within the bound must load");
+
+        assert!(cache[0].is_some(), "the node's basis must be present");
     }
 
     // ── inject_boundary_cuts tests ──────────────────────────────────────────────

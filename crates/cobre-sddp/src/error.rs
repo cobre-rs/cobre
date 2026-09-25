@@ -110,6 +110,28 @@ pub enum SddpError {
         /// The `cobre_version` the checkpoint's manifest records.
         policy_version: String,
     },
+
+    /// A stored basis in a policy checkpoint does not match the dimensions of the
+    /// LP it would warm-start.
+    #[error(
+        "stored basis for node {node_id} does not match its LP: the LP has {expected_cols} \
+         columns and {expected_template_rows} template rows, the stored basis has {found_cols} \
+         columns and {found_rows} rows with {found_cut_rows} recorded cut rows; retrain the policy"
+    )]
+    StoredBasisDimensionMismatch {
+        /// The node the stored basis was captured at.
+        node_id: i32,
+        /// Column count of the node's current LP template.
+        expected_cols: usize,
+        /// Column count the stored basis carries.
+        found_cols: usize,
+        /// Row count of the node's current LP template, before any cut rows.
+        expected_template_rows: usize,
+        /// Row count the stored basis carries.
+        found_rows: usize,
+        /// Cut-row count the checkpoint recorded for this basis.
+        found_cut_rows: usize,
+    },
 }
 
 impl From<EstimationError> for SddpError {
@@ -226,6 +248,22 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("0.0.1"), "{msg}");
         assert!(msg.contains(crate::POLICY_COBRE_VERSION), "{msg}");
+    }
+
+    #[test]
+    fn display_stored_basis_dimension_mismatch_names_node_and_all_dimensions() {
+        let err = SddpError::StoredBasisDimensionMismatch {
+            node_id: 3,
+            expected_cols: 4,
+            found_cols: 5,
+            expected_template_rows: 3,
+            found_rows: 6,
+            found_cut_rows: 2,
+        };
+        let msg = err.to_string();
+        for needle in ["3", "4", "5", "6", "2"] {
+            assert!(msg.contains(needle), "{msg}");
+        }
     }
 
     #[test]

@@ -21,7 +21,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 mod common;
-use common::{case_dir, cobre, make_valid_case};
+use common::{case_dir, cobre, make_valid_case, restamp_policy_version, write_file};
 
 #[test]
 fn valid_case_exits_0() {
@@ -1279,4 +1279,139 @@ fn run_produces_deterministic_end_block_and_metadata() {
         Some(400),
         "simulation metadata .solve_stats.total_lp_solves must be 400"
     );
+}
+
+// ── Stored-basis dimension mismatch at simulation-only load ──────────────────
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to);
+        } else {
+            fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
+/// `examples/1dtoy`'s two thermals plus a third on the same bus: adds LP
+/// columns but no state, so a policy trained on this variant passes every
+/// `validate_policy_load` check against the original 1dtoy and reaches the
+/// stored-basis dimension check.
+const THERMALS_WITH_EXTRA_JSON: &str = r#"{
+    "thermals": [
+        {
+            "id": 0, "name": "UTE1", "operational_start_date": "2020-01-01", "bus_id": 0,
+            "generation": { "min_mw": 0.0, "max_mw": 15.0 }, "cost_per_mwh": 5.0
+        },
+        {
+            "id": 1, "name": "UTE2", "operational_start_date": "2020-01-02", "bus_id": 0,
+            "generation": { "min_mw": 0.0, "max_mw": 15.0 }, "cost_per_mwh": 10.0
+        },
+        {
+            "id": 2, "name": "UTE3", "operational_start_date": "2020-01-01", "bus_id": 0,
+            "generation": { "min_mw": 0.0, "max_mw": 15.0 }, "cost_per_mwh": 20.0
+        }
+    ]
+}"#;
+
+const CONFIG_VARIANT_TRAIN_JSON: &str = r#"{
+    "training": {
+        "selection": { "method": "sampled", "forward_passes": 1 },
+        "stopping_rules": [ { "type": "iteration_limit", "limit": 2 } ],
+        "scenario_source": {
+            "seed": 42,
+            "inflow": { "scheme": "in_sample" },
+            "load": { "scheme": "in_sample" },
+            "ncs": { "scheme": "in_sample" }
+        }
+    },
+    "simulation": { "enabled": false },
+    "modeling": { "inflow_non_negativity": { "method": "none" } }
+}"#;
+
+const CONFIG_SIMULATION_ONLY_JSON: &str = r#"{
+    "training": {
+        "enabled": false,
+        "selection": { "method": "sampled", "forward_passes": 1 },
+        "stopping_rules": [ { "type": "iteration_limit", "limit": 2 } ],
+        "scenario_source": {
+            "seed": 42,
+            "inflow": { "scheme": "in_sample" },
+            "load": { "scheme": "in_sample" },
+            "ncs": { "scheme": "in_sample" }
+        }
+    },
+    "simulation": { "enabled": true, "selection": { "method": "sampled", "num_scenarios": 1 } },
+    "modeling": { "inflow_non_negativity": { "method": "none" } }
+}"#;
+
+/// A policy trained on a 1dtoy variant with one extra thermal (wider LP
+/// columns, identical state) is refused when loaded for simulation-only into
+/// the original 1dtoy: the stored basis's column count no longer matches its
+/// node's LP template. Ends with the ordering assertion: the same policy,
+/// restamped to another cobre version, is refused by the version check
+/// instead — the version refusal fires first on every load path.
+#[test]
+fn simulation_only_refuses_a_policy_with_a_wider_stored_basis() {
+    let variant_dir = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), variant_dir.path());
+    write_file(
+        variant_dir.path(),
+        "system/thermals.json",
+        THERMALS_WITH_EXTRA_JSON,
+    );
+    write_file(variant_dir.path(), "config.json", CONFIG_VARIANT_TRAIN_JSON);
+
+    let output = TempDir::new().unwrap();
+    cobre()
+        .args([
+            "run",
+            variant_dir.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success();
+
+    let sim_only_dir = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), sim_only_dir.path());
+    write_file(
+        sim_only_dir.path(),
+        "config.json",
+        CONFIG_SIMULATION_ONLY_JSON,
+    );
+
+    cobre()
+        .args([
+            "run",
+            sim_only_dir.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("stored basis for node"));
+
+    restamp_policy_version(&output.path().join("policy"), "0.0.1");
+
+    cobre()
+        .args([
+            "run",
+            sim_only_dir.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("written by cobre 0.0.1"))
+        .stderr(predicate::str::contains("stored basis for node").not());
 }

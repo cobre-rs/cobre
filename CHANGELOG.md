@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cobre.write_policy_checkpoint` now always records the running version (a
   `cobre_version` given in `metadata` is ignored).
 
+- **BREAKING — a policy checkpoint whose stored basis does not match the
+  study's LP dimensions is refused at load.** The error names the node and
+  the expected and found columns and rows; earlier versions truncated such a
+  basis silently or started cold. The CLI reports it as a validation error
+  and Python raises `cobre.errors.PolicyIncompatibleError`.
+
 ### Fixed
 
 - **BREAKING — Python: a study-setup validation failure now raises

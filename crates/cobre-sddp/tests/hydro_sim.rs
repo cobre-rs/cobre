@@ -201,9 +201,9 @@ mod simulation_only {
         let loaded_basis_cache = build_basis_cache_from_checkpoint(
             &checkpoint.stage_bases,
             &checkpoint.stage_cuts,
-            &setup.node_graph.node_ids,
-            &setup.node_graph.node_pool_ids(),
-        );
+            &setup,
+        )
+        .expect("a current-build checkpoint must load without a dimension mismatch");
         assert_eq!(
             loaded_basis_cache.len(),
             n_stages,

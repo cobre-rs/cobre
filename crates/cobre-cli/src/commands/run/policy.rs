@@ -138,9 +138,9 @@ fn load_checkpoint_into_setup(
         let basis_cache = build_basis_cache_from_checkpoint(
             &checkpoint.stage_bases,
             &checkpoint.stage_cuts,
-            &setup.node_graph.node_ids,
-            &setup.node_graph.node_pool_ids(),
-        );
+            setup,
+        )
+        .map_err(CliError::from)?;
         setup.set_warm_start_basis_cache(basis_cache);
     }
     Ok(())
@@ -336,12 +336,9 @@ pub(super) fn load_policy_for_simulation(
     .map_err(CliError::from)?;
     setup.replace_fcf(loaded_fcf);
 
-    let basis_cache = build_basis_cache_from_checkpoint(
-        &checkpoint.stage_bases,
-        &checkpoint.stage_cuts,
-        &setup.node_graph.node_ids,
-        &setup.node_graph.node_pool_ids(),
-    );
+    let basis_cache =
+        build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
+            .map_err(CliError::from)?;
 
     Ok(TrainingResult::new(
         checkpoint.metadata.producer.final_lower_bound,

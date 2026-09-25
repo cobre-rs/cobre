@@ -512,8 +512,7 @@ fn collect_load_bus_indices(
 /// `entity_ids`, reading `(mean, std)` from `normal_lp` at its own canonical
 /// position. `entity_ids`/`study_stages` MUST be exactly the shape `normal_lp`
 /// was built over (a `debug_assert` enforces it) — this is a pure positional
-/// read, never a re-derivation from raw rows. Shared by
-/// [`load_models_from_normal`]'s own conversion and by the external library
+/// read, never a re-derivation from raw rows. Shared by the external library
 /// builders' standardization-moment derivation
 /// (`setup::scenario_libraries::build_external_load_library` /
 /// `build_external_ncs_library`), so a library's standardization and
@@ -549,51 +548,21 @@ pub(crate) fn models_from_normal<M>(
     models
 }
 
-/// The static load-balance RHS [`fill_load_balance_rows`] reads for every
-/// load-noise-member bus, sourced from `normal_lp` — the SAME derivation
-/// [`PrecomputedNormal::build`] used to build it (external-derived under
-/// `External`, seasonal-derived otherwise) — mirroring inflow's
-/// `external_ar0_inflow_models` override so the LP template's static default
-/// and the runtime noise reconstruction never disagree. A non-member bus's
-/// declared row (a deterministic, `std_mw == 0.0` load under a non-External
-/// scheme) passes through unchanged: `normal_lp`'s entity set excludes it.
-///
-/// A `normal_lp` whose shape does not match `member_ids`/`study_stages` (a
-/// placeholder `PrecomputedNormal::default()`, the same escape hatch
-/// `build_stage_templates`'s own `n_entities() == 0` `debug_assert` tolerance
-/// grants a caller that has not built the real stochastic context) falls
-/// back to the raw declared rows unconditionally — indexing `normal_lp` at
-/// that shape would panic, and today's structural-layout-only test callers
-/// pass exactly this placeholder.
-fn load_models_from_normal(
-    system: &System,
-    normal_lp: &PrecomputedNormal,
-    load_scheme: SamplingScheme,
-    study_stages: &[&Stage],
-) -> Vec<LoadModel> {
-    let member_ids = system.load_noise_member_bus_ids(load_scheme);
-    if normal_lp.n_entities() != member_ids.len() || normal_lp.n_stages() != study_stages.len() {
-        return system.load_models().to_vec();
-    }
-    let member_set: HashSet<EntityId> = member_ids.iter().copied().collect();
-    let mut models: Vec<LoadModel> = system
+/// Declared load-balance rows for buses outside
+/// [`System::load_noise_member_bus_ids`]. A member bus has no model here:
+/// its template row is `0` (`fill_load_balance_rows`) and every solve
+/// patches it through `StageSolvePrep`'s load patch.
+fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Vec<LoadModel> {
+    let member_ids: HashSet<EntityId> = system
+        .load_noise_member_bus_ids(load_scheme)
+        .into_iter()
+        .collect();
+    system
         .load_models()
         .iter()
-        .filter(|lm| !member_set.contains(&lm.bus_id))
+        .filter(|lm| !member_ids.contains(&lm.bus_id))
         .cloned()
-        .collect();
-    models.extend(models_from_normal(
-        normal_lp,
-        &member_ids,
-        study_stages,
-        |bus_id, stage_id, mean_mw, std_mw| LoadModel {
-            bus_id,
-            stage_id,
-            mean_mw,
-            std_mw,
-        },
-    ));
-    models
+        .collect()
 }
 
 /// Build one [`StageTemplate`] per study stage from a fully loaded [`System`].
@@ -755,7 +724,7 @@ pub fn build_stage_templates(
         ));
     }
 
-    let load_models = load_models_from_normal(system, normal_lp, load_scheme, &study_stages);
+    let load_models = deterministic_load_models(system, load_scheme);
     let (ctx, load_bus_indices, diversion_upstream_output) = build_template_build_ctx(
         system,
         inflow_method,

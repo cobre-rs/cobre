@@ -300,8 +300,9 @@ fn fill_filled_min_storage_floor_rows(
     }
 }
 
-/// Fill load-balance row bounds: static RHS = `mean_mw · block_factor`, the
-/// per-block load scaling from `load_factors.json`.
+/// Fill load-balance row bounds: static RHS = `mean_mw · block_factor` (the
+/// per-block load scaling from `load_factors.json`) for a bus whose load is
+/// deterministic; `0` for a load-noise member, patched at solve time.
 fn fill_load_balance_rows(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,

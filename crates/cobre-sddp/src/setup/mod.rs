@@ -337,10 +337,8 @@ impl StudySetup {
     ///
     /// # Errors
     ///
-    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
-    ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::Solver`] — propagated from `build_stage_templates`
-    ///   on LP construction failure.
+    /// - [`SddpError::Validation`] — if the template list is empty ("system
+    ///   has no study stages").
     /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
     ///   an invalid config string.
     /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
@@ -423,10 +421,8 @@ impl StudySetup {
     /// - [`SddpError::Validation`] — a per-phase solver profile config sets a
     ///   field the compiled backend does not support (see
     ///   `validate_phase_solver_config`).
-    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
-    ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
-    ///   construction failure.
+    /// - [`SddpError::Validation`] — if the template list is empty ("system
+    ///   has no study stages").
     /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
     ///   model shape does not match `system` (see `validate_par_shape`).
     // Rationale (too_many_lines): a single linear pass building the `StudySetup`
@@ -989,7 +985,6 @@ struct EnergyAndTemplates {
 ///
 /// - [`SddpError::Validation`] — on energy-conversion / resolved-parameter
 ///   construction failure, or when the post-processed template list is empty.
-/// - [`SddpError::Solver`] — propagated from `build_stage_templates`.
 // Rationale (too_many_arguments): each of the three arc-table parameters threads
 // the single setup-owned derivation (`build_transit_bucket_topology`) into
 // `build_stage_templates`, mirroring the existing `per_stage_mask` thread; a
@@ -1035,7 +1030,7 @@ fn build_energy_and_templates(
             .provenance()
             .load_scheme
             .unwrap_or(SamplingScheme::InSample),
-    )?;
+    );
 
     let scaling_report = template_postprocess::postprocess_templates(
         &mut stage_templates,

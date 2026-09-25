@@ -8,6 +8,7 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
+#[cfg(any(test, feature = "test-support"))]
 use crate::error::SddpError;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet, ResolvedProductionModel};
 use crate::inflow_method::InflowNonNegativityMethod;
@@ -630,14 +631,8 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 /// column's bounds its value automatically enters the FPHA constraint
 /// right-hand side.
 ///
-/// Returns `Ok` with empty templates for a system with zero stages.  All
-/// entity counts may be zero (valid for degenerate test systems).
-///
-/// # Errors
-///
-/// Returns [`SddpError`] if the PAR precomputation data is inconsistent with
-/// the system (e.g., a hydro in `par_lp` is not present in `system`), or if
-/// the production model set has incompatible dimensions.
+/// Returns empty templates for a system with zero stages.  All entity counts
+/// may be zero (valid for degenerate test systems).
 ///
 /// ## Evaporation hydros
 ///
@@ -687,8 +682,7 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 ///                                    &std::collections::HashMap::new(),
 ///                                    &std::collections::HashMap::new(),
 ///                                    &std::collections::HashMap::new(),
-///                                    &hydro_cell_index, SamplingScheme::InSample)
-///     .expect("empty system ok");
+///                                    &hydro_cell_index, SamplingScheme::InSample);
 /// assert!(result.templates.is_empty());
 /// ```
 // Rationale (too_many_arguments): each of the three arc-table parameters threads
@@ -698,6 +692,7 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 // implicit_hasher: callers pass a concrete `HashMap`; a `BuildHasher` generic buys
 // nothing.
 #[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
+#[must_use]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: InflowNonNegativityMethod,
@@ -713,7 +708,7 @@ pub fn build_stage_templates(
     arc_arrival_density: &HashMap<usize, Vec<Option<Vec<f64>>>>,
     hydro_cell_index: &HydroCellIndex,
     load_scheme: SamplingScheme,
-) -> Result<StageTemplates, SddpError> {
+) -> StageTemplates {
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let n_hydros = system.hydros().len();
 
@@ -728,10 +723,7 @@ pub fn build_stage_templates(
     );
 
     if study_stages.is_empty() {
-        return Ok(StageTemplates::empty(
-            n_hydros,
-            resolved_parameters.cost_scale_factor,
-        ));
+        return StageTemplates::empty(n_hydros, resolved_parameters.cost_scale_factor);
     }
 
     let load_models = deterministic_load_models(system, load_scheme);
@@ -784,7 +776,7 @@ pub fn build_stage_templates(
         ));
     }
 
-    let output = assemble_stage_templates_output(
+    assemble_stage_templates_output(
         stage_outputs,
         load_bus_indices,
         diversion_upstream_output,
@@ -793,8 +785,7 @@ pub fn build_stage_templates(
         n_hydros,
         n_load_buses,
         n_study,
-    );
-    Ok(output)
+    )
 }
 
 /// Test/integration-only convenience wrapper over [`build_stage_templates`]:
@@ -808,8 +799,8 @@ pub fn build_stage_templates(
 ///
 /// # Errors
 ///
-/// Propagates [`build_stage_templates`]'s errors, plus
-/// `crate::setup::resolve_state_layout`'s `LeadTime` fan-out rejection.
+/// Propagates `crate::setup::resolve_state_layout`'s `LeadTime` fan-out
+/// rejection.
 #[cfg(any(test, feature = "test-support"))]
 pub fn build_stage_templates_resolving_layout(
     system: &System,
@@ -823,7 +814,7 @@ pub fn build_stage_templates_resolving_layout(
     let topology = build_transit_bucket_topology(system, false);
     let (state_layout, _, _) = resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    build_stage_templates(
+    Ok(build_stage_templates(
         system,
         inflow_method,
         par_lp,
@@ -838,7 +829,7 @@ pub fn build_stage_templates_resolving_layout(
         &topology.arc_arrival_density,
         &hydro_cell_index,
         SamplingScheme::InSample,
-    )
+    ))
 }
 
 /// Precompute the per-stage minimum target-storage trajectory `V_target[t]` for

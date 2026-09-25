@@ -2020,8 +2020,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &topology.arc_arrival_density,
         &hydro_cell_index,
         SamplingScheme::InSample,
-    )
-    .expect("build_stage_templates: valid system");
+    );
 
     let _report = postprocess_templates(
         &mut templates,
@@ -5377,8 +5376,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &topology.arc_arrival_density,
             &hydro_cell_index,
             SamplingScheme::InSample,
-        )
-        .expect("valid system");
+        );
     });
 
     let recorded = messages.lock().unwrap();

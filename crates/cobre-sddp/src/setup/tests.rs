@@ -43,7 +43,9 @@ use cobre_io::config::{
 };
 use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
-/// Bounds and penalties are non-zero defaults so `build_stage_templates` succeeds.
+/// Bounds and penalties are non-zero so the training tests below (e.g.
+/// `train_generates_cuts_in_fcf`) solve a genuinely optimized LP with real
+/// duals, not a degenerate all-zero one.
 fn minimal_system(n_stages: usize) -> cobre_core::System {
     minimal_system_with_policy_graph(n_stages, HorizonGraph::default())
 }

@@ -2,12 +2,12 @@
 
 Every policy load (warm-start, resume, simulation-only, `Study.load_policy`) now
 routes unconditionally through the shared `cobre_sddp::validate_policy_load`
-entry point -- there is no per-call opt-out. This module verifies the two
-Python-facing consequences: the removed opt-out kwarg raises
-`TypeError`, and a policy whose terminal entity manifest disagrees with the
-current study (same state dimension, different hydro id) raises `ValueError`.
-The compatible-load path is already exercised by
-`test_load_policy_then_simulate_matches_run` in `test_study.py`.
+entry point -- there is no per-call opt-out. This module verifies the
+Python-facing consequences of the unified validation path: the removed opt-out
+kwarg raises `TypeError`, a policy whose terminal entity manifest disagrees with
+the current study raises `ValueError`, and policy version mismatch and stored-basis
+dimension mismatch raise `PolicyIncompatibleError`. The compatible-load path is
+already exercised by `test_load_policy_then_simulate_matches_run` in `test_study.py`.
 
 Run with (from the repo root):
     pytest crates/cobre-python/tests/test_policy_load_validation.py

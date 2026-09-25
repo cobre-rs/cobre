@@ -344,6 +344,17 @@ mod tests {
                 encoded: 0,
                 expected: 1,
             },
+            SddpError::PolicyVersionMismatch {
+                policy_version: "0.0.1".to_string(),
+            },
+            SddpError::StoredBasisDimensionMismatch {
+                node_id: 0,
+                expected_cols: 100,
+                found_cols: 90,
+                expected_template_rows: 50,
+                found_rows: 45,
+                found_cut_rows: 10,
+            },
         ];
         for err in &variants {
             let _: &dyn std::error::Error = err;
@@ -372,6 +383,17 @@ mod tests {
             SddpError::WireVersionMismatch {
                 encoded: 0,
                 expected: 1,
+            },
+            SddpError::PolicyVersionMismatch {
+                policy_version: "0.0.1".to_string(),
+            },
+            SddpError::StoredBasisDimensionMismatch {
+                node_id: 0,
+                expected_cols: 100,
+                found_cols: 90,
+                expected_template_rows: 50,
+                found_rows: 45,
+                found_cut_rows: 10,
             },
         ];
         for err in &variants {

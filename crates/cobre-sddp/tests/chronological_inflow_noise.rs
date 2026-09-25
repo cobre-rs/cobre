@@ -155,7 +155,10 @@ fn chronological_noise_lower_bound_is_the_mean_root_objective() {
         "lower bound {lb} must equal the mean cold-solved root objective {expected_from_solves}"
     );
 
-    let analytic = CHRONOLOGICAL_NOISE_RELEASE_COST * 744.0 * sum_z / n_f64;
+    let analytic = CHRONOLOGICAL_NOISE_RELEASE_COST
+        * CHRONOLOGICAL_NOISE_BLOCK_HOURS.iter().sum::<f64>()
+        * sum_z
+        / n_f64;
     assert!(
         (lb - analytic).abs() <= 1e-6 * lb.abs(),
         "lower bound {lb} must equal the analytic inflow-release cost {analytic}"

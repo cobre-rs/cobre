@@ -1370,6 +1370,21 @@ fn in_sample_class_schemes() -> ClassSchemes {
     }
 }
 
+/// Reverse `nodes`/`transitions` in place when `reversed`: `build_node_graph`
+/// sorts nodes by id and out-edges by target, so this must recover the
+/// identical canonical graph — the shared input every declaration-order-
+/// invariance fixture in this module builds from.
+fn reverse_declaration_order_if(
+    reversed: bool,
+    nodes: &mut [PolicyNode],
+    transitions: &mut [Transition],
+) {
+    if reversed {
+        nodes.reverse();
+        transitions.reverse();
+    }
+}
+
 /// The declared `nodes[]`/`transitions[]` K-fan: root (id `0`) branches into fan
 /// nodes `1..=k` under strictly non-uniform weights `i / Σj` (never a uniform
 /// `1/k` split — a uniform split would make every reduction order sum identical
@@ -1423,13 +1438,7 @@ fn k_fan_policy_graph(k: usize, reversed: bool) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    // A reversed declaration order must resolve to the identical canonical node
-    // graph (build_node_graph sorts nodes by id, out-edges by target) — the input
-    // for the enumerated engine's declaration-order-invariance gate.
-    if reversed {
-        nodes.reverse();
-        transitions.reverse();
-    }
+    reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
     HorizonGraph {
         graph_type: PolicyGraphType::FiniteHorizon,
         annual_discount_rate: 0.0,
@@ -2983,12 +2992,7 @@ fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: boo
                 annual_discount_rate_override: None,
             });
         }
-        // A reversed declaration order must resolve to the identical canonical node
-        // graph (build_node_graph sorts by id, out-edges by target).
-        if reversed {
-            nodes.reverse();
-            transitions.reverse();
-        }
+        reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
         HorizonGraph {
             graph_type: PolicyGraphType::FiniteHorizon,
             annual_discount_rate: 0.0,
@@ -3119,13 +3123,7 @@ fn branching_tree_policy_graph(reversed: bool) -> HorizonGraph {
             });
         }
     }
-    // A reversed declaration order must resolve to the identical canonical node
-    // graph (build_node_graph sorts nodes by id, out-edges by target) — the input
-    // for the declaration-order-invariance gate.
-    if reversed {
-        nodes.reverse();
-        transitions.reverse();
-    }
+    reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
     HorizonGraph {
         graph_type: PolicyGraphType::FiniteHorizon,
         annual_discount_rate: 0.0,

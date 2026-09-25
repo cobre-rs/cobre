@@ -27,7 +27,7 @@ use crate::{
     risk_measure::RiskMeasure,
     setup::{
         NodeGraph, NodeSuccessor, OpeningSource,
-        node_graph::{NodePos, StageIdx},
+        node_graph::{NodePos, StageIdx, assemble_outcome_weights},
     },
     training::stage_solve_prep::{
         InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
@@ -361,16 +361,6 @@ fn find_root_position(node_graph: &NodeGraph) -> Result<NodePos, SddpError> {
         ));
     }
     Ok(root_pos)
-}
-
-/// Flatten `successors` into `out`, canonical order, each entry the product
-/// `P(n→child)·q_{child,ω}`.
-fn assemble_outcome_weights(
-    node_graph: &NodeGraph,
-    successors: &[NodeSuccessor],
-    out: &mut Vec<f64>,
-) {
-    crate::setup::node_graph::assemble_outcome_weights(node_graph, successors, out);
 }
 
 /// Assemble the root's successor outcome set `O(root) = {(n, ω) : n ∈ root⁺,

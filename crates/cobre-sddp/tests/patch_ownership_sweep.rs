@@ -29,7 +29,7 @@ use common::{build_setup_in_code, fresh_setup_with};
 fn capture_at_initial_state_matches_node_capture() {
     let case_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/deterministic/d02-single-hydro");
-    let setup = common::fresh_setup_with(&case_dir, |_| {});
+    let setup = fresh_setup_with(&case_dir, |_| {});
     let zero_noise = vec![0.0_f64; raw_noise_len(&setup)];
     let initial_state = oracle_initial_state(&setup);
 
@@ -47,7 +47,7 @@ fn capture_at_initial_state_matches_node_capture() {
 #[test]
 fn node_opening_noise_has_the_raw_noise_length() {
     let case_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/1dtoy");
-    let setup = common::fresh_setup_with(&case_dir, |_| {});
+    let setup = fresh_setup_with(&case_dir, |_| {});
     let expected_len = raw_noise_len(&setup);
 
     for pos in (0..setup.node_graph.nodes.len()).map(NodePos) {

@@ -5,6 +5,25 @@ use super::*;
 use super::common::build_setup_in_code_with_models;
 use super::common::in_code_studies::parallel_multiblock_evaporation_study;
 
+fn load_template_with_no_cuts(
+    template: &cobre_solver::StageTemplate,
+) -> cobre_solver::ActiveSolver {
+    use cobre_solver::SolverInterface;
+
+    let mut solver = cobre_solver::ActiveSolver::new().expect("ActiveSolver::new must succeed");
+    solver.load_model(template);
+    let empty_cuts = cobre_solver::RowBatch {
+        num_rows: 0,
+        row_starts: vec![0_i32],
+        col_indices: vec![],
+        values: vec![],
+        row_lower: vec![],
+        row_upper: vec![],
+    };
+    solver.add_rows(&empty_cuts);
+    solver
+}
+
 #[test]
 fn evap_zero_hydros_layout_unchanged() {
     let system = one_hydro_system(1, 0);
@@ -895,7 +914,7 @@ fn evap_outflow_objective_is_zero() {
 
 #[test]
 fn evap_lp_solvable_and_outflow_positive_coefficients() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
     let evap = evap_set_with_volume_slope(&system, &[0], 1.0, 0.02);
@@ -912,18 +931,7 @@ fn evap_lp_solvable_and_outflow_positive_coefficients() {
     .expect("evap system template build must succeed");
 
     let template = &result.templates[0];
-    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-    solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    let mut solver = load_template_with_no_cuts(template);
 
     // Fix v_in = 1000 hm3 via column bounds on storage_in.
     let col_storage_in = 2_usize; // col 0 = storage_out, col 1 = z_inflow, col 2 = storage_in
@@ -950,7 +958,7 @@ fn evap_lp_solvable_and_outflow_positive_coefficients() {
 
 #[test]
 fn evap_violation_slacks_near_zero_feasible_constraint() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
     let evap = evap_set_with_volume_slope(&system, &[0], 1.0, 0.02);
@@ -967,18 +975,7 @@ fn evap_violation_slacks_near_zero_feasible_constraint() {
     .expect("evap system template build must succeed");
 
     let template = &result.templates[0];
-    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-    solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    let mut solver = load_template_with_no_cuts(template);
 
     let v_in = 1_000.0_f64;
     solver.set_row_bounds(&[0], &[v_in], &[v_in]);
@@ -1005,7 +1002,7 @@ fn evap_violation_slacks_near_zero_feasible_constraint() {
 
 #[test]
 fn evap_storage_fixing_dual_differs_from_no_evaporation() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     // System with evaporation violation cost (so slacks are penalised).
     let system_evap = evap_hydro_system_with_violation_cost(730.0, 500.0);
@@ -1036,17 +1033,7 @@ fn evap_storage_fixing_dual_differs_from_no_evaporation() {
     .expect("baseline system template build must succeed");
 
     let solve_and_get_storage_dual = |template: &cobre_solver::StageTemplate| -> f64 {
-        let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-        solver.load_model(template);
-        let empty_cuts = RowBatch {
-            num_rows: 0,
-            row_starts: vec![0_i32],
-            col_indices: vec![],
-            values: vec![],
-            row_lower: vec![],
-            row_upper: vec![],
-        };
-        solver.add_rows(&empty_cuts);
+        let mut solver = load_template_with_no_cuts(template);
         let v_in = 1_000.0_f64;
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
         let view = solver.solve(None).expect("LP must solve to optimal");
@@ -1075,7 +1062,7 @@ fn evap_storage_fixing_dual_differs_from_no_evaporation() {
 
 #[test]
 fn evap_bound_prevents_dump_valve() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
     let evap = evap_set_with_volume_slope(&system, &[0], 2.0, 0.0001);
@@ -1092,18 +1079,7 @@ fn evap_bound_prevents_dump_valve() {
     .expect("evap dump valve test: template build must succeed");
 
     let template = &result.templates[0];
-    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-    solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    let mut solver = load_template_with_no_cuts(template);
 
     // col 0 = storage_out, col 1 = z_inflow, col 2 = storage_in (N=1, L=0).
     let col_storage_in = 2_usize;

@@ -4,10 +4,9 @@ use cobre_core::{EntityId, HorizonGraph, Stage, System};
 
 use crate::lp::builder::{self, StageTemplates};
 use crate::lp::indexer::StateSpace;
-use crate::scaling_report::ScalingReport;
 use crate::scaling_report::{
-    LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
-    summarize_scale_factors,
+    LpDimensions, ScalingReport, StageScalingReport, build_scaling_report,
+    compute_coefficient_range, summarize_scale_factors,
 };
 
 /// Compute per-stage one-step discount factors from study stages and a policy graph.
@@ -116,16 +115,14 @@ pub(crate) fn postprocess_templates(
     let bounds = system.bounds();
     let mut anticipated_thermal_indices: Vec<usize> = Vec::new();
     let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
+    let mut anticipated_thermal_ids: Vec<EntityId> = Vec::new();
     for (t_idx, thermal) in system.thermals().iter().enumerate() {
         if thermal.anticipated_config.is_some() {
             anticipated_thermal_indices.push(t_idx);
             anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
+            anticipated_thermal_ids.push(thermal.id);
         }
     }
-    let anticipated_thermal_ids: Vec<EntityId> = anticipated_thermal_indices
-        .iter()
-        .map(|&idx| system.thermals()[idx].id)
-        .collect();
     let last_real_cumulative = stage_templates
         .cumulative_discount_factors()
         .last()

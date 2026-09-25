@@ -79,15 +79,11 @@ fn study_dims() -> StudyDimensions {
 /// Mock solver that returns a fixed objective on every `solve` call.
 struct MockSolver {
     objective: f64,
-    call_count: usize,
 }
 
 impl MockSolver {
     fn with_fixed(objective: f64) -> Self {
-        Self {
-            objective,
-            call_count: 0,
-        }
+        Self { objective }
     }
 }
 
@@ -107,7 +103,6 @@ impl SolverInterface for MockSolver {
         &mut self,
         _basis: Option<&Basis>,
     ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.call_count += 1;
         Ok(cobre_solver::SolutionView {
             objective: self.objective,
             primal: &[0.0, 0.0, 0.0, 0.0],

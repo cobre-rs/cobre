@@ -419,16 +419,14 @@ pub(super) fn build_single_stage_template(
     let (mut row_lower, mut row_upper) = rows::fill_stage_rows(ctx, stage, stage_idx, &layout);
     let mut col_entries = entries::build_stage_matrix_entries(ctx, stage, stage_idx, &layout);
 
-    {
-        let mut buffers = entries::LpMatrixBuffers {
-            col_entries: &mut col_entries,
-            col_upper: &mut col_upper,
-            objective: &mut objective,
-            row_lower: &mut row_lower,
-            row_upper: &mut row_upper,
-        };
-        entries::fill_generic_constraint_entries(ctx, stage, stage_idx, &layout, &mut buffers);
-    }
+    let mut buffers = entries::LpMatrixBuffers {
+        col_entries: &mut col_entries,
+        col_upper: &mut col_upper,
+        objective: &mut objective,
+        row_lower: &mut row_lower,
+        row_upper: &mut row_upper,
+    };
+    entries::fill_generic_constraint_entries(ctx, stage, stage_idx, &layout, &mut buffers);
 
     // Scale every monetary objective coefficient by 1/K for numerical
     // conditioning; outputs are unscaled at the reporting boundary.

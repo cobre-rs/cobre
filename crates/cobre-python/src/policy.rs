@@ -470,7 +470,6 @@ pub fn write_policy_checkpoint(
         .collect::<PyResult<_>>()?;
 
     let metadata: CheckpointManifest = metadata.into();
-    let metadata_cost_scale_factor = metadata.producer.cost_scale_factor;
 
     py.detach(|| {
         let cut_records: Vec<Vec<PolicyCutRecord<'_>>> = stage_cuts
@@ -508,7 +507,7 @@ pub fn write_policy_checkpoint(
                 entity_manifest: &data.manifest,
                 cost_scale_factor: sc
                     .cost_scale_factor
-                    .or(metadata_cost_scale_factor)
+                    .or(metadata.producer.cost_scale_factor)
                     .unwrap_or(1_000_000.0),
                 node_id: sc.node_id,
                 graph_stage_id: sc.graph_stage_id,

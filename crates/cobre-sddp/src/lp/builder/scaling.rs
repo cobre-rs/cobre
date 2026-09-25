@@ -215,9 +215,10 @@ pub(super) fn compute_stage_hours(study_stages: &[&Stage]) -> (Vec<f64>, Vec<Vec
     let mut block_hours_per_stage = Vec::with_capacity(n);
 
     for stage in study_stages {
-        let total_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+        let block_hours: Vec<f64> = stage.blocks.iter().map(|b| b.duration_hours).collect();
+        let total_hours: f64 = block_hours.iter().sum();
         zeta_per_stage.push(total_hours * M3S_TO_HM3);
-        block_hours_per_stage.push(stage.blocks.iter().map(|b| b.duration_hours).collect());
+        block_hours_per_stage.push(block_hours);
     }
 
     (zeta_per_stage, block_hours_per_stage)

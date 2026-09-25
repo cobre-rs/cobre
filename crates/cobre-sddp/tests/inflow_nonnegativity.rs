@@ -753,10 +753,8 @@ fn test_penalty_slack_value_matches_negative_inflow() {
     train_fixture(&fx, 3).expect("training must succeed before simulation");
     let scenario_results = simulate_fixture(&fx, &fcf).expect("simulate must succeed");
 
-    let found_nonzero_slack = has_nonzero_slack(&scenario_results);
-
     assert!(
-        found_nonzero_slack,
+        has_nonzero_slack(&scenario_results),
         "at least one hydro must have inflow_nonnegativity_slack_m3s > 0.0 across 20 scenarios \
          with mean_m3s=0 and std_m3s=30; none found"
     );
@@ -784,10 +782,8 @@ fn test_simulation_slack_output_populated() {
         scenario_results.len()
     );
 
-    let any_nonzero = has_nonzero_slack(&scenario_results);
-
     assert!(
-        any_nonzero,
+        has_nonzero_slack(&scenario_results),
         "inflow_nonnegativity_slack_m3s must be > 0.0 in at least one hydro stage result"
     );
 }

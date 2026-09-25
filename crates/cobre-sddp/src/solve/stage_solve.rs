@@ -71,11 +71,12 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
     let stored_basis = filtered_stored_basis(inputs);
 
     let solved = if let Some(captured) = stored_basis {
+        let template = inputs.stage_context.template(inputs.stage_index);
         // `base_row_count` is the non-frozen template row count so cut rows are
         // matched by slot identity, not positional copy from the stored basis.
         let target = ReconstructionTarget {
-            base_row_count: inputs.stage_context.template(inputs.stage_index).num_rows,
-            num_cols: inputs.stage_context.template(inputs.stage_index).num_cols,
+            base_row_count: template.num_rows,
+            num_cols: template.num_cols,
         };
 
         let _ = reconstruct_basis(

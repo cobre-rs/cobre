@@ -897,7 +897,6 @@ fn fpha_hydro_without_production_models_json_stdout_mentions_file() {
 
 // ── non-boundary scalar-parameter presence guard ───────────────────────────────
 
-/// Absolute path to `examples/<name>`, resolved two levels above the crate.
 fn copy_dir_recursive(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();
     for entry in fs::read_dir(src).unwrap() {

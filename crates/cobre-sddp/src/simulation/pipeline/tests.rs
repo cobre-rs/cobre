@@ -2041,7 +2041,6 @@ mod dcs_simulation {
     /// template, returning `(immediate_cost, SimulationStageResult)`.
     // Builds the full two-branch (DCS vs frozen) stage-solve fixture inline;
     // extracting pieces would scatter the setup the branch comparison reads.
-    #[allow(clippy::too_many_lines)]
     fn run_one_sim_stage(
         dcs: Option<DcsParams>,
         frozen: &StageTemplate,

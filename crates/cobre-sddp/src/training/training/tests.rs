@@ -59,8 +59,7 @@ use crate::{
 /// Row layout:
 /// - row 0: storage-fixing (`storage_out` fixed to incoming state)
 /// - row 1: `z_inflow` definition row
-fn minimal_template(n_state: usize) -> StageTemplate {
-    let _ = n_state;
+fn minimal_template(_n_state: usize) -> StageTemplate {
     StageTemplate {
         num_cols: 4,
         num_rows: 2,
@@ -821,8 +820,6 @@ fn ac_train_emits_correct_event_sequence() {
 
 #[test]
 fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
-    use cobre_core::WorkerTimingPhase;
-
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];

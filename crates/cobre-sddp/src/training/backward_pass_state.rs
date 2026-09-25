@@ -665,8 +665,7 @@ impl BackwardPassState {
             }
         }
 
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = start.elapsed().as_millis() as u64;
+        let elapsed_ms = ms_elapsed(start);
         let solves_after: u64 = inputs
             .workspaces
             .iter()
@@ -1057,20 +1056,16 @@ impl BackwardPassState {
                 .zip(&self.worker_stats_after)
                 .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after)),
         );
-        let stage_setup_ms: f64 = self
-            .worker_deltas
-            .iter()
-            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
-            .sum();
+        let stage_setup_ms: f64 = self.worker_deltas.iter().map(non_solve_setup_ms).sum();
         for (ws, delta) in workspaces.iter_mut().zip(&self.worker_deltas) {
-            ws.worker_timing_buf.bwd_setup_ms +=
-                delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
+            ws.worker_timing_buf.bwd_setup_ms += non_solve_setup_ms(delta);
         }
         self.worker_totals.clear();
-        self.worker_totals
-            .extend(self.worker_deltas.iter().map(|d| {
-                d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
-            }));
+        self.worker_totals.extend(
+            self.worker_deltas
+                .iter()
+                .map(|d| d.solve_time_ms + non_solve_setup_ms(d)),
+        );
         let max_worker_ms = self.worker_totals.iter().copied().fold(0.0_f64, f64::max);
         let avg_worker_ms = if self.worker_totals.is_empty() {
             0.0_f64
@@ -1226,6 +1221,13 @@ impl BackwardPassState {
     }
 }
 
+/// Per-worker non-solve overhead for one stage: LP load + bound patch + basis-set
+/// time. Shared by `collect_stage_timing_stats`'s setup-time sum, its
+/// `bwd_setup_ms` accumulation, and (plus `solve_time_ms`) its per-worker totals.
+fn non_solve_setup_ms(d: &SolverStatsDelta) -> f64 {
+    d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
+}
+
 /// Iteration-constant values derived once from `BackwardPassInputs` at the start of `run`.
 ///
 /// Passed to `compute_one_backward_node` to avoid recomputing them on every node
@@ -1284,6 +1286,13 @@ struct NodeCompute {
     imbalance_ms: u64,
     /// Scheduling overhead for this node, in ms.
     scheduling_ms: u64,
+}
+
+/// Milliseconds elapsed since `start`; every duration measured here is well
+/// under `u64::MAX` ms.
+#[allow(clippy::cast_possible_truncation)]
+fn ms_elapsed(start: Instant) -> u64 {
+    start.elapsed().as_millis() as u64
 }
 
 /// Resolve the effective backward thread scheduler for the SAMPLED path
@@ -1519,8 +1528,7 @@ fn run_one_backward_level<S: SolverInterface + Send, C: Communicator>(
     inputs
         .exchange
         .exchange(inputs.records, level_stage, num_stages, inputs.comm)?;
-    #[allow(clippy::cast_possible_truncation)]
-    let state_exchange_ms = exch_start.elapsed().as_millis() as u64;
+    let state_exchange_ms = ms_elapsed(exch_start);
 
     // Every rank's real (non-padded) forward-pass count for this level, already
     // computed by `exchange()` above with no further collective — the total
@@ -1627,8 +1635,7 @@ fn run_one_backward_level<S: SolverInterface + Send, C: Communicator>(
     // peer's; the local count scales with rank count while the global total is
     // rank-count invariant.
     let cuts_generated = n_local_total + remote_total;
-    #[allow(clippy::cast_possible_truncation)]
-    let cut_sync_ms = sync_start.elapsed().as_millis() as u64;
+    let cut_sync_ms = ms_elapsed(sync_start);
 
     let mut stage_entries = Vec::with_capacity(nodes_out.len());
     let mut setup_ms = 0u64;
@@ -1750,8 +1757,7 @@ fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(
         });
     }
     let pool_regions = pool_regions_start..state.level_pool_regions_scratch.len();
-    #[allow(clippy::cast_possible_truncation)]
-    let cut_batch_build_ms = batch_start.elapsed().as_millis() as u64;
+    let cut_batch_build_ms = ms_elapsed(batch_start);
 
     let outcomes = SuccessorOutcomes::new(
         &state.successor_meta_buf,
@@ -1827,8 +1833,7 @@ fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(
             block_size,
             &state.by_node_scratch.block_order[..n_blocks],
         );
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = process_start.elapsed().as_millis() as u64;
+        let elapsed_ms = ms_elapsed(process_start);
         // Telemetry-only merge (sddp.md "by-node scheduler is
         // warm-start-only" — disjoint from the per-`(m, ω)` arena scatter and
         // ascending-m aggregation `by_node_finish` performs below); keyed by the
@@ -1878,8 +1883,7 @@ fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(
             &outcomes,
             basis_slices,
         );
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = process_start.elapsed().as_millis() as u64;
+        let elapsed_ms = ms_elapsed(process_start);
 
         let result = by_scenario_finish(
             worker_staged,

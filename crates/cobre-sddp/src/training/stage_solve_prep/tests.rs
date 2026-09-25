@@ -523,7 +523,7 @@ fn make_ncs_stochastic_context() -> (StochasticContext, Stage) {
 fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     let (stoch, ncs_stage) = make_ncs_stochastic_context();
     let state = state_layout(0, 0);
-    let template = StageTemplate {
+    let templates = vec![StageTemplate {
         num_cols: 1,
         num_rows: 0,
         num_nz: 0,
@@ -542,8 +542,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
         max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
-    };
-    let templates = vec![template];
+    }];
     let ncs_max_gen = vec![100.0_f64];
     let ncs_allow_curtailment = vec![true];
     let ncs_stochastic_dense_col = vec![0_usize];
@@ -708,7 +707,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
         mean_mw: 300.0,
         std_mw: 50.0,
     }));
-    let template = StageTemplate {
+    let templates = vec![StageTemplate {
         num_cols: 3,
         num_rows: 2,
         num_nz: 1,
@@ -727,8 +726,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
         max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
-    };
-    let templates = vec![template];
+    }];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
     let ctx = StageContext {
         state_boxes: &state_boxes,

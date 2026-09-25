@@ -189,11 +189,10 @@ fn minimal_template_1_0() -> StageTemplate {
 fn fixed_solution(num_cols: usize, objective: f64, theta_col: usize, theta_val: f64) -> LpSolution {
     let mut primal = vec![0.0_f64; num_cols];
     primal[theta_col] = theta_val;
-    let num_rows = 1; // single structural row for minimal template
     LpSolution {
         objective,
         primal,
-        dual: vec![0.0; num_rows],
+        dual: vec![0.0; 1], // single structural row for minimal template
         reduced_costs: vec![0.0; num_cols],
         iterations: 0,
         solve_time_seconds: 0.0,

@@ -1010,7 +1010,7 @@ fn build_geometry(
     has_inflow_penalty: bool,
     max_deficit_segments: usize,
     fpha_hydro_indices: Vec<HydroSys>,
-    fpha_planes: &[usize],
+    _fpha_planes: &[usize],
 ) -> StageGeometry {
     // theta = N*(3+L); control region starts at theta + 1 (no anticipated thermals).
     let theta = hydro_count * (3 + max_par_order);
@@ -1068,7 +1068,6 @@ fn build_geometry(
     let water_balance_start = hydro_count;
     let load_balance_start = water_balance_start + hydro_count;
     let load_balance_end = load_balance_start + n_buses * n_blks;
-    let _ = fpha_planes; // FPHA row arithmetic is internal; only the column count matters here.
 
     StageGeometry {
         // θ sits one column before the turbine block (`turbine.start == theta + 1`).

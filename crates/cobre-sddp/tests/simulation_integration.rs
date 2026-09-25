@@ -393,6 +393,33 @@ fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
     ]
 }
 
+fn default_single_hydro_entity_counts() -> EntityCounts {
+    EntityCounts {
+        hydro_ids: vec![1],
+        hydro_productivities: vec![1.0],
+        thermal_ids: vec![],
+        line_ids: vec![],
+        bus_ids: vec![0],
+        pumping_station_ids: vec![],
+        contract_ids: vec![],
+        non_controllable_ids: vec![],
+    }
+}
+
+fn zero_energy_conversion_set(n_stages: usize) -> EnergyConversionSet {
+    let zero_ec = EnergyConversion {
+        equivalent_productivity_mw_per_m3s: 0.0,
+        reference_volume_hm3: 0.0,
+        reference_outflow_m3s: 0.0,
+    };
+    EnergyConversionSet::new(
+        vec![vec![zero_ec; n_stages]; 1],
+        vec![vec![0.0_f64; n_stages]; 1],
+        1,
+        n_stages,
+    )
+}
+
 /// All training parameters for a 2-stage, N=1 toy system.
 struct Fixture {
     n_stages: usize,
@@ -773,16 +800,7 @@ fn train_simulate_write_cycle() {
         profile: Phase::Simulation.profile(),
     };
 
-    let entity_counts = EntityCounts {
-        hydro_ids: vec![1],
-        hydro_productivities: vec![1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![0],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
+    let entity_counts = default_single_hydro_entity_counts();
 
     let (result_tx, result_rx) = mpsc::sync_channel(4);
 
@@ -804,17 +822,7 @@ fn train_simulate_write_cycle() {
         },
     )];
 
-    let zero_ec = EnergyConversion {
-        equivalent_productivity_mw_per_m3s: 0.0,
-        reference_volume_hm3: 0.0,
-        reference_outflow_m3s: 0.0,
-    };
-    let ec = EnergyConversionSet::new(
-        vec![vec![zero_ec; fx.n_stages]; 1],
-        vec![vec![0.0_f64; fx.n_stages]; 1],
-        1,
-        fx.n_stages,
-    );
+    let ec = zero_energy_conversion_set(fx.n_stages);
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     simulate(
@@ -1432,16 +1440,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         profile: Phase::Simulation.profile(),
     };
 
-    let entity_counts = EntityCounts {
-        hydro_ids: vec![1],
-        hydro_productivities: vec![1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![0],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
+    let entity_counts = default_single_hydro_entity_counts();
 
     let zeta_per_stage = vec![zeta; n_stages];
     let block_hours_per_stage = vec![vec![total_hours]; n_stages];
@@ -1470,17 +1469,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         },
     )];
 
-    let zero_ec2 = EnergyConversion {
-        equivalent_productivity_mw_per_m3s: 0.0,
-        reference_volume_hm3: 0.0,
-        reference_outflow_m3s: 0.0,
-    };
-    let ec2 = EnergyConversionSet::new(
-        vec![vec![zero_ec2; n_stages]; 1],
-        vec![vec![0.0_f64; n_stages]; 1],
-        1,
-        n_stages,
-    );
+    let ec2 = zero_energy_conversion_set(n_stages);
 
     simulate(
         &mut sim_workspaces,
@@ -1649,27 +1638,8 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         "the fixture's single-opening chain must derive exactly one enumerated path"
     );
 
-    let entity_counts = EntityCounts {
-        hydro_ids: vec![1],
-        hydro_productivities: vec![1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![0],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
-    let zero_ec = EnergyConversion {
-        equivalent_productivity_mw_per_m3s: 0.0,
-        reference_volume_hm3: 0.0,
-        reference_outflow_m3s: 0.0,
-    };
-    let ec = EnergyConversionSet::new(
-        vec![vec![zero_ec; fx.n_stages]; 1],
-        vec![vec![0.0_f64; fx.n_stages]; 1],
-        1,
-        fx.n_stages,
-    );
+    let entity_counts = default_single_hydro_entity_counts();
+    let ec = zero_energy_conversion_set(fx.n_stages);
     let sim_config = SimulationConfig {
         n_scenarios: 1,
         io_channel_capacity: 4,

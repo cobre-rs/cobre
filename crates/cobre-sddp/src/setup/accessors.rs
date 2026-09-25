@@ -299,41 +299,46 @@ impl StudySetup {
     /// Build simulation [`TrainingContext`] with simulation-specific schemes and libraries.
     #[must_use]
     pub(crate) fn simulation_ctx(&self) -> TrainingContext<'_> {
+        fn sim_or_training<'a, T>(
+            sim_value: Option<&'a T>,
+            scheme: SamplingScheme,
+            matches_scheme: SamplingScheme,
+            training_value: Option<&'a T>,
+        ) -> Option<&'a T> {
+            sim_value.or(if scheme == matches_scheme {
+                training_value
+            } else {
+                None
+            })
+        }
+
         let tr = &self.scenario_libraries.training;
         let sim = &self.scenario_libraries.simulation;
 
-        let historical_library =
-            sim.historical
-                .as_ref()
-                .or(if sim.inflow_scheme == SamplingScheme::Historical {
-                    tr.historical.as_ref()
-                } else {
-                    None
-                });
-        let external_inflow_library =
-            sim.external_inflow
-                .as_ref()
-                .or(if sim.inflow_scheme == SamplingScheme::External {
-                    tr.external_inflow.as_ref()
-                } else {
-                    None
-                });
-        let external_load_library =
-            sim.external_load
-                .as_ref()
-                .or(if sim.load_scheme == SamplingScheme::External {
-                    tr.external_load.as_ref()
-                } else {
-                    None
-                });
-        let external_ncs_library =
-            sim.external_ncs
-                .as_ref()
-                .or(if sim.ncs_scheme == SamplingScheme::External {
-                    tr.external_ncs.as_ref()
-                } else {
-                    None
-                });
+        let historical_library = sim_or_training(
+            sim.historical.as_ref(),
+            sim.inflow_scheme,
+            SamplingScheme::Historical,
+            tr.historical.as_ref(),
+        );
+        let external_inflow_library = sim_or_training(
+            sim.external_inflow.as_ref(),
+            sim.inflow_scheme,
+            SamplingScheme::External,
+            tr.external_inflow.as_ref(),
+        );
+        let external_load_library = sim_or_training(
+            sim.external_load.as_ref(),
+            sim.load_scheme,
+            SamplingScheme::External,
+            tr.external_load.as_ref(),
+        );
+        let external_ncs_library = sim_or_training(
+            sim.external_ncs.as_ref(),
+            sim.ncs_scheme,
+            SamplingScheme::External,
+            tr.external_ncs.as_ref(),
+        );
 
         TrainingContext {
             horizon: &self.horizon,

@@ -87,19 +87,11 @@ impl SingleSuccessor {
         frozen_template: StageTemplate,
         cut_batch: RowBatch,
     ) -> Self {
-        let empty = || RowBatch {
-            num_rows: 0,
-            row_starts: Vec::new(),
-            col_indices: Vec::new(),
-            values: Vec::new(),
-            row_lower: Vec::new(),
-            row_upper: Vec::new(),
-        };
         let mut frozen = Vec::with_capacity(pool_id + 1);
         let mut cut_batches = Vec::with_capacity(pool_id + 1);
         for _ in 0..pool_id {
             frozen.push(frozen_template.clone());
-            cut_batches.push(empty());
+            cut_batches.push(empty_row_batch());
         }
         frozen.push(frozen_template);
         cut_batches.push(cut_batch);
@@ -216,17 +208,19 @@ impl MultiSuccessor {
     }
 }
 
+fn empty_row_batch() -> RowBatch {
+    RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    }
+}
+
 fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
-    (0..n_stages)
-        .map(|_| RowBatch {
-            num_rows: 0,
-            row_starts: Vec::new(),
-            col_indices: Vec::new(),
-            values: Vec::new(),
-            row_lower: Vec::new(),
-            row_upper: Vec::new(),
-        })
-        .collect()
+    (0..n_stages).map(|_| empty_row_batch()).collect()
 }
 
 /// Stub communicator for tests (single-rank).
@@ -4712,14 +4706,7 @@ fn run_one_trial_state_with_stores(
     let frozen_template = minimal_template_1_0();
 
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0u32; n_stages]);
-    let empty_cut_batch = RowBatch {
-        num_rows: 0,
-        row_starts: Vec::new(),
-        col_indices: Vec::new(),
-        values: Vec::new(),
-        row_lower: Vec::new(),
-        row_upper: Vec::new(),
-    };
+    let empty_cut_batch = empty_row_batch();
 
     let cut_state_projection = CutStateProjection::new(
         &state,
@@ -5585,14 +5572,7 @@ fn cut_coefficient_sign_convention_slot_zero_k2() {
     coefficients[state.commit_out.start] = 7.5;
     fcf.add_cut(NodeId(0), 1, 0, 0, 0.0, &coefficients);
 
-    let mut batch = RowBatch {
-        num_rows: 0,
-        row_starts: Vec::new(),
-        col_indices: Vec::new(),
-        values: Vec::new(),
-        row_lower: Vec::new(),
-        row_upper: Vec::new(),
-    };
+    let mut batch = empty_row_batch();
     build_cut_row_batch_into(
         &mut batch,
         &fcf,

@@ -1035,9 +1035,8 @@ pub(crate) fn dispatch_scenario_result(
 /// feasible solution, `Err(SimulationError::SolverError { .. })` for other
 /// terminal LP solver failures, and `Err(SimulationError::ChannelClosed)` when
 /// the channel receiver has been dropped.
-// RATIONALE: simulate() is a thin argument-forwarding shim to
-// SimulationState::run; splitting would only relocate the parameter list, not
-// reduce it — SimulationInputs already bundles what can be bundled.
+// RATIONALE: splitting would only relocate the parameter list, not reduce it —
+// SimulationInputs already bundles what can be bundled.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate<S, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],

@@ -66,7 +66,6 @@ fn stage_templates_n_load_buses_matches_stochastic_buses() {
 
 #[test]
 fn stage_templates_no_load_buses_gives_zero() {
-    // one_bus_system uses std_mw = 0 for all load models.
     let system = one_bus_system(2);
     let result = build_stage_templates_resolving_layout(
         &system,

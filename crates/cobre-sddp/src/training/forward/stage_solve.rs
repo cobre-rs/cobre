@@ -131,10 +131,8 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
             dcs_ctx,
         )?;
         let view = ws.backward_accum.dcs_solve.result_view();
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
-        let _ = view;
-        objective
+        view.objective
     } else {
         let inputs = StageInputs {
             stage_context: ctx,
@@ -158,10 +156,8 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
             e
         })?;
 
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
-        let _ = view;
-        objective
+        view.objective
     };
 
     let d_t = ctx.discount_factors.get(t.0).copied().unwrap_or(1.0);

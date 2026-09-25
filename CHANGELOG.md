@@ -73,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decision after stage 0 paid its discount twice. It is now priced relative
   to its own decision stage, `D(delivery)/D(decision)`.
 
+- **The training lower bound now includes stage-0 load uncertainty.** The
+  lower bound's root-stage LP previously skipped the load-noise patch the
+  forward and backward passes apply, so a study with stochastic load at
+  stage 0 evaluated every opening against the template's load means instead
+  of its own realized draw. The root LP is now patched identically to the
+  forward pass; on a sampled scenario tree the lower and upper bounds are
+  not guaranteed to move in any particular direction relative to each other.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

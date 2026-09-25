@@ -29,9 +29,7 @@ use crate::{
         NodeGraph, NodeSuccessor, OpeningSource,
         node_graph::{NodePos, StageIdx, assemble_outcome_weights},
     },
-    training::stage_solve_prep::{
-        InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
-    },
+    training::stage_solve_prep::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource},
     workspace::ScratchBuffers,
 };
 
@@ -96,22 +94,29 @@ impl<'a> LbEvalScratchBundle<'a> {
     }
 }
 
-/// The LB path never calls `fill_load_patches`, so `n_load_buses` and
-/// `max_blocks` are pinned to `0`. Bucket and anticipated capacity MUST match
-/// `n_buckets` / `n_anticipated * k_max` — undersizing panics in
-/// `fill_col_state_patches`.
+/// The lower bound patches the root stage's own load rows, so the load region
+/// is sized for `stage_ctx`'s root-stage (`StageIdx(0)`) block count, never the
+/// global max. Bucket and anticipated capacity MUST match `n_buckets` /
+/// `n_anticipated * k_max` — undersizing panics in `fill_col_state_patches`.
 pub(crate) fn lower_bound_patch_buffer(
     hydro_count: usize,
     max_par_order: usize,
     n_buckets: usize,
     n_anticipated: usize,
     k_max: usize,
+    stage_ctx: &StageContext<'_>,
 ) -> PatchBuffer {
+    let n_load_buses = stage_ctx.n_load_buses;
+    let max_blocks = if n_load_buses > 0 {
+        stage_ctx.block_count(StageIdx(0))
+    } else {
+        0
+    };
     PatchBuffer::new(
         hydro_count,
         max_par_order,
-        0,
-        0,
+        n_load_buses,
+        max_blocks,
         n_buckets,
         n_anticipated,
         k_max,
@@ -299,7 +304,6 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
 
         let prep_params = StageSolvePrepParams {
             state_source: StateSource(initial_state),
-            load_noise: LoadNoise::Absent,
             inflow_noise: InflowNoise::PreBuilt,
             raw_noise,
         };

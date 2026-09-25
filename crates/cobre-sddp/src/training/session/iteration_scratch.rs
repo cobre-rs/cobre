@@ -108,6 +108,7 @@ impl IterationScratch {
             n_buckets,
             n_anticipated,
             k_max,
+            stage_ctx,
         );
 
         let empty_row_batch = || RowBatch {

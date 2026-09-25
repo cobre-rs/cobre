@@ -39,9 +39,7 @@ use crate::{
     },
     training::{
         backward::extract_state_duals_only,
-        stage_solve_prep::{
-            InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
-        },
+        stage_solve_prep::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource},
     },
     trajectory::TrajectoryRecord,
     workspace::{BasisStore, CapturedBasis, SolverWorkspace},
@@ -308,7 +306,6 @@ fn solve_forward_node<S: SolverInterface + Send>(
 
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(&ws.current_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };

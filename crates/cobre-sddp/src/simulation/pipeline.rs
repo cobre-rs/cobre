@@ -46,9 +46,7 @@ use crate::{
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
-    training::stage_solve_prep::{
-        InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
-    },
+    training::stage_solve_prep::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource},
     workspace::{CapturedBasis, SolverWorkspace},
 };
 
@@ -425,7 +423,6 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     }
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(&ws.current_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };

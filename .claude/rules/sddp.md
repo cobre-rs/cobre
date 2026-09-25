@@ -534,6 +534,14 @@ real bug caught during D15). The patch inputs ride on `StageContext`
 site reads.
 Read: `training/lower_bound.rs`, `training/stage_solve_prep.rs`.
 
+The lower bound patches stochastic load-balance rows the same way, through the
+same `StageSolvePrep` call's load patch over the root opening's own load
+segment. Skipping that patch leaves stage-0 load uncertainty out of the bound
+and still compiles: the LP solves, converges, and reports a bound that never
+reflects the root's load-noise draw. Pinned by
+`lower_bound_root_lp_matches_the_forward_root_lp` in
+`tests/patch_ownership_sweep.rs`.
+
 ## Per-level exchange in the backward pass
 
 `exchange()` is called inside the reverse-topological sweep, once per

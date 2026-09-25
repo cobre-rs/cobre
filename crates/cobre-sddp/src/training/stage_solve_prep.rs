@@ -28,15 +28,6 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StateSource<'a>(pub &'a [f64]);
 
-/// Whether this stage solve patches stochastic load-bus bounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LoadNoise {
-    /// Patch stochastic load-bus bounds (forward, backward, simulation).
-    Present,
-    /// Skip them: the lower bound has no load-bus noise dimension.
-    Absent,
-}
-
 /// How the water-balance noise buffer this solve reads
 /// (`scratch.z_inflow_rhs_buf`) is populated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,8 +48,6 @@ pub(crate) enum InflowNoise {
 pub(crate) struct StageSolvePrepParams<'a> {
     /// Which slice this solve pins as incoming state.
     pub state_source: StateSource<'a>,
-    /// Whether to patch stochastic load-bus bounds.
-    pub load_noise: LoadNoise,
     /// How the inflow-noise buffers are populated.
     pub inflow_noise: InflowNoise,
     /// This solve's realized noise draw, laid out `[hydro | load-bus | NCS]`.
@@ -162,17 +151,15 @@ impl StageSolvePrep {
         } else {
             0
         };
-        if params.load_noise == LoadNoise::Present {
-            transform_load_noise(
-                params.raw_noise,
-                ctx.n_hydros,
-                ctx.n_load_buses,
-                training_ctx.stochastic,
-                stage,
-                load_blocks,
-                &mut scratch.load_rhs_buf,
-            );
-        }
+        transform_load_noise(
+            params.raw_noise,
+            ctx.n_hydros,
+            ctx.n_load_buses,
+            training_ctx.stochastic,
+            stage,
+            load_blocks,
+            &mut scratch.load_rhs_buf,
+        );
 
         patch_buf.fill_col_state_patches(
             training_ctx.state,
@@ -180,7 +167,7 @@ impl StageSolvePrep {
             &ctx.template(stage).col_scale,
             producer_box,
         );
-        if params.load_noise == LoadNoise::Present && ctx.n_load_buses > 0 {
+        if ctx.n_load_buses > 0 {
             let grid = BlockGrid::new(load_blocks, training_ctx.study_dims.max_deficit_segments);
             patch_buf.fill_load_patches(
                 ctx.load_balance_row_start(stage),

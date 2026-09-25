@@ -34,7 +34,7 @@ mod simulation_only {
             build_active_indices, build_stage_basis_records, build_stage_cut_records,
             build_stage_cuts_payloads, convert_basis_cache,
         },
-        setup::prepare_stochastic,
+        setup::{NodePos, prepare_stochastic},
     };
     use cobre_solver::ActiveSolver;
 
@@ -211,6 +211,21 @@ mod simulation_only {
         );
         let has_basis = loaded_basis_cache.iter().any(Option::is_some);
         assert!(has_basis, "at least one stage should have basis data");
+
+        for (pos, cb) in loaded_basis_cache.iter().enumerate() {
+            let Some(cb) = cb else { continue };
+            let stage = setup.node_graph.nodes[NodePos(pos)].stage;
+            let expected_rows = setup.stage_data.stage_templates.templates[stage.0].num_rows;
+            assert_eq!(
+                cb.base_row_count, expected_rows,
+                "node {pos} base_row_count must equal the study's own template row count"
+            );
+            assert_eq!(
+                cb.cut_row_slots.len(),
+                cb.basis.row_status.len() - cb.base_row_count,
+                "node {pos} cut_row_slots length must equal the trailing cut-row count"
+            );
+        }
     }
 }
 

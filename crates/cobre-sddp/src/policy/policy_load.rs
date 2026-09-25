@@ -417,21 +417,27 @@ pub fn build_basis_cache_from_checkpoint(
 ///
 /// # Cut-slot reconstruction
 ///
-/// `row_status` is `[template rows…, cut rows…]`, the trailing `num_cut_rows` in
-/// capture-time [`CutPool::active_cuts`](crate::cut::pool::CutPool::active_cuts)
-/// order (active slots, increasing). A node's cut records live in its OWN pool's
-/// [`StageCutsReadResult`] (`sc.stage_id == node_pools[node]`), never the record
-/// whose pool id happens to equal the node ordinal — the two diverge once
-/// `n_pools != n_nodes` on a branching graph. Slot identity is recovered from
-/// that pool's active records' `slot_index` in increasing order, so
-/// `reconstruct_basis` preserves stored cut-row statuses across cut-set churn.
+/// `base_row_count` is taken from `node_dims[pos]` — the STUDY's own template row
+/// count — never from the record's `row_status.len() - num_cut_rows`: the root
+/// node is captured in the last forward pass, before that iteration's backward
+/// pass appends cuts to its pool, so its recorded `num_cut_rows` (the pool's size
+/// at export) legitimately exceeds the cut rows the basis was captured with. The
+/// trailing `k = row_status.len() - base_row_count` rows are matched to pool slot
+/// identity only when a node's OWN pool's [`StageCutsReadResult`]
+/// (`sc.stage_id == node_pools[node]`, never the record whose pool id happens to
+/// equal the node ordinal) reports its active `slot_index`es as exactly the
+/// unbroken prefix `0..populated` — proof that no cut was deactivated since
+/// capture, so the basis's k oldest cut rows are exactly that pool's first k
+/// slots. `reconstruct_basis` then preserves stored cut-row statuses across
+/// cut-set churn.
 ///
 /// # Graceful fallback
 ///
-/// When the derived active-slot count ≠ `num_cut_rows` (cut selection deactivated
-/// cuts between capture and export) or no cut record matches, fall back to safe
-/// all-template behavior (empty `cut_row_slots`; every cut row reconstructs
-/// BASIC). This changes only the warm-start solve path, never the optimum.
+/// When the pool's active slots are not the unbroken `0..populated` prefix, when
+/// they are fewer than `k`, or when no cut record matches the node's pool at all,
+/// slot identity cannot be proven: `row_status` is truncated to `base_row_count`
+/// and `cut_row_slots` stays empty, so every current cut row reconstructs BASIC.
+/// This changes only the warm-start solve path, never the optimum.
 ///
 /// `node_ids` / `node_pools` are the CURRENT study's, since a resume/warm-start
 /// continues the SAME node topology — never a value recovered from the
@@ -491,25 +497,29 @@ fn build_basis_cache_for_nodes(
             .map(|&r| BasisStatus::from_discriminant_code(r))
             .collect();
 
-        let num_cut = record.num_cut_rows as usize;
         let pool = node_pools[node];
-        let active_slots: Option<Vec<u32>> = stage_cuts
+        let base_row_count = expected_template_rows;
+        let k = row_status.len() - base_row_count;
+        let cut_row_slots = stage_cuts
             .iter()
             .find(|sc| sc.stage_id as usize == pool)
-            .map(|sc| {
-                sc.cuts
+            .and_then(|sc| {
+                let populated = sc.cuts.len();
+                let active: Vec<u32> = sc
+                    .cuts
                     .iter()
                     .filter(|c| c.is_active)
                     .map(|c| c.slot_index)
-                    .collect()
+                    .collect();
+                let is_unbroken_prefix = active.len() == populated
+                    && active.iter().enumerate().all(|(i, &s)| s as usize == i);
+                (is_unbroken_prefix && k <= active.len()).then(|| active[..k].to_vec())
             });
-
-        let (base_row_count, cut_row_slots) = match active_slots {
-            Some(slots) if slots.len() == num_cut && num_cut <= row_status.len() => {
-                (row_status.len() - num_cut, slots)
-            }
-            _ => (row_status.len(), Vec::new()),
-        };
+        let mut row_status = row_status;
+        let cut_row_slots = cut_row_slots.unwrap_or_else(|| {
+            row_status.truncate(base_row_count);
+            Vec::new()
+        });
         debug_assert_eq!(
             cut_row_slots.len(),
             row_status.len() - base_row_count,
@@ -3799,20 +3809,25 @@ mod tests {
             .collect();
         let node_pools: TypedVec<NodePos, usize> = vec![0, 1, 2, 3, 3, 3, 3].into();
         let node_dims = [(2, 3); 7];
+        // Ascending per-pool active-slot counts (1/2/3/4): a node wrongly
+        // resolved to a pool with FEWER slots than its own cut-row count falls
+        // back to an empty cut_row_slots rather than coincidentally matching
+        // (a swap to a pool with equal-or-more slots shares the same [0..k)
+        // prefix and is not distinguishable by value alone).
         let stage_cuts = vec![
             pool_cuts(0, &[0]),
-            pool_cuts(1, &[1]),
-            pool_cuts(2, &[2]),
-            pool_cuts(3, &[5, 7]),
+            pool_cuts(1, &[0, 1]),
+            pool_cuts(2, &[0, 1, 2]),
+            pool_cuts(3, &[0, 1, 2, 3]),
         ];
         let stage_bases = vec![
             node_basis(0, 1),
-            node_basis(1, 1),
-            node_basis(2, 1),
-            node_basis(3, 2),
-            node_basis(4, 2),
-            node_basis(5, 2),
-            node_basis(6, 2),
+            node_basis(1, 2),
+            node_basis(2, 3),
+            node_basis(3, 4),
+            node_basis(4, 4),
+            node_basis(5, 4),
+            node_basis(6, 4),
         ];
 
         let cache = build_basis_cache_for_nodes(
@@ -3836,14 +3851,18 @@ mod tests {
             );
         }
 
-        // Interior node 2 (pool 2) recovers pool 2's single active slot.
-        assert_eq!(cache[2].as_ref().unwrap().cut_row_slots, vec![2_u32]);
+        // Interior node 2 (pool 2) recovers pool 2's own active slots — distinct
+        // in length from pool 0's and pool 1's, so a wrong-pool lookup would fail.
+        assert_eq!(
+            cache[2].as_ref().unwrap().cut_row_slots,
+            vec![0_u32, 1_u32, 2_u32]
+        );
         // Every leaf (nodes 3..=6) recovers the SHARED pool 3's active slots,
         // keyed by node_pools[node] == 3 — a node-ordinal key would drop 4/5/6.
         for (node, slot) in cache.iter().enumerate().skip(3) {
             assert_eq!(
                 slot.as_ref().unwrap().cut_row_slots,
-                vec![5_u32, 7_u32],
+                vec![0_u32, 1_u32, 2_u32, 3_u32],
                 "leaf node {node} must recover shared pool 3's active slots"
             );
         }
@@ -3859,8 +3878,17 @@ mod tests {
         let node_ids: TypedVec<NodePos, NodeId> = vec![0, 1, 2].into_iter().map(NodeId).collect();
         let node_pools: TypedVec<NodePos, usize> = vec![0, 1, 2].into();
         let node_dims = [(2, 3); 3];
-        let stage_cuts = vec![pool_cuts(0, &[0]), pool_cuts(1, &[3]), pool_cuts(2, &[9])];
-        let stage_bases = vec![node_basis(0, 1), node_basis(1, 1), node_basis(2, 1)];
+        // Ascending per-pool active-slot counts (1/2/3): a node wrongly resolved
+        // to a pool with FEWER slots than its own cut-row count falls back to an
+        // empty cut_row_slots rather than coincidentally matching (a swap to a
+        // pool with equal-or-more slots shares the same [0..k) prefix and is not
+        // distinguishable by value alone).
+        let stage_cuts = vec![
+            pool_cuts(0, &[0]),
+            pool_cuts(1, &[0, 1]),
+            pool_cuts(2, &[0, 1, 2]),
+        ];
+        let stage_bases = vec![node_basis(0, 1), node_basis(1, 2), node_basis(2, 3)];
 
         let cache = build_basis_cache_for_nodes(
             &stage_bases,
@@ -3873,8 +3901,11 @@ mod tests {
 
         assert_eq!(cache.len(), 3);
         assert_eq!(cache[0].as_ref().unwrap().cut_row_slots, vec![0_u32]);
-        assert_eq!(cache[1].as_ref().unwrap().cut_row_slots, vec![3_u32]);
-        assert_eq!(cache[2].as_ref().unwrap().cut_row_slots, vec![9_u32]);
+        assert_eq!(cache[1].as_ref().unwrap().cut_row_slots, vec![0_u32, 1_u32]);
+        assert_eq!(
+            cache[2].as_ref().unwrap().cut_row_slots,
+            vec![0_u32, 1_u32, 2_u32]
+        );
     }
 
     // ── stored-basis dimension check ──────────────────────────────────────────
@@ -3995,6 +4026,71 @@ mod tests {
                 .expect("a record within the bound must load");
 
         assert!(cache[0].is_some(), "the node's basis must be present");
+    }
+
+    /// The root-record shape (consult 1): captured before the last backward pass
+    /// appends its cuts, so the pool's active slots outrun the basis's own cut
+    /// rows. `base_row_count` must come from the template (`node_dims`), not
+    /// `row_status.len() - num_cut_rows`, and the unbroken `0..populated` prefix
+    /// still lets the single captured cut row resolve to slot 0.
+    #[test]
+    fn stored_basis_captured_before_the_last_cuts_keeps_the_template_rows() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 4, 3)];
+        let stage_cuts = vec![pool_cuts(0, &[0, 1, 2])];
+
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &[(4, 3)],
+        )
+        .expect("a record within the bound must load");
+
+        let cb = cache[0].as_ref().expect("the node's basis must be present");
+        assert_eq!(
+            cb.base_row_count, 3,
+            "base_row_count must come from the template, not row_status.len() - num_cut_rows"
+        );
+        assert_eq!(cb.cut_row_slots, vec![0_u32]);
+    }
+
+    /// When a cut between the captured row and the pool's populated tail was
+    /// deactivated, the active slots are no longer the unbroken `0..populated`
+    /// prefix, so slot identity cannot be proven: `row_status` is truncated to
+    /// the template rows and `cut_row_slots` stays empty.
+    #[test]
+    fn stored_basis_after_cut_deactivation_drops_cut_statuses() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 4, 3)];
+        let mut pool = pool_cuts(0, &[0, 1, 2]);
+        pool.cuts[1].is_active = false;
+        let stage_cuts = vec![pool];
+
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &[(4, 3)],
+        )
+        .expect("a record within the bound must load");
+
+        let cb = cache[0].as_ref().expect("the node's basis must be present");
+        assert_eq!(
+            cb.basis.row_status.len(),
+            3,
+            "row_status must be truncated to the template row count once a cut was deactivated"
+        );
+        assert!(
+            cb.cut_row_slots.is_empty(),
+            "cut_row_slots must be empty when slot identity cannot be proven"
+        );
     }
 
     // ── inject_boundary_cuts tests ──────────────────────────────────────────────

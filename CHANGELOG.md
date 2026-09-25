@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own hydro**, split across the blocks in proportion to their durations.
   In 0.16.0 it was applied to another hydro's block row.
 
+- **Resuming or warm-starting from a checkpoint no longer misreads the first
+  stage's stored basis.** The loader derived a basis's template-row count from
+  its recorded cut-row count, a count the root node's basis record can
+  legitimately exceed since it is captured before that iteration's backward
+  pass appends cuts to its pool. The loader now reads the template-row count
+  from the study's own LP instead, so a valid checkpoint no longer risks a
+  spurious basis-shape rejection on the first resumed solve.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

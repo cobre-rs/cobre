@@ -1,6 +1,7 @@
 use super::{
     BoundaryStateRequirements, NodeId, NodePos, PhaseLibraries, ScenarioLibraries, StudySetup,
     assert_external_library_widths, build_contract_prices_per_stage, study_horizon_end,
+    validate_par_shape,
 };
 use crate::SddpError;
 use crate::hydro_models::{PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel};
@@ -8,6 +9,7 @@ use crate::lp::builder::M3S_TO_HM3;
 use crate::lp::indexer::StateSpace;
 use crate::test_support;
 use cobre_stochastic::ExternalScenarioLibrary;
+use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::StageCalendar;
 
 use chrono::{Duration, NaiveDate};
@@ -2441,6 +2443,52 @@ fn minimal_system_2_hydros_with_history(
         })
         .build()
         .expect("minimal_system_2_hydros_with_history: valid")
+}
+
+/// A default (no PAR model) is `Ok` regardless of the system's shape.
+#[test]
+fn validate_par_shape_default_is_ok() {
+    let system = minimal_system_2_hydros_with_history(2, None, vec![]);
+    assert!(validate_par_shape(&system, &PrecomputedPar::default()).is_ok());
+}
+
+/// A PAR built over the system's own hydros and study stages is `Ok`.
+#[test]
+fn validate_par_shape_matching_shape_is_ok() {
+    let system = minimal_system_2_hydros_with_history(2, None, vec![]);
+    let hydro_ids: Vec<_> = system.hydros().iter().map(|h| h.id).collect();
+    let par = PrecomputedPar::build(system.inflow_models(), system.stages(), &hydro_ids, None)
+        .expect("par build ok");
+    assert!(validate_par_shape(&system, &par).is_ok());
+}
+
+/// A PAR built over only one of the system's two hydros is rejected, naming
+/// both shapes.
+#[test]
+fn validate_par_shape_hydro_count_mismatch_is_err() {
+    let system = minimal_system_2_hydros_with_history(2, None, vec![]);
+    let hydro_ids: Vec<_> = system.hydros().iter().take(1).map(|h| h.id).collect();
+    let par = PrecomputedPar::build(system.inflow_models(), system.stages(), &hydro_ids, None)
+        .expect("par build ok");
+    let err = validate_par_shape(&system, &par).expect_err("hydro count mismatch must be rejected");
+    let SddpError::Validation(msg) = err else {
+        panic!("expected SddpError::Validation, got {err:?}");
+    };
+    assert!(msg.contains("shape mismatch"), "message: {msg}");
+    assert!(msg.contains("1 hydros"), "message: {msg}");
+    assert!(msg.contains("2 hydros"), "message: {msg}");
+}
+
+/// A PAR built over one fewer stage than the system declares is rejected.
+#[test]
+fn validate_par_shape_stage_count_mismatch_is_err() {
+    let system = minimal_system_2_hydros_with_history(2, None, vec![]);
+    let hydro_ids: Vec<_> = system.hydros().iter().map(|h| h.id).collect();
+    let short_stages = &system.stages()[..system.stages().len() - 1];
+    let par = PrecomputedPar::build(system.inflow_models(), short_stages, &hydro_ids, None)
+        .expect("par build ok");
+    let err = validate_par_shape(&system, &par).expect_err("stage count mismatch must be rejected");
+    assert!(matches!(err, SddpError::Validation(_)));
 }
 
 /// 12-month `Monthly` season map (`id == month_start - 1`), matching

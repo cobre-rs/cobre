@@ -1443,7 +1443,7 @@ pub(super) fn fill_z_inflow_entries(
         let col_z = layout.col_z_inflow_start() + h_idx;
         col_entries[col_z].push((row, 1.0));
 
-        if ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == n_h {
+        if ctx.par_lp.n_stages() > 0 {
             let psi = ctx.par_lp.psi_slice(stage_idx, h_idx);
             for (lag, &psi_val) in psi.iter().enumerate() {
                 if psi_val != 0.0 && lag < lag_order {

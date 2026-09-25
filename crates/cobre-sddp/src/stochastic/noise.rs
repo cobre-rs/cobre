@@ -52,12 +52,12 @@ pub(crate) fn compute_effective_eta(
     }
 }
 
-/// Returns `true` when `stochastic`'s PAR model is configured and matches
-/// `n_hydros` — the shared guard for the water-balance patch.
+/// Returns `true` when `stochastic` carries a PAR model — the shared guard
+/// for the water-balance patch. Its shape is validated once at setup
+/// (`validate_par_shape`); every reader here checks presence only.
 #[inline]
-pub(crate) fn has_par_model(stochastic: &StochasticContext, n_hydros: usize) -> bool {
-    let par_lp = stochastic.par();
-    par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros
+pub(crate) fn has_par_model(stochastic: &StochasticContext) -> bool {
+    stochastic.par().n_stages() > 0
 }
 
 /// Transform raw inflow noise `η` into the pure z-inflow anchor rate
@@ -83,7 +83,7 @@ pub(crate) fn transform_inflow_noise(
     scratch.z_inflow_rhs_buf.clear();
 
     let par_lp = stochastic.par();
-    let has_par = has_par_model(stochastic, n_hydros);
+    let has_par = has_par_model(stochastic);
 
     match inflow_method {
         InflowNonNegativityMethod::Truncation

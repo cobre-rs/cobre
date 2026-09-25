@@ -1,7 +1,8 @@
 //! End-to-end integration tests for the SDDP training loop.
 //!
 //! Exercises the full [`cobre_sddp::train`] function with a small toy system
-//! (1 hydro, 0 PAR order, 2 stages).
+//! (1 hydro, 0 PAR order, 2 stages). Also covers `StudySetup::new`'s own
+//! validation surface, e.g. a precomputed inflow model shape mismatch.
 
 #![allow(
     clippy::unwrap_used,
@@ -1850,6 +1851,42 @@ fn frozen_backward_pass_smoke_test() {
         outcome.result.final_lb >= 0.0,
         "final lower bound must be non-negative; got {}",
         outcome.result.final_lb
+    );
+}
+
+/// A precomputed inflow model built for a different system's hydro/stage
+/// shape is rejected at setup rather than silently treated as absent.
+#[test]
+fn par_model_shape_mismatch_is_rejected_at_setup() {
+    use cobre_sddp::StudySetup;
+    use cobre_sddp::hydro_models::PrepareHydroModelsResult;
+    use common::in_code_studies::{
+        ChronologicalNoiseSpec, chronological_noise_study, stochastic_parallel_study,
+    };
+
+    let (system, config) = chronological_noise_study(&ChronologicalNoiseSpec {
+        block_modes: [BlockMode::Parallel; 2],
+        ..Default::default()
+    });
+    let stochastic = common::stochastic_in_code(&stochastic_parallel_study().0);
+
+    let result = StudySetup::new(
+        &system,
+        &config,
+        stochastic,
+        PrepareHydroModelsResult::default_from_system(&system),
+        Vec::new(),
+    );
+
+    let err =
+        result.expect_err("a PAR model built for a different system's shape must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("shape mismatch"), "message: {msg}");
+    assert!(msg.contains("1 hydros"), "message: {msg}");
+    assert!(msg.contains("2 hydros"), "message: {msg}");
+    assert!(
+        matches!(err, SddpError::Validation(_)),
+        "expected SddpError::Validation, got {err:?}"
     );
 }
 

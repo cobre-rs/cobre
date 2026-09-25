@@ -343,6 +343,8 @@ impl StudySetup {
     ///   on LP construction failure.
     /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
     ///   an invalid config string.
+    /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
+    ///   model shape does not match `system` (see `validate_par_shape`).
     pub fn new(
         system: &System,
         config: &Config,
@@ -425,6 +427,8 @@ impl StudySetup {
     ///   the template list is empty ("system has no study stages").
     /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
     ///   construction failure.
+    /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
+    ///   model shape does not match `system` (see `validate_par_shape`).
     // Rationale (too_many_lines): a single linear pass building the `StudySetup`
     // literal from per-entity prep blocks; splitting it would scatter the
     // construction the literal reads.
@@ -437,6 +441,8 @@ impl StudySetup {
         training_source: &ScenarioSource,
         simulation_source: &ScenarioSource,
     ) -> Result<Self, SddpError> {
+        validate_par_shape(system, stochastic.par())?;
+
         let StudyParams {
             seed,
             forward_passes,
@@ -1191,6 +1197,31 @@ fn check_scalar_parameters_present(
         }
     }
     Ok(())
+}
+
+/// Validate that `par`'s shape matches `system`, once, at setup — every
+/// other reader trusts a validated [`PrecomputedPar`] and checks presence
+/// only (`n_stages() > 0`).
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] when `par.n_stages() > 0` and either its
+/// stage or hydro count differs from `system`'s.
+pub(crate) fn validate_par_shape(system: &System, par: &PrecomputedPar) -> Result<(), SddpError> {
+    let par_stages = par.n_stages();
+    if par_stages == 0 {
+        return Ok(());
+    }
+    let study_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+    let hydros = system.hydros().len();
+    let par_hydros = par.n_hydros();
+    if par_stages == study_stages && par_hydros == hydros {
+        return Ok(());
+    }
+    Err(SddpError::Validation(format!(
+        "precomputed inflow model shape mismatch: the model covers {par_stages} stages x \
+         {par_hydros} hydros, the study has {study_stages} stages x {hydros} hydros"
+    )))
 }
 
 /// `L_state = max(computed_order, boundary_depth)` — the single widening

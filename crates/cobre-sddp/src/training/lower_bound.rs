@@ -22,7 +22,7 @@ use crate::{
     error::SddpError,
     inflow_method::InflowNonNegativityMethod,
     lp::builder::PatchBuffer,
-    noise::compute_effective_eta,
+    noise::{compute_effective_eta, has_par_model},
     rank_reconcile::reconcile_error_flag,
     risk_measure::RiskMeasure,
     setup::{
@@ -217,8 +217,8 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
         InflowNonNegativityMethod::Truncation | InflowNonNegativityMethod::TruncationWithPenalty
     );
     let par_lp = training_ctx.stochastic.par();
-    let has_valid_par = par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros;
-    let truncation_par = (needs_truncation && has_valid_par).then_some(par_lp);
+    let has_par = has_par_model(training_ctx.stochastic);
+    let truncation_par = (needs_truncation && has_par).then_some(par_lp);
 
     scratch.par_inflow_buf.clear();
     scratch.par_inflow_buf.resize(n_hydros, 0.0);
@@ -294,7 +294,7 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
         scratch.z_inflow_rhs_buf.clear();
         for h in 0..n_hydros {
             let eta_eff = scratch.effective_eta_buf[h];
-            let z_rhs = if has_valid_par {
+            let z_rhs = if has_par {
                 par_lp.deterministic_base(0, h) + par_lp.sigma(0, h) * eta_eff
             } else {
                 0.0
@@ -1645,9 +1645,9 @@ mod tests {
     /// `None` method passes raw noise through unchanged (regression test).
     ///
     /// With the degenerate wrapped stochastic context, the truncation path is a
-    /// no-op since `has_valid_par == false`. This validates that the
-    /// `compute_effective_eta` control flow works correctly when no PAR model
-    /// applies.
+    /// no-op since `has_par_model` reports no PAR model. This validates that
+    /// the `compute_effective_eta` control flow works correctly when no PAR
+    /// model applies.
     #[test]
     fn test_lb_none_method_unchanged() {
         let fixture = SimpleLbFixture::new(
@@ -1702,8 +1702,9 @@ mod tests {
     /// `Truncation` method does not cause a crash or infeasibility.
     ///
     /// With the degenerate wrapped stochastic context, the truncation path is a
-    /// no-op since `has_valid_par == false`, but this validates that the control
-    /// flow (`needs_truncation` = true, `truncation_par` = `None`) does not panic.
+    /// no-op since `has_par_model` reports no PAR model, but this validates that
+    /// the control flow (`needs_truncation` = true, `truncation_par` = `None`)
+    /// does not panic.
     #[test]
     fn test_lb_truncation_no_crash() {
         let fixture = SimpleLbFixture::new(

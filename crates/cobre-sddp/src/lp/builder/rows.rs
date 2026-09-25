@@ -403,7 +403,7 @@ fn fill_z_inflow_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    let has_par = ctx.par_lp.n_stages() > 0 && ctx.par_lp.n_hydros() == layout.n_h;
+    let has_par = ctx.par_lp.n_stages() > 0;
     for h_idx in 0..layout.n_h {
         let row = layout.rows.z_inflow_row_start + h_idx;
         let base = if has_par {

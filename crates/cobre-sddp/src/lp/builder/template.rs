@@ -717,6 +717,16 @@ pub fn build_stage_templates(
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let n_hydros = system.hydros().len();
 
+    debug_assert!(
+        par_lp.n_stages() == 0
+            || (par_lp.n_stages() == study_stages.len() && par_lp.n_hydros() == n_hydros),
+        "PrecomputedPar has {} stages x {} hydros but system has {} stages x {} hydros",
+        par_lp.n_stages(),
+        par_lp.n_hydros(),
+        study_stages.len(),
+        n_hydros
+    );
+
     if study_stages.is_empty() {
         return Ok(StageTemplates::empty(
             n_hydros,

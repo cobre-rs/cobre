@@ -3060,7 +3060,7 @@ fn forward_pass_no_load_buses_unchanged() {
 
     // With n_load_buses=0, active_load_patches stays 0. active_z_inflow_patches
     // also stays 0 here: the fixture's stochastic context carries no real PAR
-    // model, so fill_z_inflow_patches's has_valid_par guard never fires.
+    // model, so transform_inflow_noise's has_par_model guard never fires.
     assert_eq!(
         ws.patch_buf.forward_patch_count(),
         0,

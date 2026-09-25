@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that caught `RuntimeError` for them must catch `ValueError` or
   `CobreError`. Solver and training failures keep their class.
 
+- **`water_value_per_hm3` now reports each chronological block's own
+  water-balance dual.** On a chronological stage the water balance carries one
+  row per hydro per block; the column previously read a single row and
+  repeated that value on every block, and for every hydro after the first it
+  read another hydro's row instead of its own. Parallel-stage values are
+  unaffected.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

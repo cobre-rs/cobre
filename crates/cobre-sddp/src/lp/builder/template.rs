@@ -21,8 +21,8 @@ use crate::setup::template_postprocess::{
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, M3S_TO_HM3, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
-    Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
-    ThermalSys,
+    BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace,
+    StorageBoundaryGrid, ThermalSys,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::bucket_topology::build_transit_bucket_topology;
@@ -276,8 +276,9 @@ pub struct StageGeometry {
     pub contract_export: Range<usize>,
 
     // ── Per-stage row ranges, identity lists, and block count ────────────────
-    /// Water-balance row range (one row per hydro). Count is stage-invariant
-    /// (`n_hydros`) but the base rides the per-stage block-major rows before it.
+    /// `n_hydros` rows on a parallel stage, `n_hydros * n_blks` block-major rows on
+    /// a chronological stage; address a row through
+    /// [`StageGeometry::water_balance_row`].
     pub water_balance: Range<usize>,
     /// Load-balance row range (one row per bus per block; `n_buses · n_blks`).
     pub load_balance: Range<usize>,
@@ -352,6 +353,20 @@ impl StageGeometry {
     #[must_use]
     pub fn block_storage_col(&self, h: HydroSys, boundary: Boundary) -> usize {
         self.storage_boundary_grid.col(h.get(), boundary)
+    }
+
+    /// Hydro `h`'s water-balance row for block `blk`: its own block row on a
+    /// chronological stage, its single stage row on a parallel stage (every block
+    /// reads the same row).
+    #[inline]
+    #[must_use]
+    pub fn water_balance_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        match self.block_mode {
+            BlockMode::Parallel => self.water_balance.start + h.get(),
+            BlockMode::Chronological => {
+                self.water_balance.start + h.get() * self.n_blks + blk.get()
+            }
+        }
     }
 }
 

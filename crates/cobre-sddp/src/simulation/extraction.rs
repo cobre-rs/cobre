@@ -621,6 +621,22 @@ fn stored_energy_mwh(storage_hm3: f64, v_min_hm3: f64, rho_acum: f64) -> f64 {
     (storage_hm3 - v_min_hm3) * rho_acum * ENERGY_FACTOR_MWH_PER_HM3_PER_MW_PER_M3S
 }
 
+/// Block `blk`'s own water-balance dual, in currency units: hydro `h`'s row
+/// resolved through [`StageGeometry::water_balance_row`], times `cost_scale_factor`.
+#[inline]
+fn water_value_per_hm3(
+    view: &SolutionView<'_>,
+    spec: &StageExtractionSpec<'_>,
+    h: usize,
+    blk: BlockIdx,
+) -> f64 {
+    view.dual
+        .get(spec.geometry.water_balance_row(HydroSys::new(h), blk))
+        .copied()
+        .unwrap_or(0.0)
+        * spec.cost_scale_factor
+}
+
 /// Extraction parameters bundled for a single stage.
 ///
 /// **Per-stage geometry contract.** Every block-major equipment read must take its
@@ -863,7 +879,7 @@ fn extract_hydro_no_turbine(
         stored_energy_initial_mwh,
         stored_energy_final_mwh,
         spillage_cost: 0.0,
-        water_value_per_hm3: ctx.water_value,
+        water_value_per_hm3: water_value_per_hm3(view, spec, h, BlockIdx::new(0)),
         storage_binding_code: 0,
         operative_state_code: 1,
         turbined_slack_m3s: turbined_slack,
@@ -898,7 +914,6 @@ struct HydroStageContext {
     inflow_slack: f64,
     withdrawal_neg: f64,
     withdrawal_pos: f64,
-    water_value: f64,
     fpha_local: Option<FphaLocal>,
     /// Evaporation-local slot, `None` for a hydro with no evaporation at this stage;
     /// the closure reads `evap_indices[evap_local * n_blks + b]` per block.
@@ -960,12 +975,6 @@ impl HydroStageContext {
         } else {
             0.0
         };
-        let water_value = view
-            .dual
-            .get(spec.geometry.water_balance.start + h)
-            .copied()
-            .unwrap_or(0.0)
-            * spec.cost_scale_factor;
         let fpha_local = lookup.fpha[h];
         let evap_local = lookup.evap[h];
         let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
@@ -1009,7 +1018,6 @@ impl HydroStageContext {
             inflow_slack,
             withdrawal_neg,
             withdrawal_pos,
-            water_value,
             fpha_local,
             evap_local,
             equivalent_productivity_mw_per_m3s: conv.equivalent_productivity_mw_per_m3s,
@@ -1178,7 +1186,7 @@ fn extract_hydro_per_block<'a>(
             stored_energy_final_mwh,
             spillage_cost: spillage * view.objective_coeffs[s_col] / spec.col_scale_factor(s_col)
                 * spec.cost_scale_factor,
-            water_value_per_hm3: ctx.water_value,
+            water_value_per_hm3: water_value_per_hm3(view, spec, h, BlockIdx::new(b)),
             storage_binding_code: 0,
             operative_state_code: 1,
             turbined_slack_m3s: turbined_slack,

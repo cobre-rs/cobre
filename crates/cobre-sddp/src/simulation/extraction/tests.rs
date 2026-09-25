@@ -5973,6 +5973,139 @@ fn extract_parallel_per_block_storage_byte_identical() {
     }
 }
 
+/// Chronological block `b` reads its own water-balance row through
+/// `water_balance_row`: `.to_bits()`-identical to `dual[1 + b] * cost_scale_factor`.
+#[test]
+fn extract_chronological_water_value_reads_each_block_row() {
+    let k = 3_usize;
+    let geom = StageGeometry {
+        water_balance: 1..1 + k,
+        ..single_hydro_block_geometry(BlockMode::Chronological, k)
+    };
+    let study_dims = test_support::study_dims();
+    let state = test_support::state_layout(1, 0);
+    let ec = zero_energy_conversion(1, 1);
+
+    let n_cols = geom.spillage.end + k * 3;
+    let primal = vec![0.0_f64; n_cols];
+    let dual = vec![0.0_f64, 10.0, 20.0, 30.0];
+
+    let spec = StageExtractionSpec {
+        study_dims: &study_dims,
+        geometry: &geom,
+        hydro_cell_index: &test_support::identity_hydro_cell_index(256),
+        state: &state,
+        n_blks: k,
+        entity_counts: &entity_counts_1_hydro(),
+        inflow_m3s_per_hydro: &[],
+        block_hours: &[100.0, 100.0, 100.0],
+        generic_constraint_entries: &[],
+        ncs_col_start: 0,
+        n_ncs: 0,
+        ncs_entity_ids: &[],
+        ncs_col_upper: &[],
+        pumping_col_start: 0,
+        n_pumping: 0,
+        pumping_consumption_mw_per_m3s: &[],
+        contract_prices: &[],
+        contract_is_import: &[],
+        diversion_upstream: &HashMap::new(),
+        hydro_productivities: &[0.0],
+        col_scale: &[],
+        row_scale: &[],
+        cumulative_discount_factor: 1.0,
+        cost_scale_factor: 1_000_000.0,
+        energy_conversion: &ec,
+        hydro_min_storage_hm3: &[0.0],
+        stage_index: 0,
+        n_stages: 1,
+        anticipated_windows: &[],
+        study_stage_ids: &[],
+    };
+    let view = SolutionView {
+        primal: &primal,
+        dual: &dual,
+        objective: 0.0,
+        objective_coeffs: &vec![0.0_f64; n_cols],
+        row_lower: &[],
+    };
+
+    let result = extract_stage_result(&view, &spec, 0);
+    assert_eq!(result.hydros.len(), k);
+    for (b, row) in result.hydros.iter().enumerate() {
+        assert_eq!(
+            row.water_value_per_hm3.to_bits(),
+            (dual[1 + b] * spec.cost_scale_factor).to_bits(),
+            "block {b} must report its own water-balance row"
+        );
+    }
+}
+
+/// Parallel mode: every block row repeats the single stage water-balance row,
+/// `.to_bits()`-identical to `dual[1] * cost_scale_factor`.
+#[test]
+fn extract_parallel_water_value_repeats_the_stage_row() {
+    let k = 3_usize;
+    let geom = StageGeometry {
+        water_balance: 1..2,
+        ..single_hydro_block_geometry(BlockMode::Parallel, k)
+    };
+    let study_dims = test_support::study_dims();
+    let state = test_support::state_layout(1, 0);
+    let ec = zero_energy_conversion(1, 1);
+
+    let n_cols = geom.spillage.end + k * 3;
+    let primal = vec![0.0_f64; n_cols];
+    let dual = vec![0.0_f64, 10.0, 20.0, 30.0];
+
+    let spec = StageExtractionSpec {
+        study_dims: &study_dims,
+        geometry: &geom,
+        hydro_cell_index: &test_support::identity_hydro_cell_index(256),
+        state: &state,
+        n_blks: k,
+        entity_counts: &entity_counts_1_hydro(),
+        inflow_m3s_per_hydro: &[],
+        block_hours: &[100.0, 100.0, 100.0],
+        generic_constraint_entries: &[],
+        ncs_col_start: 0,
+        n_ncs: 0,
+        ncs_entity_ids: &[],
+        ncs_col_upper: &[],
+        pumping_col_start: 0,
+        n_pumping: 0,
+        pumping_consumption_mw_per_m3s: &[],
+        contract_prices: &[],
+        contract_is_import: &[],
+        diversion_upstream: &HashMap::new(),
+        hydro_productivities: &[0.0],
+        col_scale: &[],
+        row_scale: &[],
+        cumulative_discount_factor: 1.0,
+        cost_scale_factor: 1_000_000.0,
+        energy_conversion: &ec,
+        hydro_min_storage_hm3: &[0.0],
+        stage_index: 0,
+        n_stages: 1,
+        anticipated_windows: &[],
+        study_stage_ids: &[],
+    };
+    let view = SolutionView {
+        primal: &primal,
+        dual: &dual,
+        objective: 0.0,
+        objective_coeffs: &vec![0.0_f64; n_cols],
+        row_lower: &[],
+    };
+
+    let result = extract_stage_result(&view, &spec, 0);
+    assert_eq!(result.hydros.len(), k);
+    let expected = (dual[1] * spec.cost_scale_factor).to_bits();
+    for row in &result.hydros {
+        assert_eq!(row.water_value_per_hm3.to_bits(), expected);
+    }
+}
+
 /// Chronological per-block stored energy derives from each block's own boundary:
 /// `(S − V_min) · ρ_acum_integrated · ENERGY_FACTOR`, with `V_min` /
 /// `ρ_acum_integrated` block-invariant. A plain `EnergyConversionSet::new` with no

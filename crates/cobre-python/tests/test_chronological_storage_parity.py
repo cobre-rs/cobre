@@ -37,6 +37,8 @@ import tempfile
 
 import pyarrow.parquet as pq
 
+from _cobre_cli import run_cli
+
 # Fixtures live under the cobre-sddp test tree (the convention topology fixtures
 # use), resolved against the repo root so the test is independent of pytest's
 # working directory. Both are single-reservoir, single-hydro, three-block,
@@ -276,6 +278,56 @@ def test_chronological_study_surface_matches_run_module() -> None:
         "the Study surface must produce per-block storage variation identical to "
         "cobre.run.run (both reach run_simulation_phase_py)"
     )
+
+
+def test_chronological_hydros_values_match_cli(
+    cli_binary: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """CLI and Python report identical per-block hydro values, `water_value_per_hm3`
+    included.
+
+    Both front ends converge on the same shared extraction and writer path, so
+    every `HYDROS_SCHEMA_FIELDS` column must agree once rows are matched by
+    `(scenario_id, hydro_id, stage_id, block_id)`. This asserts value equality
+    across the two front ends only — not that block values differ or coincide
+    within a single run.
+    """
+    assert CHRONOLOGICAL_CASE.is_dir(), (
+        f"the chronological fixture must exist at {CHRONOLOGICAL_CASE}"
+    )
+
+    cli_out = tmp_path / "cli"
+    py_out = tmp_path / "python"
+    run_cli(CHRONOLOGICAL_CASE, cli_out, cli_binary)
+
+    import cobre.run  # noqa: PLC0415
+
+    cobre.run.run(str(CHRONOLOGICAL_CASE), output_dir=str(py_out))
+
+    cli_rows = _read_hydro_rows(cli_out)
+    py_rows = _read_hydro_rows(py_out)
+
+    key_cols = ("scenario_id", "hydro_id", "stage_id", "block_id")
+    cli_by_key = {tuple(row[c] for c in key_cols): row for row in cli_rows}
+    py_by_key = {tuple(row[c] for c in key_cols): row for row in py_rows}
+
+    assert cli_by_key, "the chronological fixture must emit hydro rows"
+    assert cli_by_key.keys() == py_by_key.keys(), (
+        "CLI and Python hydros row sets must share the same "
+        "(scenario_id, hydro_id, stage_id, block_id) keys"
+    )
+
+    value_cols = sorted(HYDROS_SCHEMA_FIELDS - set(key_cols))
+    mismatches: list[str] = []
+    for key, cli_row in cli_by_key.items():
+        py_row = py_by_key[key]
+        for col in value_cols:
+            if cli_row[col] != py_row[col]:
+                mismatches.append(
+                    f"  key {key} column '{col}': CLI={cli_row[col]!r} "
+                    f"PY={py_row[col]!r}"
+                )
+    assert not mismatches, "CLI/Python hydros value mismatch:\n" + "\n".join(mismatches)
 
 
 def test_parallel_per_block_storage_and_evaporation_are_constant() -> None:

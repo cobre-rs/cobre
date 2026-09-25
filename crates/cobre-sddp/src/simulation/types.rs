@@ -149,7 +149,9 @@ pub struct SimulationHydroResult {
     pub stored_energy_final_mwh: f64,
     /// Regularization cost for spillage at this plant.
     pub spillage_cost: f64,
-    /// Water value (dual of the storage balance constraint) in cost/hm³.
+    /// Marginal water value: the dual of the row's own water-balance constraint
+    /// (each block's own row in chronological stages; the stage row, repeated on
+    /// every block row, in parallel stages).
     pub water_value_per_hm3: f64,
     /// Storage binding code: indicates which storage bound is active.
     /// Encoded as `i8` matching the Parquet schema.

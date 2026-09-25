@@ -4022,6 +4022,44 @@ fn stage_geometry_block_storage_col_matches_layout() {
     }
 }
 
+/// `StageGeometry::water_balance_row` collapses every block onto the single
+/// stage row on a parallel stage, and strides `n_blks` block-major rows per
+/// hydro on a chronological stage.
+#[test]
+fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks() {
+    use super::StageGeometry;
+
+    let parallel = StageGeometry {
+        water_balance: 2..4,
+        n_blks: 3,
+        block_mode: BlockMode::Parallel,
+        ..StageGeometry::default()
+    };
+    assert_eq!(
+        parallel.water_balance_row(HydroSys::new(1), BlockIdx::new(2)),
+        3
+    );
+
+    let chronological = StageGeometry {
+        water_balance: 2..8,
+        n_blks: 3,
+        block_mode: BlockMode::Chronological,
+        ..StageGeometry::default()
+    };
+    assert_eq!(
+        chronological.water_balance_row(HydroSys::new(1), BlockIdx::new(2)),
+        7
+    );
+    for h in 0..2 {
+        for k in 0..3 {
+            assert_eq!(
+                chronological.water_balance_row(HydroSys::new(h), BlockIdx::new(k)),
+                2 + h * 3 + k
+            );
+        }
+    }
+}
+
 /// `StageLayout::geometry` field-equals every range/scalar its `StageLayout`
 /// source produces, on a `K = 3` fixture (`block_storage_col` agreement is
 /// Seam A above; `evap_indices` is empty here — no evaporation model

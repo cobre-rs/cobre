@@ -3,9 +3,9 @@
 //! node-capture helpers and must produce the raw-noise length every opening
 //! of a node expects. The one-hot patch-ownership sweep
 //! (`every_noise_dimension_patches_only_its_own_entity`) then uses that
-//! capture to assert, over every committed deck plus a stochastic in-code
-//! fixture, that each noise dimension patches only the row/column family its
-//! own entity owns.
+//! capture to assert, over every committed deck plus a stochastic and a
+//! chronological-noise in-code fixture, that each noise dimension patches
+//! only the row/column family its own entity owns.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -26,7 +26,9 @@ use cobre_sddp::test_support::{
 use cobre_solver::StageTemplate;
 
 use common::decks::{SLOW_DECKS, committed_decks};
-use common::in_code_studies::stochastic_parallel_study;
+use common::in_code_studies::{
+    ChronologicalNoiseSpec, chronological_noise_study, stochastic_parallel_study,
+};
 use common::{build_setup_in_code, fresh_setup_with};
 
 #[test]
@@ -325,6 +327,17 @@ fn every_noise_dimension_patches_only_its_own_entity() {
         &mut vacuity,
     );
 
+    let (chronological_system, chronological_config) =
+        chronological_noise_study(&ChronologicalNoiseSpec::default());
+    let chronological_setup = build_setup_in_code(chronological_system, &chronological_config);
+    sweep_setup(
+        "in-code/chronological-noise",
+        &chronological_setup,
+        &[],
+        &mut violations,
+        &mut vacuity,
+    );
+
     eprintln!("patch-ownership vacuity counts, (block_mode, family) -> nonvacuous triples:");
     for (&(mode, family), count) in &vacuity {
         eprintln!("  ({mode}, {family}): {count}");
@@ -338,6 +351,15 @@ fn every_noise_dimension_patches_only_its_own_entity() {
              triple — the sweep has no power on this family"
         );
     }
+    let chronological_inflow_count = vacuity
+        .get(&("Chronological", "inflow"))
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        chronological_inflow_count >= 1,
+        "vacuity guard: (Chronological, inflow) has no nonvacuous (deck, node, dimension) \
+         triple — the sweep has no power on this family"
+    );
 
     assert!(
         violations.is_empty(),

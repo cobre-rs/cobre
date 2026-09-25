@@ -1,7 +1,6 @@
 //! Committed-deck discovery for the template snapshot manifest
 //! (`tests/template_snapshot.rs`) and its downstream consumers (the
-//! permutation-invariance check, the patch-ownership sweep, the objective
-//! agreement baseline).
+//! permutation-invariance check, the patch-ownership sweep).
 
 use std::path::{Path, PathBuf};
 

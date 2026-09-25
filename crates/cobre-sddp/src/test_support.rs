@@ -1331,18 +1331,6 @@ pub fn node_scenario_count(graph: &NodeGraph) -> Result<u64, SddpError> {
     enumerated_scenario_count(graph)
 }
 
-/// Test-support view of the crate-internal chronological-noise predicate
-/// ([`crate::setup::chronological_multi_block_inflow_noise`]): the flagged
-/// `(stage.id, hydro.id.0)`, if any.
-#[must_use]
-pub fn chronological_multi_block_inflow_noise(
-    system: &System,
-    par: &PrecomputedPar,
-) -> Option<(i32, i32)> {
-    crate::setup::chronological_multi_block_inflow_noise(system, par)
-        .map(|(stage, hydro)| (stage.id, hydro.id.0))
-}
-
 // ── DECOMP K-fan fixture ─────────────────────────────────────────────────
 
 /// Fixed training seed for [`k_fan_setup`] — every caller trains the identical,

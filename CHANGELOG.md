@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read another hydro's row instead of its own. Parallel-stage values are
   unaffected.
 
+- **Inflow noise on a chronological stage with two or more blocks now reaches
+  its own hydro**, split across the blocks in proportion to their durations.
+  In 0.16.0 it was applied to another hydro's block row.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

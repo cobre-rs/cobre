@@ -132,15 +132,16 @@ fn lag_reference_anchor(all_stages: &[Stage], pool_pos_in_all: Option<usize>, la
 pub fn build_stage_entity_manifest(
     system: &System,
     global_layout: &StateSpace,
+    anticipated_thermal_indices: &[usize],
     projection: &CutStateProjection,
     stage_id: i32,
 ) -> Vec<EntitySlot> {
     let n = global_layout.hydro_count;
     let hydros = system.hydros();
-    let anticipated_thermals: Vec<&Thermal> = system
-        .thermals()
+    let thermals = system.thermals();
+    let anticipated_thermals: Vec<&Thermal> = anticipated_thermal_indices
         .iter()
-        .filter(|t| t.anticipated_config.is_some())
+        .map(|&t| &thermals[t])
         .collect();
     // Only `slot_lane_at`'s reverse decomposition is read here — the manifest
     // never emits ring rows/columns.
@@ -1097,7 +1098,13 @@ mod tests {
         let global = layout_2h_1ant();
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         assert_eq!(manifest.len(), projection.n_slots());
         assert_eq!(manifest.len(), 8);
@@ -1154,7 +1161,13 @@ mod tests {
         let global = layout_2h_2buckets_1ant();
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         assert_eq!(manifest.len(), projection.n_slots());
         assert_eq!(
@@ -1208,7 +1221,13 @@ mod tests {
         let global = layout_2h_2buckets_1ant();
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
         let post_study_end = post_study_delivery_calendar(&system)[0].end_date;
 
         assert_eq!(
@@ -1247,7 +1266,13 @@ mod tests {
         let global = layout_2h_1ant();
         let projection = CutStateProjection::new(&global, STORAGE_ONLY);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         assert_eq!(manifest.len(), projection.n_slots());
         assert_eq!(manifest.len(), 4);
@@ -1283,7 +1308,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
         let stage_id = 1;
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, stage_id);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            stage_id,
+        );
 
         let expected_h1 = hydro_operating_active(None, h1_window.0, h1_window.1, stage_id);
         assert!(!expected_h1, "hydro 1 must be dormant at stage 1");
@@ -1377,7 +1408,13 @@ mod tests {
         let global = test_support::state_layout(1, 3);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 2);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            2,
+        );
 
         let lag1 = manifest
             .iter()
@@ -1392,7 +1429,13 @@ mod tests {
         let global = test_support::state_layout(1, 3);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 2);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            2,
+        );
 
         let lag1 = manifest
             .iter()
@@ -1422,7 +1465,13 @@ mod tests {
         let global = test_support::state_layout(1, 2);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         let lag2 = manifest
             .iter()
@@ -1442,7 +1491,13 @@ mod tests {
         let global = test_support::state_layout(1, 3);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         let lag1 = manifest
             .iter()
@@ -1473,7 +1528,13 @@ mod tests {
         let global = test_support::state_layout(2, 2);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 2);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            2,
+        );
 
         for subindex in [1, 2] {
             let dates: Vec<i32> = manifest
@@ -1510,7 +1571,13 @@ mod tests {
         let global = test_support::state_layout(1, 1);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         let lag1 = manifest
             .iter()
@@ -1813,7 +1880,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // stage_id 1 is the middle stage (2024-05), study index 1.
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 1);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            1,
+        );
 
         // Layout N=1, L=1, A=1, k_max=2: storage j=0, lag j=1, anticipated j=2,3.
         assert_eq!(manifest.len(), 4);
@@ -1872,7 +1945,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // stage_id 2 is the terminal stage (2024-06), study index 2.
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 2);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            2,
+        );
 
         // Both ring slots' next occurrence (index 4 and index 3) lands past
         // the 3-stage horizon.
@@ -1907,7 +1986,13 @@ mod tests {
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 1);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            1,
+        );
 
         assert_eq!(manifest[2].subindex, 0);
         assert_eq!(
@@ -1944,7 +2029,13 @@ mod tests {
         // class matching stage index 0's own residue) next recurs at index 2
         // for both plants; slot 1 (residue 1) matures at the outgoing instant
         // itself (index 1).
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         // Layout N=1, L=1, A=2, k_max=2: storage j=0, lag j=1, anticipated j=2..6
         // (slot-major, plant-minor: [slot0,plant0][slot0,plant1][slot1,plant0][slot1,plant1]).
@@ -2006,7 +2097,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // Terminal stage index 2 (2024-06).
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 2);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            2,
+        );
 
         // storage j=0, lag j=1, anticipated ring slots j=2,3,4 (slot-major).
         assert_eq!(manifest.len(), 5);
@@ -2049,7 +2146,13 @@ mod tests {
 
         // stage_id 1 is the middle stage (2024-05), study index 1; ring slot 0
         // (residue 0) matures at the outgoing anchor itself (index 2, 2024-06).
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 1);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            1,
+        );
 
         assert_eq!(manifest[2].subindex, 0);
         assert_eq!(
@@ -2082,7 +2185,13 @@ mod tests {
 
         // stage_id 0's single ring slot matures at the outgoing anchor
         // (index 1), the five-week terminal stage.
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 0);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
 
         // Layout N=1, L=1, A=1, k_max=1: storage j=0, lag j=1, anticipated j=2.
         assert_eq!(manifest.len(), 3);
@@ -2128,7 +2237,13 @@ mod tests {
         let mut saw_in_study_live = false;
         let mut saw_post_study_live = false;
         for stage_id in 0..3i32 {
-            let manifest = build_stage_entity_manifest(&system, &global, &projection, stage_id);
+            let manifest = build_stage_entity_manifest(
+                &system,
+                &global,
+                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &projection,
+                stage_id,
+            );
             for slot in &manifest {
                 let start_live = slot.interval_start != ENTITY_SLOT_DATE_SENTINEL;
                 let end_live = slot.interval_end != ENTITY_SLOT_DATE_SENTINEL;
@@ -2181,7 +2296,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // Terminal stage id 63 (2031-11), study index 63.
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 63);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            63,
+        );
 
         // storage j=0, lag j=1, anticipated ring slots j=2 (subindex 0), j=3 (subindex 1).
         assert_eq!(manifest.len(), 4);
@@ -2219,7 +2340,13 @@ mod tests {
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 63);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            63,
+        );
 
         assert_eq!(manifest[3].subindex, 1);
         assert_eq!(
@@ -2257,7 +2384,13 @@ mod tests {
         let k_i = global.anticipated_lead_stages[0];
 
         for stage_id in 0..3i32 {
-            let manifest = build_stage_entity_manifest(&system, &global, &projection, stage_id);
+            let manifest = build_stage_entity_manifest(
+                &system,
+                &global,
+                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &projection,
+                stage_id,
+            );
             let current_stage_idx = study_stages
                 .iter()
                 .position(|s| s.id == stage_id)
@@ -2310,7 +2443,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         for stage_id in 0..3i32 {
-            let manifest = build_stage_entity_manifest(&system, &global, &projection, stage_id);
+            let manifest = build_stage_entity_manifest(
+                &system,
+                &global,
+                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &projection,
+                stage_id,
+            );
             let padding = manifest
                 .iter()
                 .find(|s| {
@@ -2388,7 +2527,13 @@ mod tests {
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // Terminal study stage (index 3, 2024-04).
-        let manifest = build_stage_entity_manifest(&system, &global, &projection, 3);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            3,
+        );
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
         let post_study_calendar = post_study_delivery_calendar(&system);
         let delivery_stages = extended_delivery_stages(&study_stages, &post_study_calendar);

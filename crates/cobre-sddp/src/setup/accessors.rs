@@ -140,6 +140,7 @@ impl StudySetup {
         build_stage_entity_manifest(
             system,
             &self.stage_data.state,
+            &self.stage_data.study_dims.anticipated_thermal_indices,
             &self.stage_data.cut_state_layouts[terminal_idx],
             stage_id,
         )
@@ -169,11 +170,10 @@ impl StudySetup {
             return Vec::new();
         };
         let ic = system.initial_conditions();
+        let thermals = system.thermals();
         let mut windows = Vec::new();
-        for thermal in system.thermals() {
-            if thermal.anticipated_config.is_none() {
-                continue;
-            }
+        for &t_idx in &self.stage_data.study_dims.anticipated_thermal_indices {
+            let thermal = &thermals[t_idx];
             let mut plant_windows: Vec<AnticipatedCommitmentHistory> = ic
                 .past_anticipated_commitments
                 .iter()

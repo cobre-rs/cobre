@@ -253,6 +253,7 @@ pub fn write_checkpoint(
             build_stage_entity_manifest(
                 system,
                 global_layout,
+                &setup.stage_data.study_dims.anticipated_thermal_indices,
                 &setup.stage_data.cut_state_layouts[p],
                 stage_id,
             )

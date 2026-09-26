@@ -1926,7 +1926,6 @@ impl<'a> StageLayout<'a> {
             }
         );
         StageGeometry {
-            theta_col: self.col_theta(),
             turbine: self.equipment.turbine.clone(),
             spillage: self.equipment.spillage.clone(),
             diversion: self.equipment.diversion.clone(),

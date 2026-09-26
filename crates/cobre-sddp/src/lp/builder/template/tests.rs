@@ -4457,7 +4457,6 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
     let (layout, _, _) = block_layout_and_template(BlockMode::Chronological, n_blks);
     let geometry = layout.geometry(BlockMode::Chronological);
 
-    assert_eq!(geometry.theta_col, layout.col_theta(), "theta_col");
     assert_eq!(geometry.turbine, layout.equipment.turbine, "turbine");
     assert_eq!(geometry.spillage, layout.equipment.spillage, "spillage");
     assert_eq!(geometry.diversion, layout.equipment.diversion, "diversion");

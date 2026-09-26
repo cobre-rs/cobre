@@ -173,13 +173,6 @@ impl StageTemplates {
 /// sibling `ncs_col_starts` / `pumping_col_starts` empty-slice fallbacks.
 #[derive(Debug, Clone, Default)]
 pub struct StageGeometry {
-    /// Future-cost epigraph (θ) column index — the authoritative value from
-    /// `StageLayout::col_theta`, which accounts for the commitment-hold region's
-    /// `commit_out`/`commit_in` column offset when `n_anticipated > 0`.
-    /// Single source of truth for code that must address θ outside the builder
-    /// (e.g. discount-factor postprocessing); do not re-derive the index from
-    /// `n_state`/`n_hydros` by hand.
-    pub theta_col: usize,
     /// Turbined-flow column range (one per hydro per block). `turbine.start` is
     /// `theta + 1` and stage-invariant, but `turbine.end` is `n_blks`-dependent,
     /// so the cost-breakdown `range_sum` still needs the per-stage range.

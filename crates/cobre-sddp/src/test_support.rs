@@ -4107,7 +4107,11 @@ pub fn trunk_fan_setup(
 #[must_use]
 pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8>> {
     let mut groups = FactGroups::new();
-    encode_stage_templates_facts(&setup.stage_data.stage_templates, &mut groups);
+    encode_stage_templates_facts(
+        &setup.stage_data.stage_templates,
+        &setup.stage_data.state,
+        &mut groups,
+    );
     encode_time_value_facts(&setup.stage_data.time_value, &mut groups);
     groups
 }

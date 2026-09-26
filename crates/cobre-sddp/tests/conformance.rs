@@ -1070,8 +1070,6 @@ fn build_geometry(
     let load_balance_end = load_balance_start + n_buses * n_blks;
 
     StageGeometry {
-        // θ sits one column before the turbine block (`turbine.start == theta + 1`).
-        theta_col: turbine_start - 1,
         turbine: turbine_start..spillage_start,
         spillage: spillage_start..diversion_start,
         diversion: diversion_start..thermal_start,

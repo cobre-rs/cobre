@@ -41,25 +41,15 @@ pub(crate) fn postprocess_templates(
     // Discount theta before column/row scaling: cost scaling divides c_i by K but
     // leaves theta untouched, so the two must not be folded together.
     //
-    // Use the per-stage `StageGeometry::theta_col` (= authoritative
-    // `StageLayout::col_theta()`), NOT a re-derivation from `n_state`/`n_hydros`:
-    // that hand arithmetic omits the commitment-hold region's `commit_out`/
-    // `commit_in` blocks and, with anticipated thermals, lands on a
-    // zero-cost `storage_in` column, silently disabling discounting (`0 * d = 0`).
+    // Use `state_layout.theta` (its single owner), NOT a re-derivation from
+    // `n_state`/`n_hydros`: that hand arithmetic omits the commitment-hold
+    // region's `commit_out`/`commit_in` blocks and, with anticipated thermals,
+    // lands on a zero-cost `storage_in` column, silently disabling discounting
+    // (`0 * d = 0`).
     {
-        let theta_cols: Vec<usize> = stage_templates
-            .geometry_per_stage
-            .iter()
-            .map(|g| g.theta_col)
-            .collect();
         let discount_factors = time_value.discount_factors();
-        debug_assert_eq!(
-            theta_cols.len(),
-            stage_templates.templates.len(),
-            "geometry_per_stage must be populated and aligned with templates",
-        );
         for (s_idx, tmpl) in stage_templates.templates.iter_mut().enumerate() {
-            tmpl.objective[theta_cols[s_idx]] *= discount_factors[s_idx];
+            tmpl.objective[state_layout.theta] *= discount_factors[s_idx];
         }
     }
 
@@ -284,10 +274,6 @@ mod tests {
         let build = |discount_factors: Vec<f64>| -> StageTemplates {
             let mut stage_templates = StageTemplates::empty(0, 1.0);
             for _ in 0..2 {
-                stage_templates.geometry_per_stage.push(StageGeometry {
-                    theta_col: state_layout.theta,
-                    ..StageGeometry::default()
-                });
                 stage_templates.templates.push(StageTemplate {
                     num_cols,
                     num_rows: 0,

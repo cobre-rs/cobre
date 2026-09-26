@@ -8,7 +8,7 @@ use cobre_core::{BlockMode, EntityId, PostStudyThermalBound};
 use cobre_solver::StageTemplate;
 
 use crate::lp::builder::{GenericConstraintRowEntry, StateBox};
-use crate::lp::indexer::{EvaporationIndices, HydroSys};
+use crate::lp::indexer::{EvaporationIndices, HydroSys, StateSpace};
 use crate::time_value::TimeValue;
 
 use super::{StageGeometry, StageTemplates};
@@ -226,9 +226,8 @@ fn put_gc_entry(buf: &mut Vec<u8>, entry: &GenericConstraintRowEntry) {
     put_option_usize(buf, *slack_minus_col);
 }
 
-fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry) {
+fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace) {
     let StageGeometry {
-        theta_col,
         turbine,
         spillage,
         diversion,
@@ -269,7 +268,7 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry) {
         filled_min_storage_floor_hydro_indices,
     } = geometry;
 
-    put_usize(buf, *theta_col);
+    put_usize(buf, state.theta);
     put_range(buf, turbine);
     put_range(buf, spillage);
     put_range(buf, diversion);
@@ -326,7 +325,11 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry) {
 /// other field of the struct and the nested types it holds, destructured
 /// exhaustively so an added field fails to compile rather than
 /// silently escaping the digest.
-pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &mut FactGroups) {
+pub(crate) fn encode_stage_templates_facts(
+    templates: &StageTemplates,
+    state: &StateSpace,
+    groups: &mut FactGroups,
+) {
     let StageTemplates {
         templates,
         state_boxes,
@@ -373,7 +376,7 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
     let geometry_buf = group(groups, "layout.geometry");
     for (stage, geometry) in geometry_per_stage.iter().enumerate() {
         put_usize(geometry_buf, stage);
-        put_geometry(geometry_buf, geometry);
+        put_geometry(geometry_buf, geometry, state);
     }
 
     let buf = group(groups, "stochastic.load_buses");
@@ -511,6 +514,7 @@ mod tests {
         EntityId, FactGroups, StageTemplate, StageTemplates, encode_lp_facts,
         encode_stage_templates_facts, encode_time_value_facts,
     };
+    use crate::test_support::state_layout;
     use crate::time_value::{PostStudyResolved, TimeValue};
 
     fn one_stage(template: StageTemplate) -> FactGroups {
@@ -581,7 +585,7 @@ mod tests {
     fn stage_templates_groups_are_the_documented_keys() {
         let templates = StageTemplates::empty(2, 1.0);
         let mut groups = FactGroups::new();
-        encode_stage_templates_facts(&templates, &mut groups);
+        encode_stage_templates_facts(&templates, &state_layout(0, 0), &mut groups);
         let mut keys: Vec<&str> = groups.keys().copied().collect();
         keys.sort_unstable();
         assert_eq!(
@@ -646,9 +650,9 @@ mod tests {
         b.diversion_upstream.insert(EntityId(1), vec![10, 11]);
 
         let mut groups_a = FactGroups::new();
-        encode_stage_templates_facts(&a, &mut groups_a);
+        encode_stage_templates_facts(&a, &state_layout(0, 0), &mut groups_a);
         let mut groups_b = FactGroups::new();
-        encode_stage_templates_facts(&b, &mut groups_b);
+        encode_stage_templates_facts(&b, &state_layout(0, 0), &mut groups_b);
         assert_eq!(groups_a, groups_b);
     }
 

@@ -39,7 +39,9 @@ use crate::lead_time::AnticipatedResolution;
 use crate::resolved_parameters::ResolvedParameters;
 use crate::setup::bucket_topology::build_transit_bucket_topology;
 use crate::setup::template_postprocess::postprocess_templates;
-use crate::setup::{resolve_anticipated_commitments, resolve_state_layout};
+use crate::setup::{
+    resolve_anticipated_commitments, resolve_anticipated_thermal_indices, resolve_state_layout,
+};
 use crate::test_support::state_layout_full;
 use crate::time_value::{
     PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
@@ -5277,7 +5279,8 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         "template's threaded resolution must resolve the calendar-derived decider"
     );
 
-    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(&system);
+    let (setup_resolution, setup_lead_stages) =
+        resolve_anticipated_commitments(&system, &resolve_anticipated_thermal_indices(&system));
     assert_eq!(
         setup_lead_stages, ctx.anticipated_lead_stages,
         "setup vs template anticipated_lead_stages"
@@ -5369,7 +5372,8 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         .decider
         .clone();
 
-    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(&system);
+    let (setup_resolution, setup_lead_stages) =
+        resolve_anticipated_commitments(&system, &resolve_anticipated_thermal_indices(&system));
     assert_eq!(setup_lead_stages, ctx.anticipated_lead_stages);
     assert_eq!(setup_resolution.per_plant[0].decider, template_decider);
 

@@ -738,7 +738,8 @@ impl StudySetup {
             build_contract_prices_per_stage(system, n_stages, &block_counts_per_stage);
         let contract_is_import = build_contract_is_import(system);
 
-        let anticipated_windows = build_anticipated_windows(system);
+        let anticipated_windows =
+            build_anticipated_windows(system, &study_dims.anticipated_thermal_indices);
         let extended_delivery_anchors =
             build_extended_delivery_anchors(system, &state_layout, n_stages);
         let transit_seed_arcs = build_transit_seed_arcs(system);
@@ -1242,6 +1243,19 @@ pub fn widen_lag_state_depth(computed_order: usize, boundary_depth: Option<u32>)
     boundary_depth.map_or(computed_order, |d| computed_order.max(d as usize))
 }
 
+/// The thermals with a declared `anticipated_config`, in canonical
+/// `system.thermals()` order — the sole definition of the anticipated-plant
+/// predicate and its order; every other site reads these resolved indices
+/// instead of re-filtering `system.thermals()`.
+pub(crate) fn resolve_anticipated_thermal_indices(system: &System) -> Vec<usize> {
+    system
+        .thermals()
+        .iter()
+        .enumerate()
+        .filter_map(|(t_idx, thermal)| thermal.anticipated_config.is_some().then_some(t_idx))
+        .collect()
+}
+
 /// Resolve every anticipated thermal's delivery-anchored commitment and
 /// construct the single role-(a) [`StateSpace`] — before stage templates
 /// exist, since none of the state dimensions depend on the built LP.
@@ -1261,12 +1275,7 @@ pub(crate) fn resolve_state_layout(
     transit_bucket_topology: &bucket_topology::TransitBucketTopology,
     inflow_lag_depth: Option<u32>,
 ) -> Result<(StateSpace, usize, Vec<usize>), SddpError> {
-    let anticipated_thermal_indices: Vec<usize> = system
-        .thermals()
-        .iter()
-        .enumerate()
-        .filter_map(|(t_idx, thermal)| thermal.anticipated_config.is_some().then_some(t_idx))
-        .collect();
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(system);
     let n_anticipated = anticipated_thermal_indices.len();
 
     // Single resolve_point consumer: map each anticipated plant's config to a
@@ -1274,7 +1283,8 @@ pub(crate) fn resolve_state_layout(
     // still-live ring machinery reads (the resolve_point decider contract). A
     // second resolve_point call site is forbidden — this resolution threads onto
     // the state layout instead.
-    let (anticipated_resolution, anticipated_lead_stages) = resolve_anticipated_commitments(system);
+    let (anticipated_resolution, anticipated_lead_stages) =
+        resolve_anticipated_commitments(system, &anticipated_thermal_indices);
     debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);
 
     // TODO(anticipated-fanout-output): the coupled output extractor is
@@ -1567,11 +1577,11 @@ fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> V
 /// the moment a study declares `post_study_stages`.
 pub(crate) fn resolve_anticipated_commitments_core(
     system: &System,
+    anticipated_thermal_indices: &[usize],
 ) -> (AnticipatedResolution, Vec<usize>) {
-    let anticipated_thermals: Vec<&Thermal> = system
-        .thermals()
+    let anticipated_thermals: Vec<&Thermal> = anticipated_thermal_indices
         .iter()
-        .filter(|t| t.anticipated_config.is_some())
+        .map(|&t| &system.thermals()[t])
         .collect();
     let leads: Vec<LeadTime> = anticipated_thermals
         .iter()
@@ -1581,6 +1591,11 @@ pub(crate) fn resolve_anticipated_commitments_core(
             AnticipatedConfig::LeadTime(h) => LeadTime::Time(*h),
         })
         .collect();
+    debug_assert_eq!(
+        leads.len(),
+        anticipated_thermal_indices.len(),
+        "every resolved index must have anticipated_config: Some"
+    );
     if leads.is_empty() {
         return (AnticipatedResolution::default(), Vec::new());
     }
@@ -1633,12 +1648,13 @@ pub(crate) fn resolve_anticipated_commitments_core(
 /// the core directly so the advisory never double-emits.
 pub(crate) fn resolve_anticipated_commitments(
     system: &System,
+    anticipated_thermal_indices: &[usize],
 ) -> (AnticipatedResolution, Vec<usize>) {
-    let (resolution, lead_stages) = resolve_anticipated_commitments_core(system);
-    let anticipated_thermals: Vec<&Thermal> = system
-        .thermals()
+    let (resolution, lead_stages) =
+        resolve_anticipated_commitments_core(system, anticipated_thermal_indices);
+    let anticipated_thermals: Vec<&Thermal> = anticipated_thermal_indices
         .iter()
-        .filter(|t| t.anticipated_config.is_some())
+        .map(|&t| &system.thermals()[t])
         .collect();
     warn_on_sub_stage_lead(&anticipated_thermals, &resolution);
     (resolution, lead_stages)
@@ -2582,12 +2598,16 @@ fn build_contract_is_import(system: &System) -> Vec<bool> {
 /// `anticipated_thermal_indices` and the LP-builder `anticipated_windows` use, so
 /// the simulation decision gate reads the matching window per index. Empty when
 /// there are no anticipated thermals.
-fn build_anticipated_windows(system: &System) -> Vec<(Option<i32>, Option<i32>)> {
-    system
-        .thermals()
+fn build_anticipated_windows(
+    system: &System,
+    anticipated_thermal_indices: &[usize],
+) -> Vec<(Option<i32>, Option<i32>)> {
+    anticipated_thermal_indices
         .iter()
-        .filter(|t| t.anticipated_config.is_some())
-        .map(|t| (t.entry_stage_id, t.exit_stage_id))
+        .map(|&t| {
+            let thermal = &system.thermals()[t];
+            (thermal.entry_stage_id, thermal.exit_stage_id)
+        })
         .collect()
 }
 
@@ -2707,7 +2727,7 @@ fn build_initial_state(
                 .iter()
                 .position(|&g| g == global_idx)
             else {
-                // Not an anticipated plant (`anticipated_config: None`) — skip.
+                // Not one of resolve_anticipated_thermal_indices's plants — skip.
                 continue;
             };
             // A covered stage at or beyond K_i is a resolver/validator desync,

@@ -6934,7 +6934,10 @@ fn setup_wires_anticipated_metadata_into_indexer() {
 #[test]
 fn setup_leadstages_resolution_preserves_k_max_and_state_dimension() {
     let system = minimal_system_with_anticipated_lead_stages(5, 2);
-    let (resolution, lead_stages) = super::resolve_anticipated_commitments(&system);
+    let (resolution, lead_stages) = super::resolve_anticipated_commitments(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     assert_eq!(lead_stages, vec![2], "LeadStages keeps the constant ℓ == 2");
     let point = &resolution.per_plant[0];
@@ -7005,7 +7008,10 @@ fn test_anticipated_resolve_point_pmo_calendar() {
         6,
         None,
     );
-    let (resolution, _) = super::resolve_anticipated_commitments(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
     let point = &resolution.per_plant[0];
 
     assert_eq!(
@@ -7028,7 +7034,10 @@ fn test_anticipated_resolve_point_pmo_calendar() {
 fn lead_time_three_stage_lead_resolves_a_pre_study_prefix() {
     let system =
         minimal_system_with_anticipated(&[100.0; 4], AnticipatedConfig::LeadTime(350.0), 1, None);
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.decider, vec![None, None, None, Some(0)]);
@@ -7045,7 +7054,10 @@ fn lead_time_three_stage_lead_resolves_a_pre_study_prefix() {
 fn ring_depth_counts_pre_study_occupancy() {
     let system =
         minimal_system_with_anticipated(&[100.0; 4], AnticipatedConfig::LeadTime(350.0), 1, None);
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     assert_eq!(resolution.k_max, 3);
 }
@@ -7061,7 +7073,10 @@ fn leadstages_ring_depth_covers_full_lead_when_lead_equals_horizon() {
     let n_stages = 4;
     let system =
         minimal_system_with_anticipated_lead_stages(n_stages, u32::try_from(n_stages).unwrap());
-    let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     assert_eq!(resolution.k_max, n_stages);
     assert_eq!(lead_stages, vec![n_stages]);
@@ -7079,7 +7094,10 @@ fn test_anticipated_resolve_point_fanout_calendar() {
         6,
         None,
     );
-    let (resolution, _) = super::resolve_anticipated_commitments(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.decision_sets[0], vec![1, 2, 3, 4]);
@@ -7108,7 +7126,10 @@ fn resolve_anticipated_commitments_widens_lead_time_plant_lead_to_the_ring_depth
         4,
         Some(post_study),
     );
-    let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     assert_eq!(
         resolution.per_plant[0].occupancy.iter().copied().max(),
@@ -8382,7 +8403,10 @@ fn test_anticipated_resolve_point_k0_uniform_calendar() {
         0,
         None,
     );
-    let (resolution, lead_stages) = super::resolve_anticipated_commitments(&system);
+    let (resolution, lead_stages) = super::resolve_anticipated_commitments(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
     let point = &resolution.per_plant[0];
 
     assert_eq!(
@@ -8419,7 +8443,10 @@ fn resolve_anticipated_commitments_warns_on_k0_sub_stage_lead() {
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        let _ = super::resolve_anticipated_commitments(&system);
+        let _ = super::resolve_anticipated_commitments(
+            &system,
+            &super::resolve_anticipated_thermal_indices(&system),
+        );
     });
     let recorded = messages.lock().unwrap();
     let relevant: Vec<&str> = recorded
@@ -8452,7 +8479,10 @@ fn resolve_anticipated_commitments_leadstages_never_warns() {
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        let _ = super::resolve_anticipated_commitments(&system);
+        let _ = super::resolve_anticipated_commitments(
+            &system,
+            &super::resolve_anticipated_thermal_indices(&system),
+        );
     });
     let recorded = messages.lock().unwrap();
     assert!(
@@ -8479,7 +8509,10 @@ fn warn_on_sub_stage_lead_emits_once_per_self_delivered_stage() {
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        let _ = super::resolve_anticipated_commitments(&system);
+        let _ = super::resolve_anticipated_commitments(
+            &system,
+            &super::resolve_anticipated_thermal_indices(&system),
+        );
     });
     let recorded = messages.lock().unwrap();
     let relevant: Vec<&str> = recorded
@@ -8535,7 +8568,10 @@ fn resolve_anticipated_commitments_core_reports_the_extended_delivery_width() {
         Some(post_study),
     );
 
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     assert_eq!(
         resolution.per_plant[0].decider.len(),
@@ -8556,7 +8592,10 @@ fn resolve_anticipated_commitments_core_matches_study_only_width_without_post_st
         None,
     );
 
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     assert_eq!(resolution.per_plant[0].decider.len(), 3);
 }
@@ -8584,7 +8623,10 @@ fn warn_on_boundary_absent_post_study_delivery_fires_once_when_boundary_absent()
         1,
         Some(post_study),
     );
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
@@ -8625,7 +8667,10 @@ fn warn_on_boundary_absent_post_study_delivery_silent_when_boundary_present() {
         1,
         Some(post_study),
     );
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
@@ -8660,7 +8705,10 @@ fn warn_on_boundary_absent_fires_for_nonzero_fixed_value_without_boundary() {
             value_mw: 42.0,
         }],
     );
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
@@ -8703,7 +8751,10 @@ fn warn_on_boundary_absent_silent_for_all_zero_stub_without_boundary() {
             value_mw: 0.0,
         }],
     );
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
@@ -8744,7 +8795,10 @@ fn warn_on_boundary_absent_names_dual_cause_plant_once() {
             value_mw: 42.0,
         }],
     );
-    let (resolution, _) = super::resolve_anticipated_commitments_core(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments_core(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
@@ -8793,7 +8847,10 @@ fn lead_time_fanout_rejected_at_setup() {
     );
 
     // Sanity: the fixture genuinely fans out (guards the guard's own fixture).
-    let (resolution, _) = super::resolve_anticipated_commitments(&system);
+    let (resolution, _) = super::resolve_anticipated_commitments(
+        &system,
+        &super::resolve_anticipated_thermal_indices(&system),
+    );
     assert_eq!(
         resolution.max_fanout, 2,
         "fixture must fan out with width 2 at decision stage 0"
@@ -9073,6 +9130,197 @@ fn lead_time_fanout_rejection_is_declaration_order_invariant() {
     assert!(
         msg.contains("anticipated thermal 21"),
         "message should name the fanning plant (thermal id 21), not the non-fanning one, got: {msg}"
+    );
+}
+
+/// Anticipated (`T1`=20, `T3`=22) and non-anticipated (`T2`=21) thermals
+/// interleaved in declaration order, sharing one `operational_start_date` so
+/// canonical order matches declaration order.
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
+fn system_with_interleaved_anticipated_thermals() -> cobre_core::System {
+    use chrono::NaiveDate;
+
+    let bus = Bus {
+        id: EntityId(1),
+        name: "B1".to_string(),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 500.0,
+        }],
+        excess_cost: 0.0,
+    };
+
+    let durations = [744.0_f64, 168.0];
+    let n_stages = durations.len();
+    let start_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+
+    let make_thermal = |id: i32, anticipated_config: Option<AnticipatedConfig>| Thermal {
+        id: EntityId(id),
+        name: format!("T{id}"),
+        operational_start_date: start_date,
+        bus_id: EntityId(1),
+        min_generation_mw: 0.0,
+        max_generation_mw: 100.0,
+        cost_per_mwh: 50.0,
+        anticipated_config,
+        entry_stage_id: None,
+        exit_stage_id: None,
+    };
+    let t1 = make_thermal(20, Some(AnticipatedConfig::LeadStages(1)));
+    let t2 = make_thermal(21, None);
+    let t3 = make_thermal(22, Some(AnticipatedConfig::LeadStages(1)));
+
+    let stages: Vec<Stage> = durations
+        .iter()
+        .enumerate()
+        .map(|(i, &duration)| Stage {
+            index: i,
+            id: i as i32,
+            start_date,
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: duration,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        })
+        .collect();
+
+    let load_models: Vec<LoadModel> = (0..n_stages)
+        .map(|i| LoadModel {
+            bus_id: EntityId(1),
+            stage_id: i as i32,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        })
+        .collect();
+
+    let k_max_bounds = 1usize;
+    let mut bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 0,
+            n_thermals: 3,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages,
+            k_max: k_max_bounds,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 0.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds::default(),
+            thermal: ThermalStageBounds { cost_per_mwh: 50.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    for thermal_idx in 0..3 {
+        for s in 0..(n_stages + k_max_bounds) {
+            *bounds.thermal_bounds_mut(thermal_idx, s) = ThermalStageBounds { cost_per_mwh: 50.0 };
+            *bounds.thermal_block_base_mut(thermal_idx, s) = ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            };
+        }
+    }
+
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 0,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages,
+        },
+        &PenaltiesDefaults {
+            hydro: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 0.0,
+            },
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .thermals(vec![t1, t2, t3])
+        .stages(stages)
+        .load_models(load_models)
+        .bounds(bounds)
+        .penalties(penalties)
+        .initial_conditions(InitialConditions {
+            storage: vec![],
+            filling_storage: vec![],
+            past_anticipated_commitments: vec![],
+            recent_observations: vec![],
+            past_defluences: vec![],
+        })
+        .build()
+        .expect("interleaved anticipated thermals system: valid")
+}
+
+#[test]
+fn resolve_anticipated_thermal_indices_returns_canonical_order_of_anticipated_thermals() {
+    let system = system_with_interleaved_anticipated_thermals();
+    let indices = super::resolve_anticipated_thermal_indices(&system);
+    assert_eq!(
+        indices,
+        vec![0, 2],
+        "must skip the interleaved non-anticipated thermal and return canonical ascending positions"
     );
 }
 

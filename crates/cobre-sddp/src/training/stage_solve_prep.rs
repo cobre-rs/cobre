@@ -170,16 +170,15 @@ impl StageSolvePrep {
         if ctx.n_load_buses > 0 {
             let grid = BlockGrid::new(load_blocks, training_ctx.study_dims.max_deficit_segments);
             patch_buf.fill_load_patches(
-                ctx.load_balance_row_start(stage),
+                ctx.geometry_per_stage[stage.0].load_balance_rows(),
                 grid,
                 &scratch.load_rhs_buf,
                 ctx.load_bus_indices,
                 &ctx.template(stage).row_scale,
             );
         }
-        let z_inflow_row_start = ctx.geometry(stage).map_or(0, |g| g.z_inflow_row_start);
         patch_buf.fill_z_inflow_patches(
-            z_inflow_row_start,
+            training_ctx.state,
             &scratch.z_inflow_rhs_buf,
             &ctx.template(stage).row_scale,
         );

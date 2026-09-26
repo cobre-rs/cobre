@@ -26,13 +26,15 @@ use crate::{
     horizon_mode::HorizonMode,
     inflow_method::InflowNonNegativityMethod,
     lp::builder::{PatchBuffer, StateBox},
-    lp::indexer::{BlockGrid, StudyDimensions},
+    lp::indexer::{BlockGrid, BlockRowFamily, StudyDimensions},
     noise::{
         NcsNoiseOffsets, build_dense_ncs_col_indices, gather_dense_ncs_bounds,
         transform_inflow_noise, transform_load_noise, transform_ncs_noise,
     },
     setup::node_graph::StageIdx,
-    test_support::{all_enabled_cut_state_layouts, state_layout, study_dims},
+    test_support::{
+        all_enabled_cut_state_layouts, geometry_with_load_balance, state_layout, study_dims,
+    },
     workspace::{ScratchBuffers, WorkspaceSizing},
 };
 
@@ -203,6 +205,30 @@ fn minimal_forward_template() -> StageTemplate {
     }
 }
 
+/// Single hydro, single stochastic load bus, 2 rows (load balance + z-inflow).
+fn single_hydro_load_template() -> StageTemplate {
+    StageTemplate {
+        num_cols: 3,
+        num_rows: 2,
+        num_nz: 1,
+        col_starts: vec![0_i32, 0, 1, 1],
+        row_indices: vec![0_i32],
+        values: vec![1.0],
+        col_lower: vec![0.0, 0.0, 0.0],
+        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
+        objective: vec![0.0, 0.0, 1.0],
+        row_lower: vec![0.0, 0.0],
+        row_upper: vec![0.0, 0.0],
+        n_state: 1,
+        n_transfer: 0,
+        n_dual_relevant: 1,
+        n_hydro: 1,
+        max_par_order: 0,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
+    }
+}
+
 /// Every dimension unbounded — the pin-time box-membership assert is vacuous.
 fn unbounded_state_box(n_state: usize) -> StateBox {
     StateBox {
@@ -356,7 +382,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     );
     reference_patch_buf.fill_col_state_patches(&state, &current_state, &template.col_scale, None);
     reference_patch_buf.fill_z_inflow_patches(
-        0,
+        &state,
         &reference_scratch.z_inflow_rhs_buf,
         &template.row_scale,
     );
@@ -707,31 +733,13 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
         mean_mw: 300.0,
         std_mw: 50.0,
     }));
-    let templates = vec![StageTemplate {
-        num_cols: 3,
-        num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 0.0],
-        row_upper: vec![0.0, 0.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }];
+    let templates = vec![single_hydro_load_template()];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
+    let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1)];
     let ctx = StageContext {
         state_boxes: &state_boxes,
         templates: &templates,
-        geometry_per_stage: &[],
+        geometry_per_stage: &geometry_per_stage,
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
         n_load_buses: 1,
@@ -842,7 +850,14 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     );
     let mut reference_patch_buf = PatchBuffer::new(1, 0, 1, 1, 0, 0, 0);
     let grid = BlockGrid::new(1, training_ctx.study_dims.max_deficit_segments);
-    reference_patch_buf.fill_load_patches(1, grid, &reference_scratch.load_rhs_buf, &[0], &[]);
+    let load_rows = BlockRowFamily::per_block(1..2);
+    reference_patch_buf.fill_load_patches(
+        load_rows,
+        grid,
+        &reference_scratch.load_rhs_buf,
+        &[0],
+        &[],
+    );
 
     let (indices, lower, upper) = solver
         .row_bounds_calls

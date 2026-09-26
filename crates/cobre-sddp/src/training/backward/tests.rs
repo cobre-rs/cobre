@@ -3084,6 +3084,7 @@ fn backward_pass_load_patches_applied() {
     let load_balance_row_starts = vec![10_usize; n_stages];
     let load_bus_indices = vec![0_usize];
     let block_counts_per_stage = vec![1_usize; n_stages];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let state_boxes = permissive_state_boxes(n_state, n_stages);
@@ -3092,7 +3093,7 @@ fn backward_pass_load_patches_applied() {
         basis_store: &mut basis_store,
         ctx: &StageContext {
             state_boxes: &state_boxes,
-            geometry_per_stage: &[],
+            geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
@@ -3445,6 +3446,7 @@ fn backward_pass_cut_coefficients_unaffected() {
     let load_balance_row_starts = vec![10_usize; n_stages];
     let load_bus_indices = vec![0_usize];
     let block_counts_per_stage = vec![1_usize; n_stages];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let state_boxes = permissive_state_boxes(n_state, n_stages);
@@ -3453,7 +3455,7 @@ fn backward_pass_cut_coefficients_unaffected() {
         basis_store: &mut basis_store,
         ctx: &StageContext {
             state_boxes: &state_boxes,
-            geometry_per_stage: &[],
+            geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,

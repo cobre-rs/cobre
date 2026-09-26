@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cobre_sddp::StudySetup;
-use cobre_sddp::test_support::template_fact_groups;
+use cobre_sddp::test_support::{state_space, template_fact_groups};
 use sha2::{Digest, Sha256};
 
 use common::decks::{Deck, SLOW_DECKS, committed_decks};
@@ -373,6 +373,39 @@ fn parallel_evaporation_fixture_evaporates_on_a_multiblock_parallel_stage() {
         !geometry.evap_hydro_indices.is_empty(),
         "stage 0 must have an active evaporation slot"
     );
+}
+
+/// Migration proof, kept as a test over every deck rather than an assert
+/// inside `StageLayout::new` (already at its line-count ceiling): at every
+/// stage, on every snapshot deck and the in-code studies, the layout's own
+/// z-inflow rows — the row-cursor span from `z_inflow_row_start` up to
+/// `water_balance.start` — equal `StateSpace::z_inflow_rows()`.
+#[test]
+fn every_stage_layout_z_inflow_rows_match_the_state_space() {
+    let check = |key: &str, setup: &StudySetup| {
+        let expected = state_space(setup).z_inflow_rows();
+        for (stage, geometry) in setup
+            .stage_data
+            .stage_templates
+            .geometry_per_stage
+            .iter()
+            .enumerate()
+        {
+            let layout_rows = geometry.z_inflow_row_start..geometry.water_balance.start;
+            assert_eq!(
+                layout_rows, expected,
+                "{key} stage {stage}: layout z-inflow rows {layout_rows:?} != \
+                 state.z_inflow_rows() {expected:?}"
+            );
+        }
+    };
+
+    for deck in active_decks() {
+        check(&deck.key, &build_deck_or_panic(&deck));
+    }
+    for (key, setup) in in_code_decks() {
+        check(&key, &setup);
+    }
 }
 
 #[cfg(feature = "slow-tests")]

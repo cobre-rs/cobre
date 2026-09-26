@@ -2722,11 +2722,12 @@ fn forward_pass_load_noise_positive_realization() {
     let load_balance_row_starts = vec![10usize];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let ctx = StageContext {
         state_boxes: &state_boxes,
-        geometry_per_stage: &[],
+        geometry_per_stage: &geometry_per_stage,
         templates: &templates,
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,
@@ -2883,11 +2884,12 @@ fn forward_pass_load_noise_clamped_to_zero() {
     let load_balance_row_starts = vec![10usize];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let ctx = StageContext {
         state_boxes: &state_boxes,
-        geometry_per_stage: &[],
+        geometry_per_stage: &geometry_per_stage,
         templates: &templates,
         n_hydros: 1,
         cost_scale_factor: 1_000_000.0,

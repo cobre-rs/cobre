@@ -19,12 +19,12 @@ use std::path::Path;
 
 use cobre_core::{BlockMode, EntityId};
 use cobre_sddp::StudySetup;
-use cobre_sddp::indexer::BlockIdx;
+use cobre_sddp::indexer::{BlockIdx, BusSys, HydroSys, StateSpace};
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::{NodePos, StageIdx};
 use cobre_sddp::test_support::{
     capture_patched_node_template, capture_patched_node_template_at, lower_bound_root_templates,
-    node_opening_noise, oracle_initial_state, raw_noise_len, stage_state_box_bounds,
+    node_opening_noise, oracle_initial_state, raw_noise_len, stage_state_box_bounds, state_space,
 };
 use cobre_solver::{ActiveSolver, StageTemplate};
 
@@ -78,13 +78,15 @@ fn to_bits(v: &[f64]) -> Vec<u64> {
 // site below: keeps a later change to an ownership set confined to one
 // function instead of every check site.
 
-fn z_row(geom: &StageGeometry, h: usize) -> usize {
-    geom.z_inflow_row_start + h
+fn z_row(state: &StateSpace, h: usize) -> usize {
+    state.z_inflow_row(HydroSys::new(h))
 }
 
 fn load_chunk(geom: &StageGeometry, bus_pos: usize) -> Range<usize> {
-    let start = geom.load_balance.start + bus_pos * geom.n_blks;
-    start..start + geom.n_blks
+    let bus = BusSys::new(bus_pos);
+    let first = geom.load_balance_row(bus, BlockIdx::new(0));
+    let last = geom.load_balance_row(bus, BlockIdx::new(geom.n_blks - 1));
+    first..last + 1
 }
 
 fn ncs_chunk(geom: &StageGeometry, sys_idx: usize) -> Range<usize> {
@@ -151,7 +153,7 @@ fn check_inflow(
     pos: NodePos,
     dim: usize,
     h: usize,
-    geom: &StageGeometry,
+    state: &StateSpace,
     changed: &ChangedIndices,
     violations: &mut Vec<String>,
 ) {
@@ -161,7 +163,7 @@ fn check_inflow(
             changed.cols
         ));
     }
-    let z = z_row(geom, h);
+    let z = z_row(state, h);
     for &row in &changed.rows {
         if row != z {
             violations.push(format!(
@@ -266,7 +268,15 @@ fn sweep_setup(
 
             if dim < n_hydros {
                 *vacuity.entry((mode_tag, "inflow")).or_insert(0) += 1;
-                check_inflow(deck_key, pos, dim, dim, geom, &changed, violations);
+                check_inflow(
+                    deck_key,
+                    pos,
+                    dim,
+                    dim,
+                    state_space(setup),
+                    &changed,
+                    violations,
+                );
             } else if dim < n_hydros + n_load {
                 *vacuity.entry((mode_tag, "load")).or_insert(0) += 1;
                 let bus_pos = setup.stage_data.stage_templates.load_bus_indices[dim - n_hydros];

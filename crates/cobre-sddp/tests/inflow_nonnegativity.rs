@@ -488,7 +488,7 @@ fn base_stage_context<'a>(
 ) -> StageContext<'a> {
     StageContext {
         state_boxes,
-        geometry_per_stage: &[],
+        geometry_per_stage: &fx.stage_templates.geometry_per_stage,
         templates: &fx.stage_templates.templates,
         n_hydros: fx.stage_templates.n_hydros,
         cost_scale_factor: 1_000_000.0,

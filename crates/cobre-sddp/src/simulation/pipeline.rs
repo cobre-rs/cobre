@@ -20,7 +20,7 @@ use crate::error::SddpError::Infeasible;
 use crate::error::SddpError::Solver;
 use crate::lp::builder::GenericConstraintRowEntry;
 use crate::lp::builder::StageGeometry;
-use crate::lp::indexer::StudyDimensions;
+use crate::lp::indexer::{BlockIdx, BlockRowFamily, StudyDimensions};
 use crate::noise::DownstreamAccumState;
 use crate::noise::LagAccumState;
 use crate::stage_solve::StageInputs;
@@ -223,7 +223,7 @@ fn build_row_lower_unscaled<'a>(
     load_rhs_buf: &[f64],
     scratch_buf: &'a mut Vec<f64>,
     n_load_buses: usize,
-    load_balance_row_start: usize,
+    load_rows: BlockRowFamily,
     n_blks: usize,
     load_bus_indices: &[usize],
 ) -> &'a [f64] {
@@ -248,7 +248,7 @@ fn build_row_lower_unscaled<'a>(
         let mut rhs_idx = 0;
         for &bus_pos in load_bus_indices {
             for blk in 0..n_blks {
-                scratch_buf[load_balance_row_start + bus_pos * n_blks + blk] =
+                scratch_buf[load_rows.row(bus_pos, BlockIdx::new(blk), n_blks)] =
                     load_rhs_buf[rhs_idx];
                 rhs_idx += 1;
             }
@@ -592,6 +592,19 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     Ok((immediate_cost, result))
 }
 
+/// `t`'s load-balance row family and block count, or the empty family with `0`
+/// blocks when the stage has no stochastic load buses.
+fn resolve_load_rows(ctx: &StageContext<'_>, t: StageIdx) -> (BlockRowFamily, usize) {
+    if ctx.n_load_buses > 0 {
+        (
+            ctx.geometry_per_stage[t.0].load_balance_rows(),
+            ctx.block_count(t),
+        )
+    } else {
+        (BlockRowFamily::default(), 0)
+    }
+}
+
 /// Extract the cost and result record from a solved simulation stage LP.
 ///
 /// RATIONALE (`too_many_arguments`): takes individual scratch field borrows rather
@@ -647,18 +660,14 @@ pub(crate) fn extract_sim_stage_result(
         .block_hours_per_stage
         .get(t.0)
         .map_or(&[][..], |v| v.as_slice());
-    let (load_row_start, load_n_blks) = if ctx.n_load_buses > 0 {
-        (ctx.load_balance_row_start(t), ctx.block_count(t))
-    } else {
-        (0, 0)
-    };
+    let (load_rows, load_n_blks) = resolve_load_rows(ctx, t);
     let row_lower_ref = build_row_lower_unscaled(
         &ctx.template(t).row_lower,
         &ctx.template(t).row_scale,
         load_rhs_buf,
         row_lower_buf,
         ctx.n_load_buses,
-        load_row_start,
+        load_rows,
         load_n_blks,
         ctx.load_bus_indices,
     );

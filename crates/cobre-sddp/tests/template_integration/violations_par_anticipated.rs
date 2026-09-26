@@ -337,9 +337,10 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     let b_active: usize = 2;
     let load_rhs: Vec<f64> = (0..m * b_active).map(|i| 100.0 + i as f64).collect();
     let bus_positions: Vec<usize> = (0..m).collect();
-    let load_row_start: usize = 200; // arbitrary LP row offset
+    let load_start: usize = 200; // arbitrary LP row offset
+    let load_rows = BlockRowFamily::per_block(load_start..load_start + m * b_active);
     buf.fill_load_patches(
-        load_row_start,
+        load_rows,
         BlockGrid::new(b_active, 1),
         &load_rhs,
         &bus_positions,
@@ -347,8 +348,8 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     );
 
     let z_inflow_rhs: Vec<f64> = (0..n).map(|h| 80.0 + h as f64).collect();
-    let z_inflow_row_start: usize = 50;
-    buf.fill_z_inflow_patches(z_inflow_row_start, &z_inflow_rhs, &[]);
+    let state = StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]);
+    buf.fill_z_inflow_patches(&state, &z_inflow_rhs, &[]);
 
     // The count uses b_active, not B_max: any generic-constraint patching would push
     // it past the M*B_max + N capacity into an out-of-bounds write.

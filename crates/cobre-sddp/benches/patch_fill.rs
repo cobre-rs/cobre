@@ -1,11 +1,11 @@
 //! Criterion micro-benchmark for the per-solve `PatchBuffer::fill_load_patches`
-//! + `fill_z_inflow_patches` pair, at two shapes: (a) 5 buses x 3 blocks x 165
-//! hydros, and (b) 64 buses x 24 blocks x 400 hydros. Bus positions are in
-//! reverse (non-slot) order, matching the runtime caller's `load_bus_indices`.
+//! and `fill_z_inflow_patches` pair, at two shapes (see `SHAPES`). Bus
+//! positions are in reverse (non-slot) order, matching the runtime caller's
+//! `load_bus_indices`.
 
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
-use cobre_sddp::indexer::BlockGrid;
+use cobre_sddp::indexer::{BlockGrid, BlockRowFamily, StateSpace};
 use cobre_sddp::lp::builder::PatchBuffer;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -21,20 +21,20 @@ fn bench_patch_fill(c: &mut Criterion) {
         let bus_positions: Vec<usize> = (0..n_buses).rev().collect();
         let z_inflow_rhs = vec![0.5_f64; n_hydros];
         let row_scale: [f64; 0] = [];
-        let load_row_start = 0_usize;
-        let z_inflow_row_start = n_buses * n_blocks;
+        let load_rows = BlockRowFamily::per_block(0..n_buses * n_blocks);
+        let state = StateSpace::new(n_hydros, 0, 0, Vec::new(), 0, 0, vec![], &vec![0; n_hydros]);
 
         group.bench_function(name, |b| {
             b.iter(|| {
                 buf.fill_load_patches(
-                    black_box(load_row_start),
+                    black_box(load_rows),
                     BlockGrid::new(n_blocks, 0),
                     black_box(&load_rhs),
                     black_box(&bus_positions),
                     black_box(&row_scale),
                 );
                 buf.fill_z_inflow_patches(
-                    black_box(z_inflow_row_start),
+                    black_box(&state),
                     black_box(&z_inflow_rhs),
                     black_box(&row_scale),
                 );

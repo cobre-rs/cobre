@@ -517,7 +517,7 @@ mod tests {
         horizon_mode::HorizonMode,
         inflow_method::InflowNonNegativityMethod,
         lp::builder::{PatchBuffer, StateBox},
-        lp::indexer::{CutStateProjection, StateSpace, StudyDimensions},
+        lp::indexer::{BlockIdx, CutStateProjection, HydroSys, StateSpace, StudyDimensions},
         risk_measure::RiskMeasure,
         setup::node_graph::StageIdx,
         setup::{
@@ -2683,7 +2683,7 @@ mod tests {
         };
         let z_col_a = state.z_inflow.start + h_a;
         let z_col_b = state.z_inflow.start + h_b;
-        let water_row_a = geom0.water_balance.start + h_a;
+        let water_row_a = geom0.water_balance_row(HydroSys::new(h_a), BlockIdx::new(0));
         assert_eq!(
             raw_at(z_col_a, water_row_a),
             -templates.zeta_per_stage[0],

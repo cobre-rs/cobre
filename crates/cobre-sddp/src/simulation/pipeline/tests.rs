@@ -807,6 +807,7 @@ fn simulation_load_patches_applied() {
     let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -815,7 +816,7 @@ fn simulation_load_patches_applied() {
         &mut workspaces,
         &StageContext {
             state_boxes: &state_boxes,
-            geometry_per_stage: &[],
+            geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
@@ -1276,6 +1277,7 @@ fn simulation_inflow_extraction_unaffected() {
     let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -1284,7 +1286,7 @@ fn simulation_inflow_extraction_unaffected() {
         &mut workspaces,
         &StageContext {
             state_boxes: &state_boxes,
-            geometry_per_stage: &[],
+            geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
@@ -1900,18 +1902,20 @@ mod dcs_simulation {
     const X_HAT: f64 = 2.0;
 
     /// Cut-free base: cols `[storage_out=0, z_inflow=1, storage_in=2,
-    /// theta=3]`, row 0 the coupling row `storage_out - storage_in = 0`, row 1
-    /// the z-inflow definition `z_inflow = rhs` (mirrors production's
-    /// `fill_z_inflow_patches` row, keeping `z_inflow` a defined column rather
-    /// than a free one), minimise `theta`. `storage_in` is pinned to `x_hat`;
-    /// cuts constrain `theta` against `storage_out` (col 0).
+    /// theta=3]`, row 0 the z-inflow definition `z_inflow = rhs` (mirrors
+    /// production's `fill_z_inflow_patches` row, keeping `z_inflow` a defined
+    /// column rather than a free one, and matching every built template's own
+    /// invariant that the z-inflow rows lead the row space), row 1 the
+    /// coupling row `storage_out - storage_in = 0`, minimise `theta`.
+    /// `storage_in` is pinned to `x_hat`; cuts constrain `theta` against
+    /// `storage_out` (col 0).
     fn sim_core_template() -> StageTemplate {
         StageTemplate {
             num_cols: 4,
             num_rows: 2,
             num_nz: 3,
             col_starts: vec![0_i32, 1, 2, 3, 3],
-            row_indices: vec![0_i32, 1, 0],
+            row_indices: vec![1_i32, 0, 1],
             values: vec![1.0, 1.0, -1.0],
             col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
@@ -1929,20 +1933,21 @@ mod dcs_simulation {
     }
 
     /// All-cuts frozen template: cut-free base + the three pool cuts frozen as
-    /// structural rows 2..5 (slot order). `num_rows = 5`.
+    /// structural rows 2..5 (slot order), with the z-inflow definition row
+    /// shifted to row 0 like every other fixture here. `num_rows = 5`.
     fn sim_all_cuts_frozen() -> StageTemplate {
         StageTemplate {
             num_cols: 4,
             num_rows: 5,
             num_nz: 7,
             col_starts: vec![0_i32, 2, 3, 4, 7],
-            row_indices: vec![0_i32, 2, 4, 0, 1, 2, 3],
+            row_indices: vec![1_i32, 3, 0, 1, 2, 3, 4],
             values: vec![1.0, -2.0, 1.0, -1.0, 1.0, 1.0, 1.0],
             col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
             objective: vec![0.0, 0.0, 0.0, 1.0],
-            row_lower: vec![0.0, 1.0, 0.0, 3.0, 0.0],
-            row_upper: vec![0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY, 0.0],
+            row_lower: vec![0.0, 0.0, 1.0, 0.0, 3.0],
+            row_upper: vec![0.0, 0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -1955,20 +1960,20 @@ mod dcs_simulation {
 
     /// Frozen template carrying a single DOMINATING spurious cut
     /// (`-5*col0 + theta >= 0`, floor 10 at `x_hat = 2`, NOT in the pool), plus
-    /// the same trailing z-inflow definition row as the other fixtures.
+    /// the same leading z-inflow definition row as the other fixtures.
     fn sim_frozen_dominating_cut() -> StageTemplate {
         StageTemplate {
             num_cols: 4,
             num_rows: 3,
             num_nz: 5,
             col_starts: vec![0_i32, 2, 3, 4, 5],
-            row_indices: vec![0_i32, 1, 2, 0, 1],
+            row_indices: vec![1_i32, 2, 0, 1, 2],
             values: vec![1.0, -5.0, 1.0, -1.0, 1.0],
             col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
             objective: vec![0.0, 0.0, 0.0, 1.0],
             row_lower: vec![0.0, 0.0, 0.0],
-            row_upper: vec![0.0, f64::INFINITY, 0.0],
+            row_upper: vec![0.0, 0.0, f64::INFINITY],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -2047,17 +2052,7 @@ mod dcs_simulation {
     ) -> (f64, SimulationStageResult) {
         let state = test_support::state_layout(1, 0);
         let core = sim_core_template();
-        // The DCS branch always loads `core`; the frozen branch loads `frozen` —
-        // each carries its own trailing z-inflow definition row as its last row.
-        let z_inflow_row_start = if dcs.is_some() {
-            core.num_rows - 1
-        } else {
-            frozen.num_rows - 1
-        };
-        let geometry_per_stage = [StageGeometry {
-            z_inflow_row_start,
-            ..StageGeometry::default()
-        }];
+        let geometry_per_stage = [StageGeometry::default()];
         let templates = vec![core];
         let stochastic = super::make_stochastic_context(1);
         let horizon = HorizonMode::Finite { num_stages: 1 };

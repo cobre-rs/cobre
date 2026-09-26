@@ -15,7 +15,7 @@
 
 use std::ops::Range;
 
-use super::{InCol, OutCol, RangeCursor, StateDim, for_each_live_commitment_slot};
+use super::{HydroSys, InCol, OutCol, RangeCursor, StateDim, for_each_live_commitment_slot};
 use crate::lead_time::AnticipatedResolution;
 
 use cobre_core::temporal::StageStateConfig;
@@ -754,11 +754,27 @@ impl StateSpace {
 
         self.nonzero_state_indices = mask;
     }
+
+    /// The z-inflow definition rows: one per hydro, leading every stage's row
+    /// space.
+    #[inline]
+    #[must_use]
+    pub fn z_inflow_rows(&self) -> Range<usize> {
+        0..self.hydro_count
+    }
+
+    /// Hydro `h`'s z-inflow definition row.
+    #[inline]
+    #[must_use]
+    pub fn z_inflow_row(&self, h: HydroSys) -> usize {
+        debug_assert!(h.get() < self.hydro_count);
+        self.z_inflow_rows().start + h.get()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AnticipatedResolution, InCol, OutCol, StateDim, StateSpace};
+    use super::{AnticipatedResolution, HydroSys, InCol, OutCol, StateDim, StateSpace};
     use crate::lead_time::{DeliveryAxis, LeadTime, PointResolution};
 
     /// Build a [`StateSpace`] finalized the way production `resolve_state_layout`
@@ -1832,6 +1848,15 @@ mod tests {
                 idx.bucket_outgoing_col(b).get(),
                 idx.transit_buckets_out.start + b
             );
+        }
+    }
+
+    #[test]
+    fn z_inflow_rows_lead_the_row_space_one_per_hydro() {
+        let idx = finalized(5, 2, 0, 0, vec![]);
+        assert_eq!(idx.z_inflow_rows(), 0..idx.hydro_count);
+        for h in 0..idx.hydro_count {
+            assert_eq!(idx.z_inflow_row(HydroSys::new(h)), h);
         }
     }
 

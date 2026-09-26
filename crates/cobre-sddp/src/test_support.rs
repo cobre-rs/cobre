@@ -615,6 +615,22 @@ pub fn geom(_hydro_count: usize, _max_par_order: usize) -> StageGeometry {
     StageGeometry::default()
 }
 
+/// Build a [`StageGeometry`] carrying only a load-balance row family
+/// (`n_buses * n_blks` rows starting at `load_start`), for fixtures that need a
+/// non-empty `geometry_per_stage` entry to exercise the load patch.
+#[must_use]
+pub fn geometry_with_load_balance(
+    load_start: usize,
+    n_buses: usize,
+    n_blks: usize,
+) -> StageGeometry {
+    StageGeometry {
+        load_balance: load_start..load_start + n_buses * n_blks,
+        n_blks,
+        ..StageGeometry::default()
+    }
+}
+
 /// Build a finalized storage+lag [`StateSpace`] (no anticipated thermals) with the
 /// full `max_par_order` lag stride for every hydro — the dense coverage
 /// `crate::setup::resolve_state_layout` finalizes with no per-hydro AR truncation.
@@ -2291,6 +2307,13 @@ pub fn raw_noise_len(setup: &StudySetup) -> usize {
     setup.stage_data.state.hydro_count
         + setup.stage_data.stage_templates.n_load_buses
         + setup.stochastic.n_stochastic_ncs()
+}
+
+/// `setup`'s stage-invariant [`StateSpace`] — `StudySetup::stage_data.state` is
+/// `pub(crate)`; this is the test-support reach-through.
+#[must_use]
+pub fn state_space(setup: &StudySetup) -> &StateSpace {
+    &setup.stage_data.state
 }
 
 /// The `[hydro | load-bus | NCS]` standardized noise draw for `node_pos`: an

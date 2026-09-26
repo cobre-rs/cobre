@@ -1,5 +1,5 @@
 use super::state_box::StateBox;
-use crate::lp::indexer::{BlockGrid, BlockIdx, StateDim, StateSpace};
+use crate::lp::indexer::{BlockGrid, BlockIdx, BlockRowFamily, HydroSys, StateDim, StateSpace};
 
 /// Pre-allocated row-bound and column-bound patch arrays for one SDDP stage LP solve.
 ///
@@ -257,8 +257,8 @@ impl PatchBuffer {
     }
 
     /// Fill `n_load_buses * n_blocks` load-balance equality patches into
-    /// the row buffer at offset `0`, addressed via [`BlockGrid::flat`] (the single
-    /// owner of block-major strides). `load_rhs` is bus-major, block-minor matching
+    /// the row buffer at offset `0`, addressed via `load_rows` (the stage's own
+    /// load-balance row family). `load_rhs` is bus-major, block-minor matching
     /// `bus_positions` order; values are prescaled by `row_scale[row]` when
     /// `row_scale` is non-empty (pass `&[]` for no scaling).
     ///
@@ -272,9 +272,10 @@ impl PatchBuffer {
     /// - `load_rhs.len() != self.load_bus_count * grid.n_blks()`
     /// - `bus_positions.len() != self.load_bus_count`
     /// - `grid.n_blks() > self.max_blocks`
+    #[inline]
     pub fn fill_load_patches(
         &mut self,
-        load_row_start: usize,
+        load_rows: BlockRowFamily,
         grid: BlockGrid,
         load_rhs: &[f64],
         bus_positions: &[usize],
@@ -305,9 +306,9 @@ impl PatchBuffer {
 
         for (i, &bus_pos) in bus_positions.iter().enumerate() {
             for blk in 0..n_blocks {
-                let row = grid.flat(load_row_start, bus_pos, BlockIdx::new(blk));
-                // Host-array index `i * n_blks + blk` routed through the same
-                // `grid.flat` (start = 0) to keep one owner of the stride.
+                let row = load_rows.row(bus_pos, BlockIdx::new(blk), n_blocks);
+                // Host-array index `i * n_blks + blk` routed through `grid.flat`
+                // (start = 0) to keep one owner of the stride.
                 let rhs = load_rhs[grid.flat(0, i, BlockIdx::new(blk))];
                 let scaled = if row_scale.is_empty() {
                     rhs
@@ -324,17 +325,18 @@ impl PatchBuffer {
         self.active_load_patches = self.load_bus_count * n_blocks;
     }
 
-    /// Fill the `N` z-inflow-definition equality patches at
-    /// `z_inflow_row_start` from `z_inflow_rhs`, prescaled by `row_scale[row]` when
-    /// `row_scale` is non-empty (pass `&[]` for no scaling).
+    /// Fill the `N` z-inflow-definition equality patches at `state`'s
+    /// [`StateSpace::z_inflow_row`] from `z_inflow_rhs`, prescaled by
+    /// `row_scale[row]` when `row_scale` is non-empty (pass `&[]` for no scaling).
     ///
     /// Must be called after [`fill_load_patches`] (whose `active_load_patches` sets
     /// this region's offset) and before `set_row_bounds`.
     ///
     /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
+    #[inline]
     pub fn fill_z_inflow_patches(
         &mut self,
-        z_inflow_row_start: usize,
+        state: &StateSpace,
         z_inflow_rhs: &[f64],
         row_scale: &[f64],
     ) {
@@ -348,7 +350,7 @@ impl PatchBuffer {
 
         for (h, &rhs) in z_inflow_rhs.iter().enumerate().take(n) {
             let slot = z_inflow_start + h;
-            let row = z_inflow_row_start + h;
+            let row = state.z_inflow_row(HydroSys::new(h));
             let scaled = if row_scale.is_empty() {
                 rhs
             } else {
@@ -389,7 +391,7 @@ impl PatchBuffer {
 )]
 mod tests {
     use super::{PatchBuffer, StateBox};
-    use crate::lp::indexer::BlockGrid;
+    use crate::lp::indexer::{BlockGrid, BlockRowFamily};
     use crate::test_support::{state_layout, state_layout_full, state_layout_with_transit_buckets};
 
     /// Every dimension unbounded — the pin-time box-membership assert is vacuous.
@@ -511,7 +513,8 @@ mod tests {
         assert_eq!(buf.indices.len(), 160);
 
         let z_rhs = vec![0.0_f64; n];
-        buf.fill_z_inflow_patches(500, &z_rhs, &[]);
+        let state = state_layout(n, 12);
+        buf.fill_z_inflow_patches(&state, &z_rhs, &[]);
         assert_eq!(buf.forward_patch_count(), 160);
     }
 
@@ -539,9 +542,9 @@ mod tests {
         assert_eq!(buf.upper.len(), 5);
     }
 
-    /// Load-balance row indices follow `row = load_row_start + bus_positions[i] * n_blocks + blk`.
+    /// Load-balance row indices follow `row = load_rows.start() + bus_positions[i] * n_blocks + blk`.
     ///
-    /// With `n_load_buses=2, n_blocks=2, bus_positions=[0,1], load_row_start=100`:
+    /// With `n_load_buses=2, n_blocks=2, bus_positions=[0,1], load_rows` starting at 100:
     /// load patches start at slot 0 so indices[0..4] = [100, 101, 102, 103].
     #[test]
     fn fill_load_patches_correct_indices() {
@@ -549,7 +552,14 @@ mod tests {
         let mut buf = PatchBuffer::new(0, 0, 2, 2, 0, 0, 0);
         let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(100, BlockGrid::new(2, 1), &load_rhs, &bus_positions, &[]);
+        let load_rows = BlockRowFamily::per_block(100..104);
+        buf.fill_load_patches(
+            load_rows,
+            BlockGrid::new(2, 1),
+            &load_rhs,
+            &bus_positions,
+            &[],
+        );
 
         assert_eq!(buf.indices[0], 100); // bus 0, blk 0
         assert_eq!(buf.indices[1], 101); // bus 0, blk 1
@@ -563,7 +573,14 @@ mod tests {
         let mut buf = PatchBuffer::new(0, 0, 2, 2, 0, 0, 0);
         let load_rhs = [300.0_f64, 280.0, 500.0, 450.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(100, BlockGrid::new(2, 1), &load_rhs, &bus_positions, &[]);
+        let load_rows = BlockRowFamily::per_block(100..104);
+        buf.fill_load_patches(
+            load_rows,
+            BlockGrid::new(2, 1),
+            &load_rhs,
+            &bus_positions,
+            &[],
+        );
 
         assert_eq!(buf.lower[0], 300.0);
         assert_eq!(buf.upper[0], 300.0);
@@ -582,7 +599,14 @@ mod tests {
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(20, BlockGrid::new(3, 1), &load_rhs, &bus_positions, &[]);
+        let load_rows = BlockRowFamily::per_block(20..26);
+        buf.fill_load_patches(
+            load_rows,
+            BlockGrid::new(3, 1),
+            &load_rhs,
+            &bus_positions,
+            &[],
+        );
 
         let count = buf.forward_patch_count();
         for i in 0..count {
@@ -605,7 +629,14 @@ mod tests {
 
         let load_rhs = [100.0_f64, 90.0, 80.0, 200.0, 190.0, 180.0];
         let bus_positions = [0_usize, 1];
-        buf.fill_load_patches(20, BlockGrid::new(3, 1), &load_rhs, &bus_positions, &[]);
+        let load_rows = BlockRowFamily::per_block(20..26);
+        buf.fill_load_patches(
+            load_rows,
+            BlockGrid::new(3, 1),
+            &load_rhs,
+            &bus_positions,
+            &[],
+        );
 
         assert_eq!(buf.forward_patch_count(), 6); // M*n_blocks=6
     }
@@ -616,9 +647,46 @@ mod tests {
     fn zero_load_buses_forward_patch_count_is_z_inflow_only() {
         let mut buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
         let z_rhs = [0.1_f64, 0.2, 0.3];
-        buf.fill_z_inflow_patches(50, &z_rhs, &[]);
+        let state = state_layout(3, 2);
+        buf.fill_z_inflow_patches(&state, &z_rhs, &[]);
 
         assert_eq!(buf.forward_patch_count(), 3);
+    }
+
+    /// Bus positions differ from slot order; each patched row must equal
+    /// `start + bus_pos * n_blks + blk`, never `start + slot * n_blks + blk`.
+    #[test]
+    fn load_patches_address_rows_by_bus_position_not_slot() {
+        let mut buf = PatchBuffer::new(0, 0, 3, 2, 0, 0, 0);
+        let load_rhs = [0.0_f64; 6];
+        let bus_positions = [2_usize, 0, 1];
+        let load_rows = BlockRowFamily::per_block(10..16);
+        buf.fill_load_patches(
+            load_rows,
+            BlockGrid::new(2, 1),
+            &load_rhs,
+            &bus_positions,
+            &[],
+        );
+
+        for (i, &bus_pos) in bus_positions.iter().enumerate() {
+            for blk in 0..2 {
+                assert_eq!(buf.indices[i * 2 + blk], 10 + bus_pos * 2 + blk);
+            }
+        }
+    }
+
+    /// Each patched z-inflow row equals `h`, the hydro's `StateSpace::z_inflow_row`.
+    #[test]
+    fn z_inflow_patches_address_the_state_space_z_rows() {
+        let mut buf = PatchBuffer::new(4, 0, 0, 0, 0, 0, 0);
+        let z_rhs = [1.0_f64, 2.0, 3.0, 4.0];
+        let state = state_layout(4, 0);
+        buf.fill_z_inflow_patches(&state, &z_rhs, &[]);
+
+        for h in 0..4 {
+            assert_eq!(buf.indices[h], h);
+        }
     }
 
     // -------------------------------------------------------------------------

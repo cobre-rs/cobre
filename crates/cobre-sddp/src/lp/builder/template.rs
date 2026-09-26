@@ -326,7 +326,7 @@ impl StageGeometry {
         }
     }
 
-    fn load_balance_rows(&self) -> BlockRowFamily {
+    pub(crate) fn load_balance_rows(&self) -> BlockRowFamily {
         BlockRowFamily::per_block(self.load_balance.clone())
     }
 

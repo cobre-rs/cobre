@@ -29,8 +29,8 @@ use crate::lp::builder::{
     GenericConstraintRowEntry, StageGeometry, evaporation_slot, evaporation_slot_count,
 };
 use crate::lp::indexer::{
-    AnticipatedLocal, BlockGrid, BlockIdx, Boundary, EvapLocal, FillingTargetLocal, FloorLocal,
-    FphaLocal, HydroCell, HydroCellIndex, HydroSys, StateSpace, StudyDimensions,
+    AnticipatedLocal, BlockGrid, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal,
+    FloorLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, StateSpace, StudyDimensions,
     anticipated_resolution_for, is_anticipated_decision_active_for_delivery,
 };
 use crate::setup::NodeId;
@@ -1456,8 +1456,9 @@ fn extract_buses(
                         .sum();
                     let excess_col =
                         grid.flat(spec.geometry.excess.start, bus_idx, BlockIdx::new(b));
-                    let load_row =
-                        grid.flat(spec.geometry.load_balance.start, bus_idx, BlockIdx::new(b));
+                    let load_row = spec
+                        .geometry
+                        .load_balance_row(BusSys::new(bus_idx), BlockIdx::new(b));
                     let raw_dual = view.dual.get(load_row).copied().unwrap_or(0.0);
                     let hrs = spec.block_hours.get(b).copied().unwrap_or(0.0);
                     #[allow(clippy::cast_possible_truncation)]

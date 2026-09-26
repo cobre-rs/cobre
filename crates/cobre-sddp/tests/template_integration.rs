@@ -38,7 +38,7 @@ use cobre_sddp::{
         EvaporationModel, EvaporationModelSet, FphaPlane, LinearizedEvaporation,
         PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel,
     },
-    indexer::{BlockGrid, StateSpace},
+    indexer::{BlockGrid, BlockRowFamily, StateSpace},
     inflow_method::InflowNonNegativityMethod,
     lp::builder::PatchBuffer,
     resolved_parameters::ResolvedParameters,

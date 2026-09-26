@@ -37,7 +37,7 @@ use cobre_sddp::{
     horizon_mode::HorizonMode,
     indexer::{CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
-    lp::builder::StateBox,
+    lp::builder::{StageGeometry, StateBox},
     risk_measure::RiskMeasure,
     train,
 };
@@ -421,11 +421,19 @@ fn test_stochastic_load_training_completes() {
     let load_balance_row_starts = vec![1usize; n_stages];
     let load_bus_indices = vec![0usize];
     let block_counts_per_stage = vec![1usize; n_stages];
+    let geometry_per_stage = vec![
+        StageGeometry {
+            load_balance: 1..2,
+            n_blks: 1,
+            ..StageGeometry::default()
+        };
+        n_stages
+    ];
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let stage_ctx = StageContext {
         state_boxes: &state_boxes,
-        geometry_per_stage: &[],
+        geometry_per_stage: &geometry_per_stage,
         templates: &templates,
         n_hydros: 0,
         cost_scale_factor: 1_000_000.0,
@@ -674,11 +682,19 @@ fn test_stochastic_load_seed_determinism() {
         let load_balance_row_starts = vec![1usize; n_stages];
         let load_bus_indices = vec![0usize];
         let block_counts_per_stage = vec![1usize; n_stages];
+        let geometry_per_stage = vec![
+            StageGeometry {
+                load_balance: 1..2,
+                n_blks: 1,
+                ..StageGeometry::default()
+            };
+            n_stages
+        ];
 
         let state_boxes = permissive_state_boxes(state.n_state, n_stages);
         let stage_ctx = StageContext {
             state_boxes: &state_boxes,
-            geometry_per_stage: &[],
+            geometry_per_stage: &geometry_per_stage,
             templates: &templates,
             n_hydros: 0,
             cost_scale_factor: 1_000_000.0,

@@ -48,6 +48,7 @@ impl BlockRowFamily {
     }
 
     /// `entity`'s row for `blk`, striding by the owner's `n_blks`.
+    #[inline]
     pub(crate) fn row(self, entity: usize, blk: BlockIdx, n_blks: usize) -> usize {
         let (stride, blk_offset) = match self.rows_per_entity {
             RowsPerEntity::One => (1, 0),

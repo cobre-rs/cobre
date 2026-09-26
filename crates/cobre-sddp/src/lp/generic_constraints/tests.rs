@@ -2112,7 +2112,7 @@ fn make_indexer_with_anticipated() -> StageGeometry {
             n_buses: 1,
             n_blks: 2,
             n_anticipated: 1,
-            k_max: 2,
+            lead_stages: 2,
             anticipated_thermal_indices: vec![1], // sys pos 1 is anticipated
             ..Default::default()
         },

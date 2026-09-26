@@ -191,7 +191,7 @@ mod tests {
     /// AC: a storage column bounded `[0.0, 50.0]` box-copies verbatim.
     #[test]
     fn state_box_storage_takes_the_outgoing_column_bounds() {
-        let layout = state_layout_full(1, 0, 0, 0, Vec::new());
+        let layout = state_layout_full(1, 0, 0, Vec::new());
         let mut template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let storage_j = layout.storage.start;
         template.col_lower[storage_j] = 0.0;
@@ -207,7 +207,7 @@ mod tests {
     /// AC: an inflow-lag dimension stays at the unbounded default.
     #[test]
     fn state_box_inflow_lag_is_unbounded() {
-        let layout = state_layout_full(1, 1, 0, 0, Vec::new());
+        let layout = state_layout_full(1, 1, 0, Vec::new());
         let template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let (bounds, time_value) = empty_bounds_and_time_value();
 
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn state_box_transit_bucket_reachable_is_zero_to_inf_frozen_is_zero_zero() {
         let layout =
-            state_layout_with_transit_buckets(1, 0, 2, vec![(0, 0), (0, 1)], 0, 0, Vec::new());
+            state_layout_with_transit_buckets(1, 0, 2, vec![(0, 0), (0, 1)], 0, Vec::new());
         let mut template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let reachable_j = layout.transit_buckets_out.start;
         let frozen_j = layout.transit_buckets_out.start + 1;

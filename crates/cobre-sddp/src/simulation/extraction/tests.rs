@@ -949,12 +949,12 @@ fn extract_equipment_reads_primal_when_with_equipment() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 0,
-        k_max: 0,
+        lead_stages: 0,
         anticipated_thermal_indices: vec![],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(2, 1, 0, 0, vec![]);
+    let state = test_support::state_layout_full(2, 1, 0, vec![]);
     // theta = 8, equipment starts at 9
     assert_eq!(state.theta, 8);
     assert_eq!(indexer.turbine, 9..11);
@@ -1142,12 +1142,12 @@ fn extract_thermals_marks_anticipated_thermals_when_indices_nonempty() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 1,
+        lead_stages: 1,
         anticipated_thermal_indices: vec![1],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 1, 1, vec![1]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![1]);
     // With N=0, L=0, A=1, K_max=1:
     //   commit_out = [0, 1)  (outgoing ring, A*K_max = 1 slot)
     //   commit_in     = [1, 2)  (incoming, A*K_max = 1 slot)
@@ -1265,7 +1265,7 @@ fn extract_thermals_marks_anticipated_thermals_when_indices_nonempty() {
 /// `delivery_dates[2]`.
 #[test]
 fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decision() {
-    let mut state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let mut state = test_support::state_layout_full(0, 0, 1, vec![2]);
     state.set_anticipated_resolution(AnticipatedResolution {
         per_plant: vec![PointResolution {
             decider: vec![None, Some(0), Some(1)],
@@ -1382,12 +1382,12 @@ fn extract_thermals_marks_no_thermals_anticipated_when_indices_empty() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 0,
-        k_max: 0,
+        lead_stages: 0,
         anticipated_thermal_indices: vec![],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 0, 0, vec![]);
+    let state = test_support::state_layout_full(0, 0, 0, vec![]);
 
     let n_cols = indexer.generation_below_slack.end.max(3);
     let primal = vec![0.0_f64; n_cols];
@@ -1480,7 +1480,7 @@ fn anticipated_decision_counts_k2() -> test_support::GeometryDims {
         n_thermals: 2,
         n_blks: 1,
         n_anticipated: 1,
-        k_max: 2,
+        lead_stages: 2,
         anticipated_thermal_indices: vec![1],
         ..Default::default()
     }
@@ -1507,7 +1507,7 @@ fn make_primal_with_decision_sentinel(geometry: &StageGeometry, sentinel: f64) -
 fn extract_thermals_reads_anticipated_decision_when_in_horizon() {
     let indexer = make_anticipated_decision_indexer_k2();
     let study_dims = test_support::study_dims_for(&anticipated_decision_counts_k2());
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
     let primal = make_primal_with_decision_sentinel(&indexer, 123.5);
     let obj = vec![0.0_f64; primal.len()];
 
@@ -1585,7 +1585,7 @@ fn extract_thermals_reads_anticipated_decision_when_in_horizon() {
 fn extract_thermals_emits_none_at_horizon_boundary() {
     let indexer = make_anticipated_decision_indexer_k2();
     let study_dims = test_support::study_dims_for(&anticipated_decision_counts_k2());
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
     let primal = make_primal_with_decision_sentinel(&indexer, 123.5);
     let obj = vec![0.0_f64; primal.len()];
 
@@ -1661,7 +1661,7 @@ fn extract_thermals_emits_none_at_horizon_boundary() {
 fn extract_thermals_emits_none_one_past_horizon_boundary() {
     let indexer = make_anticipated_decision_indexer_k2();
     let study_dims = test_support::study_dims_for(&anticipated_decision_counts_k2());
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
     let primal = make_primal_with_decision_sentinel(&indexer, 123.5);
     let obj = vec![0.0_f64; primal.len()];
 
@@ -1747,12 +1747,12 @@ fn extract_thermals_emits_none_for_non_anticipated_thermals() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 1,
+        lead_stages: 1,
         anticipated_thermal_indices: vec![1],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 1, 1, vec![1]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![1]);
 
     let n_cols = indexer.anticipated_decision.end.max(indexer.thermal.end);
     let mut primal = vec![0.0_f64; n_cols];
@@ -1841,12 +1841,12 @@ fn extract_thermals_anticipated_decision_is_per_block_invariant() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 1,
+        lead_stages: 1,
         anticipated_thermal_indices: vec![0],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 1, 1, vec![1]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![1]);
 
     let n_cols = indexer.anticipated_decision.end.max(indexer.thermal.end);
     let mut primal = vec![0.0_f64; n_cols];
@@ -1946,12 +1946,12 @@ fn extract_thermals_decision_uses_attached_resolution_delivery_stage() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 3,
+        lead_stages: 3,
         anticipated_thermal_indices: vec![0],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let mut state = test_support::state_layout_full(0, 0, 1, 3, vec![3]);
+    let mut state = test_support::state_layout_full(0, 0, 1, vec![3]);
     state.set_anticipated_resolution(AnticipatedResolution {
         per_plant: vec![PointResolution {
             decider: vec![None, Some(0), None],
@@ -2056,7 +2056,7 @@ fn anticipated_committed_counts_k2_3blks() -> test_support::GeometryDims {
         n_thermals: 1,
         n_blks: 3,
         n_anticipated: 1,
-        k_max: 2,
+        lead_stages: 2,
         anticipated_thermal_indices: vec![0],
         ..Default::default()
     }
@@ -2089,7 +2089,7 @@ fn make_anticipated_committed_indexer_k2_3blks() -> StageGeometry {
 #[test]
 fn extract_thermals_per_block_committed_at_delivery_stage() {
     let indexer = make_anticipated_committed_indexer_k2_3blks();
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
     // thermal = [5, 8): col 5 = block 0, col 6 = block 1, col 7 = block 2
     // (theta = N*(3+L) + 2*n_ant_state = 0 + 2*2 = 4, control region starts at 5).
     assert_eq!(indexer.thermal.start, 5);
@@ -2190,7 +2190,7 @@ fn extract_thermals_per_block_committed_at_delivery_stage() {
 fn extract_thermals_per_block_committed_reads_stage_maturing_slot_when_seed_zero() {
     let indexer = make_anticipated_committed_indexer_k2_3blks();
     let study_dims = test_support::study_dims_for(&anticipated_committed_counts_k2_3blks());
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
     // commit_in = [2, 4): slot 0 = col 2, slot 1 = col 3. At stage 1 the maturing
     // slot is 1 mod 2 = 1 (col 3); slot 0 carries a decoy that must NOT be read.
     assert_eq!(state.commit_in.start, 2);
@@ -2272,7 +2272,7 @@ fn extract_thermals_per_block_committed_reads_stage_maturing_slot_when_seed_zero
 fn extract_thermals_per_block_committed_at_first_delivery_boundary() {
     let indexer = make_anticipated_committed_indexer_k2_3blks();
     let study_dims = test_support::study_dims_for(&anticipated_committed_counts_k2_3blks());
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
     let n_cols = indexer.anticipated_decision.end.max(indexer.thermal.end);
     let mut primal = vec![0.0_f64; n_cols];
     primal[3] = 50.0;
@@ -2358,12 +2358,12 @@ fn extract_thermals_per_block_committed_none_for_non_anticipated() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 2,
+        lead_stages: 2,
         anticipated_thermal_indices: vec![1],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
 
     let n_cols = indexer.anticipated_decision.end.max(indexer.thermal.end);
     let mut primal = vec![0.0_f64; n_cols];
@@ -2464,12 +2464,12 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 1,
+        lead_stages: 1,
         anticipated_thermal_indices: vec![0],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 1, 1, vec![1]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![1]);
     assert!(
         indexer.thermal.is_empty(),
         "n_blks=0 must yield empty thermal range"
@@ -2571,12 +2571,12 @@ fn extract_thermals_no_block_committed_reads_slot0_when_seed_zero() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 1,
+        lead_stages: 1,
         anticipated_thermal_indices: vec![0],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(0, 0, 1, 1, vec![1]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![1]);
 
     let n_cols = indexer.anticipated_decision.end.max(1);
     let primal = vec![0.0_f64; n_cols];
@@ -2663,11 +2663,11 @@ fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
-        k_max: 1,
+        lead_stages: 1,
         anticipated_thermal_indices: vec![0],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
-    let state = test_support::state_layout_full(0, 0, 1, 1, vec![1]);
+    let state = test_support::state_layout_full(0, 0, 1, vec![1]);
 
     let n_cols = indexer
         .anticipated_decision
@@ -3038,12 +3038,12 @@ fn test_slack_extraction_with_penalty_active() {
         has_inflow_penalty: true,
         max_deficit_segments: 1,
         n_anticipated: 0,
-        k_max: 0,
+        lead_stages: 0,
         anticipated_thermal_indices: vec![],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(2, 1, 0, 0, vec![]);
+    let state = test_support::state_layout_full(2, 1, 0, vec![]);
 
     assert!(
         study_dims.has_inflow_penalty,
@@ -3160,12 +3160,12 @@ fn test_slack_extraction_without_penalty_is_zero() {
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 0,
-        k_max: 0,
+        lead_stages: 0,
         anticipated_thermal_indices: vec![],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(2, 1, 0, 0, vec![]);
+    let state = test_support::state_layout_full(2, 1, 0, vec![]);
     assert!(
         !study_dims.has_inflow_penalty,
         "has_inflow_penalty must be false"
@@ -3257,12 +3257,12 @@ fn test_slack_extraction_fallback_path_with_penalty() {
         has_inflow_penalty: true,
         max_deficit_segments: 1,
         n_anticipated: 0,
-        k_max: 0,
+        lead_stages: 0,
         anticipated_thermal_indices: vec![],
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(2, 1, 0, 0, vec![]);
+    let state = test_support::state_layout_full(2, 1, 0, vec![]);
 
     // turbine is empty (n_blks=0) → fallback path
     assert!(
@@ -6390,15 +6390,8 @@ fn make_transit_bucket_primal(transit_buckets_out: &[f64], transit_buckets_in: &
 fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
     let geometry = test_support::geom(2, 1);
     let study_dims = test_support::study_dims();
-    let state = test_support::state_layout_with_transit_buckets(
-        2,
-        1,
-        2,
-        vec![(0, 1), (0, 2)],
-        0,
-        0,
-        vec![],
-    );
+    let state =
+        test_support::state_layout_with_transit_buckets(2, 1, 2, vec![(0, 1), (0, 2)], 0, vec![]);
     let primal = make_transit_bucket_primal(&[11.0, 22.0], &[7.0, 8.0]);
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
@@ -6534,7 +6527,6 @@ fn extract_transit_buckets_rows_follow_canonical_column_order() {
         1,
         3,
         vec![(0, 1), (0, 2), (1, 1)],
-        0,
         0,
         vec![],
     );

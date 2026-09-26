@@ -952,7 +952,7 @@ mod tests {
 
     #[test]
     fn debug_assert_bucket_copy_gap_intact_passes_when_bucket_matches_primal() {
-        let layout = state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, 0, vec![]);
+        let layout = state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, vec![]);
         let primal = vec![7.0, 11.0];
         let assembled = primal.clone();
         super::debug_assert_bucket_copy_gap_intact(&assembled, &primal, &layout);
@@ -961,7 +961,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "bucket/commitment-hold state must equal the LP primal's identity")]
     fn debug_assert_bucket_copy_gap_intact_panics_when_bucket_diverges() {
-        let layout = state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, 0, vec![]);
+        let layout = state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, vec![]);
         let primal = vec![7.0, 11.0];
         let mut assembled = primal.clone();
         assembled[1] = 999.0; // simulate an accidental overwrite of the bucket block
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn debug_assert_bucket_copy_gap_intact_passes_when_commitment_hold_matches_primal() {
-        let layout = state_layout_with_transit_buckets(0, 0, 0, vec![], 2, 1, vec![1, 1]);
+        let layout = state_layout_with_transit_buckets(0, 0, 0, vec![], 2, vec![1, 1]);
         let primal = vec![3.0, 5.0];
         let assembled = primal.clone();
         super::debug_assert_bucket_copy_gap_intact(&assembled, &primal, &layout);
@@ -979,7 +979,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "bucket/commitment-hold state must equal the LP primal's identity")]
     fn debug_assert_bucket_copy_gap_intact_panics_when_commitment_hold_diverges() {
-        let layout = state_layout_with_transit_buckets(0, 0, 0, vec![], 2, 1, vec![1, 1]);
+        let layout = state_layout_with_transit_buckets(0, 0, 0, vec![], 2, vec![1, 1]);
         let primal = vec![3.0, 5.0];
         let mut assembled = primal.clone();
         assembled[0] = 999.0; // simulate an accidental overwrite of the commitment-hold slot
@@ -994,7 +994,7 @@ mod tests {
     /// (storage, lag0, `bucket_out`, `commit_out`), mirroring the
     /// `transit_bucket_copy_gap` fixture shape.
     fn seam_layout() -> crate::lp::indexer::StateSpace {
-        state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, 1, vec![1])
+        state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1])
     }
 
     fn identity_stage_lag() -> StageLagTransition {

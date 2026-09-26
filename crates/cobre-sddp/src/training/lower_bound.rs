@@ -2888,7 +2888,6 @@ mod tests {
             2,
             vec![(0, 0), (0, 1)],
             0,
-            0,
             vec![],
         );
         assert_eq!(state.n_state, 2);

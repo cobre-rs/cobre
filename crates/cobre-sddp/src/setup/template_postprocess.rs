@@ -209,7 +209,7 @@ mod tests {
             .geometry_per_stage
             .push(StageGeometry::default());
 
-        let state_layout: StateSpace = state_layout_full(1, 0, 0, 0, Vec::new());
+        let state_layout: StateSpace = state_layout_full(1, 0, 0, Vec::new());
         let system = SystemBuilder::new()
             .stages(vec![one_year_stage(0)])
             .bounds(ResolvedBounds::empty())

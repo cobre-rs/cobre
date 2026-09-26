@@ -2192,8 +2192,7 @@ fn layout_for_lag_test(hydro_count: usize, max_par_order: usize) -> StateSpace {
 /// Must match [`counts_with_anticipated`]: 1 hydro, 0 lags, `n_anticipated`
 /// plants with the given per-plant K.
 fn layout_with_anticipated(n_anticipated: usize, k_values: &[usize]) -> StateSpace {
-    let k_max = k_values.iter().copied().max().unwrap_or(0);
-    test_support::state_layout_full(1, 0, n_anticipated, k_max, k_values.to_vec())
+    test_support::state_layout_full(1, 0, n_anticipated, k_values.to_vec())
 }
 
 /// 2-hydro PAR(2) system with `inflow_lags`, `season_map`, and
@@ -3552,14 +3551,14 @@ fn counts_with_anticipated(
     k_values: &[usize],
     thermal_indices: &[usize],
 ) -> test_support::GeometryDims {
-    let k_max = k_values.iter().copied().max().unwrap_or(0);
+    let lead_stages = k_values.iter().copied().max().unwrap_or(0);
     test_support::GeometryDims {
         hydro_count: 1,
         n_thermals: n_anticipated, // at least cover the anticipated plants
         n_buses: 1,
         n_blks: 1,
         n_anticipated,
-        k_max,
+        lead_stages,
         anticipated_thermal_indices: thermal_indices.to_vec(),
         ..Default::default()
     }
@@ -7736,7 +7735,7 @@ fn stage_data_geometry_role_b_matches_reference_build() {
         has_inflow_penalty: study_dims.has_inflow_penalty,
         max_deficit_segments: study_dims.max_deficit_segments,
         n_anticipated: study_dims.anticipated_thermal_indices.len(),
-        k_max: 0,
+        lead_stages: 0,
         anticipated_thermal_indices: study_dims.anticipated_thermal_indices.clone(),
     };
     let reference = test_support::geometry(

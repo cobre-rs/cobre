@@ -3968,7 +3968,7 @@ mod transit_bucket_copy_gap {
     /// captured advanced state (`records[0].state`).
     fn run_transit_bucket_forward_stage() -> Vec<f64> {
         let state =
-            test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, 1, vec![1]);
+            test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
         let template = transit_bucket_template();
         let templates = vec![template.clone()];
         let stochastic = super::make_stochastic_context_1_hydro_3_stages();

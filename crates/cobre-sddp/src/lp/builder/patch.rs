@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn fill_col_state_patches_anticipated_state() {
         // N=0, A=1, K=2 anticipated-only state layout.
-        let state_layout = state_layout_full(0, 0, 1, 2, vec![2]);
+        let state_layout = state_layout_full(0, 0, 1, vec![2]);
 
         // n_state = 0 + 1*2 = 2; the state-VECTOR anticipated block is
         // `commit_out` (== 0 here), NOT the relocated incoming
@@ -743,7 +743,7 @@ mod tests {
     /// guaranteed bit-exact.
     #[test]
     fn fill_col_state_patches_anticipated_state_unscaled_is_exact() {
-        let state_layout = state_layout_full(0, 0, 1, 2, vec![2]);
+        let state_layout = state_layout_full(0, 0, 1, vec![2]);
         let ant_state_vec_start = state_layout.commit_out.start;
         let ant_incoming_col_start = state_layout.commit_in.start;
         let mut state = vec![0.0_f64; state_layout.n_state];
@@ -888,7 +888,7 @@ mod tests {
     fn fill_col_state_patches_every_transit_bucket_incoming_column_is_pinned() {
         let n_buckets = 2;
         let state_layout =
-            state_layout_with_transit_buckets(3, 2, n_buckets, vec![(0, 0), (0, 1)], 0, 0, vec![]);
+            state_layout_with_transit_buckets(3, 2, n_buckets, vec![(0, 0), (0, 1)], 0, vec![]);
         let mut state = vec![0.0_f64; state_layout.n_state];
         state[state_layout.transit_buckets_out.start] = 100.0;
         state[state_layout.transit_buckets_out.start + 1] = 200.0;
@@ -926,7 +926,7 @@ mod tests {
         let l = 2;
         let n_buckets = 2;
         let state_layout =
-            state_layout_with_transit_buckets(n, l, n_buckets, vec![(0, 0), (0, 1)], 1, 2, vec![2]);
+            state_layout_with_transit_buckets(n, l, n_buckets, vec![(0, 0), (0, 1)], 1, vec![2]);
         let unshifted_anticipated_start = n * (1 + l);
         // The state-VECTOR anticipated position is `commit_out`
         // (the `state_to_lp_column` identity domain), shifted by `n_buckets`
@@ -979,7 +979,7 @@ mod tests {
         let l = 2;
         let a = 2;
         let k = 3;
-        let state_layout = state_layout_full(n, l, a, k, vec![k; a]);
+        let state_layout = state_layout_full(n, l, a, vec![k; a]);
         assert_eq!(state_layout.n_buckets, 0);
 
         let state: Vec<f64> = (0..state_layout.n_state)
@@ -1049,7 +1049,7 @@ mod tests {
     #[should_panic(expected = "index out of bounds")]
     fn fill_col_state_patches_undersized_buffer_panics() {
         let state_layout =
-            state_layout_with_transit_buckets(3, 2, 2, vec![(0, 0), (0, 1)], 0, 0, vec![]);
+            state_layout_with_transit_buckets(3, 2, 2, vec![(0, 0), (0, 1)], 0, vec![]);
         let state = vec![0.0_f64; state_layout.n_state];
         let mut buf = PatchBuffer::new(3, 2, 0, 0, 0, 0, 0);
         buf.fill_col_state_patches(

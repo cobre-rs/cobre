@@ -114,8 +114,8 @@ pub struct GeometryDims {
     pub max_deficit_segments: usize,
     /// Number of anticipated thermals.
     pub n_anticipated: usize,
-    /// Maximum `lead_stages` across the anticipated thermals.
-    pub k_max: usize,
+    /// Per-plant lead stage, uniform across every anticipated thermal.
+    pub lead_stages: usize,
     /// Mapping from anticipated-local position to global thermal index.
     pub anticipated_thermal_indices: Vec<usize>,
 }
@@ -132,7 +132,7 @@ impl Default for GeometryDims {
             has_inflow_penalty: false,
             max_deficit_segments: 1,
             n_anticipated: 0,
-            k_max: 0,
+            lead_stages: 0,
             anticipated_thermal_indices: Vec::new(),
         }
     }
@@ -207,7 +207,7 @@ pub fn eq_with_anticipated(
     n_blks: usize,
     has_inflow_penalty: bool,
     n_anticipated: usize,
-    k_max: usize,
+    lead_stages: usize,
 ) -> GeometryDims {
     GeometryDims {
         hydro_count,
@@ -218,7 +218,7 @@ pub fn eq_with_anticipated(
         n_blks,
         has_inflow_penalty,
         n_anticipated,
-        k_max,
+        lead_stages,
         anticipated_thermal_indices: (0..n_anticipated).collect(),
         ..Default::default()
     }
@@ -504,7 +504,7 @@ pub fn geometry(
     };
     let cascade = CascadeTopology::build(&[]);
     let par_lp = PrecomputedPar::default();
-    let anticipated_lead_stages = vec![dims.k_max; dims.n_anticipated];
+    let anticipated_lead_stages = vec![dims.lead_stages; dims.n_anticipated];
 
     let ctx = TemplateBuildCtx {
         hydros: &hydros,
@@ -574,7 +574,6 @@ pub fn geometry(
         dims.hydro_count,
         dims.max_par_order,
         dims.n_anticipated,
-        dims.k_max,
         anticipated_lead_stages,
     );
     let stage = geometry_stage(dims.n_blks);
@@ -596,20 +595,16 @@ pub fn geom(_hydro_count: usize, _max_par_order: usize) -> StageGeometry {
 /// `crate::setup::resolve_state_layout` finalizes with no per-hydro AR truncation.
 #[must_use]
 pub fn state_layout(hydro_count: usize, max_par_order: usize) -> StateSpace {
-    state_layout_full(hydro_count, max_par_order, 0, 0, Vec::new())
+    state_layout_full(hydro_count, max_par_order, 0, Vec::new())
 }
 
 /// Build a finalized [`StateSpace`] from explicit state-vector dimensions,
 /// including anticipated thermals. Lag coverage is dense (full `max_par_order`).
-///
-/// `anticipated_lead_stages` must have length `n_anticipated` and its max (when
-/// non-empty) must equal `k_max`.
 #[must_use]
 pub fn state_layout_full(
     hydro_count: usize,
     max_par_order: usize,
     n_anticipated: usize,
-    k_max: usize,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
     state_layout_with_transit_buckets(
@@ -618,7 +613,6 @@ pub fn state_layout_full(
         0,
         Vec::new(),
         n_anticipated,
-        k_max,
         anticipated_lead_stages,
     )
 }
@@ -634,7 +628,6 @@ pub fn state_layout_with_transit_buckets(
     n_buckets: usize,
     transit_bucket_column_order: Vec<(usize, usize)>,
     n_anticipated: usize,
-    k_max: usize,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
     let effective_lag_count = vec![max_par_order; hydro_count];
@@ -644,7 +637,7 @@ pub fn state_layout_with_transit_buckets(
         n_buckets,
         transit_bucket_column_order,
         n_anticipated,
-        k_max,
+        AnticipatedResolution::default().ring_size(&anticipated_lead_stages),
         anticipated_lead_stages,
         &effective_lag_count,
     )

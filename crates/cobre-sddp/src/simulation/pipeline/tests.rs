@@ -2642,7 +2642,7 @@ mod anticipated_ring_matches_forward_propagation {
     /// copy-outgoing convention, not a residual shift.
     #[test]
     fn simulation_ring_matches_forward_pass_for_identical_solves() {
-        let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+        let state = test_support::state_layout_full(0, 0, 1, vec![2]);
         let num_cols = state.theta + 1;
         let template = ring_template(num_cols, state.n_state);
         let templates = vec![template.clone(), template.clone(), template];

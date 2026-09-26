@@ -1067,7 +1067,7 @@ mod tests {
 
     /// The `N=2, L=2, A=1, k_max=2` global layout the fixture system maps onto.
     fn layout_2h_1ant() -> StateSpace {
-        let mut state = test_support::state_layout_full(2, 2, 1, 2, vec![2]);
+        let mut state = test_support::state_layout_full(2, 2, 1, vec![2]);
         state.set_anticipated_resolution(single_plant_lead2_one_stage_resolution());
         state
     }
@@ -1081,7 +1081,6 @@ mod tests {
             2,
             vec![(0, 1), (1, 2)],
             1,
-            2,
             vec![2],
         );
         state.set_anticipated_resolution(single_plant_lead2_one_stage_resolution());
@@ -1802,7 +1801,7 @@ mod tests {
     #[test]
     fn anticipated_slot_delivery_anchor_matches_delivery_stage_year_month() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadStages(2));
-        let mut global = test_support::state_layout_full(1, 1, 1, 2, vec![2]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
@@ -1861,7 +1860,7 @@ mod tests {
     #[test]
     fn anticipated_slot_delivery_anchor_past_horizon_is_sentinel() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadStages(2));
-        let mut global = test_support::state_layout_full(1, 1, 1, 2, vec![2]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
@@ -1897,7 +1896,7 @@ mod tests {
     #[test]
     fn anticipated_slot_leadtime_mode_yields_real_anchor() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadTime(720.0));
-        let mut global = test_support::state_layout_full(1, 1, 1, 2, vec![2]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0)],
             DeliveryAxis {
@@ -1930,7 +1929,7 @@ mod tests {
     #[test]
     fn anticipated_slot_padding_beyond_own_lead_is_sentinel() {
         let system = system_1h_2ant_3monthly();
-        let mut global = test_support::state_layout_full(1, 1, 2, 2, vec![1, 2]);
+        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(1), LeadTime::Stages(2)],
             DeliveryAxis {
@@ -1995,7 +1994,7 @@ mod tests {
     fn ring_slot_targeting_post_study_carries_a_real_anchor() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
         let system = system_1h_1ant_3monthly_lead3(post_study_stages_from(start));
-        let mut global = test_support::state_layout_full(1, 1, 1, 3, vec![3]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![3]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(3)],
             DeliveryAxis {
@@ -2037,7 +2036,7 @@ mod tests {
     #[test]
     fn anticipated_slot_interval_matches_its_delivery_stage_span() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadStages(2));
-        let mut global = test_support::state_layout_full(1, 1, 1, 2, vec![2]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
@@ -2070,7 +2069,7 @@ mod tests {
     #[test]
     fn anticipated_slot_interval_on_a_five_week_stage_spans_thirty_five_days() {
         let system = system_1h_1ant_short_then_five_week_terminal();
-        let mut global = test_support::state_layout_full(1, 1, 1, 1, vec![1]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![1]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(1)],
             DeliveryAxis {
@@ -2115,7 +2114,7 @@ mod tests {
     fn anticipated_slot_dated_iff_intervalled() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
         let system = system_1h_1ant_3monthly_lead3(post_study_stages_from(start));
-        let mut global = test_support::state_layout_full(1, 1, 1, 3, vec![3]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![3]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(3)],
             DeliveryAxis {
@@ -2170,7 +2169,7 @@ mod tests {
     fn terminal_maturing_residue_dates_onto_its_post_study_delivery() {
         let post_study = post_study_stages_from_months(&[(2031, 12), (2032, 1)]);
         let system = system_1h_1ant_64monthly_lead2(Some(post_study));
-        let mut global = test_support::state_layout_full(1, 1, 1, 2, vec![2]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
@@ -2209,7 +2208,7 @@ mod tests {
     #[test]
     fn terminal_maturing_residue_stays_sentinel_without_a_post_study_calendar() {
         let system = system_1h_1ant_64monthly_lead2(None);
-        let mut global = test_support::state_layout_full(1, 1, 1, 2, vec![2]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
@@ -2242,7 +2241,7 @@ mod tests {
     fn anticipated_slot_date_matches_the_resolved_physical_delivery_stage() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
         let system = system_1h_1ant_3monthly_lead3(post_study_stages_from(start));
-        let mut global = test_support::state_layout_full(1, 1, 1, 3, vec![3]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![3]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(3)],
             DeliveryAxis {
@@ -2299,7 +2298,7 @@ mod tests {
     #[test]
     fn anticipated_padding_slots_beyond_plant_lead_stay_sentinel() {
         let system = system_1h_2ant_3monthly();
-        let mut global = test_support::state_layout_full(1, 1, 2, 2, vec![1, 2]);
+        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(1), LeadTime::Stages(2)],
             DeliveryAxis {
@@ -2384,7 +2383,7 @@ mod tests {
         assert_eq!(point.physical_target(6), 9);
 
         let k_max = resolution.k_max;
-        let mut global = test_support::state_layout_full(1, 1, 1, k_max, vec![k_max]);
+        let mut global = test_support::state_layout_full(1, 1, 1, vec![k_max]);
         global.set_anticipated_resolution(resolution);
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 

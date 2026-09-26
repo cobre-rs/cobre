@@ -107,8 +107,7 @@ pub struct StateSpace {
     /// no arc is declared.
     pub n_buckets: usize,
 
-    /// Number of anticipated thermals —
-    /// [`crate::setup::resolve_anticipated_thermal_indices`]'s resolved count.
+    /// Number of anticipated thermals — [`super::AnticipatedPlants::len`].
     pub n_anticipated: usize,
 
     /// Maximum `lead_stages` across the anticipated thermals (`K_max`).

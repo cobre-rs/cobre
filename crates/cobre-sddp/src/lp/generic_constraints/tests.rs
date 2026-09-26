@@ -22,8 +22,8 @@ use crate::lp::indexer::{
     Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
 };
 use crate::test_support::{
-    GeometryDims, geometry, geometry_hydro, geometry_hydro_with_groups, identity_hydro_cell_index,
-    make_unit_group,
+    GeometryDims, anticipated_plants_at, geometry, geometry_hydro, geometry_hydro_with_groups,
+    identity_hydro_cell_index, make_unit_group,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────
@@ -48,13 +48,13 @@ fn make_geom<'a>(
     indexer: &'a StageGeometry,
     state: &'a StateSpace,
     max_deficit_segments: usize,
-    anticipated_thermal_indices: &[usize],
+    anticipated_positions: &[usize],
 ) -> GenericResolverGeom<'a> {
     make_geom_with_contracts(
         indexer,
         state,
         max_deficit_segments,
-        anticipated_thermal_indices,
+        anticipated_positions,
         &indexer.contract_import,
         &indexer.contract_export,
     )
@@ -68,14 +68,14 @@ fn make_geom_with_contracts<'a>(
     indexer: &'a StageGeometry,
     state: &'a StateSpace,
     max_deficit_segments: usize,
-    anticipated_thermal_indices: &[usize],
+    anticipated_positions: &[usize],
     contract_import: &'a std::ops::Range<usize>,
     contract_export: &'a std::ops::Range<usize>,
 ) -> GenericResolverGeom<'a> {
     // Leak the reconstructed reverse map so the borrowed `GenericResolverGeom`
     // field has a `'a`-compatible referent without threading an owner through
     // every call site.
-    let reverse: HashMap<usize, usize> = anticipated_thermal_indices
+    let reverse: HashMap<usize, usize> = anticipated_positions
         .iter()
         .enumerate()
         .map(|(local, &sys_pos)| (sys_pos, local))
@@ -2113,7 +2113,7 @@ fn make_indexer_with_anticipated() -> StageGeometry {
             n_blks: 2,
             n_anticipated: 1,
             lead_stages: 2,
-            anticipated_thermal_indices: vec![1], // sys pos 1 is anticipated
+            anticipated_plants: anticipated_plants_at(&[1]), // sys pos 1 is anticipated
             ..Default::default()
         },
         vec![],
@@ -2124,7 +2124,7 @@ fn make_indexer_with_anticipated() -> StageGeometry {
 
 /// `AnticipatedDecision` for an anticipated thermal maps to
 /// `anticipated_decision.start + local_idx`: EntityId(6) at sys_pos=1
-/// (anticipated_thermal_indices[0]), anticipated_decision.start = 9, local_idx = 0
+/// (`anticipated_plants`'s only entry), anticipated_decision.start = 9, local_idx = 0
 /// → column 9.
 #[test]
 fn anticipated_decision_maps_to_correct_column() {
@@ -2200,7 +2200,7 @@ fn anticipated_decision_ignores_block_idx() {
 }
 
 /// A regular (non-anticipated) thermal returns empty (defense-in-depth):
-/// EntityId(5) at sys_pos=0 is NOT in anticipated_thermal_indices.
+/// EntityId(5) at sys_pos=0 is NOT in `anticipated_plants`.
 #[test]
 fn anticipated_decision_non_anticipated_thermal_returns_empty() {
     let indexer = make_indexer_with_anticipated();

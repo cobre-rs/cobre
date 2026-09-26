@@ -565,8 +565,8 @@ pub fn resolve_point(lag: LeadTime, axis: DeliveryAxis<'_>) -> PointResolution {
 /// per-plant `anticipated_lead_stages`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnticipatedResolution {
-    /// One [`PointResolution`] per anticipated plant, in anticipated-local
-    /// (`anticipated_thermal_indices`) order.
+    /// One [`PointResolution`] per anticipated plant, in
+    /// [`crate::indexer::AnticipatedPlants`] order.
     pub per_plant: Vec<PointResolution>,
     /// Delivery-anchored ring depth `max_i ring_depth_i` over every plant (see
     /// [`PointResolution::ring_depth`], the single owner of the depth formula);

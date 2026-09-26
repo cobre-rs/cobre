@@ -20,8 +20,8 @@ use crate::time_value::TimeValue;
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
-    BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace,
-    StorageBoundaryGrid, ThermalSys,
+    AnticipatedPlants, BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys,
+    StateSpace, StorageBoundaryGrid,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::bucket_topology::build_transit_bucket_topology;
@@ -620,7 +620,7 @@ pub fn build_stage_templates(
     evaporation_models: &EvaporationModelSet,
     resolved_parameters: &ResolvedParameters,
     state_layout: &StateSpace,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     per_stage_mask: &[Vec<usize>],
     arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
     arc_spread_chrono: &HashMap<usize, Vec<Option<SpreadResolution>>>,
@@ -657,7 +657,7 @@ pub fn build_stage_templates(
         resolved_parameters,
         state_layout.anticipated_resolution.clone(),
         state_layout.anticipated_lead_stages.clone(),
-        anticipated_thermal_indices,
+        anticipated_plants,
         per_stage_mask.to_vec(),
         arc_stage_weights.clone(),
         arc_spread_chrono.clone(),
@@ -685,11 +685,6 @@ pub fn build_stage_templates(
     debug_assert_eq!(
         ctx.max_par_order, state_layout.max_par_order,
         "ctx's threaded max_par_order must match the state_layout it was built from"
-    );
-    debug_assert_eq!(
-        anticipated_thermal_indices.len(),
-        state_layout.n_anticipated,
-        "anticipated_thermal_indices must match state_layout.n_anticipated"
     );
 
     let n_study = study_stages.len();
@@ -739,7 +734,7 @@ pub fn build_stage_templates_resolving_layout(
     resolved_parameters: &ResolvedParameters,
 ) -> Result<StageTemplates, SddpError> {
     let topology = build_transit_bucket_topology(system, false);
-    let (state_layout, _, anticipated_thermal_indices) =
+    let (state_layout, _, anticipated_plants) =
         resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -747,8 +742,7 @@ pub fn build_stage_templates_resolving_layout(
         .iter()
         .map(|s| BlockClock::new(s).total_hours())
         .collect();
-    let time_value =
-        TimeValue::from_system(system, &anticipated_thermal_indices, &study_total_hours);
+    let time_value = TimeValue::from_system(system, &anticipated_plants, &study_total_hours);
     Ok(build_stage_templates(
         system,
         inflow_method,
@@ -758,7 +752,7 @@ pub fn build_stage_templates_resolving_layout(
         evaporation_models,
         resolved_parameters,
         &state_layout,
-        &anticipated_thermal_indices,
+        &anticipated_plants,
         &topology.per_stage_mask,
         &topology.arc_stage_weights,
         &topology.arc_spread_chrono,
@@ -865,7 +859,7 @@ fn build_template_build_ctx<'a>(
     resolved_parameters: &'a ResolvedParameters,
     anticipated_resolution: AnticipatedResolution,
     anticipated_lead_stages: Vec<usize>,
-    anticipated_thermal_indices: &'a [usize],
+    anticipated_plants: &'a AnticipatedPlants,
     per_stage_mask: Vec<Vec<usize>>,
     arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
     arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
@@ -949,20 +943,14 @@ fn build_template_build_ctx<'a>(
 
     let load_bus_indices = collect_load_bus_indices(system, &bus_pos, load_scheme);
 
-    let anticipated_windows: Vec<(Option<i32>, Option<i32>)> = anticipated_thermal_indices
-        .iter()
-        .map(|&t_idx| {
-            let thermal = &system.thermals()[t_idx];
+    let anticipated_windows: Vec<(Option<i32>, Option<i32>)> = anticipated_plants
+        .thermals()
+        .map(|t| {
+            let thermal = &system.thermals()[t.get()];
             (thermal.entry_stage_id, thermal.exit_stage_id)
         })
         .collect();
-    let anticipated_thermal_indices: Vec<ThermalSys> = anticipated_thermal_indices
-        .iter()
-        .map(|&t_idx| ThermalSys::new(t_idx))
-        .collect();
-    let n_anticipated = anticipated_thermal_indices.len();
-
-    debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);
+    let n_anticipated = anticipated_plants.len();
 
     // Cloned so the map serves both LP construction (ctx) and the simulation
     // extraction output.
@@ -1046,7 +1034,7 @@ fn build_template_build_ctx<'a>(
         max_par_order,
         n_anticipated,
         anticipated_lead_stages,
-        anticipated_thermal_indices,
+        anticipated_plants,
         anticipated_windows,
         anticipated_resolution,
         study_stage_ids,

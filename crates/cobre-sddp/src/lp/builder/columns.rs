@@ -634,7 +634,9 @@ pub(super) fn fill_anticipated_columns(
             bufs.col_upper[state_out_col] = f64::INFINITY;
 
             let bound = if delivery_stage < n_stages {
-                let thermal_idx = ctx.anticipated_thermal_indices[res.plant];
+                let thermal_idx = ctx
+                    .anticipated_plants
+                    .thermal_of(AnticipatedLocal::new(res.plant));
                 // Safe only because cobre-io's load-time validation rejects a
                 // `block_id` bound row on an anticipated thermal, so the base is the
                 // value at every block — a guarantee this type cannot see.
@@ -1348,7 +1350,7 @@ mod interior_storage_bound_tests {
     use super::super::layout::ResolvedTables;
     use super::super::test_support::state_layout_for;
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_storage_columns};
-    use crate::indexer::{Boundary, HydroCellIndex, HydroSys};
+    use crate::indexer::{AnticipatedPlants, Boundary, HydroCellIndex, HydroSys};
 
     const N_STAGES: usize = 1;
     const STAGE_IDX: usize = 0;
@@ -1525,6 +1527,7 @@ mod interior_storage_bound_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl InteriorStorageFixtures {
@@ -1566,6 +1569,7 @@ mod interior_storage_bound_tests {
                     vec![0],
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -1617,7 +1621,7 @@ mod interior_storage_bound_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
@@ -1863,7 +1867,7 @@ mod diversion_bound_tests {
     use crate::hydro_models::{
         EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
     };
-    use crate::indexer::HydroCellIndex;
+    use crate::indexer::{AnticipatedPlants, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -2019,6 +2023,7 @@ mod diversion_bound_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl DivFixtures {
@@ -2060,6 +2065,7 @@ mod diversion_bound_tests {
                     vec![0],
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -2125,7 +2131,7 @@ mod diversion_bound_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
@@ -2277,7 +2283,7 @@ mod filling_phase_gating_tests {
         EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet,
         ResolvedProductionModel,
     };
-    use crate::indexer::{BlockIdx, FphaCellLocal, HydroCell, HydroCellIndex};
+    use crate::indexer::{AnticipatedPlants, BlockIdx, FphaCellLocal, HydroCell, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -2461,6 +2467,7 @@ mod filling_phase_gating_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl Fixtures {
@@ -2509,6 +2516,7 @@ mod filling_phase_gating_tests {
                     vec![0],
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -2560,7 +2568,7 @@ mod filling_phase_gating_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
@@ -3435,7 +3443,7 @@ mod anticipated_objective_tests {
         state_layout_for, state_layout_with_resolution, two_block_stage,
     };
     use super::{StageLayout, TemplateBuildCtx, fill_stage_columns};
-    use crate::indexer::{HydroCellIndex, ThermalSys};
+    use crate::indexer::{AnticipatedPlants, HydroCellIndex};
 
     const N_STAGES: usize = 6;
     const K_MAX: usize = 1;
@@ -3465,6 +3473,7 @@ mod anticipated_objective_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl AntObjFixtures {
@@ -3497,6 +3506,7 @@ mod anticipated_objective_tests {
                     exit_stage_id: None,
                 },
             ];
+            let anticipated_plants = AnticipatedPlants::build(&thermals);
             let mut bounds = bounds_two_thermals();
             for stage in 0..N_STAGES {
                 bounds.thermal_bounds_mut(0, stage).cost_per_mwh = DELIVERY_COST_PER_MWH;
@@ -3529,6 +3539,7 @@ mod anticipated_objective_tests {
                     (0..N_STAGES as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants,
             }
         }
 
@@ -3578,7 +3589,7 @@ mod anticipated_objective_tests {
                 max_par_order: 0,
                 n_anticipated: 1,
                 anticipated_lead_stages: vec![K_MAX],
-                anticipated_thermal_indices: vec![ThermalSys::new(0)],
+                anticipated_plants: &self.anticipated_plants,
                 // Windowless single plant: the decision gate reduces to the
                 // strict horizon clause. `study_stage_ids` lists the N_STAGES
                 // study-stage ids so the in-range delivery lookup is safe.
@@ -3717,6 +3728,7 @@ mod anticipated_objective_tests {
         n_stages: usize,
         k_max: usize,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl DeliveryAnchoredFixtures {
@@ -3738,6 +3750,7 @@ mod anticipated_objective_tests {
                 entry_stage_id: None,
                 exit_stage_id: None,
             }];
+            let anticipated_plants = AnticipatedPlants::build(&thermals);
             let mut bounds = ResolvedBounds::new(
                 &BoundsCountsSpec {
                     n_hydros: 0,
@@ -3818,6 +3831,7 @@ mod anticipated_objective_tests {
                 n_stages,
                 k_max,
                 time_value,
+                anticipated_plants,
             }
         }
 
@@ -3867,7 +3881,7 @@ mod anticipated_objective_tests {
                 max_par_order: 0,
                 n_anticipated: 1,
                 anticipated_lead_stages: vec![self.k_max],
-                anticipated_thermal_indices: vec![ThermalSys::new(0)],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..self.n_stages as i32).collect(),
@@ -3984,6 +3998,7 @@ mod anticipated_objective_tests {
         resolved_parameters: ResolvedParameters,
         resolution: AnticipatedResolution,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     /// The fixture's `ResolvedBounds` table, sized `n_stages + k_max` per
@@ -4098,6 +4113,7 @@ mod anticipated_objective_tests {
                 entry_stage_id: None,
                 exit_stage_id: None,
             }];
+            let anticipated_plants = AnticipatedPlants::build(&thermals);
 
             let resolution = AnticipatedResolution::resolve(
                 &[LeadTime::Stages(PSA_LEAD)],
@@ -4172,6 +4188,7 @@ mod anticipated_objective_tests {
                 },
                 resolution,
                 time_value,
+                anticipated_plants,
             }
         }
 
@@ -4221,7 +4238,7 @@ mod anticipated_objective_tests {
                 max_par_order: 0,
                 n_anticipated: 1,
                 anticipated_lead_stages: vec![usize::try_from(PSA_LEAD).unwrap()],
-                anticipated_thermal_indices: vec![ThermalSys::new(0)],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: self.resolution.clone(),
                 study_stage_ids: (0..i32::try_from(PSA_N_STAGES).unwrap()).collect(),
@@ -4375,7 +4392,7 @@ mod block_family_slack_tests {
     use crate::hydro_models::{
         EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
     };
-    use crate::indexer::{BlockIdx, HydroCell, HydroCellIndex, HydroSys};
+    use crate::indexer::{AnticipatedPlants, BlockIdx, HydroCell, HydroCellIndex, HydroSys};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -4634,6 +4651,7 @@ mod block_family_slack_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl SlackFixtures {
@@ -4692,6 +4710,7 @@ mod block_family_slack_tests {
                     vec![0],
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -4745,7 +4764,7 @@ mod block_family_slack_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
@@ -4914,7 +4933,7 @@ mod evaporation_slack_objective_tests {
         EvaporationModel, EvaporationModelSet, LinearizedEvaporation, ProductionModelSet,
         ResolvedProductionModel,
     };
-    use crate::indexer::{BlockIdx, EvapLocal, HydroCellIndex};
+    use crate::indexer::{AnticipatedPlants, BlockIdx, EvapLocal, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -5099,6 +5118,7 @@ mod evaporation_slack_objective_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl EvapFixtures {
@@ -5150,6 +5170,7 @@ mod evaporation_slack_objective_tests {
                     vec![0],
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -5201,7 +5222,7 @@ mod evaporation_slack_objective_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
@@ -5336,7 +5357,7 @@ mod contract_column_tests {
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-    use crate::indexer::HydroCellIndex;
+    use crate::indexer::{AnticipatedPlants, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -5427,6 +5448,7 @@ mod contract_column_tests {
         resolved_parameters: ResolvedParameters,
         contracts: Vec<EnergyContract>,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl ContractFixtures {
@@ -5456,6 +5478,7 @@ mod contract_column_tests {
                     (0..N_STAGES as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -5528,7 +5551,7 @@ mod contract_column_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
@@ -5662,7 +5685,7 @@ mod thermal_block_bound_tests {
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-    use crate::indexer::HydroCellIndex;
+    use crate::indexer::{AnticipatedPlants, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -5748,11 +5771,13 @@ mod thermal_block_bound_tests {
         resolved_parameters: ResolvedParameters,
         thermals: Vec<Thermal>,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl ThermalFixtures {
         fn new(thermals: Vec<Thermal>) -> Self {
             let n_thermals = thermals.len();
+            let anticipated_plants = AnticipatedPlants::build(&thermals);
             Self {
                 par_lp: PrecomputedPar::default(),
                 cascade: CascadeTopology::build(&[]),
@@ -5778,6 +5803,7 @@ mod thermal_block_bound_tests {
                     (0..N_STAGES as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants,
             }
         }
 
@@ -5879,7 +5905,7 @@ mod thermal_block_bound_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
@@ -6092,7 +6118,7 @@ mod line_contract_pumping_block_bound_tests {
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-    use crate::indexer::HydroCellIndex;
+    use crate::indexer::{AnticipatedPlants, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -6256,6 +6282,7 @@ mod line_contract_pumping_block_bound_tests {
         pumping_stations: Vec<PumpingStation>,
         contracts: Vec<EnergyContract>,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl LcpFixtures {
@@ -6294,6 +6321,7 @@ mod line_contract_pumping_block_bound_tests {
                     (0..N_STAGES as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -6448,7 +6476,7 @@ mod line_contract_pumping_block_bound_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
@@ -6833,7 +6861,7 @@ mod hydro_block_bound_tests {
         EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet,
         ResolvedProductionModel,
     };
-    use crate::indexer::{BlockIdx, FphaCellLocal, HydroCellIndex};
+    use crate::indexer::{AnticipatedPlants, BlockIdx, FphaCellLocal, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -7018,6 +7046,7 @@ mod hydro_block_bound_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl HydroBlockFixtures {
@@ -7071,6 +7100,7 @@ mod hydro_block_bound_tests {
                     (0..N_STAGES as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -7200,7 +7230,7 @@ mod hydro_block_bound_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
@@ -7898,7 +7928,9 @@ mod cell_column_bound_tests {
         EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet,
         ResolvedProductionModel,
     };
-    use crate::indexer::{BlockIdx, FphaCellLocal, HydroCell, HydroCellIndex, HydroSys};
+    use crate::indexer::{
+        AnticipatedPlants, BlockIdx, FphaCellLocal, HydroCell, HydroCellIndex, HydroSys,
+    };
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::test_support::make_unit_group;
@@ -8159,6 +8191,7 @@ mod cell_column_bound_tests {
         /// that need a real "another stage" to assert against.
         n_stages: usize,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl Fixtures {
@@ -8204,6 +8237,7 @@ mod cell_column_bound_tests {
                     (0..n_stages as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -8318,7 +8352,7 @@ mod cell_column_bound_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..self.n_stages as i32).collect(),
@@ -9110,7 +9144,7 @@ mod ncs_objective_tests {
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-    use crate::indexer::HydroCellIndex;
+    use crate::indexer::{AnticipatedPlants, HydroCellIndex};
     use crate::lead_time::AnticipatedResolution;
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::TimeValue;
@@ -9196,6 +9230,7 @@ mod ncs_objective_tests {
         resolved_parameters: ResolvedParameters,
         non_controllable_sources: Vec<NonControllableSource>,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl NcsFixtures {
@@ -9233,6 +9268,7 @@ mod ncs_objective_tests {
                     (0..N_STAGES as i32).collect(),
                     crate::time_value::PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
@@ -9287,7 +9323,7 @@ mod ncs_objective_tests {
                 max_par_order: 0,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),

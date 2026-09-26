@@ -6,7 +6,7 @@ use super::{
 use crate::SddpError;
 use crate::block_clock::M3S_TO_HM3;
 use crate::hydro_models::{PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel};
-use crate::lp::indexer::StateSpace;
+use crate::lp::indexer::{AnticipatedPlants, StateSpace, ThermalSys};
 use crate::test_support;
 use cobre_stochastic::ExternalScenarioLibrary;
 use cobre_stochastic::par::precompute::PrecomputedPar;
@@ -3549,7 +3549,7 @@ fn build_initial_state_no_lags_state_is_storage_only() {
 fn counts_with_anticipated(
     n_anticipated: usize,
     k_values: &[usize],
-    thermal_indices: &[usize],
+    anticipated_positions: &[usize],
 ) -> test_support::GeometryDims {
     let lead_stages = k_values.iter().copied().max().unwrap_or(0);
     test_support::GeometryDims {
@@ -3559,7 +3559,7 @@ fn counts_with_anticipated(
         n_blks: 1,
         n_anticipated,
         lead_stages,
-        anticipated_thermal_indices: thermal_indices.to_vec(),
+        anticipated_plants: test_support::anticipated_plants_at(anticipated_positions),
         ..Default::default()
     }
 }
@@ -6936,7 +6936,7 @@ fn setup_leadstages_resolution_preserves_k_max_and_state_dimension() {
     let system = minimal_system_with_anticipated_lead_stages(5, 2);
     let (resolution, lead_stages) = super::resolve_anticipated_commitments(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     assert_eq!(lead_stages, vec![2], "LeadStages keeps the constant ℓ == 2");
@@ -7010,7 +7010,7 @@ fn test_anticipated_resolve_point_pmo_calendar() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
 
@@ -7036,7 +7036,7 @@ fn lead_time_three_stage_lead_resolves_a_pre_study_prefix() {
         minimal_system_with_anticipated(&[100.0; 4], AnticipatedConfig::LeadTime(350.0), 1, None);
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
 
@@ -7056,7 +7056,7 @@ fn ring_depth_counts_pre_study_occupancy() {
         minimal_system_with_anticipated(&[100.0; 4], AnticipatedConfig::LeadTime(350.0), 1, None);
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     assert_eq!(resolution.k_max, 3);
@@ -7075,7 +7075,7 @@ fn leadstages_ring_depth_covers_full_lead_when_lead_equals_horizon() {
         minimal_system_with_anticipated_lead_stages(n_stages, u32::try_from(n_stages).unwrap());
     let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     assert_eq!(resolution.k_max, n_stages);
@@ -7096,7 +7096,7 @@ fn test_anticipated_resolve_point_fanout_calendar() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
 
@@ -7128,7 +7128,7 @@ fn resolve_anticipated_commitments_widens_lead_time_plant_lead_to_the_ring_depth
     );
     let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     assert_eq!(
@@ -7755,9 +7755,9 @@ fn stage_data_geometry_role_b_matches_reference_build() {
         n_blks: geometry.n_blks,
         has_inflow_penalty: study_dims.has_inflow_penalty,
         max_deficit_segments: study_dims.max_deficit_segments,
-        n_anticipated: study_dims.anticipated_thermal_indices.len(),
+        n_anticipated: study_dims.anticipated_plants.len(),
         lead_stages: 0,
-        anticipated_thermal_indices: study_dims.anticipated_thermal_indices.clone(),
+        anticipated_plants: study_dims.anticipated_plants.clone(),
     };
     let reference = test_support::geometry(
         &dims,
@@ -8405,7 +8405,7 @@ fn test_anticipated_resolve_point_k0_uniform_calendar() {
     );
     let (resolution, lead_stages) = super::resolve_anticipated_commitments(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
 
@@ -8445,7 +8445,7 @@ fn resolve_anticipated_commitments_warns_on_k0_sub_stage_lead() {
     tracing::subscriber::with_default(subscriber, || {
         let _ = super::resolve_anticipated_commitments(
             &system,
-            &super::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
         );
     });
     let recorded = messages.lock().unwrap();
@@ -8481,7 +8481,7 @@ fn resolve_anticipated_commitments_leadstages_never_warns() {
     tracing::subscriber::with_default(subscriber, || {
         let _ = super::resolve_anticipated_commitments(
             &system,
-            &super::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
         );
     });
     let recorded = messages.lock().unwrap();
@@ -8511,7 +8511,7 @@ fn warn_on_sub_stage_lead_emits_once_per_self_delivered_stage() {
     tracing::subscriber::with_default(subscriber, || {
         let _ = super::resolve_anticipated_commitments(
             &system,
-            &super::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
         );
     });
     let recorded = messages.lock().unwrap();
@@ -8570,7 +8570,7 @@ fn resolve_anticipated_commitments_core_reports_the_extended_delivery_width() {
 
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     assert_eq!(
@@ -8594,7 +8594,7 @@ fn resolve_anticipated_commitments_core_matches_study_only_width_without_post_st
 
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     assert_eq!(resolution.per_plant[0].decider.len(), 3);
@@ -8625,12 +8625,17 @@ fn warn_on_boundary_absent_post_study_delivery_fires_once_when_boundary_absent()
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        super::warn_on_boundary_absent_post_study_delivery(&system, &[0], &resolution, false);
+        super::warn_on_boundary_absent_post_study_delivery(
+            &system,
+            &AnticipatedPlants::build(system.thermals()),
+            &resolution,
+            false,
+        );
     });
     let recorded = messages.lock().unwrap();
     let relevant: Vec<&str> = recorded
@@ -8669,12 +8674,17 @@ fn warn_on_boundary_absent_post_study_delivery_silent_when_boundary_present() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        super::warn_on_boundary_absent_post_study_delivery(&system, &[0], &resolution, true);
+        super::warn_on_boundary_absent_post_study_delivery(
+            &system,
+            &AnticipatedPlants::build(system.thermals()),
+            &resolution,
+            true,
+        );
     });
     let recorded = messages.lock().unwrap();
     assert!(
@@ -8707,12 +8717,17 @@ fn warn_on_boundary_absent_fires_for_nonzero_fixed_value_without_boundary() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        super::warn_on_boundary_absent_post_study_delivery(&system, &[0], &resolution, false);
+        super::warn_on_boundary_absent_post_study_delivery(
+            &system,
+            &AnticipatedPlants::build(system.thermals()),
+            &resolution,
+            false,
+        );
     });
     let recorded = messages.lock().unwrap();
     let relevant: Vec<&str> = recorded
@@ -8753,12 +8768,17 @@ fn warn_on_boundary_absent_silent_for_all_zero_stub_without_boundary() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        super::warn_on_boundary_absent_post_study_delivery(&system, &[0], &resolution, false);
+        super::warn_on_boundary_absent_post_study_delivery(
+            &system,
+            &AnticipatedPlants::build(system.thermals()),
+            &resolution,
+            false,
+        );
     });
     let recorded = messages.lock().unwrap();
     assert!(
@@ -8797,12 +8817,17 @@ fn warn_on_boundary_absent_names_dual_cause_plant_once() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
-        super::warn_on_boundary_absent_post_study_delivery(&system, &[0], &resolution, false);
+        super::warn_on_boundary_absent_post_study_delivery(
+            &system,
+            &AnticipatedPlants::build(system.thermals()),
+            &resolution,
+            false,
+        );
     });
     let recorded = messages.lock().unwrap();
     let relevant: Vec<&str> = recorded
@@ -8849,7 +8874,7 @@ fn lead_time_fanout_rejected_at_setup() {
     // Sanity: the fixture genuinely fans out (guards the guard's own fixture).
     let (resolution, _) = super::resolve_anticipated_commitments(
         &system,
-        &super::resolve_anticipated_thermal_indices(&system),
+        &AnticipatedPlants::build(system.thermals()),
     );
     assert_eq!(
         resolution.max_fanout, 2,
@@ -9314,12 +9339,12 @@ fn system_with_interleaved_anticipated_thermals() -> cobre_core::System {
 }
 
 #[test]
-fn resolve_anticipated_thermal_indices_returns_canonical_order_of_anticipated_thermals() {
+fn anticipated_plants_build_returns_canonical_order_of_anticipated_thermals() {
     let system = system_with_interleaved_anticipated_thermals();
-    let indices = super::resolve_anticipated_thermal_indices(&system);
+    let plants = AnticipatedPlants::build(system.thermals());
     assert_eq!(
-        indices,
-        vec![0, 2],
+        plants.thermals().collect::<Vec<_>>(),
+        vec![ThermalSys::new(0), ThermalSys::new(2)],
         "must skip the interleaved non-anticipated thermal and return canonical ascending positions"
     );
 }

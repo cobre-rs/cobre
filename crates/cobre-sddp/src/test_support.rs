@@ -17,14 +17,14 @@ use cobre_comm::LocalBackend;
 use cobre_core::scenario::{InflowModel, LoadModel, SamplingScheme};
 use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, Transition};
 use cobre_core::{
-    Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, CascadeTopology,
-    ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro, HydroBlockBounds,
-    HydroGenerationModel, HydroPenalties, HydroStageBounds, HydroStorage, HydroUnitGroup,
-    InitialConditions, LineBlockBounds, LineStagePenalties, NcsStagePenalties, NoiseMethod,
-    PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
+    AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
+    CascadeTopology, ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro,
+    HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds, HydroStorage,
+    HydroUnitGroup, InitialConditions, LineBlockBounds, LineStagePenalties, NcsStagePenalties,
+    NoiseMethod, PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
     ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
     ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig, System,
-    SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
+    SystemBuilder, Thermal, ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_io::StageIdResolver;
 use cobre_io::config::{
@@ -61,7 +61,7 @@ use crate::lp::builder::{
     encode_stage_templates_facts, encode_time_value_facts,
 };
 use crate::lp::indexer::{
-    CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions, ThermalSys,
+    AnticipatedPlants, CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions,
 };
 use crate::noise::{DownstreamAccumState, LagAccumState};
 use crate::policy::policy_load::{
@@ -116,8 +116,8 @@ pub struct GeometryDims {
     pub n_anticipated: usize,
     /// Per-plant lead stage, uniform across every anticipated thermal.
     pub lead_stages: usize,
-    /// Mapping from anticipated-local position to global thermal index.
-    pub anticipated_thermal_indices: Vec<usize>,
+    /// The anticipated-plant set.
+    pub anticipated_plants: AnticipatedPlants,
 }
 
 impl Default for GeometryDims {
@@ -133,7 +133,7 @@ impl Default for GeometryDims {
             max_deficit_segments: 1,
             n_anticipated: 0,
             lead_stages: 0,
-            anticipated_thermal_indices: Vec::new(),
+            anticipated_plants: AnticipatedPlants::default(),
         }
     }
 }
@@ -196,7 +196,7 @@ pub fn eq(
 
 /// Build [`GeometryDims`] with explicit anticipated-thermal fields.
 ///
-/// The anticipated identity list defaults to `0..n_anticipated`.
+/// The anticipated-plant set defaults to positions `0..n_anticipated`.
 #[must_use]
 pub fn eq_with_anticipated(
     hydro_count: usize,
@@ -219,9 +219,38 @@ pub fn eq_with_anticipated(
         has_inflow_penalty,
         n_anticipated,
         lead_stages,
-        anticipated_thermal_indices: (0..n_anticipated).collect(),
+        anticipated_plants: anticipated_plants_at(&(0..n_anticipated).collect::<Vec<usize>>()),
         ..Default::default()
     }
+}
+
+/// Build an [`AnticipatedPlants`] whose only members are `positions`, each with
+/// a one-stage lead — the fixture builder every positionless test uses in place
+/// of owning a `System`. `positions` must be strictly ascending.
+#[must_use]
+pub fn anticipated_plants_at(positions: &[usize]) -> AnticipatedPlants {
+    debug_assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "positions must be strictly ascending"
+    );
+    let n = positions.last().map_or(0, |&p| p + 1);
+    let thermals: Vec<Thermal> = (0..n)
+        .map(|idx| Thermal {
+            id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+            name: String::new(),
+            operational_start_date: ymd(2024, 1, 1),
+            bus_id: EntityId(0),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            cost_per_mwh: 0.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 0.0,
+            anticipated_config: positions
+                .contains(&idx)
+                .then_some(AnticipatedConfig::LeadStages(1)),
+        })
+        .collect();
+    AnticipatedPlants::build(&thermals)
 }
 
 /// All-zero [`HydroPenalties`] for [`geometry_hydro`] — no fixture-side penalty
@@ -547,11 +576,7 @@ pub fn geometry(
         max_par_order: dims.max_par_order,
         n_anticipated: dims.n_anticipated,
         anticipated_lead_stages: anticipated_lead_stages.clone(),
-        anticipated_thermal_indices: dims
-            .anticipated_thermal_indices
-            .iter()
-            .map(|&t| ThermalSys::new(t))
-            .collect(),
+        anticipated_plants: &dims.anticipated_plants,
         anticipated_windows: vec![(None, None); dims.n_anticipated],
         anticipated_resolution: AnticipatedResolution::default(),
         study_stage_ids: Vec::new(),
@@ -715,7 +740,7 @@ pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
         has_inflow_penalty: dims.has_inflow_penalty,
         has_withdrawal: dims.hydro_count > 0,
         has_operational_violations: dims.hydro_count != 0,
-        anticipated_thermal_indices: dims.anticipated_thermal_indices.clone(),
+        anticipated_plants: dims.anticipated_plants.clone(),
         n_pumping: 0,
     }
 }

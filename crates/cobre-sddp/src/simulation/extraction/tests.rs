@@ -31,12 +31,13 @@ use crate::lp::builder::{
     evaporation_slot_count,
 };
 use crate::lp::indexer::{
-    FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex, HydroSys, StateSpace,
-    StudyDimensions,
+    AnticipatedPlants, FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex, HydroSys,
+    StateSpace, StudyDimensions,
 };
 use crate::resolved_parameters::ResolvedParameters;
 use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 use crate::test_support;
+use crate::test_support::anticipated_plants_at;
 use crate::time_value::{PostStudyResolved, TimeValue};
 
 // -------------------------------------------------------------------------
@@ -950,7 +951,7 @@ fn extract_equipment_reads_primal_when_with_equipment() {
         max_deficit_segments: 1,
         n_anticipated: 0,
         lead_stages: 0,
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: AnticipatedPlants::default(),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -1124,7 +1125,7 @@ fn extract_equipment_reads_primal_when_with_equipment() {
 }
 
 /// Verify that `is_anticipated` is set to `true` for thermals whose global
-/// index appears in `anticipated_thermal_indices`, and `false` for all others.
+/// index appears in `anticipated_plants`, and `false` for all others.
 ///
 /// Setup: 2 thermals (ids 10 and 20), 1 block. Thermal at global index 1
 /// (id=20) is anticipated. The per-block branch is exercised by using
@@ -1143,7 +1144,7 @@ fn extract_thermals_marks_anticipated_thermals_when_indices_nonempty() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 1,
-        anticipated_thermal_indices: vec![1],
+        anticipated_plants: anticipated_plants_at(&[1]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -1283,7 +1284,7 @@ fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decisio
         ..StageGeometry::default()
     };
     let study_dims = StudyDimensions {
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
         ..StudyDimensions::default()
     };
     let counts = EntityCounts {
@@ -1368,7 +1369,7 @@ fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decisio
 }
 
 /// Verify that `is_anticipated` is `false` for every thermal when
-/// `anticipated_thermal_indices` is empty (no anticipated thermals configured).
+/// `anticipated_plants` is empty (no anticipated thermals configured).
 #[test]
 fn extract_thermals_marks_no_thermals_anticipated_when_indices_empty() {
     // N=0 hydros, T=2 thermals, B=0 buses, K=1 block, n_anticipated=0
@@ -1383,7 +1384,7 @@ fn extract_thermals_marks_no_thermals_anticipated_when_indices_empty() {
         max_deficit_segments: 1,
         n_anticipated: 0,
         lead_stages: 0,
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: AnticipatedPlants::default(),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -1481,7 +1482,7 @@ fn anticipated_decision_counts_k2() -> test_support::GeometryDims {
         n_blks: 1,
         n_anticipated: 1,
         lead_stages: 2,
-        anticipated_thermal_indices: vec![1],
+        anticipated_plants: anticipated_plants_at(&[1]),
         ..Default::default()
     }
 }
@@ -1748,7 +1749,7 @@ fn extract_thermals_emits_none_for_non_anticipated_thermals() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 1,
-        anticipated_thermal_indices: vec![1],
+        anticipated_plants: anticipated_plants_at(&[1]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -1842,7 +1843,7 @@ fn extract_thermals_anticipated_decision_is_per_block_invariant() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 1,
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -1947,7 +1948,7 @@ fn extract_thermals_decision_uses_attached_resolution_delivery_stage() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 3,
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -2057,7 +2058,7 @@ fn anticipated_committed_counts_k2_3blks() -> test_support::GeometryDims {
         n_blks: 3,
         n_anticipated: 1,
         lead_stages: 2,
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
         ..Default::default()
     }
 }
@@ -2359,7 +2360,7 @@ fn extract_thermals_per_block_committed_none_for_non_anticipated() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 2,
-        anticipated_thermal_indices: vec![1],
+        anticipated_plants: anticipated_plants_at(&[1]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -2465,7 +2466,7 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 1,
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -2572,7 +2573,7 @@ fn extract_thermals_no_block_committed_reads_slot0_when_seed_zero() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 1,
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -2664,7 +2665,7 @@ fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
         max_deficit_segments: 1,
         n_anticipated: 1,
         lead_stages: 1,
-        anticipated_thermal_indices: vec![0],
+        anticipated_plants: anticipated_plants_at(&[0]),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let state = test_support::state_layout_full(0, 0, 1, vec![1]);
@@ -3039,7 +3040,7 @@ fn test_slack_extraction_with_penalty_active() {
         max_deficit_segments: 1,
         n_anticipated: 0,
         lead_stages: 0,
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: AnticipatedPlants::default(),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -3161,7 +3162,7 @@ fn test_slack_extraction_without_penalty_is_zero() {
         max_deficit_segments: 1,
         n_anticipated: 0,
         lead_stages: 0,
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: AnticipatedPlants::default(),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -3258,7 +3259,7 @@ fn test_slack_extraction_fallback_path_with_penalty() {
         max_deficit_segments: 1,
         n_anticipated: 0,
         lead_stages: 0,
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: AnticipatedPlants::default(),
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
@@ -7622,6 +7623,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
     let hydro_cell_index = test_support::identity_hydro_cell_index(0);
     let production_models = ProductionModelSet::new(Vec::new(), 0, 1);
     let evaporation_models = EvaporationModelSet::new(Vec::new());
+    let anticipated_plants = AnticipatedPlants::default();
 
     let ctx = TemplateBuildCtx {
         hydros: &[],
@@ -7664,7 +7666,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         max_par_order: 0,
         n_anticipated: 0,
         anticipated_lead_stages: vec![],
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: &anticipated_plants,
         anticipated_windows: vec![],
         anticipated_resolution: AnticipatedResolution::default(),
         study_stage_ids: Vec::new(),

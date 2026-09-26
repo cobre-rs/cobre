@@ -9,10 +9,10 @@ use cobre_core::{
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
-use crate::indexer::StateSpace;
+use crate::indexer::{AnticipatedPlants, StateSpace};
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::setup::bucket_topology::build_transit_bucket_topology;
-use crate::setup::{resolve_anticipated_commitments_core, resolve_anticipated_thermal_indices};
+use crate::setup::resolve_anticipated_commitments_core;
 
 use super::layout::TemplateBuildCtx;
 
@@ -38,7 +38,7 @@ pub(super) fn ctx_anticipated_and_mask_inputs(
     usize,
 ) {
     let (resolution, lead_stages) =
-        resolve_anticipated_commitments_core(system, &resolve_anticipated_thermal_indices(system));
+        resolve_anticipated_commitments_core(system, &AnticipatedPlants::build(system.thermals()));
     let topology = build_transit_bucket_topology(system, false);
     let max_par_order = system
         .inflow_models()

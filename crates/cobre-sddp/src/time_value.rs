@@ -4,7 +4,7 @@
 use cobre_core::{EntityId, HorizonGraph, PostStudyStages, PostStudyThermalBound, Stage, System};
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
-use crate::lp::indexer::AnticipatedLocal;
+use crate::lp::indexer::{AnticipatedLocal, AnticipatedPlants};
 
 /// Compute per-stage one-step discount factors from study stages and a policy graph.
 ///
@@ -120,9 +120,9 @@ pub(crate) struct PostStudyResolved {
     /// Dense row-major `[anticipated_local][post_study_stage]` projection of
     /// [`PostStudyThermalLookup::lookup`] — one cell per anticipated plant times
     /// post-study stage, `None` where the deck declares none. `anticipated_local`
-    /// MUST be [`crate::setup::resolve_anticipated_thermal_indices`]'s canonical
-    /// order; a mismatched order silently prices one plant's post-study
-    /// commitment with another's fuel cost. Never index this directly — read it
+    /// MUST be [`crate::indexer::AnticipatedPlants`]'s canonical order; a
+    /// mismatched order silently prices one plant's post-study commitment with
+    /// another's fuel cost. Never index this directly — read it
     /// only through [`Self::anticipated_bound`], and never rebuild it into a
     /// `Vec<Vec<_>>` (a per-plant allocation) or an `EntityId`-keyed map (a
     /// nondeterministic-iteration-order read).
@@ -194,8 +194,8 @@ impl PostStudyResolved {
 ///
 /// `anticipated_thermal_ids` is the anticipated plants' `EntityId`s in
 /// anticipated-local order — `resolve_state_layout`'s own
-/// `anticipated_thermal_indices` order, handed in rather than re-derived here,
-/// since a second derivation could silently diverge from it.
+/// [`crate::indexer::AnticipatedPlants`] order, handed in rather than
+/// re-derived here, since a second derivation could silently diverge from it.
 ///
 /// `last_real_cumulative` and `last_real_per_stage` are the study's own last
 /// cumulative and per-stage discount factors — `StageTemplates::
@@ -289,20 +289,20 @@ pub(crate) struct TimeValue {
 impl TimeValue {
     /// Resolve the whole delivery calendar directly from `system`: derives the
     /// study stages (`id >= 0`) and the anticipated thermal ids (projected from
-    /// `anticipated_thermal_indices`, [`crate::setup::resolve_anticipated_thermal_indices`]'s
-    /// canonical order), the post-study calendar and the policy graph, then
-    /// delegates to [`Self::resolve`]. `study_total_hours` is supplied by the
-    /// caller (`BlockClock`) rather than derived here — `block_clock` is not on
-    /// this module's import allowlist.
+    /// `anticipated_plants`, [`crate::indexer::AnticipatedPlants`]'s canonical
+    /// order), the post-study calendar and the policy graph, then delegates to
+    /// [`Self::resolve`]. `study_total_hours` is supplied by the caller
+    /// (`BlockClock`) rather than derived here — `block_clock` is not on this
+    /// module's import allowlist.
     pub(crate) fn from_system(
         system: &System,
-        anticipated_thermal_indices: &[usize],
+        anticipated_plants: &AnticipatedPlants,
         study_total_hours: &[f64],
     ) -> Self {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
-        let anticipated_thermal_ids: Vec<EntityId> = anticipated_thermal_indices
-            .iter()
-            .map(|&t| system.thermals()[t].id)
+        let anticipated_thermal_ids: Vec<EntityId> = anticipated_plants
+            .thermals()
+            .map(|t| system.thermals()[t.get()].id)
             .collect();
         Self::resolve(
             &study_stages,
@@ -567,7 +567,7 @@ mod tests {
 
 #[cfg(test)]
 mod from_system_tests {
-    use super::TimeValue;
+    use super::{AnticipatedPlants, TimeValue};
     use chrono::NaiveDate;
     use cobre_core::temporal::{
         BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
@@ -639,9 +639,8 @@ mod from_system_tests {
             .expect("minimal two-stage anticipated system must build");
 
         let study_total_hours = vec![744.0, 672.0];
-        let anticipated_thermal_indices =
-            crate::setup::resolve_anticipated_thermal_indices(&system);
-        let tv = TimeValue::from_system(&system, &anticipated_thermal_indices, &study_total_hours);
+        let anticipated_plants = AnticipatedPlants::build(system.thermals());
+        let tv = TimeValue::from_system(&system, &anticipated_plants, &study_total_hours);
 
         assert_eq!(tv.delivery_stage_ids(), &[0, 1]);
     }

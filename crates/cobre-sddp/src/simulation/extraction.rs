@@ -164,7 +164,7 @@ fn read_floor_slack_primal(
 /// only on the study-invariant [`StudyDimensions`], so it is built once per run.
 ///
 /// Entry `t` is `Some(local_anticipated_idx)` — the position of `t` within
-/// `study_dims.anticipated_thermal_indices`, used to address anticipated-decision
+/// `study_dims.anticipated_plants`, used to address anticipated-decision
 /// columns — when thermal `t` is anticipated, `None` otherwise.
 pub(crate) struct ThermalReverseLookup {
     /// Anticipated-local slot per thermal, `None` if not anticipated.
@@ -175,12 +175,8 @@ impl ThermalReverseLookup {
     /// Build the reverse lookup table for anticipated thermal indices.
     pub(crate) fn build(study_dims: &StudyDimensions, n_thermals: usize) -> Self {
         let mut thermal_is_anticipated = vec![None; n_thermals];
-        for (local, &sys) in study_dims.anticipated_thermal_indices.iter().enumerate() {
-            debug_assert!(
-                sys < n_thermals,
-                "anticipated_thermal_indices entry {sys} >= n_thermals {n_thermals}"
-            );
-            thermal_is_anticipated[sys] = Some(AnticipatedLocal::new(local));
+        for (local, sys) in study_dims.anticipated_plants.thermals().enumerate() {
+            thermal_is_anticipated[sys.get()] = Some(AnticipatedLocal::new(local));
         }
         Self {
             thermal_is_anticipated,
@@ -291,8 +287,8 @@ fn compute_anticipated_committed_mw(
 /// stages then the post-study continuation), the same calendar the policy
 /// manifest dates ring slots against via `delivery_anchor_at`. `thermal_id`
 /// resolves anticipated-local `local` through
-/// [`StudyDimensions::anticipated_thermal_indices`] into the system thermals,
-/// the canonical anticipated order the ring and manifest share.
+/// [`StudyDimensions::anticipated_plants`] into the system thermals, the
+/// canonical anticipated order the ring and manifest share.
 ///
 /// Iterating every genuine post-study decision (not `.next()`) keeps one row per
 /// decision, so a future multi-decider fill fans out rather than silently
@@ -325,7 +321,11 @@ pub(crate) fn extract_anticipated_lanes(
                 "delivery target {m} out of delivery_dates bounds {}",
                 delivery_dates.len(),
             );
-            let sys_thermal = spec.study_dims.anticipated_thermal_indices[local];
+            let sys_thermal = spec
+                .study_dims
+                .anticipated_plants
+                .thermal_of(AnticipatedLocal::new(local))
+                .get();
             results.push(SimulationAnticipatedLaneResult {
                 stage_id,
                 thermal_id: spec.entity_counts.thermal_ids[sys_thermal],

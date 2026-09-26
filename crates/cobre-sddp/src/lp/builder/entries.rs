@@ -5,8 +5,8 @@ use crate::block_clock::BlockClock;
 use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
-    BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, StateSpace,
-    for_each_ring_residue,
+    AnticipatedLocal, BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys,
+    StateSpace, for_each_ring_residue,
 };
 
 use super::delivery_ring::DeliveryRing;
@@ -75,7 +75,9 @@ pub(super) fn fill_anticipated_fishing_entries(
         // ring.
         let slot = stage_idx % layout.state.k_max;
         let row = layout.anticipated.row_anticipated_fishing_start + pos;
-        let thermal_idx = ctx.anticipated_thermal_indices[local_idx];
+        let thermal_idx = ctx
+            .anticipated_plants
+            .thermal_of(AnticipatedLocal::new(local_idx));
         let mut block_hours_total: f64 = 0.0;
         for blk in 0..n_blks {
             let col_gen = grid.flat(
@@ -2231,9 +2233,10 @@ mod zero_cost_tests {
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-    use crate::indexer::{BlockIdx, HydroCellIndex, StateSpace, ThermalSys};
+    use crate::indexer::{AnticipatedPlants, BlockIdx, HydroCellIndex, StateSpace};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
     use crate::resolved_parameters::ResolvedParameters;
+    use crate::test_support::anticipated_plants_at;
     use crate::time_value::{PostStudyResolved, TimeValue};
 
     use super::super::columns::{ColumnBufs, fill_stage_columns, fill_thermal_columns};
@@ -2264,6 +2267,7 @@ mod zero_cost_tests {
         production_models: ProductionModelSet,
         evaporation_models: EvaporationModelSet,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl AntFixtures {
@@ -2349,17 +2353,21 @@ mod zero_cost_tests {
                     vec![],
                     PostStudyResolved::default(),
                 ),
+                anticipated_plants: AnticipatedPlants::default(),
             }
         }
 
+        /// `anticipated_positions` must be strictly ascending
+        /// (`test_support::anticipated_plants_at`).
         fn make_ctx(
             &mut self,
             n_anticipated: usize,
             k_max: usize,
             anticipated_lead_stages: Vec<usize>,
-            anticipated_thermal_indices: Vec<usize>,
+            anticipated_positions: &[usize],
             n_thermals: usize,
         ) -> TemplateBuildCtx<'_> {
+            self.anticipated_plants = anticipated_plants_at(anticipated_positions);
             // Sized to cover every active plant's delivery stage
             // (`stage_idx + K_i < n_stages`); `fill_anticipated_columns`
             // indexes these by delivery stage when pricing the decision column.
@@ -2415,10 +2423,7 @@ mod zero_cost_tests {
                 max_par_order: 0,
                 n_anticipated,
                 anticipated_lead_stages,
-                anticipated_thermal_indices: anticipated_thermal_indices
-                    .into_iter()
-                    .map(ThermalSys::new)
-                    .collect(),
+                anticipated_plants: &self.anticipated_plants,
                 // Windowless: one `(None, None)` per plant, so the decision gate
                 // reduces to the strict horizon clause. `study_stage_ids` lists the
                 // study-stage ids so the in-range delivery lookup is safe.
@@ -2498,7 +2503,7 @@ mod zero_cost_tests {
             1,       // n_anticipated
             1,       // k_max
             vec![1], // anticipated_lead_stages: K_0 = 1
-            vec![0], // anticipated_thermal_indices: thermal 0 is anticipated
+            &[0],    // anticipated_positions: thermal 0 is anticipated
             2,       // n_thermals
         );
         ctx.thermals = &thermals;
@@ -2550,7 +2555,7 @@ mod zero_cost_tests {
     fn fishing_rows_fill_all_plants() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(10, 0, 0);
-        let ctx = fixtures.make_ctx(2, 5, vec![1, 5], vec![0, 1], 2);
+        let ctx = fixtures.make_ctx(2, 5, vec![1, 5], &[0, 1], 2);
         let stage = two_block_stage(2, [372.0, 372.0]);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 2);
@@ -2592,7 +2597,7 @@ mod zero_cost_tests {
     fn fishing_rows_always_active_stage_zero() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(10, 0, 0);
-        let ctx = fixtures.make_ctx(2, 5, vec![1, 5], vec![0, 1], 2);
+        let ctx = fixtures.make_ctx(2, 5, vec![1, 5], &[0, 1], 2);
         let stage = two_block_stage(0, [372.0, 372.0]);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -2668,7 +2673,7 @@ mod zero_cost_tests {
     fn fishing_fill_on_an_empty_ring_does_not_divide_by_zero() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(1, 0, 1);
-        let ctx = fixtures.make_ctx(1, 0, vec![1], vec![0], 1);
+        let ctx = fixtures.make_ctx(1, 0, vec![1], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
         // Bypasses state_layout_for's owner-derived k_max (ring_size would widen
         // it to 1, matching anticipated_lead_stages) to keep the ring itself
@@ -2734,7 +2739,7 @@ mod zero_cost_tests {
             2,          // n_anticipated
             3,          // k_max
             vec![2, 3], // anticipated_lead_stages: K=[2,3]
-            vec![0, 1], // anticipated_thermal_indices
+            &[0, 1],    // anticipated_positions
             0,          // n_thermals
         );
 
@@ -2810,7 +2815,7 @@ mod zero_cost_tests {
     #[test]
     fn test_fill_anticipated_state_out_def_rows_two_active_plants() {
         let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
-        let ctx = fixtures.make_ctx(2, 3, vec![2, 3], vec![0, 1], 0);
+        let ctx = fixtures.make_ctx(2, 3, vec![2, 3], &[0, 1], 0);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -2852,7 +2857,7 @@ mod zero_cost_tests {
     #[test]
     fn test_fill_anticipated_state_out_def_entries_two_active_plants() {
         let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
-        let ctx = fixtures.make_ctx(2, 3, vec![2, 3], vec![0, 1], 0);
+        let ctx = fixtures.make_ctx(2, 3, vec![2, 3], &[0, 1], 0);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -2904,7 +2909,7 @@ mod zero_cost_tests {
     fn anticipated_slot_masking_ships_row_cap_and_column_freeze_together() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(6, 3, 1);
-        let ctx = fixtures.make_ctx(1, 3, vec![3], vec![0], 1);
+        let ctx = fixtures.make_ctx(1, 3, vec![3], &[0], 1);
         let stage = two_block_stage(4, [372.0, 372.0]);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 4);
@@ -2994,7 +2999,7 @@ mod zero_cost_tests {
     fn fill_anticipated_slot_definition_entries_matches_open_coded_carry_formula_across_heterogeneous_plants()
      {
         let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
-        let ctx = fixtures.make_ctx(2, 3, vec![3, 2], vec![0, 1], 2);
+        let ctx = fixtures.make_ctx(2, 3, vec![3, 2], &[0, 1], 2);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -3047,7 +3052,7 @@ mod zero_cost_tests {
     fn k0_sub_stage_lead_emits_no_anticipated_rows_or_fishing_coupling() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 0, 1);
-        let ctx = fixtures.make_ctx(1, 0, vec![0], vec![0], 1);
+        let ctx = fixtures.make_ctx(1, 0, vec![0], &[0], 1);
 
         let mut state = state_layout_for(&ctx);
         state.set_anticipated_resolution(AnticipatedResolution::resolve(
@@ -3122,7 +3127,7 @@ mod zero_cost_tests {
     fn empty_ring_collapses_all_three_anticipated_row_families() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(2, 0, 1);
-        let ctx = fixtures.make_ctx(1, 0, vec![1], vec![0], 1);
+        let ctx = fixtures.make_ctx(1, 0, vec![1], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
         // Bypasses state_layout_for's owner-derived k_max (ring_size would widen
         // it to 1, matching anticipated_lead_stages) to keep the ring itself
@@ -3171,7 +3176,7 @@ mod zero_cost_tests {
     fn deposit_and_carry_never_share_an_outgoing_column() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 3, 1);
-        let mut ctx = fixtures.make_ctx(1, 3, vec![3], vec![0], 1);
+        let mut ctx = fixtures.make_ctx(1, 3, vec![3], &[0], 1);
         ctx.anticipated_resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(350.0)],
             DeliveryAxis {
@@ -3224,7 +3229,7 @@ mod zero_cost_tests {
     fn anticipated_deposit_targets_the_raw_residue_on_an_identity_axis() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(8, 4, 0);
-        let ctx = fixtures.make_ctx(2, 4, vec![3, 4], vec![0, 1], 0);
+        let ctx = fixtures.make_ctx(2, 4, vec![3, 4], &[0, 1], 0);
         let stage = two_block_stage(0, [372.0, 372.0]);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3296,7 +3301,7 @@ mod zero_cost_tests {
     fn anticipated_deposit_targets_the_ring_axis_residue_across_an_excised_window() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 0);
-        let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 0);
+        let mut ctx = fixtures.make_ctx(1, 4, vec![4], &[0], 0);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
         let time_value = TimeValue::from_parts(
             vec![],
@@ -3347,7 +3352,7 @@ mod zero_cost_tests {
     fn anticipated_deposit_and_carry_never_share_an_outgoing_column() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 0);
-        let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 0);
+        let mut ctx = fixtures.make_ctx(1, 4, vec![4], &[0], 0);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
         let time_value = TimeValue::from_parts(
             vec![],
@@ -3394,7 +3399,7 @@ mod zero_cost_tests {
     fn anticipated_fishing_slot_is_unchanged_by_an_excised_window() {
         let mut fixtures = AntFixtures::new();
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 1);
-        let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 1);
+        let mut ctx = fixtures.make_ctx(1, 4, vec![4], &[0], 1);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
         let time_value = TimeValue::from_parts(
             vec![],
@@ -3461,7 +3466,7 @@ mod zero_cost_tests {
             2,          // n_anticipated
             3,          // k_max
             vec![2, 3], // anticipated_lead_stages
-            vec![0, 1], // anticipated_thermal_indices
+            &[0, 1],    // anticipated_positions
             2,          // n_thermals: must cover thermal indices 0 and 1 so the
                         // fishing-row entry resolves to a real thermal column.
         );
@@ -3552,8 +3557,8 @@ mod pumping_water_tests {
         ResolvedProductionModel,
     };
     use crate::indexer::{
-        BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroCellIndex, HydroSys, LineSys,
-        StateDim, StateSpace,
+        AnticipatedPlants, BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroCellIndex,
+        HydroSys, LineSys, StateDim, StateSpace,
     };
     use crate::lead_time::{AnticipatedResolution, SpreadResolution, resolve_spread};
     use crate::resolved_parameters::ResolvedParameters;
@@ -3806,6 +3811,7 @@ mod pumping_water_tests {
         /// `PumpingFlow`/`PumpingPower` resolver arms run through the real caller.
         generic_constraints: Vec<GenericConstraint>,
         time_value: TimeValue,
+        anticipated_plants: AnticipatedPlants,
     }
 
     impl PumpFixtures {
@@ -3986,6 +3992,7 @@ mod pumping_water_tests {
             // `CascadeTopology::build(&[])` did.
             let cascade = CascadeTopology::build(&hydros);
             let hydro_cell_index = HydroCellIndex::build(&hydros);
+            let anticipated_plants = AnticipatedPlants::build(&thermals);
 
             Self {
                 hydros,
@@ -4027,6 +4034,7 @@ mod pumping_water_tests {
                     (0..N_STAGES as i32).collect(),
                     PostStudyResolved::default(),
                 ),
+                anticipated_plants,
             }
         }
 
@@ -4229,7 +4237,7 @@ mod pumping_water_tests {
                 max_par_order: self.max_par_order,
                 n_anticipated: 0,
                 anticipated_lead_stages: vec![],
-                anticipated_thermal_indices: vec![],
+                anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],

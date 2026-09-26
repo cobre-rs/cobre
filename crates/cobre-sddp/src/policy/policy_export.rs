@@ -26,7 +26,8 @@ use crate::SddpError;
 use crate::cut::FutureCostFunction;
 use crate::lp::builder::delivery_ring::DeliveryRing;
 use crate::lp::indexer::{
-    CutSlot, CutStateProjection, StateRegion, StateSpace, for_each_live_commitment_slot,
+    AnticipatedPlants, CutSlot, CutStateProjection, StateRegion, StateSpace,
+    for_each_live_commitment_slot,
 };
 use crate::setup::{NodeGraph, NodePos, extended_delivery_stages, post_study_delivery_calendar};
 use crate::training::TrainingResult;
@@ -101,16 +102,16 @@ fn lag_reference_anchor(all_stages: &[Stage], pool_pos_in_all: Option<usize>, la
 pub fn build_stage_entity_manifest(
     system: &System,
     global_layout: &StateSpace,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     projection: &CutStateProjection,
     stage_id: i32,
 ) -> Vec<EntitySlot> {
     let n = global_layout.hydro_count;
     let hydros = system.hydros();
     let thermals = system.thermals();
-    let anticipated_thermals: Vec<&Thermal> = anticipated_thermal_indices
-        .iter()
-        .map(|&t| &thermals[t])
+    let anticipated_thermals: Vec<&Thermal> = anticipated_plants
+        .thermals()
+        .map(|t| &thermals[t.get()])
         .collect();
     // Only `slot_lane_at`'s reverse decomposition is read here — the manifest
     // never emits ring rows/columns.
@@ -774,7 +775,7 @@ mod tests {
         reserve_boundary_inflow_lag_slots,
     };
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
-    use crate::lp::indexer::{CutStateProjection, StateSpace};
+    use crate::lp::indexer::{AnticipatedPlants, CutStateProjection, StateSpace};
     use crate::setup::{
         NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         StageIdx, extended_delivery_stages, post_study_delivery_calendar, year_month_day_anchor,
@@ -1045,7 +1046,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1108,7 +1109,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1168,7 +1169,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1213,7 +1214,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1255,7 +1256,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             stage_id,
         );
@@ -1355,7 +1356,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             2,
         );
@@ -1376,7 +1377,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             2,
         );
@@ -1412,7 +1413,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1438,7 +1439,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1475,7 +1476,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             2,
         );
@@ -1518,7 +1519,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -1828,7 +1829,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             1,
         );
@@ -1893,7 +1894,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             2,
         );
@@ -1934,7 +1935,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             1,
         );
@@ -1988,7 +1989,7 @@ mod tests {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &AnticipatedPlants::build(system.thermals()),
                 &projection,
                 stage_id,
             );
@@ -2039,7 +2040,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -2112,7 +2113,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -2162,7 +2163,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             2,
         );
@@ -2211,7 +2212,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             1,
         );
@@ -2250,7 +2251,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             0,
         );
@@ -2302,7 +2303,7 @@ mod tests {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &AnticipatedPlants::build(system.thermals()),
                 &projection,
                 stage_id,
             );
@@ -2361,7 +2362,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             63,
         );
@@ -2405,7 +2406,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             63,
         );
@@ -2451,7 +2452,7 @@ mod tests {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &AnticipatedPlants::build(system.thermals()),
                 &projection,
                 stage_id,
             );
@@ -2512,7 +2513,7 @@ mod tests {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &AnticipatedPlants::build(system.thermals()),
                 &projection,
                 stage_id,
             );
@@ -2602,7 +2603,7 @@ mod tests {
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
-            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &AnticipatedPlants::build(system.thermals()),
             &projection,
             3,
         );

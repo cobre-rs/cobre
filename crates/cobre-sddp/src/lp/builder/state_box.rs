@@ -11,7 +11,7 @@ use cobre_core::ResolvedBounds;
 use cobre_solver::StageTemplate;
 
 use crate::indexer::{
-    AnticipatedLocal, StateSpace, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, StateSpace, anticipated_resolution_for,
     is_anticipated_decision_active_for_delivery,
 };
 use crate::time_value::TimeValue;
@@ -34,7 +34,7 @@ pub(crate) fn build_state_box(
     layout: &StateSpace,
     stage_idx: usize,
     bounds: &ResolvedBounds,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     anticipated_windows: &[(Option<i32>, Option<i32>)],
     time_value: &TimeValue,
 ) -> StateBox {
@@ -54,7 +54,7 @@ pub(crate) fn build_state_box(
         layout,
         stage_idx,
         bounds,
-        anticipated_thermal_indices,
+        anticipated_plants,
         anticipated_windows,
         time_value,
     );
@@ -101,7 +101,7 @@ fn fill_commitment_hold_box(
     layout: &StateSpace,
     stage_idx: usize,
     bounds: &ResolvedBounds,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     anticipated_windows: &[(Option<i32>, Option<i32>)],
     time_value: &TimeValue,
 ) {
@@ -112,11 +112,6 @@ fn fill_commitment_hold_box(
     if layout.n_anticipated == 0 || layout.k_max == 0 {
         return;
     }
-    debug_assert_eq!(
-        anticipated_thermal_indices.len(),
-        layout.n_anticipated,
-        "anticipated_thermal_indices must have one entry per anticipated plant"
-    );
     debug_assert_eq!(
         anticipated_windows.len(),
         layout.n_anticipated,
@@ -153,7 +148,9 @@ fn fill_commitment_hold_box(
             }
 
             let bound = if m < n_stages {
-                let thermal_idx = anticipated_thermal_indices[local_idx];
+                let thermal_idx = anticipated_plants
+                    .thermal_of(AnticipatedLocal::new(local_idx))
+                    .get();
                 let cap = bounds.thermal_block_base(thermal_idx, m);
                 Some((cap.min_generation_mw, cap.max_generation_mw))
             } else {
@@ -198,7 +195,15 @@ mod tests {
         template.col_upper[storage_j] = 50.0;
         let (bounds, time_value) = empty_bounds_and_time_value();
 
-        let state_box = build_state_box(&template, &layout, 0, &bounds, &[], &[], &time_value);
+        let state_box = build_state_box(
+            &template,
+            &layout,
+            0,
+            &bounds,
+            &AnticipatedPlants::default(),
+            &[],
+            &time_value,
+        );
 
         assert_eq!(state_box.lower[storage_j], 0.0);
         assert_eq!(state_box.upper[storage_j], 50.0);
@@ -211,7 +216,15 @@ mod tests {
         let template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let (bounds, time_value) = empty_bounds_and_time_value();
 
-        let state_box = build_state_box(&template, &layout, 0, &bounds, &[], &[], &time_value);
+        let state_box = build_state_box(
+            &template,
+            &layout,
+            0,
+            &bounds,
+            &AnticipatedPlants::default(),
+            &[],
+            &time_value,
+        );
 
         let lag_j = layout.inflow_lags.start;
         assert_eq!(state_box.lower[lag_j], f64::NEG_INFINITY);
@@ -233,7 +246,15 @@ mod tests {
         template.col_upper[frozen_j] = 0.0;
         let (bounds, time_value) = empty_bounds_and_time_value();
 
-        let state_box = build_state_box(&template, &layout, 0, &bounds, &[], &[], &time_value);
+        let state_box = build_state_box(
+            &template,
+            &layout,
+            0,
+            &bounds,
+            &AnticipatedPlants::default(),
+            &[],
+            &time_value,
+        );
 
         assert_eq!(state_box.lower[reachable_j], 0.0);
         assert_eq!(state_box.upper[reachable_j], f64::INFINITY);

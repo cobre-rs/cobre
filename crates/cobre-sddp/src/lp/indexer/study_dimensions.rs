@@ -1,7 +1,9 @@
 //! The [`StudyDimensions`] single owner of the study-invariant, non-state LP
-//! shape: the scalar entity counts, presence flags, and anticipated-thermal
-//! identity list constant across every stage and block of a study and not part
-//! of the state vector. No other long-lived type holds these facts.
+//! shape: the scalar entity counts, presence flags, and anticipated-plant set
+//! constant across every stage and block of a study and not part of the state
+//! vector. No other long-lived type holds these facts.
+
+use super::AnticipatedPlants;
 
 /// Study-invariant, non-state LP shape for an SDDP study.
 ///
@@ -16,7 +18,7 @@
 ///   global `n_blks` is the footgun that mis-strides equipment columns at any
 ///   stage whose block count differs from stage 0's.
 ///
-/// `anticipated_thermal_indices` is study-invariant, so it is owned here; the
+/// `anticipated_plants` is study-invariant, so it is owned here; the
 /// per-stage FPHA / evaporation identity lists vary by stage and are owned by
 /// the per-stage geometry.
 // Rationale: the four bool fields are independent presence flags for optional
@@ -42,9 +44,8 @@ pub struct StudyDimensions {
     pub has_withdrawal: bool,
     /// Whether operational violation slack columns are present.
     pub has_operational_violations: bool,
-    /// Maps anticipated-local position `i` to the i-th anticipated plant's
-    /// position within `system.thermals[]`.
-    pub anticipated_thermal_indices: Vec<usize>,
+    /// The study's anticipated-plant set.
+    pub anticipated_plants: AnticipatedPlants,
     /// Number of pumping stations.
     pub n_pumping: usize,
 }

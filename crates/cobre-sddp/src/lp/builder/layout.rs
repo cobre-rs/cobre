@@ -16,10 +16,10 @@ use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
 };
 use crate::indexer::{
-    AnticipatedLocal, BlockGrid, BlockIdx, Boundary, EvapLocal, EvaporationIndices, FphaCellLocal,
-    FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, RangeCursor, StateSpace,
-    StorageBoundaryGrid, ThermalSys, anticipated_resolution_for, for_each_live_commitment_slot,
-    is_anticipated_decision_active_for_delivery,
+    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, Boundary, EvapLocal,
+    EvaporationIndices, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys,
+    RangeCursor, StateSpace, StorageBoundaryGrid, anticipated_resolution_for,
+    for_each_live_commitment_slot, is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::time_value::TimeValue;
@@ -113,12 +113,12 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) n_lines: usize,
     pub(crate) n_buses: usize,
     pub(crate) max_par_order: usize,
-    /// Number of thermals `crate::setup::resolve_anticipated_thermal_indices` resolves.
+    /// [`AnticipatedPlants::len`].
     pub(crate) n_anticipated: usize,
     /// Per-plant `lead_stages` (`K_i`), length `n_anticipated`, anticipated-local order.
     pub(crate) anticipated_lead_stages: Vec<usize>,
-    /// Anticipated-local position → global thermal index, length `n_anticipated`.
-    pub(crate) anticipated_thermal_indices: Vec<ThermalSys>,
+    /// The study's anticipated-plant set.
+    pub(crate) anticipated_plants: &'a AnticipatedPlants,
     /// Per-plant commissioning window `(entry_stage_id, exit_stage_id)`, length
     /// `n_anticipated`, anticipated-local order. The decision gate keys on the
     /// DELIVERY stage's operation window
@@ -1479,10 +1479,10 @@ impl<'a> StageLayout<'a> {
         };
 
         let anticipated_local_by_sys_pos = ctx
-            .anticipated_thermal_indices
-            .iter()
+            .anticipated_plants
+            .thermals()
             .enumerate()
-            .map(|(local, &sys_pos)| (sys_pos.get(), local))
+            .map(|(local, sys_pos)| (sys_pos.get(), local))
             .collect();
 
         let equipment = EquipmentColumns {

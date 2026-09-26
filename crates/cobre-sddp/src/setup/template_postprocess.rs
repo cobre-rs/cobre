@@ -3,7 +3,7 @@
 use cobre_core::System;
 
 use crate::lp::builder::{self, StageTemplates};
-use crate::lp::indexer::StateSpace;
+use crate::lp::indexer::{AnticipatedPlants, StateSpace};
 use crate::scaling_report::{
     LpDimensions, ScalingReport, StageScalingReport, build_scaling_report,
     compute_coefficient_range, summarize_scale_factors,
@@ -17,7 +17,7 @@ pub(crate) fn postprocess_templates(
     stage_templates: &mut StageTemplates,
     system: &System,
     state_layout: &StateSpace,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     cost_scale_factor: f64,
     time_value: &TimeValue,
 ) -> ScalingReport {
@@ -30,7 +30,7 @@ pub(crate) fn postprocess_templates(
     // as the unscaled trial state (`fill_unscaled` in
     // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
     let bounds = system.bounds();
-    let anticipated_windows = super::build_anticipated_windows(system, anticipated_thermal_indices);
+    let anticipated_windows = super::build_anticipated_windows(system, anticipated_plants);
 
     debug_assert_eq!(
         time_value.discount_factors().len(),
@@ -69,7 +69,7 @@ pub(crate) fn postprocess_templates(
             state_layout,
             stage_idx,
             bounds,
-            anticipated_thermal_indices,
+            anticipated_plants,
             &anticipated_windows,
             time_value,
         );
@@ -127,8 +127,7 @@ pub(crate) fn postprocess_templates(
 mod tests {
     use super::postprocess_templates;
     use crate::lp::builder::{StageGeometry, StageTemplates};
-    use crate::lp::indexer::StateSpace;
-    use crate::setup::resolve_anticipated_thermal_indices;
+    use crate::lp::indexer::{AnticipatedPlants, StateSpace};
     use crate::test_support::state_layout_full;
     use crate::time_value::{PostStudyResolved, TimeValue};
     use chrono::NaiveDate;
@@ -218,12 +217,12 @@ mod tests {
             PostStudyResolved::default(),
         );
 
-        let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
+        let anticipated_plants = AnticipatedPlants::build(system.thermals());
         postprocess_templates(
             &mut stage_templates,
             &system,
             &state_layout,
-            &anticipated_thermal_indices,
+            &anticipated_plants,
             1.0,
             &time_value,
         );

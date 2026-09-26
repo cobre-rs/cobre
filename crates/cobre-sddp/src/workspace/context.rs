@@ -67,7 +67,7 @@ pub struct StageContext<'a> {
     pub ncs_stochastic_windows: &'a [(Option<i32>, Option<i32>)],
     /// Stage-invariant commissioning window `(entry, exit)` per anticipated
     /// thermal, in anticipated-local order (matching
-    /// `StudyDimensions::anticipated_thermal_indices`). The simulation
+    /// `StudyDimensions::anticipated_plants`). The simulation
     /// anticipated-decision read gates on the DELIVERY stage's `stage.id`, the same
     /// predicate the LP builder uses — never the decision stage.
     pub anticipated_windows: &'a [(Option<i32>, Option<i32>)],

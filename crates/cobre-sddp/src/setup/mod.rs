@@ -104,7 +104,10 @@ use crate::{
     inflow_method::InflowNonNegativityMethod,
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution, SpreadResolution},
     lp::builder::{StateBox, build_stage_templates},
-    lp::indexer::{CutStateProjection, HydroCellIndex, StateSpace, StudyDimensions},
+    lp::indexer::{
+        AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, StateSpace,
+        StudyDimensions, ThermalSys,
+    },
     risk_measure::{RiskMeasure, uniform_effective_measure},
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
@@ -171,7 +174,7 @@ pub struct StudySetup {
 
     /// Stage-invariant `(entry_stage_id, exit_stage_id)` per anticipated thermal,
     /// in anticipated-local order matching
-    /// `stage_data.study_dims.anticipated_thermal_indices`.
+    /// `stage_data.study_dims.anticipated_plants`.
     ///
     /// Threaded into the simulation
     /// [`StageExtractionSpec`](crate::simulation::extraction::StageExtractionSpec)
@@ -496,7 +499,7 @@ impl StudySetup {
         // the built LP, and `build_stage_templates` needs the finished `StateSpace`
         // threaded in as a parameter (the single role-(a) owner — see
         // `resolve_state_layout`).
-        let (state_layout, hydro_count, anticipated_thermal_indices) = resolve_state_layout(
+        let (state_layout, hydro_count, anticipated_plants) = resolve_state_layout(
             system,
             stochastic.par(),
             &transit_bucket_topology,
@@ -504,7 +507,7 @@ impl StudySetup {
         )?;
         warn_on_boundary_absent_post_study_delivery(
             system,
-            &anticipated_thermal_indices,
+            &anticipated_plants,
             &state_layout.anticipated_resolution,
             boundary.is_present(),
         );
@@ -554,7 +557,7 @@ impl StudySetup {
             &hydro_models,
             &scalar_parameters,
             &state_layout,
-            &anticipated_thermal_indices,
+            &anticipated_plants,
             cost_scale_factor,
             &transit_bucket_topology.per_stage_mask,
             &transit_bucket_topology.arc_stage_weights,
@@ -568,7 +571,7 @@ impl StudySetup {
             &stage_templates,
             inflow_method,
             hydro_count,
-            anticipated_thermal_indices,
+            anticipated_plants,
         );
 
         let mut initial_state = build_initial_state(
@@ -739,8 +742,7 @@ impl StudySetup {
             build_contract_prices_per_stage(system, n_stages, &block_counts_per_stage);
         let contract_is_import = build_contract_is_import(system);
 
-        let anticipated_windows =
-            build_anticipated_windows(system, &study_dims.anticipated_thermal_indices);
+        let anticipated_windows = build_anticipated_windows(system, &study_dims.anticipated_plants);
         let extended_delivery_anchors =
             build_extended_delivery_anchors(system, &state_layout, n_stages);
         let transit_seed_arcs = build_transit_seed_arcs(system);
@@ -1002,7 +1004,7 @@ fn build_energy_and_templates(
     hydro_models: &PrepareHydroModelsResult,
     scalar_parameters: &[cobre_core::ScalarParameter],
     state_layout: &StateSpace,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     cost_scale_factor: f64,
     per_stage_mask: &[Vec<usize>],
     arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
@@ -1022,8 +1024,7 @@ fn build_energy_and_templates(
         .iter()
         .map(|s| BlockClock::new(s).total_hours())
         .collect();
-    let time_value =
-        TimeValue::from_system(system, anticipated_thermal_indices, &study_total_hours);
+    let time_value = TimeValue::from_system(system, anticipated_plants, &study_total_hours);
 
     let mut stage_templates = build_stage_templates(
         system,
@@ -1034,7 +1035,7 @@ fn build_energy_and_templates(
         &hydro_models.evaporation,
         &resolved_parameters,
         state_layout,
-        anticipated_thermal_indices,
+        anticipated_plants,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -1051,7 +1052,7 @@ fn build_energy_and_templates(
         &mut stage_templates,
         system,
         state_layout,
-        anticipated_thermal_indices,
+        anticipated_plants,
         cost_scale_factor,
         &time_value,
     );
@@ -1248,24 +1249,11 @@ pub fn widen_lag_state_depth(computed_order: usize, boundary_depth: Option<u32>)
     boundary_depth.map_or(computed_order, |d| computed_order.max(d as usize))
 }
 
-/// The thermals with a declared `anticipated_config`, in canonical
-/// `system.thermals()` order — the sole definition of the anticipated-plant
-/// predicate and its order; every other site reads these resolved indices
-/// instead of re-filtering `system.thermals()`.
-pub(crate) fn resolve_anticipated_thermal_indices(system: &System) -> Vec<usize> {
-    system
-        .thermals()
-        .iter()
-        .enumerate()
-        .filter_map(|(t_idx, thermal)| thermal.anticipated_config.is_some().then_some(t_idx))
-        .collect()
-}
-
 /// Resolve every anticipated thermal's delivery-anchored commitment and
 /// construct the single role-(a) [`StateSpace`] — before stage templates
 /// exist, since none of the state dimensions depend on the built LP.
 ///
-/// The returned `hydro_count` and `anticipated_thermal_indices` are the exact
+/// The returned `hydro_count` and `anticipated_plants` are the exact
 /// values the layout was built from; [`build_study_dimensions`] takes them as
 /// parameters instead of re-deriving them from the built templates.
 ///
@@ -1279,9 +1267,9 @@ pub(crate) fn resolve_state_layout(
     par_lp: &PrecomputedPar,
     transit_bucket_topology: &bucket_topology::TransitBucketTopology,
     inflow_lag_depth: Option<u32>,
-) -> Result<(StateSpace, usize, Vec<usize>), SddpError> {
-    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(system);
-    let n_anticipated = anticipated_thermal_indices.len();
+) -> Result<(StateSpace, usize, AnticipatedPlants), SddpError> {
+    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let n_anticipated = anticipated_plants.len();
 
     // Single resolve_point consumer: map each anticipated plant's config to a
     // delivery-anchored PointResolution and derive the constant-lead K_i the
@@ -1289,17 +1277,12 @@ pub(crate) fn resolve_state_layout(
     // second resolve_point call site is forbidden — this resolution threads onto
     // the state layout instead.
     let (anticipated_resolution, anticipated_lead_stages) =
-        resolve_anticipated_commitments(system, &anticipated_thermal_indices);
-    debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);
+        resolve_anticipated_commitments(system, &anticipated_plants);
 
     // TODO(anticipated-fanout-output): the coupled output extractor is
     // compute_anticipated_decision_mw
     if anticipated_resolution.max_fanout > 1 {
-        let plant_id = first_fanned_plant_id(
-            system,
-            &anticipated_thermal_indices,
-            &anticipated_resolution,
-        );
+        let plant_id = first_fanned_plant_id(system, &anticipated_plants, &anticipated_resolution);
         debug_assert!(
             plant_id.is_some(),
             "max_fanout > 1 must locate the fanning plant"
@@ -1375,7 +1358,12 @@ pub(crate) fn resolve_state_layout(
     );
     state.set_anticipated_resolution(anticipated_resolution);
 
-    Ok((state, hydro_count, anticipated_thermal_indices))
+    debug_assert_eq!(
+        state.n_anticipated,
+        anticipated_plants.len(),
+        "state and the anticipated-plant set must agree on n_anticipated"
+    );
+    Ok((state, hydro_count, anticipated_plants))
 }
 
 /// Canonical absolute delivery/arrival calendar date of a stage `start_date`,
@@ -1486,7 +1474,7 @@ fn build_transit_seed_arcs(system: &System) -> Vec<TransitSeedArc> {
 /// Build the study-invariant, non-state [`StudyDimensions`] from the system
 /// and the post-processed stage templates.
 ///
-/// `hydro_count` and `anticipated_thermal_indices` are threaded from
+/// `hydro_count` and `anticipated_plants` are threaded from
 /// [`resolve_state_layout`] — the same values its [`StateSpace`] was built
 /// from — so the only per-stage template field this reads is
 /// `ncs_col_starts`, the one dimension genuinely derived from the built LP.
@@ -1495,7 +1483,7 @@ fn build_study_dimensions(
     stage_templates: &StageTemplates,
     inflow_method: crate::InflowNonNegativityMethod,
     hydro_count: usize,
-    anticipated_thermal_indices: Vec<usize>,
+    anticipated_plants: AnticipatedPlants,
 ) -> StudyDimensions {
     let has_inflow_penalty = inflow_method.has_slack_columns() && hydro_count > 0;
 
@@ -1519,7 +1507,7 @@ fn build_study_dimensions(
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,
-        anticipated_thermal_indices,
+        anticipated_plants,
         n_pumping: system.n_pumping_stations(),
     }
 }
@@ -1528,12 +1516,12 @@ fn build_study_dimensions(
 /// fans out — `|genuine C(t)| > 1` at some decision stage `t` — or `None` if
 /// none does. Shares the exact per-plant/per-stage predicate
 /// [`AnticipatedResolution::max_fanout`] maxes over, so `Some(_)` iff
-/// `resolution.max_fanout > 1`; `anticipated_thermal_indices` and
+/// `resolution.max_fanout > 1`; `anticipated_plants` and
 /// `resolution.per_plant` are both in canonical (anticipated-local) order, so
 /// the first match is declaration-order-invariant.
 fn first_fanned_plant_id(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     resolution: &AnticipatedResolution,
 ) -> Option<EntityId> {
     resolution
@@ -1543,7 +1531,12 @@ fn first_fanned_plant_id(
         .find_map(|(local_idx, point)| {
             let fans_out =
                 (0..point.decision_sets.len()).any(|t| point.genuine_decisions_at(t).count() > 1);
-            fans_out.then(|| system.thermals()[anticipated_thermal_indices[local_idx]].id)
+            fans_out.then(|| {
+                let thermal_idx = anticipated_plants
+                    .thermal_of(AnticipatedLocal::new(local_idx))
+                    .get();
+                system.thermals()[thermal_idx].id
+            })
         })
 }
 
@@ -1582,11 +1575,11 @@ fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> V
 /// the moment a study declares `post_study_stages`.
 pub(crate) fn resolve_anticipated_commitments_core(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
 ) -> (AnticipatedResolution, Vec<usize>) {
-    let anticipated_thermals: Vec<&Thermal> = anticipated_thermal_indices
-        .iter()
-        .map(|&t| &system.thermals()[t])
+    let anticipated_thermals: Vec<&Thermal> = anticipated_plants
+        .thermals()
+        .map(|t| &system.thermals()[t.get()])
         .collect();
     let leads: Vec<LeadTime> = anticipated_thermals
         .iter()
@@ -1596,11 +1589,6 @@ pub(crate) fn resolve_anticipated_commitments_core(
             AnticipatedConfig::LeadTime(h) => LeadTime::Time(*h),
         })
         .collect();
-    debug_assert_eq!(
-        leads.len(),
-        anticipated_thermal_indices.len(),
-        "every resolved index must have anticipated_config: Some"
-    );
     if leads.is_empty() {
         return (AnticipatedResolution::default(), Vec::new());
     }
@@ -1653,13 +1641,13 @@ pub(crate) fn resolve_anticipated_commitments_core(
 /// the core directly so the advisory never double-emits.
 pub(crate) fn resolve_anticipated_commitments(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
 ) -> (AnticipatedResolution, Vec<usize>) {
     let (resolution, lead_stages) =
-        resolve_anticipated_commitments_core(system, anticipated_thermal_indices);
-    let anticipated_thermals: Vec<&Thermal> = anticipated_thermal_indices
-        .iter()
-        .map(|&t| &system.thermals()[t])
+        resolve_anticipated_commitments_core(system, anticipated_plants);
+    let anticipated_thermals: Vec<&Thermal> = anticipated_plants
+        .thermals()
+        .map(|t| &system.thermals()[t.get()])
         .collect();
     warn_on_sub_stage_lead(&anticipated_thermals, &resolution);
     (resolution, lead_stages)
@@ -1704,7 +1692,7 @@ fn warn_on_sub_stage_lead(thermals: &[&Thermal], resolution: &AnticipatedResolut
 /// event), naming every affected plant in the one emitted event.
 fn warn_on_boundary_absent_post_study_delivery(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     resolution: &AnticipatedResolution,
     boundary_present: bool,
 ) {
@@ -1721,16 +1709,16 @@ fn warn_on_boundary_absent_post_study_delivery(
                 .any(|w| w.thermal_id.0 == thermal_id && w.start_date >= end && w.value_mw != 0.0)
         })
     };
-    let affected: Vec<String> = anticipated_thermal_indices
-        .iter()
+    let affected: Vec<String> = anticipated_plants
+        .thermals()
         .zip(&resolution.per_plant)
-        .filter(|&(&t_idx, point)| {
+        .filter(|&(t, point)| {
             let class3 = point.decider.get(n_stages..).is_some_and(|post_study| {
                 post_study.iter().any(|c| c.is_some_and(|t| t < n_stages))
             });
-            class3 || has_nonzero_fixed(thermals[t_idx].id.0)
+            class3 || has_nonzero_fixed(thermals[t.get()].id.0)
         })
-        .map(|(&t_idx, _)| format!("{} ({})", thermals[t_idx].id, thermals[t_idx].name))
+        .map(|(t, _)| format!("{} ({})", thermals[t.get()].id, thermals[t.get()].name))
         .collect();
     if affected.is_empty() {
         return;
@@ -2599,18 +2587,18 @@ fn build_contract_is_import(system: &System) -> Vec<bool> {
 
 /// Build the per-plant commissioning windows for the anticipated thermals.
 ///
-/// In anticipated-local declaration order — the same order
-/// `anticipated_thermal_indices` and the LP-builder `anticipated_windows` use, so
-/// the simulation decision gate reads the matching window per index. Empty when
-/// there are no anticipated thermals.
+/// In anticipated-local declaration order — the same order `anticipated_plants`
+/// and the LP-builder `anticipated_windows` use, so the simulation decision
+/// gate reads the matching window per index. Empty when there are no
+/// anticipated thermals.
 fn build_anticipated_windows(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
 ) -> Vec<(Option<i32>, Option<i32>)> {
-    anticipated_thermal_indices
-        .iter()
-        .map(|&t| {
-            let thermal = &system.thermals()[t];
+    anticipated_plants
+        .thermals()
+        .map(|t| {
+            let thermal = &system.thermals()[t.get()];
             (thermal.entry_stage_id, thermal.exit_stage_id)
         })
         .collect()
@@ -2712,11 +2700,6 @@ fn build_initial_state(
     }
 
     if layout.n_anticipated > 0 && layout.k_max > 0 {
-        debug_assert_eq!(
-            study_dims.anticipated_thermal_indices.len(),
-            layout.n_anticipated,
-            "anticipated_thermal_indices length must equal n_anticipated",
-        );
         let thermals = system.thermals();
         let thermal_positions = id_to_position(thermals, |t: &Thermal| t.id.0);
         let calendar = StageCalendar::new(study_stages_slice(system));
@@ -2728,11 +2711,11 @@ fn build_initial_state(
             };
             // O(n) over the small `n_anticipated` list, not a map.
             let Some(local_idx) = study_dims
-                .anticipated_thermal_indices
-                .iter()
-                .position(|&g| g == global_idx)
+                .anticipated_plants
+                .thermals()
+                .position(|t| t == ThermalSys::new(global_idx))
             else {
-                // Not one of resolve_anticipated_thermal_indices's plants — skip.
+                // Not one of AnticipatedPlants::build's plants — skip.
                 continue;
             };
             // A covered stage at or beyond K_i is a resolver/validator desync,

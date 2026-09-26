@@ -47,7 +47,7 @@ use cobre_sddp::{
     energy_conversion::{EnergyConversion, EnergyConversionSet},
     horizon_mode::HorizonMode,
     hydro_models::PrepareHydroModelsResult,
-    indexer::{CutStateProjection, StateSpace, StudyDimensions},
+    indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lp::builder::{PatchBuffer, StageGeometry, StateBox, build_stage_templates_resolving_layout},
     risk_measure::RiskMeasure,
@@ -99,7 +99,7 @@ fn study_dims_for(
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,
-        anticipated_thermal_indices: vec![],
+        anticipated_plants: AnticipatedPlants::default(),
         n_pumping: 0,
     }
 }

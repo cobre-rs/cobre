@@ -554,6 +554,7 @@ impl StudySetup {
             &hydro_models,
             &scalar_parameters,
             &state_layout,
+            &anticipated_thermal_indices,
             cost_scale_factor,
             &transit_bucket_topology.per_stage_mask,
             &transit_bucket_topology.arc_stage_weights,
@@ -1001,6 +1002,7 @@ fn build_energy_and_templates(
     hydro_models: &PrepareHydroModelsResult,
     scalar_parameters: &[cobre_core::ScalarParameter],
     state_layout: &StateSpace,
+    anticipated_thermal_indices: &[usize],
     cost_scale_factor: f64,
     per_stage_mask: &[Vec<usize>],
     arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
@@ -1020,7 +1022,8 @@ fn build_energy_and_templates(
         .iter()
         .map(|s| BlockClock::new(s).total_hours())
         .collect();
-    let time_value = TimeValue::from_system(system, &study_total_hours);
+    let time_value =
+        TimeValue::from_system(system, anticipated_thermal_indices, &study_total_hours);
 
     let mut stage_templates = build_stage_templates(
         system,
@@ -1031,6 +1034,7 @@ fn build_energy_and_templates(
         &hydro_models.evaporation,
         &resolved_parameters,
         state_layout,
+        anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -1047,6 +1051,7 @@ fn build_energy_and_templates(
         &mut stage_templates,
         system,
         state_layout,
+        anticipated_thermal_indices,
         cost_scale_factor,
         &time_value,
     );

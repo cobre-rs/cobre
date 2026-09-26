@@ -120,13 +120,12 @@ pub(crate) struct PostStudyResolved {
     /// Dense row-major `[anticipated_local][post_study_stage]` projection of
     /// [`PostStudyThermalLookup::lookup`] — one cell per anticipated plant times
     /// post-study stage, `None` where the deck declares none. `anticipated_local`
-    /// MUST be `resolve_state_layout`'s own `anticipated_thermal_indices`
-    /// canonical order (`system.thermals()` filtered on
-    /// `anticipated_config.is_some()`); a mismatched order silently prices one
-    /// plant's post-study commitment with another's fuel cost. Never index this
-    /// directly — read it only through [`Self::anticipated_bound`], and never
-    /// rebuild it into a `Vec<Vec<_>>` (a per-plant allocation) or an
-    /// `EntityId`-keyed map (a nondeterministic-iteration-order read).
+    /// MUST be [`crate::setup::resolve_anticipated_thermal_indices`]'s canonical
+    /// order; a mismatched order silently prices one plant's post-study
+    /// commitment with another's fuel cost. Never index this directly — read it
+    /// only through [`Self::anticipated_bound`], and never rebuild it into a
+    /// `Vec<Vec<_>>` (a per-plant allocation) or an `EntityId`-keyed map (a
+    /// nondeterministic-iteration-order read).
     anticipated_bounds: Vec<Option<(f64, f64, f64)>>,
     /// Row stride of [`Self::anticipated_bounds`] — the post-study stage count,
     /// `total_hours.len()`.
@@ -289,19 +288,21 @@ pub(crate) struct TimeValue {
 
 impl TimeValue {
     /// Resolve the whole delivery calendar directly from `system`: derives the
-    /// study stages (`id >= 0`), the anticipated thermal ids
-    /// (`system.thermals()` filtered on `anticipated_config.is_some()`, in the
-    /// system's order), the post-study calendar and the policy graph, then
+    /// study stages (`id >= 0`) and the anticipated thermal ids (projected from
+    /// `anticipated_thermal_indices`, [`crate::setup::resolve_anticipated_thermal_indices`]'s
+    /// canonical order), the post-study calendar and the policy graph, then
     /// delegates to [`Self::resolve`]. `study_total_hours` is supplied by the
     /// caller (`BlockClock`) rather than derived here — `block_clock` is not on
     /// this module's import allowlist.
-    pub(crate) fn from_system(system: &System, study_total_hours: &[f64]) -> Self {
+    pub(crate) fn from_system(
+        system: &System,
+        anticipated_thermal_indices: &[usize],
+        study_total_hours: &[f64],
+    ) -> Self {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
-        let anticipated_thermal_ids: Vec<EntityId> = system
-            .thermals()
+        let anticipated_thermal_ids: Vec<EntityId> = anticipated_thermal_indices
             .iter()
-            .filter(|t| t.anticipated_config.is_some())
-            .map(|t| t.id)
+            .map(|&t| system.thermals()[t].id)
             .collect();
         Self::resolve(
             &study_stages,
@@ -638,7 +639,9 @@ mod from_system_tests {
             .expect("minimal two-stage anticipated system must build");
 
         let study_total_hours = vec![744.0, 672.0];
-        let tv = TimeValue::from_system(&system, &study_total_hours);
+        let anticipated_thermal_indices =
+            crate::setup::resolve_anticipated_thermal_indices(&system);
+        let tv = TimeValue::from_system(&system, &anticipated_thermal_indices, &study_total_hours);
 
         assert_eq!(tv.delivery_stage_ids(), &[0, 1]);
     }

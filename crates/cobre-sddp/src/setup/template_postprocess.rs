@@ -17,6 +17,7 @@ pub(crate) fn postprocess_templates(
     stage_templates: &mut StageTemplates,
     system: &System,
     state_layout: &StateSpace,
+    anticipated_thermal_indices: &[usize],
     cost_scale_factor: f64,
     time_value: &TimeValue,
 ) -> ScalingReport {
@@ -29,14 +30,7 @@ pub(crate) fn postprocess_templates(
     // as the unscaled trial state (`fill_unscaled` in
     // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
     let bounds = system.bounds();
-    let mut anticipated_thermal_indices: Vec<usize> = Vec::new();
-    let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
-    for (t_idx, thermal) in system.thermals().iter().enumerate() {
-        if thermal.anticipated_config.is_some() {
-            anticipated_thermal_indices.push(t_idx);
-            anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
-        }
-    }
+    let anticipated_windows = super::build_anticipated_windows(system, anticipated_thermal_indices);
 
     debug_assert_eq!(
         time_value.discount_factors().len(),
@@ -75,7 +69,7 @@ pub(crate) fn postprocess_templates(
             state_layout,
             stage_idx,
             bounds,
-            &anticipated_thermal_indices,
+            anticipated_thermal_indices,
             &anticipated_windows,
             time_value,
         );
@@ -134,6 +128,7 @@ mod tests {
     use super::postprocess_templates;
     use crate::lp::builder::{StageGeometry, StageTemplates};
     use crate::lp::indexer::StateSpace;
+    use crate::setup::resolve_anticipated_thermal_indices;
     use crate::test_support::state_layout_full;
     use crate::time_value::{PostStudyResolved, TimeValue};
     use chrono::NaiveDate;
@@ -223,10 +218,12 @@ mod tests {
             PostStudyResolved::default(),
         );
 
+        let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
         postprocess_templates(
             &mut stage_templates,
             &system,
             &state_layout,
+            &anticipated_thermal_indices,
             1.0,
             &time_value,
         );

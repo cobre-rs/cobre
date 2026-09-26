@@ -59,7 +59,8 @@ fn build_time_value_for(system: &cobre_core::System) -> TimeValue {
         .iter()
         .map(|s| BlockClock::new(s).total_hours())
         .collect();
-    TimeValue::from_system(system, &study_total_hours)
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(system);
+    TimeValue::from_system(system, &anticipated_thermal_indices, &study_total_hours)
 }
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -471,6 +472,7 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -483,6 +485,7 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -537,6 +540,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -549,6 +553,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -624,6 +629,7 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -636,6 +642,7 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -847,6 +854,7 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -859,6 +867,7 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -912,6 +921,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -924,6 +934,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -973,6 +984,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -985,6 +997,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -1124,6 +1137,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let _ = super::build_template_build_ctx(
@@ -1136,6 +1150,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -1206,6 +1221,7 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -1218,6 +1234,7 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -1291,6 +1308,7 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -1303,6 +1321,7 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -1703,6 +1722,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx_a, _, _) = super::build_template_build_ctx(
@@ -1715,6 +1735,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -2071,8 +2092,9 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
     let topology = build_transit_bucket_topology(&system, false);
-    let (state_layout, _, _) = resolve_state_layout(&system, &par_lp, &topology, None)
-        .expect("resolve_state_layout: valid test fixture");
+    let (state_layout, _, anticipated_thermal_indices) =
+        resolve_state_layout(&system, &par_lp, &topology, None)
+            .expect("resolve_state_layout: valid test fixture");
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
     let time_value = build_time_value_for(&system);
@@ -2085,6 +2107,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &hydro_result.evaporation,
         &resolved_params,
         &state_layout,
+        &anticipated_thermal_indices,
         &topology.per_stage_mask,
         &topology.arc_stage_weights,
         &topology.arc_spread_chrono,
@@ -2098,6 +2121,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &mut templates,
         &system,
         &state_layout,
+        &anticipated_thermal_indices,
         DEFAULT_COST_SCALE_FACTOR,
         &time_value,
     );
@@ -2164,6 +2188,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -2176,6 +2201,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -2208,6 +2234,7 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -2220,6 +2247,7 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -2260,6 +2288,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -2272,6 +2301,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -2313,6 +2343,7 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -2325,6 +2356,7 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -2535,6 +2567,7 @@ fn build_post_study_resolved_for(
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -2547,6 +2580,7 @@ fn build_post_study_resolved_for(
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -2952,6 +2986,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -2964,6 +2999,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -3752,6 +3788,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -3764,6 +3801,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -3869,6 +3907,7 @@ fn block_layout_and_template(
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -3881,6 +3920,7 @@ fn block_layout_and_template(
         resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -4458,6 +4498,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -4470,6 +4511,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -4905,6 +4947,7 @@ fn filling_block_layout_and_template(
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -4917,6 +4960,7 @@ fn filling_block_layout_and_template(
         resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -5232,6 +5276,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -5244,6 +5289,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -5344,6 +5390,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         arc_arrival_density,
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_thermal_indices = resolve_anticipated_thermal_indices(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
@@ -5356,6 +5403,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         &resolved_params,
         anticipated_resolution,
         anticipated_lead_stages,
+        &anticipated_thermal_indices,
         per_stage_mask,
         arc_stage_weights,
         arc_spread_chrono,
@@ -5465,8 +5513,9 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
     let topology = build_transit_bucket_topology(&system, false);
-    let (state_layout, _, _) = resolve_state_layout(&system, &par_lp, &topology, None)
-        .expect("resolve_state_layout: valid test fixture");
+    let (state_layout, _, anticipated_thermal_indices) =
+        resolve_state_layout(&system, &par_lp, &topology, None)
+            .expect("resolve_state_layout: valid test fixture");
     let per_stage_mask = topology.per_stage_mask;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
@@ -5482,6 +5531,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &hydro_result.evaporation,
             &resolved_params,
             &state_layout,
+            &anticipated_thermal_indices,
             &per_stage_mask,
             &topology.arc_stage_weights,
             &topology.arc_spread_chrono,

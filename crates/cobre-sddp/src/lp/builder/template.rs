@@ -620,6 +620,7 @@ pub fn build_stage_templates(
     evaporation_models: &EvaporationModelSet,
     resolved_parameters: &ResolvedParameters,
     state_layout: &StateSpace,
+    anticipated_thermal_indices: &[usize],
     per_stage_mask: &[Vec<usize>],
     arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
     arc_spread_chrono: &HashMap<usize, Vec<Option<SpreadResolution>>>,
@@ -656,6 +657,7 @@ pub fn build_stage_templates(
         resolved_parameters,
         state_layout.anticipated_resolution.clone(),
         state_layout.anticipated_lead_stages.clone(),
+        anticipated_thermal_indices,
         per_stage_mask.to_vec(),
         arc_stage_weights.clone(),
         arc_spread_chrono.clone(),
@@ -683,6 +685,11 @@ pub fn build_stage_templates(
     debug_assert_eq!(
         ctx.max_par_order, state_layout.max_par_order,
         "ctx's threaded max_par_order must match the state_layout it was built from"
+    );
+    debug_assert_eq!(
+        anticipated_thermal_indices.len(),
+        state_layout.n_anticipated,
+        "anticipated_thermal_indices must match state_layout.n_anticipated"
     );
 
     let n_study = study_stages.len();
@@ -732,14 +739,16 @@ pub fn build_stage_templates_resolving_layout(
     resolved_parameters: &ResolvedParameters,
 ) -> Result<StageTemplates, SddpError> {
     let topology = build_transit_bucket_topology(system, false);
-    let (state_layout, _, _) = resolve_state_layout(system, par_lp, &topology, None)?;
+    let (state_layout, _, anticipated_thermal_indices) =
+        resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let study_total_hours: Vec<f64> = study_stages
         .iter()
         .map(|s| BlockClock::new(s).total_hours())
         .collect();
-    let time_value = TimeValue::from_system(system, &study_total_hours);
+    let time_value =
+        TimeValue::from_system(system, &anticipated_thermal_indices, &study_total_hours);
     Ok(build_stage_templates(
         system,
         inflow_method,
@@ -749,6 +758,7 @@ pub fn build_stage_templates_resolving_layout(
         evaporation_models,
         resolved_parameters,
         &state_layout,
+        &anticipated_thermal_indices,
         &topology.per_stage_mask,
         &topology.arc_stage_weights,
         &topology.arc_spread_chrono,
@@ -855,6 +865,7 @@ fn build_template_build_ctx<'a>(
     resolved_parameters: &'a ResolvedParameters,
     anticipated_resolution: AnticipatedResolution,
     anticipated_lead_stages: Vec<usize>,
+    anticipated_thermal_indices: &'a [usize],
     per_stage_mask: Vec<Vec<usize>>,
     arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
     arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
@@ -938,17 +949,17 @@ fn build_template_build_ctx<'a>(
 
     let load_bus_indices = collect_load_bus_indices(system, &bus_pos, load_scheme);
 
-    // Per anticipated thermal: global index and commissioning window. The window
-    // keys the decision gate's operation-window clause on the delivery stage;
-    // `(None, None)` means active every delivery stage in horizon.
-    let mut anticipated_thermal_indices: Vec<ThermalSys> = Vec::new();
-    let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
-    for (t_idx, thermal) in system.thermals().iter().enumerate() {
-        if thermal.anticipated_config.is_some() {
-            anticipated_thermal_indices.push(ThermalSys::new(t_idx));
-            anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
-        }
-    }
+    let anticipated_windows: Vec<(Option<i32>, Option<i32>)> = anticipated_thermal_indices
+        .iter()
+        .map(|&t_idx| {
+            let thermal = &system.thermals()[t_idx];
+            (thermal.entry_stage_id, thermal.exit_stage_id)
+        })
+        .collect();
+    let anticipated_thermal_indices: Vec<ThermalSys> = anticipated_thermal_indices
+        .iter()
+        .map(|&t_idx| ThermalSys::new(t_idx))
+        .collect();
     let n_anticipated = anticipated_thermal_indices.len();
 
     debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);

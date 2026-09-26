@@ -114,7 +114,7 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) n_lines: usize,
     pub(crate) n_buses: usize,
     pub(crate) max_par_order: usize,
-    /// Number of thermals with `anticipated_config.is_some()`.
+    /// Number of thermals `crate::setup::resolve_anticipated_thermal_indices` resolves.
     pub(crate) n_anticipated: usize,
     /// Per-plant `lead_stages` (`K_i`), length `n_anticipated`, anticipated-local order.
     pub(crate) anticipated_lead_stages: Vec<usize>,

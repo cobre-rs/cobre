@@ -1108,7 +1108,6 @@ fn build_geometry(
         filling_target_col: 0..0,
         filled_min_storage_floor: 0..0,
         filled_min_storage_floor_col: 0..0,
-        z_inflow_row_start: 0,
         n_blks,
         storage_boundary_grid: StorageBoundaryGrid::new(storage_in_base, 0, 0, n_blks),
         block_mode: BlockMode::Parallel,

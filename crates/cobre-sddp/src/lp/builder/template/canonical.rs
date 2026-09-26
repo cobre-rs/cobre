@@ -258,7 +258,6 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
         filling_target_col,
         filled_min_storage_floor,
         filled_min_storage_floor_col,
-        z_inflow_row_start,
         n_blks,
         storage_boundary_grid,
         block_mode,
@@ -302,7 +301,7 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
     put_range(buf, filled_min_storage_floor);
     put_range(buf, filled_min_storage_floor_col);
 
-    put_usize(buf, *z_inflow_row_start);
+    put_usize(buf, state.z_inflow_rows().start);
     put_usize(buf, *n_blks);
 
     for field in storage_boundary_grid.canonical_fields() {

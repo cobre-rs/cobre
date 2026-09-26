@@ -4543,10 +4543,6 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
         layout.filled_min_storage_floor_col(),
         "filled_min_storage_floor_col"
     );
-    assert_eq!(
-        geometry.z_inflow_row_start, layout.rows.z_inflow_row_start,
-        "z_inflow_row_start"
-    );
     assert_eq!(geometry.n_blks, layout.n_blks, "n_blks");
     assert_eq!(geometry.block_mode, BlockMode::Chronological, "block_mode");
     assert_eq!(

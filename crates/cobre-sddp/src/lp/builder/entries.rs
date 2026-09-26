@@ -8165,7 +8165,7 @@ mod pumping_water_tests {
             z_u: layout.col_z_inflow_start() + u_idx,
             water_row_u: layout.rows.water_balance.start() + u_idx,
             water_row_d: layout.rows.water_balance.start() + d_idx,
-            z_inflow_row_u: layout.rows.z_inflow_row_start + u_idx,
+            z_inflow_row_u: layout.z_inflow_row(HydroSys::new(u_idx)),
             filling_target_row_d: layout.filling.row_filling_target_start + d_target_local,
             n_target_rows: layout.filling.filling_target_hydro_indices.len(),
             storage_in_u: layout.col_storage_in_start() + u_idx,

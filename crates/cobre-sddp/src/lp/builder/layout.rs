@@ -436,9 +436,6 @@ pub(crate) struct SlackColumns {
 /// travel-time buckets, load balance, the FPHA/evaporation row cursor, and the
 /// structural row-count scalars.
 pub(crate) struct ConstraintRows {
-    /// Row index of the first z-inflow definition constraint. Row 0; state pinning
-    /// uses column bounds, so no state-fixing rows precede the z-inflow block.
-    pub(crate) z_inflow_row_start: usize,
     /// Water balance row family: `n_h` rows in parallel mode, `n_h * n_blks` in
     /// chronological mode (the `K` chained per-hydro rows), addressed through
     /// [`StageLayout::water_balance_row`].
@@ -1311,12 +1308,10 @@ impl<'a> StageLayout<'a> {
         let post_equipment_col_start = evap_col_start;
 
         // ── Role-(b) constraint row ranges ───────────────────────────────────
-        // z_inflow rows start at row 0 — state pinning uses column bounds, so no
-        // state-fixing row range precedes them. `row` allocates every family
+        // The builder's own rows start immediately after `StateSpace::z_inflow_rows()`,
+        // the sole owner of that leading row range. `row` allocates every family
         // through `RangeCursor::alloc`, mirroring `col` above.
-        let mut row = RangeCursor::new(0);
-        let z_inflow_row_start = row.pos();
-        row.alloc(n_h);
+        let mut row = RangeCursor::new(state.z_inflow_rows().end);
         let water_balance = match stage.block_mode {
             BlockMode::Chronological => BlockRowFamily::per_block(row.alloc(n_h * n_blks)),
             BlockMode::Parallel => BlockRowFamily::one_per_entity(row.alloc(n_h)),
@@ -1516,7 +1511,6 @@ impl<'a> StageLayout<'a> {
             oper_violation,
         };
         let rows = ConstraintRows {
-            z_inflow_row_start,
             water_balance,
             transit_bucket_definition,
             transit_bucket_row_pos,
@@ -1845,7 +1839,7 @@ impl<'a> StageLayout<'a> {
     #[inline]
     #[must_use]
     pub(crate) fn z_inflow_row(&self, h: HydroSys) -> usize {
-        self.rows.z_inflow_row_start + h.get()
+        self.state.z_inflow_row(h)
     }
 
     // ── Range accessors mirrored onto `StageGeometry` (own fields) ──────────────
@@ -1957,7 +1951,6 @@ impl<'a> StageLayout<'a> {
             filling_target_col: self.filling_target_col(),
             filled_min_storage_floor: self.filled_min_storage_floor(),
             filled_min_storage_floor_col: self.filled_min_storage_floor_col(),
-            z_inflow_row_start: self.rows.z_inflow_row_start,
             n_blks: self.n_blks,
             storage_boundary_grid: self.storage_boundary_grid(),
             block_mode,

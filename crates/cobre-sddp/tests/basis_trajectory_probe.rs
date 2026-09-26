@@ -124,8 +124,9 @@ impl RowFamily {
 ///
 /// Reconstructs each unexposed family's position by chaining off the ranges
 /// `StageGeometry` does expose (`water_balance`, `filling_target`,
-/// `filled_min_storage_floor`, `load_balance`, `fpha`, `z_inflow_row_start`)
-/// plus counts derivable from `StageContext`/`StageGeometry`
+/// `filled_min_storage_floor`, `load_balance`, `fpha`) and
+/// `StateSpace::z_inflow_rows()`, plus counts derivable from
+/// `StageContext`/`StageGeometry`
 /// (`evap_indices.len()`, `n_hydros * n_blks` per operational-violation
 /// family) — never a hand-copied row-fill formula.
 /// Three families this walk cannot place directly are handled by
@@ -155,7 +156,7 @@ fn classify_stage_rows(
         fam[range].fill(family);
     };
 
-    let z_inflow_range = geom.z_inflow_row_start..geom.z_inflow_row_start + n_hydros;
+    let z_inflow_range = state_space.z_inflow_rows();
     mark(&mut fam, z_inflow_range.clone(), RowFamily::ZInflow);
     assert_eq!(
         z_inflow_range.start, 0,
@@ -292,6 +293,7 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
     let geom = geometry(&dims, fpha_hydro_indices, &fpha_planes, evap_hydro_indices);
     let n_hydros = dims.hydro_count;
     let n_blks = dims.n_blks;
+    let state = state_layout(n_hydros, dims.max_par_order);
 
     let total_fpha_rows = 2 * n_blks + 3 * n_blks;
     let evap_rows = geom.evap_indices.len(); // one evap hydro
@@ -306,7 +308,8 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         + evap_rows
         + opviol_rows;
     assert_eq!(
-        geom.z_inflow_row_start, 0,
+        state.z_inflow_rows().start,
+        0,
         "fixture arithmetic sanity: z_inflow must be the first row family"
     );
 
@@ -334,7 +337,6 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         noise_group_ids: &[],
         downstream_par_order: 0,
     };
-    let state = state_layout(n_hydros, dims.max_par_order);
 
     let total_rows = base_row_count + 5; // + 5 synthetic cut rows
     let template = StageTemplate {

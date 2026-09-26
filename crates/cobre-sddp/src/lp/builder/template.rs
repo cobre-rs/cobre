@@ -268,10 +268,6 @@ pub struct StageGeometry {
     /// stage. Simulation extraction reads the `σ^{v-}` primal at `start + local_idx`,
     /// resolving `local_idx` via `filled_min_storage_floor_hydro_indices`.
     pub filled_min_storage_floor_col: Range<usize>,
-    /// Row index of the first z-inflow definition constraint. Always `0`: state
-    /// pinning uses column bounds, so no state-fixing rows precede the z-inflow
-    /// block. Carried per stage to mirror `StageLayout::z_inflow_row_start`.
-    pub z_inflow_row_start: usize,
     /// Number of operating blocks (K) at this stage — the block-major stride for
     /// every equipment family.
     pub n_blks: usize,

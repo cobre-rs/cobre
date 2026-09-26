@@ -7804,10 +7804,6 @@ fn stage_data_geometry_role_b_matches_reference_build() {
         reference.load_balance, geometry.load_balance,
         "load_balance"
     );
-    assert_eq!(
-        reference.z_inflow_row_start, geometry.z_inflow_row_start,
-        "z_inflow_row_start"
-    );
     assert_eq!(reference.n_blks, geometry.n_blks, "n_blks");
 }
 

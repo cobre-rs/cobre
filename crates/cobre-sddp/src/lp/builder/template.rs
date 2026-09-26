@@ -20,7 +20,7 @@ use crate::time_value::TimeValue;
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
-    AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
+    AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
     HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
 };
 #[cfg(any(test, feature = "test-support"))]
@@ -204,6 +204,12 @@ pub struct StageGeometry {
     pub excess: Range<usize>,
     /// FPHA-generation column range (one per FPHA hydro per block).
     pub generation: Range<usize>,
+    /// Dense, system-indexed, block-major NCS generation column family; reached
+    /// through [`StageGeometry::ncs_generation_col`].
+    pub ncs_generation: Range<usize>,
+    /// Dense, system-indexed, block-major pumping-flow column family; reached
+    /// through [`StageGeometry::pumping_flow_col`].
+    pub pumping_flow: Range<usize>,
     /// Per-`(evaporation hydro, slot)` column/row indices, slot-major
     /// (`local_evap_idx * slots + slot`) — one slot per evaporating hydro on a
     /// parallel stage, one per block on a chronological stage
@@ -339,6 +345,32 @@ impl StageGeometry {
     #[must_use]
     pub fn load_balance_row(&self, bus: BusSys, blk: BlockIdx) -> usize {
         self.load_balance_rows().row(bus.get(), blk, self.n_blks)
+    }
+
+    /// NCS entity `ncs_sys`'s generation column for block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn ncs_generation_col(&self, ncs_sys: usize, blk: BlockIdx) -> usize {
+        let col = BlockGrid::new(self.n_blks, 0).flat(self.ncs_generation.start, ncs_sys, blk);
+        debug_assert!(
+            col < self.ncs_generation.end,
+            "NCS column {col} outside {:?}",
+            self.ncs_generation
+        );
+        col
+    }
+
+    /// Pumping station `pumping_sys`'s flow column for block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn pumping_flow_col(&self, pumping_sys: usize, blk: BlockIdx) -> usize {
+        let col = BlockGrid::new(self.n_blks, 0).flat(self.pumping_flow.start, pumping_sys, blk);
+        debug_assert!(
+            col < self.pumping_flow.end,
+            "pumping column {col} outside {:?}",
+            self.pumping_flow
+        );
+        col
     }
 }
 
@@ -1114,6 +1146,24 @@ fn assemble_stage_templates_output(
                 "dense pumping count must be constant across stages",
             );
         }
+        debug_assert_eq!(
+            out.equipment_geometry.ncs_generation.start, out.ncs_col_start,
+            "geometry.ncs_generation must start at the legacy ncs_col_start",
+        );
+        debug_assert_eq!(
+            out.equipment_geometry.ncs_generation.len(),
+            out.ncs_count * out.equipment_geometry.n_blks,
+            "geometry.ncs_generation must span ncs_count * n_blks columns",
+        );
+        debug_assert_eq!(
+            out.equipment_geometry.pumping_flow.start, out.pumping_col_start,
+            "geometry.pumping_flow must start at the legacy pumping_col_start",
+        );
+        debug_assert_eq!(
+            out.equipment_geometry.pumping_flow.len(),
+            out.n_pumping * out.equipment_geometry.n_blks,
+            "geometry.pumping_flow must span n_pumping * n_blks columns",
+        );
         geometry_per_stage.push(out.equipment_geometry);
     }
 

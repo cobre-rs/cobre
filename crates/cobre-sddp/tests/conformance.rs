@@ -1082,6 +1082,9 @@ fn build_geometry(
         deficit: deficit_start..excess_start,
         excess: excess_start..excess_end,
         generation,
+        // This conformance geometry models no NCS or pumping columns.
+        ncs_generation: 0..0,
+        pumping_flow: 0..0,
         evap_indices: Vec::new(),
         inflow_slack,
         withdrawal_slack_neg,

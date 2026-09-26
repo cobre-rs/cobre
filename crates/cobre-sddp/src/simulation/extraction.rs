@@ -679,8 +679,6 @@ pub struct StageExtractionSpec<'a> {
     pub block_hours: &'a [f64],
     /// Per-row metadata for active generic constraint rows at this stage.
     pub generic_constraint_entries: &'a [GenericConstraintRowEntry],
-    /// First NCS generation column; NCS columns are `ncs_col_start + local_idx * n_blks + blk`.
-    pub ncs_col_start: usize,
     /// Number of active NCS entities at this stage.
     pub n_ncs: usize,
     /// IDs of active NCS entities, in ID-sorted order. Length equals `n_ncs`.
@@ -688,9 +686,6 @@ pub struct StageExtractionSpec<'a> {
     /// Per-(ncs, block) column upper bounds, `available_gen * factor`. Same
     /// block-major layout as the NCS columns, length `n_ncs * n_blks`.
     pub ncs_col_upper: &'a [f64],
-    /// First pumping-flow column. Dense over ALL system stations:
-    /// `pumping_col_start + p_sys * n_blks + blk` (`p_sys` = SYSTEM index).
-    pub pumping_col_start: usize,
     /// Full system station count (dense); a commissioning-dormant station keeps
     /// its column pinned to `[0, 0]`.
     pub n_pumping: usize,
@@ -1915,13 +1910,14 @@ fn extract_non_controllables(
 
     let n_blks = spec.n_blks;
     let grid = spec.block_grid();
-    let col_start = spec.ncs_col_start;
     let mut results = Vec::with_capacity(n_ncs * n_blks);
     let mut total_curtailment_cost = 0.0;
 
     for (local_idx, &ncs_id) in spec.ncs_entity_ids.iter().enumerate() {
         for blk in 0..n_blks {
-            let col = grid.flat(col_start, local_idx, BlockIdx::new(blk));
+            let col = spec
+                .geometry
+                .ncs_generation_col(local_idx, BlockIdx::new(blk));
             let generation_mw = view.primal[col];
             // `ncs_col_upper` is the same block-major layout zero-based, so `flat` from 0.
             let col_upper_offset = grid.flat(0, local_idx, BlockIdx::new(blk));
@@ -1975,15 +1971,13 @@ fn extract_pumping_stations(
         return Vec::new();
     }
 
-    let col_start = spec.pumping_col_start;
     debug_assert!(
-        view.primal.len() >= col_start + n_pumping * n_blks,
+        view.primal.len() >= spec.geometry.pumping_flow.end,
         "pumping primal out of bounds: need {}, have {}",
-        col_start + n_pumping * n_blks,
+        spec.geometry.pumping_flow.end,
         view.primal.len()
     );
 
-    let grid = spec.block_grid();
     let mut results = Vec::with_capacity(n_pumping * n_blks);
     for p_sys in 0..n_pumping {
         debug_assert!(
@@ -1994,7 +1988,7 @@ fn extract_pumping_stations(
         let pumping_station_id = spec.entity_counts.pumping_station_ids[p_sys];
         let consumption = spec.pumping_consumption_mw_per_m3s[p_sys];
         for blk in 0..n_blks {
-            let col = grid.flat(col_start, p_sys, BlockIdx::new(blk));
+            let col = spec.geometry.pumping_flow_col(p_sys, BlockIdx::new(blk));
             let pumped_flow_m3s = view.primal[col];
             #[allow(clippy::cast_possible_truncation)]
             results.push(SimulationPumpingResult {

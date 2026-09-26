@@ -239,6 +239,9 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry) {
         deficit,
         excess,
         generation,
+        // Encoded under layout.ncs_cols / layout.pumping_cols instead — see below.
+        ncs_generation: _ncs_generation,
+        pumping_flow: _pumping_flow,
         evap_indices,
         inflow_slack,
         withdrawal_slack_neg,

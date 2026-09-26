@@ -18,11 +18,11 @@ use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
     ContractBlockBounds, ContractType, DeficitSegment, EnergyContract, EntityId, Hydro,
     HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds, LineBlockBounds,
-    LineStagePenalties, LoadModel, NcsStagePenalties, NoiseMethod, PenaltiesCountsSpec,
-    PenaltiesDefaults, PostStudyStage, PostStudyStages, PostStudyThermalBound, PumpingBlockBounds,
-    PumpingStation, ResolvedBounds, ResolvedPenalties, ScenarioSourceConfig, Stage,
-    StageRiskConfig, StageStateConfig, SystemBuilder, Thermal, ThermalBlockBounds,
-    ThermalStageBounds,
+    LineStagePenalties, LoadModel, NcsStagePenalties, NoiseMethod, NonControllableSource,
+    PenaltiesCountsSpec, PenaltiesDefaults, PostStudyStage, PostStudyStages, PostStudyThermalBound,
+    PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedNcsBounds, ResolvedNcsFactors,
+    ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
+    SystemBuilder, Thermal, ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_stochastic::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
@@ -668,6 +668,238 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
             templates.n_pumping, layout.equipment.n_pumping,
             "stage {t}: scalar n_pumping must equal layout.n_pumping",
         );
+    }
+}
+
+/// `StageGeometry::pumping_flow` carries exactly the range the legacy
+/// `pumping_col_starts[t]`/`n_pumping` pair encodes at every stage, and
+/// `StageGeometry::pumping_flow_col` addresses it by the same formula
+/// (`pumping_col_starts[t] + p * n_blks + blk`), on the pumping-station
+/// fixture study.
+#[test]
+fn geometry_pumping_family_matches_the_pumping_column_start() {
+    let stations = vec![fixture_pumping_station(5), fixture_pumping_station(2)];
+    let system = system_with_pumping_stations(stations);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+
+    let templates = super::build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("build_stage_templates: valid system");
+
+    for t in 0..templates.pumping_col_starts.len() {
+        let geom = &templates.geometry_per_stage[t];
+        let start = templates.pumping_col_starts[t];
+        let n_pumping = templates.n_pumping;
+        assert_eq!(
+            geom.pumping_flow,
+            start..start + n_pumping * geom.n_blks,
+            "stage {t}: pumping_flow must equal pumping_col_starts[t]..+n_pumping*n_blks"
+        );
+        for p in 0..n_pumping {
+            for blk in 0..geom.n_blks {
+                assert_eq!(
+                    geom.pumping_flow_col(p, BlockIdx::new(blk)),
+                    start + p * geom.n_blks + blk,
+                    "stage {t}: pumping_flow_col({p}, {blk}) must equal \
+                     pumping_col_starts[t] + p*n_blks+blk"
+                );
+            }
+        }
+    }
+}
+
+// ── NCS data threaded into TemplateBuildCtx and StageGeometry ─────────────
+
+/// Build a non-controllable source with the given id (bus ref fixed to the
+/// fixture bus; a non-degenerate installed capacity, curtailment allowed).
+fn fixture_non_controllable_source(id: i32) -> NonControllableSource {
+    NonControllableSource {
+        id: EntityId(id),
+        name: format!("W{id}"),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        bus_id: EntityId(1),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        max_generation_mw: 100.0,
+        allow_curtailment: true,
+        curtailment_cost: 5.0,
+    }
+}
+
+/// Build a one-bus, two-hydro system with the supplied non-controllable
+/// sources over `n_blks` blocks. Mirrors `system_with_pumping_stations`; the
+/// two hydros and bus exist solely to satisfy NCS bus-reference validation.
+fn system_with_non_controllable_sources(
+    sources: Vec<NonControllableSource>,
+    n_blks: usize,
+) -> cobre_core::System {
+    let n_ncs = sources.len();
+    let n_hydros = 2_usize;
+    let n_stages = 1_usize;
+
+    let bus = fixture_bus();
+    let hydros = vec![fixture_hydro(1), fixture_hydro(2)];
+
+    let blocks: Vec<Block> = (0..n_blks)
+        .map(|b| Block {
+            index: b,
+            name: format!("BLK{b}"),
+            duration_hours: 372.0,
+        })
+        .collect();
+
+    let stages: Vec<Stage> = vec![Stage {
+        index: 0,
+        id: 0,
+        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+        season_id: Some(0),
+        blocks,
+        block_mode: BlockMode::Parallel,
+        state_config: StageStateConfig {
+            storage: false,
+            inflow_lags: false,
+        },
+        risk_config: StageRiskConfig::Expectation,
+        scenario_config: ScenarioSourceConfig {
+            branching_factor: 1,
+            noise_method: NoiseMethod::Saa,
+        },
+    }];
+
+    let load_models = vec![LoadModel {
+        bus_id: EntityId(1),
+        stage_id: 0,
+        mean_mw: 100.0,
+        std_mw: 0.0,
+    }];
+
+    let resolved_bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros,
+            n_thermals: 0,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: default_hydro_bounds(),
+            hydro_block: default_hydro_block_bounds(),
+            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs,
+            n_stages,
+        },
+        &PenaltiesDefaults {
+            hydro: default_hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+    let max_gen: Vec<f64> = sources.iter().map(|s| s.max_generation_mw).collect();
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(hydros)
+        .non_controllable_sources(sources)
+        .stages(stages)
+        .load_models(load_models)
+        .bounds(resolved_bounds)
+        .penalties(penalties)
+        .resolved_ncs_bounds(ResolvedNcsBounds::new(n_ncs, n_stages, &max_gen))
+        .resolved_ncs_factors(ResolvedNcsFactors::new(n_ncs, n_stages, n_blks))
+        .build()
+        .expect("system_with_non_controllable_sources: valid system")
+}
+
+/// `StageGeometry::ncs_generation` carries exactly the range the legacy
+/// `ncs_col_starts[t]`/`n_ncs` pair encodes at every stage, and
+/// `StageGeometry::ncs_generation_col` addresses it by the same formula
+/// (`ncs_col_starts[t] + sys_idx * n_blks + blk`), on a deck that models NCS.
+#[test]
+fn geometry_ncs_family_matches_the_ncs_column_start() {
+    let sources = vec![
+        fixture_non_controllable_source(5),
+        fixture_non_controllable_source(2),
+    ];
+    let system = system_with_non_controllable_sources(sources, 2);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+
+    let templates = super::build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("build_stage_templates: valid system");
+
+    assert_eq!(
+        templates.n_ncs, 2,
+        "two NCS sources were declared; the dense count is a scalar"
+    );
+    for t in 0..templates.ncs_col_starts.len() {
+        let geom = &templates.geometry_per_stage[t];
+        let start = templates.ncs_col_starts[t];
+        let n_ncs = templates.n_ncs;
+        assert_eq!(
+            geom.ncs_generation,
+            start..start + n_ncs * geom.n_blks,
+            "stage {t}: ncs_generation must equal ncs_col_starts[t]..+n_ncs*n_blks"
+        );
+        for sys_idx in 0..n_ncs {
+            for blk in 0..geom.n_blks {
+                assert_eq!(
+                    geom.ncs_generation_col(sys_idx, BlockIdx::new(blk)),
+                    start + sys_idx * geom.n_blks + blk,
+                    "stage {t}: ncs_generation_col({sys_idx}, {blk}) must equal \
+                     ncs_col_starts[t] + sys_idx*n_blks+blk"
+                );
+            }
+        }
     }
 }
 

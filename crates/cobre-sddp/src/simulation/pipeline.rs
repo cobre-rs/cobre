@@ -667,7 +667,6 @@ pub(crate) fn extract_sim_stage_result(
     let ncs_n = output.n_ncs;
     let ncs_col_start = output.ncs_col_starts.get(t.0).copied().unwrap_or(0);
     let stage_n_blks = ctx.block_count(t);
-    let pumping_col_start = output.pumping_col_starts.get(t.0).copied().unwrap_or(0);
     let n_pumping = output.n_pumping;
     debug_assert!(
         output.geometry_per_stage.is_empty()
@@ -752,14 +751,12 @@ pub(crate) fn extract_sim_stage_result(
             .generic_constraint_row_entries
             .get(t.0)
             .map_or(&[], Vec::as_slice),
-        ncs_col_start,
         n_ncs: ncs_n,
         ncs_entity_ids: output
             .ncs_entity_ids_per_stage
             .get(t.0)
             .map_or(&[], Vec::as_slice),
         ncs_col_upper,
-        pumping_col_start,
         n_pumping,
         pumping_consumption_mw_per_m3s: output.pumping_consumption_mw_per_m3s,
         contract_prices: output

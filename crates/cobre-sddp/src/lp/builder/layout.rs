@@ -1910,6 +1910,10 @@ impl<'a> StageLayout<'a> {
             deficit: self.equipment.deficit.clone(),
             excess: self.equipment.excess.clone(),
             generation: self.equipment.generation.clone(),
+            ncs_generation: self.equipment.col_ncs_start
+                ..self.equipment.col_ncs_start + self.equipment.n_ncs * self.n_blks,
+            pumping_flow: self.equipment.col_pumping_start
+                ..self.equipment.col_pumping_start + self.equipment.n_pumping * self.n_blks,
             evap_indices: self.evap_indices.clone(),
             inflow_slack: self.slack.inflow_slack.clone(),
             withdrawal_slack_neg: self.slack.withdrawal_slack_neg.clone(),

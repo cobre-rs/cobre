@@ -19,6 +19,7 @@ use std::path::Path;
 
 use cobre_core::{BlockMode, EntityId};
 use cobre_sddp::StudySetup;
+use cobre_sddp::indexer::BlockIdx;
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::{NodePos, StageIdx};
 use cobre_sddp::test_support::{
@@ -86,9 +87,9 @@ fn load_chunk(geom: &StageGeometry, bus_pos: usize) -> Range<usize> {
     start..start + geom.n_blks
 }
 
-fn ncs_chunk(ncs_col_start: usize, n_blks: usize, sys_idx: usize) -> Range<usize> {
-    let start = ncs_col_start + sys_idx * n_blks;
-    start..start + n_blks
+fn ncs_chunk(geom: &StageGeometry, sys_idx: usize) -> Range<usize> {
+    geom.ncs_generation_col(sys_idx, BlockIdx::new(0))
+        ..geom.ncs_generation_col(sys_idx, BlockIdx::new(geom.n_blks - 1)) + 1
 }
 
 /// Maps stochastic NCS slot `r` (`setup.stochastic.ncs_entity_ids()[r]`) to its
@@ -201,8 +202,7 @@ fn check_ncs(
     pos: NodePos,
     dim: usize,
     sys_idx: usize,
-    ncs_col_start: usize,
-    n_blks: usize,
+    geom: &StageGeometry,
     changed: &ChangedIndices,
     violations: &mut Vec<String>,
 ) {
@@ -212,7 +212,7 @@ fn check_ncs(
             changed.rows
         ));
     }
-    let chunk = ncs_chunk(ncs_col_start, n_blks, sys_idx);
+    let chunk = ncs_chunk(geom, sys_idx);
     for &col in &changed.cols {
         if !chunk.contains(&col) {
             violations.push(format!(
@@ -244,7 +244,6 @@ fn sweep_setup(
         let stage = setup.node_graph.nodes[pos].stage.0;
         let geom = &setup.stage_data.stage_templates.geometry_per_stage[stage];
         let mode_tag = block_mode_tag(geom.block_mode);
-        let ncs_col_start = setup.stage_data.stage_templates.ncs_col_starts[stage];
 
         let (lo, hi) = stage_state_box_bounds(setup, stage.saturating_sub(1));
         let incoming_state: Vec<f64> = initial_state
@@ -281,16 +280,7 @@ fn sweep_setup(
                          (dim {dim}); pass an ncs_dense_col sized to n_stochastic_ncs"
                     )
                 });
-                check_ncs(
-                    deck_key,
-                    pos,
-                    dim,
-                    sys_idx,
-                    ncs_col_start,
-                    geom.n_blks,
-                    &changed,
-                    violations,
-                );
+                check_ncs(deck_key, pos, dim, sys_idx, geom, &changed, violations);
             }
         }
     }

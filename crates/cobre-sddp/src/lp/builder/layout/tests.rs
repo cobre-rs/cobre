@@ -178,7 +178,7 @@ impl ZeroEntityFixtures {
     /// A zero-anticipated `TemplateBuildCtx` that carries the fixture's own
     /// generic constraints (rather than the empty slice `make_ctx` installs).
     fn make_ctx_generic(&self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.make_ctx(0, 0, vec![], vec![]);
+        let mut ctx = self.make_ctx(0, vec![], vec![]);
         ctx.generic_constraints = &self.generic_constraints;
         ctx
     }
@@ -191,7 +191,6 @@ impl ZeroEntityFixtures {
     fn make_ctx(
         &self,
         n_anticipated: usize,
-        k_max: usize,
         anticipated_lead_stages: Vec<usize>,
         anticipated_thermal_indices: Vec<usize>,
     ) -> TemplateBuildCtx<'_> {
@@ -239,7 +238,6 @@ impl ZeroEntityFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated,
-            k_max,
             anticipated_lead_stages,
             // Windowless: one `(None, None)` per anticipated plant. With no
             // window the operation-window clause is identically true, so the
@@ -354,14 +352,14 @@ fn membership_hydro(
 #[test]
 fn stage_layout_zero_anticipated_matches_pre_anticipated_offsets() {
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = minimal_stage();
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
-    assert_eq!(layout.n_ant_state, 0, "n_ant_state");
+    assert_eq!(layout.state.commit_out.len(), 0, "n_ant_state");
     assert_eq!(layout.n_anticipated, 0, "n_anticipated");
-    assert_eq!(layout.k_max, 0, "k_max");
+    assert_eq!(layout.state.k_max, 0, "k_max");
 
     let idx = state_layout(ctx.n_hydros, ctx.max_par_order);
     assert_eq!(
@@ -730,7 +728,6 @@ impl UsefulVolumeFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],
@@ -1161,7 +1158,6 @@ impl TwoHydroFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],
@@ -1477,7 +1473,6 @@ impl FphaMixFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],
@@ -1660,7 +1655,6 @@ impl FillingMembershipFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],
@@ -2145,8 +2139,7 @@ fn anticipated_decision_columns_placed_between_thermal_and_line_fwd() {
     // ZeroEntityFixtures builds n_thermals=0, so the thermal per-block block is
     // empty and col_anticipated_decision_start == col_thermal_start.
     let n_anticipated = 2_usize;
-    let k_max = 1_usize;
-    let ctx = fixtures.make_ctx(n_anticipated, k_max, vec![1, 1], vec![0, 0]);
+    let ctx = fixtures.make_ctx(n_anticipated, vec![1, 1], vec![0, 0]);
 
     let mut stage = minimal_stage();
     stage.blocks = (0..4)
@@ -2206,7 +2199,6 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
     let fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(
         n_anticipated,
-        k_max,
         vec![2, 3], // anticipated_lead_stages
         vec![0, 2], // anticipated_thermal_indices (arbitrary; layout doesn't inspect them)
     );
@@ -2215,7 +2207,11 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
     let expected_n_ant_state = n_anticipated * k_max;
-    assert_eq!(layout.n_ant_state, expected_n_ant_state, "n_ant_state");
+    assert_eq!(
+        layout.state.commit_out.len(),
+        expected_n_ant_state,
+        "n_ant_state"
+    );
 
     let expected_col_turbine_start = n_hydros * (3 + max_par_order) + 2 * expected_n_ant_state + 1;
     assert_eq!(
@@ -2245,12 +2241,10 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
 #[test]
 fn anticipated_fishing_row_offset_after_operational_violations() {
     let n_anticipated = 2_usize;
-    let k_max = 2_usize;
 
     let fixtures = AntFixturesWithNStages::new(4);
     let ctx = fixtures.make_ctx(
         n_anticipated,
-        k_max,
         vec![1, 2], // K_0=1, K_1=2
         vec![0, 1], // arbitrary thermal indices
     );
@@ -2279,12 +2273,10 @@ fn anticipated_fishing_row_offset_after_operational_violations() {
 #[test]
 fn anticipated_fishing_row_count_grows_with_stage() {
     let n_anticipated = 2_usize;
-    let k_max = 2_usize;
 
     let fixtures = AntFixturesWithNStages::new(4);
     let ctx = fixtures.make_ctx(
         n_anticipated,
-        k_max,
         vec![1, 2], // K_0=1, K_1=2
         vec![0, 1], // arbitrary thermal indices
     );
@@ -2317,7 +2309,7 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
     let k_max = 3_usize;
 
     let fixtures = AntFixturesWithNStages::new(1);
-    let ctx = fixtures.make_ctx(n_anticipated, k_max, vec![3, 2], vec![0, 1]);
+    let ctx = fixtures.make_ctx(n_anticipated, vec![3, 2], vec![0, 1]);
     let stage = minimal_stage();
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -2736,7 +2728,6 @@ impl AntFixturesWithNStages {
     fn make_ctx(
         &self,
         n_anticipated: usize,
-        k_max: usize,
         anticipated_lead_stages: Vec<usize>,
         anticipated_thermal_indices: Vec<usize>,
     ) -> TemplateBuildCtx<'_> {
@@ -2785,7 +2776,6 @@ impl AntFixturesWithNStages {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated,
-            k_max,
             anticipated_lead_stages,
             anticipated_thermal_indices: anticipated_thermal_indices
                 .into_iter()
@@ -2817,7 +2807,6 @@ fn test_layout_state_out_block_adjacent_to_decision() {
     let fixtures = AntFixturesWithNStages::new(6);
     let ctx = fixtures.make_ctx(
         2,          // n_anticipated
-        3,          // k_max
         vec![2, 3], // K_0=2, K_1=3
         vec![0, 1],
     );
@@ -2854,7 +2843,6 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
     let fixtures = AntFixturesWithNStages::new(6);
     let ctx = fixtures.make_ctx(
         2,          // n_anticipated
-        3,          // k_max
         vec![2, 3], // K_0=2, K_1=3
         vec![0, 1],
     );
@@ -2875,7 +2863,7 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
 #[test]
 fn test_layout_no_anticipated_unchanged_num_cols() {
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = minimal_stage();
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3050,7 +3038,6 @@ impl PumpingFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],
@@ -3088,7 +3075,7 @@ impl PumpingFixtures {
 #[test]
 fn pumping_layout_inert_when_no_stations() {
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = minimal_stage();
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3287,7 +3274,7 @@ fn column_accessors_match_open_coded_formulas() {
     // Chronological so `n_evap_slots == n_blks`, giving the evaporation probe
     // below the same multi-slot coverage as every other block-major family.
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = Stage {
         block_mode: BlockMode::Chronological,
         ..PumpingFixtures::stage_with_blocks(4)
@@ -3436,7 +3423,7 @@ fn column_accessors_match_open_coded_formulas() {
 #[test]
 fn post_equipment_col_start_matches_evap_col_start_when_no_hydros() {
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = PumpingFixtures::stage_with_blocks(4);
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3486,7 +3473,7 @@ fn post_equipment_col_start_matches_evap_col_start_when_no_hydros() {
 #[test]
 fn post_equipment_row_start_matches_evap_rows_end_when_no_hydros() {
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = PumpingFixtures::stage_with_blocks(4);
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3536,7 +3523,7 @@ fn post_equipment_row_start_matches_evap_rows_end_when_no_hydros() {
 #[test]
 fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     let fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, 0, vec![], vec![]);
+    let ctx = fixtures.make_ctx(0, vec![], vec![]);
     let stage = PumpingFixtures::stage_with_blocks(4);
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3789,7 +3776,6 @@ impl TwoHydroMultiBusFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],
@@ -4043,7 +4029,6 @@ impl FphaMultiBusFixtures {
             n_buses: 0,
             max_par_order: 0,
             n_anticipated: 0,
-            k_max: 0,
             anticipated_lead_stages: vec![],
             anticipated_thermal_indices: vec![],
             anticipated_windows: vec![],

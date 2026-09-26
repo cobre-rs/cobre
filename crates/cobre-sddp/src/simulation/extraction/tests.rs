@@ -7671,7 +7671,6 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         n_buses: 0,
         max_par_order: 0,
         n_anticipated: 0,
-        k_max: 0,
         anticipated_lead_stages: vec![],
         anticipated_thermal_indices: vec![],
         anticipated_windows: vec![],

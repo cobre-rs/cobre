@@ -546,7 +546,6 @@ pub fn geometry(
         n_buses: dims.n_buses,
         max_par_order: dims.max_par_order,
         n_anticipated: dims.n_anticipated,
-        k_max: dims.k_max,
         anticipated_lead_stages: anticipated_lead_stages.clone(),
         anticipated_thermal_indices: dims
             .anticipated_thermal_indices

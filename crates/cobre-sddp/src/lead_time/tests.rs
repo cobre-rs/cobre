@@ -1094,6 +1094,27 @@ fn resolve_sizes_k_max_from_the_deepest_plant_ring_depth() {
     assert_eq!(resolution.k_max, 4);
 }
 
+#[test]
+fn ring_size_widens_resolution_depth_to_the_deepest_lead_stage() {
+    let resolution = AnticipatedResolution {
+        per_plant: Vec::new(),
+        k_max: 3,
+        max_fanout: 0,
+    };
+
+    assert_eq!(
+        resolution.ring_size(&[1, 2]),
+        3,
+        "resolution depth dominant"
+    );
+    assert_eq!(resolution.ring_size(&[1, 5]), 5, "lead dominant");
+    assert_eq!(
+        resolution.ring_size(&[]),
+        3,
+        "empty lead list returns k_max"
+    );
+}
+
 /// The carried in-flight set at decision stage `t` as the ring actually sweeps
 /// it (`build_anticipated_slot_row_pos`): the window `m in {t+1, ..., t+k_max}`
 /// capped at `n_delivery`, restricted to deliveries that are READY

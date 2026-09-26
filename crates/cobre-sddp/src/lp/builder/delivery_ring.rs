@@ -75,6 +75,22 @@ impl DeliveryRing {
         }
     }
 
+    /// The in-study commitment-hold ring (`n_lanes = n_anticipated`,
+    /// slot-major/plant-minor, `depth = k_max`, modular-addressed) every
+    /// anticipated call site shares — the single owner of its out/in block
+    /// construction. Borrows the merged [`StateSpace::commit_out`]/
+    /// [`StateSpace::commit_in`] region.
+    #[must_use]
+    pub fn anticipated(state: &StateSpace) -> Self {
+        let n_ant_state = state.n_anticipated * state.k_max;
+        Self::new(
+            state.commit_out.start..state.commit_out.start + n_ant_state,
+            state.commit_in.start..state.commit_in.start + n_ant_state,
+            state.n_anticipated,
+            state.k_max,
+        )
+    }
+
     /// Outgoing-block column for ring position `(slot, lane)` — the single
     /// owner of the ring's addressing arithmetic.
     ///

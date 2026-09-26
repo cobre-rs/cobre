@@ -1227,7 +1227,12 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
     );
 
     assert_eq!(ctx.n_anticipated, 2, "n_anticipated");
-    assert_eq!(ctx.k_max, 3, "k_max");
+    assert_eq!(
+        ctx.anticipated_resolution
+            .ring_size(&ctx.anticipated_lead_stages),
+        3,
+        "k_max"
+    );
     assert_eq!(
         ctx.anticipated_lead_stages,
         vec![2, 3],
@@ -1307,7 +1312,12 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
     );
 
     assert_eq!(ctx.n_anticipated, 0, "n_anticipated");
-    assert_eq!(ctx.k_max, 0, "k_max");
+    assert_eq!(
+        ctx.anticipated_resolution
+            .ring_size(&ctx.anticipated_lead_stages),
+        0,
+        "k_max"
+    );
     assert!(
         ctx.anticipated_lead_stages.is_empty(),
         "anticipated_lead_stages"
@@ -1714,7 +1724,12 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     );
 
     assert_eq!(ctx_a.n_anticipated, 2);
-    assert_eq!(ctx_a.k_max, 3);
+    assert_eq!(
+        ctx_a
+            .anticipated_resolution
+            .ring_size(&ctx_a.anticipated_lead_stages),
+        3
+    );
     assert_eq!(
         ctx_a.anticipated_thermal_indices,
         vec![ThermalSys::new(0), ThermalSys::new(1)]
@@ -1763,7 +1778,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         n_buses: ctx_a.n_buses,
         max_par_order: ctx_a.max_par_order,
         n_anticipated: ctx_a.n_anticipated,
-        k_max: ctx_a.k_max,
         anticipated_lead_stages: vec![
             ctx_a.anticipated_lead_stages[1],
             ctx_a.anticipated_lead_stages[0],
@@ -1846,7 +1860,9 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             layout_a.anticipated.col_anticipated_slots_out_start,
             layout_b.anticipated.col_anticipated_slots_out_start,
             ctx_a.n_anticipated,
-            ctx_a.k_max,
+            ctx_a
+                .anticipated_resolution
+                .ring_size(&ctx_a.anticipated_lead_stages),
             layout_a.anticipated.row_anticipated_fishing_start,
             layout_b.anticipated.row_anticipated_fishing_start,
             layout_a.anticipated.n_anticipated_fishing_rows,
@@ -5236,7 +5252,12 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         SamplingScheme::InSample,
         &time_value,
     );
-    assert_eq!(ctx.k_max, 1, "ctx.k_max");
+    assert_eq!(
+        ctx.anticipated_resolution
+            .ring_size(&ctx.anticipated_lead_stages),
+        1,
+        "ctx.k_max"
+    );
     assert_eq!(
         ctx.anticipated_lead_stages,
         vec![1],
@@ -5262,7 +5283,12 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         setup_lead_stages, ctx.anticipated_lead_stages,
         "setup vs template anticipated_lead_stages"
     );
-    assert_eq!(setup_resolution.k_max, ctx.k_max, "setup vs template k_max");
+    assert_eq!(
+        setup_resolution.k_max,
+        ctx.anticipated_resolution
+            .ring_size(&ctx.anticipated_lead_stages),
+        "setup vs template k_max"
+    );
     assert_eq!(
         setup_resolution.per_plant[0].decider, expected_decider,
         "setup vs template decider"

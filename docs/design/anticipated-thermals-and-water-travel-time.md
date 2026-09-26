@@ -390,8 +390,9 @@ uniform-calendar lead (`occupancy[t] = depth[t] + max(0, n_none − 1 − t)`,
 (the pre-delivery-anchor sizing anchor). `k_max` is a pure function of the
 per-plant leads and the delivery calendar — independent of `n_blks`,
 `block_mode`, or the number of decisions. It is computed in
-`AnticipatedResolution::resolve` and the final widen lives in
-`resolve_state_layout` (`crates/cobre-sddp/src/setup/mod.rs`).
+`AnticipatedResolution::resolve`, and the final widen is
+`AnticipatedResolution::ring_size`, called by `resolve_state_layout`
+(`crates/cobre-sddp/src/setup/mod.rs`).
 
 The state region is `S = A·k_max` (see §3.3). The **modular slot key** is keyed
 on the **ring axis**, not the raw delivery axis: the delivery axis with each
@@ -447,8 +448,9 @@ staggered commissioning).
 ### 3.4 LP entry
 
 The commitment transition is realized entirely by three `[0,0]`-equality row
-families over the one dense `anticipated_ring` (`n_lanes = n_anticipated`, `depth =
-k_max`); `commit_in` is pinned to the previous stage's `commit_out` by column
+families over the one dense ring `DeliveryRing::anticipated` builds
+(`n_lanes = n_anticipated`, `depth = k_max`); `commit_in` is pinned to the
+previous stage's `commit_out` by column
 bounds, so there is no Rust-side shift step. Every `mod k_max` slot key below is
 a **ring-axis** residue (§3.2) — `ring_index(m) mod k_max`, the identity whenever
 the plant declares no fixed post-horizon commitment:

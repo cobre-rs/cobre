@@ -95,19 +95,6 @@ fn lag_reference_anchor(all_stages: &[Stage], pool_pos_in_all: Option<usize>, la
         })
 }
 
-/// The in-study anticipated ring's slot-major/plant-minor addressing over
-/// `commit_out`/`commit_in`, always at their full width — a ring slot is the
-/// commitment-hold region's only carrier.
-fn anticipated_ring_for(global_layout: &StateSpace) -> DeliveryRing {
-    let n_ant_state = global_layout.n_anticipated * global_layout.k_max;
-    DeliveryRing::new(
-        global_layout.commit_out.start..global_layout.commit_out.start + n_ant_state,
-        global_layout.commit_in.start..global_layout.commit_in.start + n_ant_state,
-        global_layout.n_anticipated,
-        global_layout.k_max,
-    )
-}
-
 /// Build the per-slot entity-identity manifest for one stage's cut pool: one
 /// [`EntitySlot`] per enabled cut-state dimension of `projection`.
 ///
@@ -157,7 +144,7 @@ pub fn build_stage_entity_manifest(
         .collect();
     // Only `slot_lane_at`'s reverse decomposition is read here — the manifest
     // never emits ring rows/columns.
-    let anticipated_ring = anticipated_ring_for(global_layout);
+    let anticipated_ring = DeliveryRing::anticipated(global_layout);
 
     // Study stages in canonical index order — the space `AnticipatedResolution`'s
     // decider/depth and the bucket topology both index.

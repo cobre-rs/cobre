@@ -116,8 +116,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) max_par_order: usize,
     /// Number of thermals with `anticipated_config.is_some()`.
     pub(crate) n_anticipated: usize,
-    /// Maximum `lead_stages` across the anticipated thermals (`K_max`).
-    pub(crate) k_max: usize,
     /// Per-plant `lead_stages` (`K_i`), length `n_anticipated`, anticipated-local order.
     pub(crate) anticipated_lead_stages: Vec<usize>,
     /// Anticipated-local position → global thermal index, length `n_anticipated`.
@@ -551,13 +549,6 @@ pub(crate) struct StageLayout<'a> {
     pub(crate) lag_order: usize,
     /// Number of anticipated thermals (mirrors `TemplateBuildCtx.n_anticipated`).
     pub(crate) n_anticipated: usize,
-    /// Maximum `lead_stages` across the anticipated thermals (`K_max`).
-    pub(crate) k_max: usize,
-    /// Anticipated-state ring-buffer width: `n_anticipated * k_max`.
-    // Rationale: asserted only in layout unit tests; production helpers derive
-    // `n_anticipated * k_max` inline, so dead_code fires on the production side.
-    #[allow(dead_code)]
-    pub(crate) n_ant_state: usize,
     /// In-study anticipated-ring column/row offsets (see [`AnticipatedLayout`]).
     pub(crate) anticipated: AnticipatedLayout,
     /// Equipment column ranges (see [`EquipmentColumns`]).
@@ -1374,8 +1365,6 @@ impl<'a> StageLayout<'a> {
         let n_op_cell = n_cells * n_blks;
         let oper_violation = OperViolationRanges::new(&mut col, &mut row, n_op_hydro, n_op_cell);
 
-        let n_ant_state = ctx.n_anticipated * ctx.k_max;
-
         // NCS follows the last operational-violation slack family; `col.pos()`
         // already equals the post-equipment cursor when `n_h == 0`, so no fallback
         // branch is needed.
@@ -1558,8 +1547,6 @@ impl<'a> StageLayout<'a> {
             n_h,
             lag_order: ctx.max_par_order,
             n_anticipated: ctx.n_anticipated,
-            k_max: ctx.k_max,
-            n_ant_state,
             anticipated,
             equipment,
             slack,

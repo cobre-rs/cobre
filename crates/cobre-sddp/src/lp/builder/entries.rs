@@ -17,22 +17,6 @@ use crate::generic_constraints::{
 
 use std::ops::Range;
 
-/// The in-study commitment-hold ring (`n_lanes = n_anticipated`,
-/// slot-major/plant-minor, `depth = k_max`, modular-addressed) every
-/// anticipated call site shares — the single owner of its out/in block
-/// construction. Borrows the merged [`StateSpace::commit_out`]/
-/// [`StateSpace::commit_in`] region.
-pub(super) fn anticipated_ring(layout: &StageLayout) -> DeliveryRing {
-    let state = layout.state;
-    let n_ant_state = layout.n_anticipated * layout.k_max;
-    DeliveryRing::new(
-        state.commit_out.start..state.commit_out.start + n_ant_state,
-        state.commit_in.start..state.commit_in.start + n_ant_state,
-        layout.n_anticipated,
-        layout.k_max,
-    )
-}
-
 /// Fishing (consumption) coupling: for every anticipated plant whose
 /// delivery matures THIS stage
 /// (`layout.anticipated.anticipated_fishing_row_pos`, `None` at a `K = 0`
@@ -68,7 +52,7 @@ pub(super) fn fill_anticipated_fishing_entries(
 ) {
     let n_blks = layout.n_blks;
     let grid = layout.block_grid();
-    let ring = anticipated_ring(layout);
+    let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active = 0_usize;
     for local_idx in 0..ctx.n_anticipated {
         // Indexed via `.get` rather than `[local_idx]`: `n_anticipated` sizes
@@ -88,7 +72,7 @@ pub(super) fn fill_anticipated_fishing_entries(
         // `is_anticipated_at` is `true` for a pre-study (`None`) decider, so
         // an `n_anticipated`-only gate would reach this modulo on an empty
         // ring.
-        let slot = stage_idx % layout.k_max;
+        let slot = stage_idx % layout.state.k_max;
         let row = layout.anticipated.row_anticipated_fishing_start + pos;
         let thermal_idx = ctx.anticipated_thermal_indices[local_idx];
         let mut block_hours_total: f64 = 0.0;
@@ -128,7 +112,7 @@ pub(super) fn fill_anticipated_state_out_def_entries(
     let n_stages = ctx.resolved.bounds.n_stages();
     let row_start = layout.anticipated.row_anticipated_state_out_def_start;
     let decision_start = layout.anticipated.col_anticipated_decision_start;
-    let ring = anticipated_ring(layout);
+    let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active: usize = 0;
     for_each_ring_residue(layout.state, n_stages, stage_idx, |res, point| {
         let Some(delivery_stage) = point.genuine_decisions_at(stage_idx).next() else {
@@ -181,7 +165,7 @@ fn fill_anticipated_slot_definition_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let row_start = layout.anticipated.row_anticipated_slot_definition_start;
-    let ring = anticipated_ring(layout);
+    let ring = DeliveryRing::anticipated(layout.state);
     let n_reachable = ring.emit_carry_rows(
         &layout.anticipated.anticipated_slot_row_pos,
         row_start,
@@ -2246,7 +2230,7 @@ mod zero_cost_tests {
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-    use crate::indexer::{BlockIdx, HydroCellIndex, ThermalSys};
+    use crate::indexer::{BlockIdx, HydroCellIndex, StateSpace, ThermalSys};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
     use crate::resolved_parameters::ResolvedParameters;
     use crate::time_value::{PostStudyResolved, TimeValue};
@@ -2429,7 +2413,6 @@ mod zero_cost_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated,
-                k_max,
                 anticipated_lead_stages,
                 anticipated_thermal_indices: anticipated_thermal_indices
                     .into_iter()
@@ -2686,7 +2669,12 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(1, 0, 1);
         let ctx = fixtures.make_ctx(1, 0, vec![1], vec![0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let state = state_layout_for(&ctx);
+        // Bypasses state_layout_for's owner-derived k_max (ring_size would widen
+        // it to 1, matching anticipated_lead_stages) to keep the ring itself
+        // starved at k_max=0 — the exact "absent the guard" input the C13
+        // regression above needs; StateSpace::new's own k_max stays a free
+        // parameter for this.
+        let state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![1], &[]);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
@@ -3135,7 +3123,12 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(2, 0, 1);
         let ctx = fixtures.make_ctx(1, 0, vec![1], vec![0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let state = state_layout_for(&ctx);
+        // Bypasses state_layout_for's owner-derived k_max (ring_size would widen
+        // it to 1, matching anticipated_lead_stages) to keep the ring itself
+        // starved at k_max=0 — the exact "absent the guard" input the C13
+        // regression above needs; StateSpace::new's own k_max stays a free
+        // parameter for this.
+        let state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![1], &[]);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         assert_eq!(
@@ -3195,7 +3188,7 @@ mod zero_cost_tests {
         fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
 
         let out_start = layout.anticipated.col_anticipated_slots_out_start;
-        let n_ant_state = layout.n_anticipated * layout.k_max;
+        let n_ant_state = layout.n_anticipated * layout.state.k_max;
         for (offset, entries) in col_entries[out_start..out_start + n_ant_state]
             .iter()
             .enumerate()
@@ -3372,7 +3365,7 @@ mod zero_cost_tests {
         fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
 
         let out_start = layout.anticipated.col_anticipated_slots_out_start;
-        let n_ant_state = layout.n_anticipated * layout.k_max;
+        let n_ant_state = layout.n_anticipated * layout.state.k_max;
         for (offset, entries) in col_entries[out_start..out_start + n_ant_state]
             .iter()
             .enumerate()
@@ -3478,7 +3471,9 @@ mod zero_cost_tests {
         let col_entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
 
         let a = ctx.n_anticipated;
-        let k = ctx.k_max;
+        let k = ctx
+            .anticipated_resolution
+            .ring_size(&ctx.anticipated_lead_stages);
         for slot in 0..k {
             for plant in 0..a {
                 let col = layout.col_anticipated_state_start() + slot * a + plant;
@@ -4232,7 +4227,6 @@ mod pumping_water_tests {
                 n_buses: self.buses.len(),
                 max_par_order: self.max_par_order,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -6535,7 +6529,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -6647,7 +6642,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -6730,7 +6726,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -6851,7 +6848,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -6941,7 +6939,8 @@ mod pumping_water_tests {
                 (down1_idx, 1),
             ],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -7072,7 +7071,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -7155,7 +7155,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -7287,7 +7288,9 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             par_ctx.n_anticipated,
-            par_ctx.k_max,
+            par_ctx
+                .anticipated_resolution
+                .ring_size(&par_ctx.anticipated_lead_stages),
             par_ctx.anticipated_lead_stages.clone(),
             &vec![0; par_ctx.n_hydros],
         );
@@ -7310,7 +7313,9 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             chr_ctx.n_anticipated,
-            chr_ctx.k_max,
+            chr_ctx
+                .anticipated_resolution
+                .ring_size(&chr_ctx.anticipated_lead_stages),
             chr_ctx.anticipated_lead_stages.clone(),
             &vec![0; chr_ctx.n_hydros],
         );
@@ -7379,7 +7384,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -7433,7 +7439,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -7595,7 +7602,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );
@@ -7650,7 +7658,8 @@ mod pumping_water_tests {
             1,
             vec![(down_idx, 1)],
             ctx.n_anticipated,
-            ctx.k_max,
+            ctx.anticipated_resolution
+                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
             &vec![0; ctx.n_hydros],
         );

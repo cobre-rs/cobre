@@ -612,6 +612,13 @@ impl AnticipatedResolution {
             max_fanout,
         }
     }
+
+    /// Widens [`Self::k_max`] to cover the deepest of `lead_stages`.
+    #[must_use]
+    pub(crate) fn ring_size(&self, lead_stages: &[usize]) -> usize {
+        self.k_max
+            .max(lead_stages.iter().copied().max().unwrap_or(0))
+    }
 }
 
 /// Cumulative stage-end boundaries `S_0 = 0, S_1, .., S_n` on the hour clock.

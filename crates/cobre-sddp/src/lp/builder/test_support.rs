@@ -82,7 +82,8 @@ pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
         0,
         Vec::new(),
         ctx.n_anticipated,
-        ctx.k_max,
+        ctx.anticipated_resolution
+            .ring_size(&ctx.anticipated_lead_stages),
         ctx.anticipated_lead_stages.clone(),
         &effective_lag_counts,
     )

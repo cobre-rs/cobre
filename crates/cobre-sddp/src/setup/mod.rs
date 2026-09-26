@@ -1297,13 +1297,11 @@ pub(crate) fn resolve_state_layout(
         )));
     }
 
-    // Ring depth: the delivery-anchored max_t K_i(t), clamped up to the
-    // constant-lead machinery's per-plant K_i so its slot indexing stays in range.
-    // A LeadStages plant's depth is bounded by ℓ, so this equals the pre-anchor
-    // max(lead_stages) and the ring sizing is byte-for-byte unchanged.
-    let k_max: usize = anticipated_resolution
-        .k_max
-        .max(anticipated_lead_stages.iter().copied().max().unwrap_or(0));
+    // Ring depth: ring_size clamps the delivery-anchored depth up to the
+    // constant-lead machinery's per-plant K_i so its slot indexing stays in
+    // range; a LeadStages plant's depth is already bounded by ℓ, so the ring
+    // sizing stays byte-for-byte unchanged.
+    let k_max = anticipated_resolution.ring_size(&anticipated_lead_stages);
 
     let hydro_count = system.hydros().len();
     let max_par_order: usize = widen_lag_state_depth(

@@ -952,9 +952,6 @@ fn build_template_build_ctx<'a>(
     let n_anticipated = anticipated_thermal_indices.len();
 
     debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);
-    let k_max: usize = anticipated_resolution
-        .k_max
-        .max(anticipated_lead_stages.iter().copied().max().unwrap_or(0));
 
     // Cloned so the map serves both LP construction (ctx) and the simulation
     // extraction output.
@@ -1037,7 +1034,6 @@ fn build_template_build_ctx<'a>(
         n_buses: buses.len(),
         max_par_order,
         n_anticipated,
-        k_max,
         anticipated_lead_stages,
         anticipated_thermal_indices,
         anticipated_windows,

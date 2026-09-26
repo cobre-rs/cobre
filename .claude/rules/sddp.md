@@ -1481,12 +1481,12 @@ referencing a frozen column or a free column with no defining constraint, both
 wrong-but-compiling. Water instantiates one ring per downstream plant
 (`transit_bucket_ring`, `n_lanes = 1`, over that plant's ragged contiguous
 sub-range); anticipated instantiates ONE dense ring spanning every plant
-(`anticipated_ring`, `n_lanes = n_anticipated`, slot-major/plant-minor) — both
-addressing schemes resolve through the same `out_col`/`in_col` formula
+(`DeliveryRing::anticipated`, `n_lanes = n_anticipated`, slot-major/plant-minor)
+— both addressing schemes resolve through the same `out_col`/`in_col` formula
 (`block.start + slot * n_lanes + lane`).
 Read: `lp/builder/delivery_ring.rs` (`DeliveryRing::emit_shift_rows`,
-`freeze_masked_columns`, `emit_deposit`, `out_col`/`in_col`, `slot_target`),
-`lp/builder/entries.rs` (`transit_bucket_ring`, `anticipated_ring`).
+`freeze_masked_columns`, `emit_deposit`, `out_col`/`in_col`, `slot_target`,
+`DeliveryRing::anticipated`), `lp/builder/entries.rs` (`transit_bucket_ring`).
 
 ### In-transit bucket dynamics & sign
 
@@ -1958,8 +1958,9 @@ every simultaneous pre-study seed is in flight (stage 0, before the first
 fishing) — the last seeded stage then silently delivers an earlier stage's MW,
 a silent-wrong-value bug that still compiles and still converges.
 Read: `lead_time/mod.rs` (`PointResolution::ring_depth`,
-`AnticipatedResolution::resolve`), `setup/mod.rs`
-(`resolve_anticipated_commitments_core`'s `LeadStages`/`LeadTime` split).
+`AnticipatedResolution::resolve`, `AnticipatedResolution::ring_size`),
+`setup/mod.rs` (`resolve_anticipated_commitments_core`'s `LeadStages`/`LeadTime`
+split).
 Pinned by `ring_depth_covers_every_simultaneous_pre_study_seed`,
 `ring_depth_equals_the_occupancy_max_when_no_seed_overflows`,
 `ring_depth_ignores_post_study_none_deciders`, and
@@ -2071,9 +2072,9 @@ Read: `lp/indexer/state_space.rs` (`StateSpace::commit_out`,
 `StateSpace::commit_in`, `commitment_hold_in_study_offset`, `state_to_lp_column`,
 `state_to_lp_incoming_column`), `lp/builder/delivery_ring.rs`
 (`DeliveryRing::emit_carry_rows`, `emit_deposit`, `freeze_masked_columns`,
-`slot_lane_at`), `lp/builder/entries.rs`
+`slot_lane_at`, `DeliveryRing::anticipated`), `lp/builder/entries.rs`
 (`fill_anticipated_slot_definition_entries`,
-`fill_anticipated_state_out_def_entries`, `anticipated_ring`), `lp/builder/rows.rs`
+`fill_anticipated_state_out_def_entries`), `lp/builder/rows.rs`
 (`fill_anticipated_slot_definition_rows`, `fill_anticipated_state_out_def_rows`),
 `lp/builder/layout.rs` (`build_anticipated_slot_row_pos`), `lp/builder/columns.rs`
 (`fill_anticipated_slot_columns`), `policy/policy_export.rs`

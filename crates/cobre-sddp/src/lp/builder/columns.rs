@@ -10,7 +10,7 @@ use crate::indexer::{
 };
 
 use super::EVAPORATION_FLOW_SAFETY_MARGIN;
-use super::delivery_ring::for_each_ring_residue;
+use super::delivery_ring::{DeliveryRing, for_each_ring_residue};
 use super::layout::{StageLayout, TemplateBuildCtx};
 use crate::generic_constraints::contract_family_slot;
 
@@ -146,7 +146,7 @@ fn fill_transit_bucket_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) 
 /// overwrites this fill when active).
 fn fill_anticipated_slot_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
     let base = layout.anticipated.col_anticipated_slots_out_start;
-    let ring = super::entries::anticipated_ring(layout);
+    let ring = DeliveryRing::anticipated(layout.state);
     ring.freeze_masked_columns(
         &layout.anticipated.anticipated_slot_row_pos,
         base,
@@ -594,7 +594,7 @@ pub(super) fn fill_anticipated_columns(
     let n_delivery = layout.state.delivery_stage_count(n_stages);
     let n_ant = ctx.n_anticipated;
     let decision_start = layout.anticipated.col_anticipated_decision_start;
-    let ring = super::entries::anticipated_ring(layout);
+    let ring = DeliveryRing::anticipated(layout.state);
 
     for local_idx in 0..n_ant {
         let col = decision_start + local_idx;
@@ -1615,7 +1615,6 @@ mod interior_storage_bound_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -2124,7 +2123,6 @@ mod diversion_bound_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -2560,7 +2558,6 @@ mod filling_phase_gating_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -3579,7 +3576,6 @@ mod anticipated_objective_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 1,
-                k_max: K_MAX,
                 anticipated_lead_stages: vec![K_MAX],
                 anticipated_thermal_indices: vec![ThermalSys::new(0)],
                 // Windowless single plant: the decision gate reduces to the
@@ -3869,7 +3865,6 @@ mod anticipated_objective_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 1,
-                k_max: self.k_max,
                 anticipated_lead_stages: vec![self.k_max],
                 anticipated_thermal_indices: vec![ThermalSys::new(0)],
                 anticipated_windows: vec![(None, None)],
@@ -3986,7 +3981,6 @@ mod anticipated_objective_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
-        k_max: usize,
         resolution: AnticipatedResolution,
         time_value: TimeValue,
     }
@@ -4175,7 +4169,6 @@ mod anticipated_objective_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
-                k_max,
                 resolution,
                 time_value,
             }
@@ -4226,7 +4219,6 @@ mod anticipated_objective_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 1,
-                k_max: self.k_max,
                 anticipated_lead_stages: vec![usize::try_from(PSA_LEAD).unwrap()],
                 anticipated_thermal_indices: vec![ThermalSys::new(0)],
                 anticipated_windows: vec![(None, None)],
@@ -4751,7 +4743,6 @@ mod block_family_slack_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -5208,7 +5199,6 @@ mod evaporation_slack_objective_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -5536,7 +5526,6 @@ mod contract_column_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -5888,7 +5877,6 @@ mod thermal_block_bound_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -6458,7 +6446,6 @@ mod line_contract_pumping_block_bound_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -7211,7 +7198,6 @@ mod hydro_block_bound_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -8330,7 +8316,6 @@ mod cell_column_bound_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],
@@ -9300,7 +9285,6 @@ mod ncs_objective_tests {
                 n_buses: 0,
                 max_par_order: 0,
                 n_anticipated: 0,
-                k_max: 0,
                 anticipated_lead_stages: vec![],
                 anticipated_thermal_indices: vec![],
                 anticipated_windows: vec![],

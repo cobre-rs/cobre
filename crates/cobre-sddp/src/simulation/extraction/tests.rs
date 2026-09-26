@@ -996,15 +996,15 @@ fn extract_equipment_reads_primal_when_with_equipment() {
         contract_ids: vec![],
         non_controllable_ids: vec![],
     };
-    // Dual vector: water_value reads from dual[water_balance.start + h],
-    // load balance from dual[load_balance.start + b*K + blk].
+    // Dual vector: water_value reads from dual[water_balance.start() + h],
+    // load balance from dual[load_balance.start() + b*K + blk].
     // N=2, L=1: z_inflow rows [0,2), water_balance=[2,4), load_balance=[4,5).
     let mut dual = vec![0.0_f64; 5];
-    dual[2] = -120.0; // water value h0 ($/hm³) — at water_balance.start+0
-    dual[3] = -95.0; // water value h1 ($/hm³) — at water_balance.start+1
+    dual[2] = -120.0; // water value h0 ($/hm³) — at water_balance.start()+0
+    dual[3] = -95.0; // water value h1 ($/hm³) — at water_balance.start()+1
     dual[4] = 108_000.0; // raw load balance dual ($/MW); 150 $/MWh × 720 h
 
-    // Build row_lower for the load balance row. load_balance.start=4, K=1, B=1.
+    // Build row_lower for the load balance row. load_balance.start()=4, K=1, B=1.
     let mut row_lower = vec![0.0_f64; 5]; // must be >= load_balance.end = 5
     row_lower[4] = 75.0; // load = 75 MW for bus 100
     let block_hours = [720.0_f64]; // one block, 30-day month
@@ -1091,7 +1091,7 @@ fn extract_equipment_reads_primal_when_with_equipment() {
     // spot_price = dual * COST_SCALE_FACTOR / hrs = 108_000 * 1_000_000 / 720 = 150_000_000.0 $/MWh
     assert!((result.buses[0].spot_price - 150_000_000.0).abs() < 1e-3);
 
-    // water_value = dual[water_balance.start+h] * COST_SCALE_FACTOR
+    // water_value = dual[water_balance.start()+h] * COST_SCALE_FACTOR
     assert!((result.hydros[0].water_value_per_hm3 - (-120_000_000.0)).abs() < 1e-3);
     assert!((result.hydros[1].water_value_per_hm3 - (-95_000_000.0)).abs() < 1e-3);
 

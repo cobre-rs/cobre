@@ -131,7 +131,7 @@ impl RowFamily {
 /// family) — never a hand-copied row-fill formula.
 /// Three families this walk cannot place directly are handled by
 /// construction: `transit_bucket_definition`'s size falls out of the
-/// `water_balance.end .. load_balance.start` gap regardless of its value; the
+/// `water_balance.end() .. load_balance.start()` gap regardless of its value; the
 /// three anticipated-thermal families are asserted empty (panics naming the
 /// gap) rather than silently misclassified — `cobre_rodada` has neither
 /// declared travel-time arcs nor anticipated thermals, confirmed by the

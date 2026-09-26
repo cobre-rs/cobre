@@ -1326,8 +1326,8 @@ fn block_storage_col_resolves_all_boundaries() {
 
 /// The water-balance block spans `n_h` rows in parallel mode and `n_h * n_blks`
 /// in chronological mode (the `K` chained per-hydro rows), with `K = 1`
-/// chronological collapsing to the parallel count. `load_balance.start` chains off
-/// `water_balance.end` in every case.
+/// chronological collapsing to the parallel count. `load_balance.start()` chains off
+/// `water_balance.end()` in every case.
 #[test]
 fn chronological_water_balance_row_count() {
     let fixtures = TwoHydroFixtures::new();
@@ -1344,7 +1344,7 @@ fn chronological_water_balance_row_count() {
     assert_eq!(
         parallel.rows.load_balance.start(),
         parallel.rows.water_balance.end(),
-        "parallel load_balance.start chains off water_balance.end"
+        "parallel load_balance.start() chains off water_balance.end()"
     );
 
     let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
@@ -1357,7 +1357,7 @@ fn chronological_water_balance_row_count() {
     assert_eq!(
         chrono_k3.rows.load_balance.start(),
         chrono_k3.rows.water_balance.end(),
-        "chronological K=3 load_balance.start chains off water_balance.end"
+        "chronological K=3 load_balance.start() chains off water_balance.end()"
     );
 
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
@@ -1370,7 +1370,7 @@ fn chronological_water_balance_row_count() {
     assert_eq!(
         chrono_k1.rows.load_balance.start(),
         chrono_k1.rows.water_balance.end(),
-        "chronological K=1 load_balance.start chains off water_balance.end"
+        "chronological K=1 load_balance.start() chains off water_balance.end()"
     );
 }
 

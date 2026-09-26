@@ -98,6 +98,11 @@ owners of the byte layout. Any layout change must update
 both methods together; the `broadcast_basis_cache` helper
 in `training/training.rs` only owns the four MPI broadcast calls.
 
+When changing the stage-LP builder (`lp/builder/`, `lp/indexer/`, or the `setup/`
+code that resolves the builder's inputs), read:
+→ `docs/design/lp-builder-contract.md` — the four jobs the builder exists for and
+the questions every change to it must answer
+
 When adding new LP variables, constraints, or entity types, read:
 → `crates/cobre-sddp/src/lp/builder/mod.rs` module docs and `crates/cobre-sddp/src/lp/indexer/mod.rs`
 

@@ -632,6 +632,10 @@ fn water_value_per_hm3(
     h: usize,
     blk: BlockIdx,
 ) -> f64 {
+    if spec.geometry.water_balance.is_empty() {
+        // test harnesses pass the default geometry, which has no rows
+        return 0.0;
+    }
     view.dual
         .get(spec.geometry.water_balance_row(HydroSys::new(h), blk))
         .copied()

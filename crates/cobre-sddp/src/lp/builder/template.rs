@@ -20,8 +20,8 @@ use crate::time_value::TimeValue;
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
-    AnticipatedPlants, BlockIdx, Boundary, EvaporationIndices, HydroCellIndex, HydroSys,
-    StateSpace, StorageBoundaryGrid,
+    AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
+    HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::bucket_topology::build_transit_bucket_topology;
@@ -237,7 +237,8 @@ pub struct StageGeometry {
     /// a chronological stage; address a row through
     /// [`StageGeometry::water_balance_row`].
     pub water_balance: Range<usize>,
-    /// Load-balance row range (one row per bus per block; `n_buses · n_blks`).
+    /// Load-balance row range (one row per bus per block; `n_buses · n_blks`);
+    /// address a row through [`StageGeometry::load_balance_row`].
     pub load_balance: Range<usize>,
     /// FPHA hyperplane row range, immediately following `load_balance`. Length
     /// varies per stage: `for_each_fpha_plane` sums plane counts that differ per
@@ -312,18 +313,32 @@ impl StageGeometry {
         self.storage_boundary_grid.col(h.get(), boundary)
     }
 
+    fn water_balance_rows(&self) -> BlockRowFamily {
+        match self.block_mode {
+            BlockMode::Parallel => BlockRowFamily::one_per_entity(self.water_balance.clone()),
+            BlockMode::Chronological => BlockRowFamily::per_block(self.water_balance.clone()),
+        }
+    }
+
+    fn load_balance_rows(&self) -> BlockRowFamily {
+        BlockRowFamily::per_block(self.load_balance.clone())
+    }
+
     /// Hydro `h`'s water-balance row for block `blk`: its own block row on a
     /// chronological stage, its single stage row on a parallel stage (every block
     /// reads the same row).
     #[inline]
     #[must_use]
     pub fn water_balance_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        match self.block_mode {
-            BlockMode::Parallel => self.water_balance.start + h.get(),
-            BlockMode::Chronological => {
-                self.water_balance.start + h.get() * self.n_blks + blk.get()
-            }
-        }
+        self.water_balance_rows().row(h.get(), blk, self.n_blks)
+    }
+
+    /// Bus `bus`'s load-balance row for block `blk` (`n_buses · n_blks` rows,
+    /// strided by [`Self::n_blks`]).
+    #[inline]
+    #[must_use]
+    pub fn load_balance_row(&self, bus: BusSys, blk: BlockIdx) -> usize {
+        self.load_balance_rows().row(bus.get(), blk, self.n_blks)
     }
 }
 

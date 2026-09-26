@@ -31,8 +31,8 @@ use cobre_stochastic::season_cast::post_study_calendar_stages;
 use crate::block_clock::{BlockClock, M3S_TO_HM3};
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, HydroCell, HydroCellIndex, HydroSys,
-    StateSpace, ThermalSys, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, BusSys, HydroCell, HydroCellIndex,
+    HydroSys, StateSpace, ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -4188,6 +4188,28 @@ fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks(
             assert_eq!(
                 chronological.water_balance_row(HydroSys::new(h), BlockIdx::new(k)),
                 2 + h * 3 + k
+            );
+        }
+    }
+}
+
+/// `StageGeometry::load_balance_row` strides buses by the block count,
+/// regardless of `block_mode`.
+#[test]
+fn load_balance_row_strides_buses_by_the_block_count() {
+    use super::StageGeometry;
+
+    let geometry = StageGeometry {
+        load_balance: 10..22,
+        n_blks: 4,
+        block_mode: BlockMode::Parallel,
+        ..StageGeometry::default()
+    };
+    for bus in 0..3 {
+        for k in 0..4 {
+            assert_eq!(
+                geometry.load_balance_row(BusSys::new(bus), BlockIdx::new(k)),
+                10 + bus * 4 + k
             );
         }
     }

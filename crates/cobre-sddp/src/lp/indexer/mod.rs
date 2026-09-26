@@ -56,6 +56,9 @@
 //! - `block_grid` — the [`BlockGrid`] typed block-stride address primitive and
 //!   its three shape methods ([`BlockGrid::flat`], [`BlockGrid::fpha_plane`],
 //!   [`BlockGrid::deficit`]).
+//! - `block_row_family` — the [`BlockRowFamily`] typed block-major row-family
+//!   address primitive, the single owner of the one-row-per-entity vs.
+//!   per-block collapse.
 //! - `range_cursor` — the `RangeCursor` running column/row offset allocator
 //!   shared by [`StageLayout`](crate::lp::builder)'s per-stage equipment chains
 //!   and [`StateSpace`]'s stage-invariant state-vector chain.
@@ -77,8 +80,8 @@
 //!   stage's `StageStateConfig` enables (anticipated state always included),
 //!   delegating each column to [`StateSpace::state_to_lp_incoming_column`].
 //! - `entity_index` — entity system/local index vocabulary
-//!   ([`HydroSys`]/[`ThermalSys`]/[`LineSys`], [`FphaLocal`]/[`EvapLocal`]/
-//!   [`FillingTargetLocal`]/[`FloorLocal`]/[`AnticipatedLocal`],
+//!   ([`HydroSys`]/[`ThermalSys`]/[`LineSys`]/[`BusSys`], [`FphaLocal`]/
+//!   [`EvapLocal`]/[`FillingTargetLocal`]/[`FloorLocal`]/[`AnticipatedLocal`],
 //!   [`HydroCell`]/[`FphaCellLocal`]).
 //! - `hydro_cell` — the [`HydroCellIndex`] partition and [`HydroCell`] type.
 //!
@@ -89,6 +92,7 @@
 mod anticipated_gate;
 mod anticipated_plants;
 mod block_grid;
+mod block_row_family;
 mod cut_state_projection;
 mod entity_index;
 mod hydro_cell;
@@ -105,9 +109,10 @@ pub(crate) use anticipated_gate::{
 };
 pub use anticipated_plants::AnticipatedPlants;
 pub use block_grid::BlockGrid;
+pub use block_row_family::BlockRowFamily;
 pub use cut_state_projection::CutStateProjection;
 pub use entity_index::{
-    AnticipatedLocal, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
+    AnticipatedLocal, BusSys, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
     HydroCell, HydroSys, LineSys, ThermalSys,
 };
 pub use hydro_cell::HydroCellIndex;

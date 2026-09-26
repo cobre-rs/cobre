@@ -170,7 +170,7 @@ impl StageSolvePrep {
         if ctx.n_load_buses > 0 {
             let grid = BlockGrid::new(load_blocks, training_ctx.study_dims.max_deficit_segments);
             patch_buf.fill_load_patches(
-                ctx.geometry_per_stage[stage.0].load_balance_rows(),
+                ctx.geometry_per_stage[stage.0].load_balance,
                 grid,
                 &scratch.load_rhs_buf,
                 ctx.load_bus_indices,

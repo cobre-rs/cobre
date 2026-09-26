@@ -41,7 +41,7 @@ fn every_committed_deck_reads_z_inflow_on_its_water_rows() {
 
         for (s, t) in templates.templates.iter().enumerate() {
             let geom = &templates.geometry_per_stage[s];
-            let water = geom.water_balance.clone();
+            let water = geom.water_balance.range();
             let stride = water.len() / n_hydros;
             let zeta = templates.zeta_per_stage[s];
             let block_hours = &templates.block_hours_per_stage[s];
@@ -189,7 +189,7 @@ fn water_rows_carry_no_par_base() {
     .expect("build_stage_templates_resolving_layout ok");
 
     let t = &result.templates[0];
-    let water = result.geometry_per_stage[0].water_balance.clone();
+    let water = result.geometry_per_stage[0].water_balance.range();
     for r in water {
         assert_eq!(
             t.row_lower[r], 0.0,

@@ -295,8 +295,8 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry) {
     put_range(buf, generation_below_slack);
     put_range(buf, contract_import);
     put_range(buf, contract_export);
-    put_range(buf, water_balance);
-    put_range(buf, load_balance);
+    put_range(buf, &water_balance.range());
+    put_range(buf, &load_balance.range());
     put_range(buf, fpha);
     put_range(buf, filling_target);
     put_range(buf, filling_target_col);

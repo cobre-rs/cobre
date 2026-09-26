@@ -163,23 +163,25 @@ fn classify_stage_rows(
          pinning uses column bounds, so no row family should precede it"
     );
     assert_eq!(
-        geom.water_balance.start, z_inflow_range.end,
+        geom.water_balance.start(),
+        z_inflow_range.end,
         "classify_stage_rows: water_balance does not immediately follow z_inflow at stage {stage}"
     );
 
     mark(
         &mut fam,
-        geom.water_balance.clone(),
+        geom.water_balance.range(),
         RowFamily::WaterBalance,
     );
     mark(
         &mut fam,
-        geom.water_balance.end..geom.load_balance.start,
+        geom.water_balance.end()..geom.load_balance.start(),
         RowFamily::TransitBucketDefinition,
     );
-    mark(&mut fam, geom.load_balance.clone(), RowFamily::LoadBalance);
+    mark(&mut fam, geom.load_balance.range(), RowFamily::LoadBalance);
     assert_eq!(
-        geom.fpha.start, geom.load_balance.end,
+        geom.fpha.start,
+        geom.load_balance.end(),
         "classify_stage_rows: fpha does not immediately follow load_balance at stage {stage}"
     );
     mark(&mut fam, geom.fpha.clone(), RowFamily::Fpha);
@@ -297,8 +299,12 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
     // z_inflow (n_hydros) + water_balance (n_hydros, BlockMode::Parallel) +
     // load_balance + fpha + evaporation + 4 operational-violation families;
     // no filling/anticipated/generic-constraint rows in this fixture.
-    let base_row_count =
-        n_hydros + n_hydros + geom.load_balance.len() + total_fpha_rows + evap_rows + opviol_rows;
+    let base_row_count = n_hydros
+        + n_hydros
+        + geom.load_balance.range().len()
+        + total_fpha_rows
+        + evap_rows
+        + opviol_rows;
     assert_eq!(
         geom.z_inflow_row_start, 0,
         "fixture arithmetic sanity: z_inflow must be the first row family"

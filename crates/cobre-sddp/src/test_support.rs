@@ -61,7 +61,8 @@ use crate::lp::builder::{
     encode_stage_templates_facts, encode_time_value_facts,
 };
 use crate::lp::indexer::{
-    AnticipatedPlants, CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions,
+    AnticipatedPlants, BlockRowFamily, CutStateProjection, HydroCellIndex, StateDim, StateSpace,
+    StudyDimensions,
 };
 use crate::noise::{DownstreamAccumState, LagAccumState};
 use crate::policy::policy_load::{
@@ -625,7 +626,7 @@ pub fn geometry_with_load_balance(
     n_blks: usize,
 ) -> StageGeometry {
     StageGeometry {
-        load_balance: load_start..load_start + n_buses * n_blks,
+        load_balance: BlockRowFamily::per_block(load_start..load_start + n_buses * n_blks),
         n_blks,
         ..StageGeometry::default()
     }

@@ -35,7 +35,7 @@ use cobre_sddp::{
     context::{StageContext, TrainingContext},
     cut::fcf::FutureCostFunction,
     horizon_mode::HorizonMode,
-    indexer::{CutStateProjection, StateSpace, StudyDimensions},
+    indexer::{BlockRowFamily, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lp::builder::{StageGeometry, StateBox},
     risk_measure::RiskMeasure,
@@ -423,7 +423,7 @@ fn test_stochastic_load_training_completes() {
     let block_counts_per_stage = vec![1usize; n_stages];
     let geometry_per_stage = vec![
         StageGeometry {
-            load_balance: 1..2,
+            load_balance: BlockRowFamily::per_block(1..2),
             n_blks: 1,
             ..StageGeometry::default()
         };
@@ -684,7 +684,7 @@ fn test_stochastic_load_seed_determinism() {
         let block_counts_per_stage = vec![1usize; n_stages];
         let geometry_per_stage = vec![
             StageGeometry {
-                load_balance: 1..2,
+                load_balance: BlockRowFamily::per_block(1..2),
                 n_blks: 1,
                 ..StageGeometry::default()
             };

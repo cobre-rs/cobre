@@ -7747,7 +7747,7 @@ fn stage_data_geometry_role_b_matches_reference_build() {
     let geometry = &setup.stage_data.stage_templates.geometry_per_stage[0];
     let study_dims = &setup.stage_data.study_dims;
     let dims = test_support::GeometryDims {
-        hydro_count: geometry.water_balance.len(),
+        hydro_count: geometry.water_balance.range().len(),
         max_par_order: 0, // role-(b) ranges do not depend on L
         n_thermals: study_dims.n_thermals,
         n_lines: study_dims.n_lines,

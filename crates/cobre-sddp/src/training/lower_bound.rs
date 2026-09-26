@@ -2689,7 +2689,7 @@ mod tests {
             -templates.zeta_per_stage[0],
             "Filling hydro H_A's own z-inflow column must carry -zeta on its own water row"
         );
-        for row in geom0.water_balance.clone() {
+        for row in geom0.water_balance.range() {
             assert_eq!(
                 raw_at(z_col_b, row),
                 0.0,

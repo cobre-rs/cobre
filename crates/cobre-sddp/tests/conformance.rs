@@ -26,7 +26,7 @@
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::BlockMode;
-use cobre_sddp::indexer::{HydroSys, StorageBoundaryGrid};
+use cobre_sddp::indexer::{BlockRowFamily, HydroSys, StorageBoundaryGrid};
 use cobre_sddp::lp::builder::StageGeometry;
 use cobre_sddp::{FutureCostFunction, SyncResult};
 use cobre_solver::{
@@ -1098,8 +1098,10 @@ fn build_geometry(
         // `StageGeometry::from_layout`.
         contract_import: 0..0,
         contract_export: 0..0,
-        water_balance: water_balance_start..water_balance_start + hydro_count,
-        load_balance: load_balance_start..load_balance_end,
+        water_balance: BlockRowFamily::one_per_entity(
+            water_balance_start..water_balance_start + hydro_count,
+        ),
+        load_balance: BlockRowFamily::per_block(load_balance_start..load_balance_end),
         fpha: load_balance_end..load_balance_end,
         // This conformance geometry models no filling hydros, so the
         // terminal-target and operating-floor blocks are empty — including the

@@ -401,7 +401,7 @@ fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
     let state_space = setup.stage_state();
     let n_blks = geom.n_blks;
 
-    let w_row = geom.water_balance.start + DOWNSTREAM_POS;
+    let w_row = geom.water_balance.start() + DOWNSTREAM_POS;
     let g_row_start = generic_row_start(templates, stage);
     let g_row = |b: usize| g_row_start + b;
 
@@ -451,7 +451,7 @@ fn hydro_inflow_rows_match_the_water_balance_inflow_side_with_travel_time() {
     let tpl = &templates.templates[1];
     let geom = &templates.geometry_per_stage[1];
     let state = setup.stage_state();
-    let w_row = geom.water_balance.start + DOWNSTREAM_POS;
+    let w_row = geom.water_balance.start() + DOWNSTREAM_POS;
 
     let has_bucket_contribution = state
         .transit_buckets_in

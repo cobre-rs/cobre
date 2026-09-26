@@ -596,10 +596,7 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
 /// blocks when the stage has no stochastic load buses.
 fn resolve_load_rows(ctx: &StageContext<'_>, t: StageIdx) -> (BlockRowFamily, usize) {
     if ctx.n_load_buses > 0 {
-        (
-            ctx.geometry_per_stage[t.0].load_balance_rows(),
-            ctx.block_count(t),
-        )
+        (ctx.geometry_per_stage[t.0].load_balance, ctx.block_count(t))
     } else {
         (BlockRowFamily::default(), 0)
     }

@@ -31,8 +31,8 @@ use cobre_stochastic::season_cast::post_study_calendar_stages;
 use crate::block_clock::{BlockClock, M3S_TO_HM3};
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, BusSys, HydroCell, HydroCellIndex,
-    HydroSys, StateSpace, ThermalSys, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys, HydroCell,
+    HydroCellIndex, HydroSys, StateSpace, ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -4395,7 +4395,7 @@ fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks(
     use super::StageGeometry;
 
     let parallel = StageGeometry {
-        water_balance: 2..4,
+        water_balance: BlockRowFamily::one_per_entity(2..4),
         n_blks: 3,
         block_mode: BlockMode::Parallel,
         ..StageGeometry::default()
@@ -4406,7 +4406,7 @@ fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks(
     );
 
     let chronological = StageGeometry {
-        water_balance: 2..8,
+        water_balance: BlockRowFamily::per_block(2..8),
         n_blks: 3,
         block_mode: BlockMode::Chronological,
         ..StageGeometry::default()
@@ -4432,7 +4432,7 @@ fn load_balance_row_strides_buses_by_the_block_count() {
     use super::StageGeometry;
 
     let geometry = StageGeometry {
-        load_balance: 10..22,
+        load_balance: BlockRowFamily::per_block(10..22),
         n_blks: 4,
         block_mode: BlockMode::Parallel,
         ..StageGeometry::default()
@@ -4517,13 +4517,11 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
         "contract_export"
     );
     assert_eq!(
-        geometry.water_balance,
-        layout.rows.water_balance.range(),
+        geometry.water_balance, layout.rows.water_balance,
         "water_balance"
     );
     assert_eq!(
-        geometry.load_balance,
-        layout.rows.load_balance.range(),
+        geometry.load_balance, layout.rows.load_balance,
         "load_balance"
     );
     assert_eq!(
@@ -4568,6 +4566,20 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
         geometry.filled_min_storage_floor_hydro_indices,
         layout.filling.filled_min_storage_floor_hydro_indices,
         "filled_min_storage_floor_hydro_indices"
+    );
+}
+
+/// `StageGeometry::water_balance` is the layout's own family, kind included, on
+/// a Parallel stage too (the K3 test above covers Chronological).
+#[test]
+fn stage_layout_geometry_water_balance_family_matches_layout_source_in_parallel_mode() {
+    let n_blks = 3_usize;
+    let (layout, _, _) = block_layout_and_template(BlockMode::Parallel, n_blks);
+    let geometry = layout.geometry(BlockMode::Parallel);
+
+    assert_eq!(
+        geometry.water_balance, layout.rows.water_balance,
+        "water_balance"
     );
 }
 

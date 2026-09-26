@@ -31,8 +31,8 @@ use crate::lp::builder::{
     evaporation_slot_count,
 };
 use crate::lp::indexer::{
-    AnticipatedPlants, FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex, HydroSys,
-    StateSpace, StudyDimensions,
+    AnticipatedPlants, BlockRowFamily, FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex,
+    HydroSys, StateSpace, StudyDimensions,
 };
 use crate::resolved_parameters::ResolvedParameters;
 use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
@@ -3018,7 +3018,7 @@ fn test_slack_extraction_with_penalty_active() {
 
     let obj = vec![0.0_f64; n_cols];
     let dual = vec![0.0_f64; 4];
-    let row_lower = vec![0.0_f64; indexer.load_balance.end.max(1)];
+    let row_lower = vec![0.0_f64; indexer.load_balance.end().max(1)];
 
     let counts = EntityCounts {
         hydro_ids: vec![10, 20],
@@ -3120,7 +3120,7 @@ fn test_slack_extraction_without_penalty_is_zero() {
     let primal = vec![1.0_f64; n_cols]; // all ones
     let obj = vec![0.0_f64; n_cols];
     let dual = vec![0.0_f64; 4];
-    let row_lower = vec![0.0_f64; indexer.load_balance.end.max(1)];
+    let row_lower = vec![0.0_f64; indexer.load_balance.end().max(1)];
 
     let counts = EntityCounts {
         hydro_ids: vec![10, 20],
@@ -5874,7 +5874,7 @@ fn extract_parallel_per_block_storage_byte_identical() {
 fn extract_chronological_water_value_reads_each_block_row() {
     let k = 3_usize;
     let geom = StageGeometry {
-        water_balance: 1..1 + k,
+        water_balance: BlockRowFamily::per_block(1..1 + k),
         ..single_hydro_block_geometry(BlockMode::Chronological, k)
     };
     let study_dims = test_support::study_dims();
@@ -5940,7 +5940,7 @@ fn extract_chronological_water_value_reads_each_block_row() {
 fn extract_parallel_water_value_repeats_the_stage_row() {
     let k = 3_usize;
     let geom = StageGeometry {
-        water_balance: 1..2,
+        water_balance: BlockRowFamily::one_per_entity(1..2),
         ..single_hydro_block_geometry(BlockMode::Parallel, k)
     };
     let study_dims = test_support::study_dims();

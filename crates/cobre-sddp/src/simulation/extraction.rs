@@ -632,7 +632,7 @@ fn water_value_per_hm3(
     h: usize,
     blk: BlockIdx,
 ) -> f64 {
-    if spec.geometry.water_balance.is_empty() {
+    if spec.geometry.water_balance.range().is_empty() {
         // test harnesses pass the default geometry, which has no rows
         return 0.0;
     }
@@ -1500,7 +1500,7 @@ fn extract_buses(
 /// - `spec.entity_counts.hydro_ids.len() == spec.state.hydro_count`
 /// - `spec.entity_counts.hydro_productivities.len() == spec.state.hydro_count`
 /// - `view.objective_coeffs.len() >= view.primal.len()` when equipment ranges are non-empty
-/// - `view.row_lower.len() >= spec.geometry.load_balance.end` when `load_balance` is non-empty
+/// - `view.row_lower.len() >= spec.geometry.load_balance.end()` when `load_balance` is non-empty
 /// - `stage_id` is 0-based
 ///
 /// Violations are caught by `debug_assert!` in debug builds.
@@ -1586,16 +1586,9 @@ pub(crate) fn extract_stage_result_with_lookups(
         spec.entity_counts.hydro_productivities.len(),
         state.hydro_count
     );
-    // Bound is the per-stage row end `start + n_buses * n_blks`, not `load_balance.end`,
-    // which is striped by stage 0's block count.
-    let load_balance = &spec.geometry.load_balance;
-    let load_balance_end = if load_balance.is_empty() {
-        load_balance.end
-    } else {
-        load_balance.start + spec.entity_counts.bus_ids.len() * spec.n_blks
-    };
+    let load_balance_end = spec.geometry.load_balance.end();
     debug_assert!(
-        load_balance.is_empty() || view.row_lower.len() >= load_balance_end,
+        spec.geometry.load_balance.range().is_empty() || view.row_lower.len() >= load_balance_end,
         "row_lower too short: len={}, need >= load_balance_end={load_balance_end}",
         view.row_lower.len(),
     );

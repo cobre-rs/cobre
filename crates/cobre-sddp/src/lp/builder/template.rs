@@ -239,13 +239,15 @@ pub struct StageGeometry {
     pub contract_export: Range<usize>,
 
     // ── Per-stage row ranges, identity lists, and block count ────────────────
-    /// `n_hydros` rows on a parallel stage, `n_hydros * n_blks` block-major rows on
-    /// a chronological stage; address a row through
-    /// [`StageGeometry::water_balance_row`].
-    pub water_balance: Range<usize>,
-    /// Load-balance row range (one row per bus per block; `n_buses · n_blks`);
-    /// address a row through [`StageGeometry::load_balance_row`].
-    pub load_balance: Range<usize>,
+    /// Water-balance row family, strided by [`Self::n_blks`]; owns the shape
+    /// (one row per hydro on a parallel stage, one per hydro per block on a
+    /// chronological stage). Address a row through
+    /// [`StageGeometry::water_balance_row`], never `.range()` arithmetic.
+    pub water_balance: BlockRowFamily,
+    /// Load-balance row family (one row per bus per block; `n_buses · n_blks`),
+    /// strided by [`Self::n_blks`]. Address a row through
+    /// [`StageGeometry::load_balance_row`].
+    pub load_balance: BlockRowFamily,
     /// FPHA hyperplane row range, immediately following `load_balance`. Length
     /// varies per stage: `for_each_fpha_plane` sums plane counts that differ per
     /// hydro (`fpha_hydro_indices.len() * n_blks` is NOT the row count).
@@ -319,24 +321,13 @@ impl StageGeometry {
         self.storage_boundary_grid.col(h.get(), boundary)
     }
 
-    fn water_balance_rows(&self) -> BlockRowFamily {
-        match self.block_mode {
-            BlockMode::Parallel => BlockRowFamily::one_per_entity(self.water_balance.clone()),
-            BlockMode::Chronological => BlockRowFamily::per_block(self.water_balance.clone()),
-        }
-    }
-
-    pub(crate) fn load_balance_rows(&self) -> BlockRowFamily {
-        BlockRowFamily::per_block(self.load_balance.clone())
-    }
-
     /// Hydro `h`'s water-balance row for block `blk`: its own block row on a
     /// chronological stage, its single stage row on a parallel stage (every block
     /// reads the same row).
     #[inline]
     #[must_use]
     pub fn water_balance_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        self.water_balance_rows().row(h.get(), blk, self.n_blks)
+        self.water_balance.row(h.get(), blk, self.n_blks)
     }
 
     /// Bus `bus`'s load-balance row for block `blk` (`n_buses · n_blks` rows,
@@ -344,7 +335,7 @@ impl StageGeometry {
     #[inline]
     #[must_use]
     pub fn load_balance_row(&self, bus: BusSys, blk: BlockIdx) -> usize {
-        self.load_balance_rows().row(bus.get(), blk, self.n_blks)
+        self.load_balance.row(bus.get(), blk, self.n_blks)
     }
 
     /// NCS entity `ncs_sys`'s generation column for block `blk`.

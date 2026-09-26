@@ -1170,11 +1170,11 @@ fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
         let ei = g.evap_indices[0];
         let zeta = templates.zeta_per_stage[s];
 
-        let water_value = csc_entry(t, ei.evaporation_flow_col, g.water_balance.start)
+        let water_value = csc_entry(t, ei.evaporation_flow_col, g.water_balance.start())
             .expect("evaporation flow column must have an entry on the water row");
         let unscaled_water = unscale(
             t,
-            g.water_balance.start,
+            g.water_balance.start(),
             ei.evaporation_flow_col,
             water_value,
         );

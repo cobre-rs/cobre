@@ -1523,6 +1523,7 @@ mod interior_storage_bound_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl InteriorStorageFixtures {
@@ -1557,6 +1558,13 @@ mod interior_storage_bound_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -1614,13 +1622,7 @@ mod interior_storage_bound_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0],
-                    vec![744.0],
-                    vec![0],
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -2016,6 +2018,7 @@ mod diversion_bound_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl DivFixtures {
@@ -2050,6 +2053,13 @@ mod diversion_bound_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -2121,13 +2131,7 @@ mod diversion_bound_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0],
-                    vec![744.0],
-                    vec![0],
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -2457,6 +2461,7 @@ mod filling_phase_gating_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl Fixtures {
@@ -2498,6 +2503,13 @@ mod filling_phase_gating_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -2555,13 +2567,7 @@ mod filling_phase_gating_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0],
-                    vec![744.0],
-                    vec![0],
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -3460,6 +3466,7 @@ mod anticipated_objective_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl AntObjFixtures {
@@ -3517,6 +3524,13 @@ mod anticipated_objective_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0, 0.9, 0.81, 0.729, 0.6561, 0.59049],
+                    vec![744.0; N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -3575,13 +3589,7 @@ mod anticipated_objective_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0, 0.9, 0.81, 0.729, 0.6561, 0.59049],
-                    vec![744.0; N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -3711,8 +3719,7 @@ mod anticipated_objective_tests {
         resolved_parameters: ResolvedParameters,
         n_stages: usize,
         k_max: usize,
-        discount: Vec<f64>,
-        hours: Vec<f64>,
+        time_value: TimeValue,
     }
 
     impl DeliveryAnchoredFixtures {
@@ -3786,6 +3793,13 @@ mod anticipated_objective_tests {
                 discount.push(d);
                 d *= 0.9;
             }
+            let time_value = TimeValue::from_parts(
+                vec![],
+                discount,
+                vec![744.0; n_stages],
+                (0..n_stages as i32).collect(),
+                crate::time_value::PostStudyResolved::default(),
+            );
             Self {
                 thermals,
                 cascade: CascadeTopology::build(&[]),
@@ -3806,8 +3820,7 @@ mod anticipated_objective_tests {
                 },
                 n_stages,
                 k_max,
-                discount,
-                hours: vec![744.0; n_stages],
+                time_value,
             }
         }
 
@@ -3863,13 +3876,7 @@ mod anticipated_objective_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    self.discount.clone(),
-                    self.hours.clone(),
-                    (0..self.n_stages as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -3979,12 +3986,9 @@ mod anticipated_objective_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
-        post_study_resolved: PostStudyResolved,
         k_max: usize,
         resolution: AnticipatedResolution,
-        delivery_hours: Vec<f64>,
-        delivery_discount: Vec<f64>,
-        delivery_stage_ids: Vec<i32>,
+        time_value: TimeValue,
     }
 
     /// The fixture's `ResolvedBounds` table, sized `n_stages + k_max` per
@@ -4145,6 +4149,13 @@ mod anticipated_objective_tests {
                 .collect();
             let delivery_stage_ids: Vec<i32> =
                 (0..i32::try_from(PSA_N_STAGES + n_post).unwrap()).collect();
+            let time_value = TimeValue::from_parts(
+                vec![],
+                delivery_discount,
+                delivery_hours,
+                delivery_stage_ids,
+                post_study_resolved,
+            );
 
             Self {
                 thermals,
@@ -4164,12 +4175,9 @@ mod anticipated_objective_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
-                post_study_resolved,
                 k_max,
                 resolution,
-                delivery_hours,
-                delivery_discount,
-                delivery_stage_ids,
+                time_value,
             }
         }
 
@@ -4225,13 +4233,7 @@ mod anticipated_objective_tests {
                 anticipated_resolution: self.resolution.clone(),
                 study_stage_ids: (0..i32::try_from(PSA_N_STAGES).unwrap()).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    self.delivery_discount.clone(),
-                    self.delivery_hours.clone(),
-                    self.delivery_stage_ids.clone(),
-                    self.post_study_resolved.clone(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -4638,6 +4640,7 @@ mod block_family_slack_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl SlackFixtures {
@@ -4689,6 +4692,13 @@ mod block_family_slack_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![BLOCK_HOURS[0] + BLOCK_HOURS[1]],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -4748,13 +4758,7 @@ mod block_family_slack_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0],
-                    vec![BLOCK_HOURS[0] + BLOCK_HOURS[1]],
-                    vec![0],
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -5102,6 +5106,7 @@ mod evaporation_slack_objective_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl EvapFixtures {
@@ -5146,6 +5151,13 @@ mod evaporation_slack_objective_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -5203,13 +5215,7 @@ mod evaporation_slack_objective_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0],
-                    vec![744.0],
-                    vec![0],
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -5429,6 +5435,7 @@ mod contract_column_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         contracts: Vec<EnergyContract>,
+        time_value: TimeValue,
     }
 
     impl ContractFixtures {
@@ -5451,6 +5458,13 @@ mod contract_column_tests {
                     cost_scale_factor: 1_000_000.0,
                 },
                 contracts,
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![744.0; N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -5529,13 +5543,7 @@ mod contract_column_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; N_STAGES],
-                    vec![744.0; N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -5749,6 +5757,7 @@ mod thermal_block_bound_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         thermals: Vec<Thermal>,
+        time_value: TimeValue,
     }
 
     impl ThermalFixtures {
@@ -5772,6 +5781,13 @@ mod thermal_block_bound_tests {
                     cost_scale_factor: 1_000_000.0,
                 },
                 thermals,
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -5879,13 +5895,7 @@ mod thermal_block_bound_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; N_STAGES],
-                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -6256,6 +6266,7 @@ mod line_contract_pumping_block_bound_tests {
         lines: Vec<Line>,
         pumping_stations: Vec<PumpingStation>,
         contracts: Vec<EnergyContract>,
+        time_value: TimeValue,
     }
 
     impl LcpFixtures {
@@ -6287,6 +6298,13 @@ mod line_contract_pumping_block_bound_tests {
                 lines,
                 pumping_stations,
                 contracts,
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -6447,13 +6465,7 @@ mod line_contract_pumping_block_bound_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; N_STAGES],
-                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -7017,6 +7029,7 @@ mod hydro_block_bound_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
+        time_value: TimeValue,
     }
 
     impl HydroBlockFixtures {
@@ -7063,6 +7076,13 @@ mod hydro_block_bound_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -7198,13 +7218,7 @@ mod hydro_block_bound_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; N_STAGES],
-                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -8157,6 +8171,7 @@ mod cell_column_bound_tests {
         /// for every single-stage fixture, wider only for the group-override tests
         /// that need a real "another stage" to assert against.
         n_stages: usize,
+        time_value: TimeValue,
     }
 
     impl Fixtures {
@@ -8195,6 +8210,13 @@ mod cell_column_bound_tests {
                     cost_scale_factor: 1_000_000.0,
                 },
                 n_stages,
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; n_stages],
+                    vec![BLOCK_HOURS.iter().sum(); n_stages],
+                    (0..n_stages as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -8315,13 +8337,7 @@ mod cell_column_bound_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; self.n_stages],
-                    vec![BLOCK_HOURS.iter().sum(); self.n_stages],
-                    (0..self.n_stages as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -9193,6 +9209,7 @@ mod ncs_objective_tests {
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
         non_controllable_sources: Vec<NonControllableSource>,
+        time_value: TimeValue,
     }
 
     impl NcsFixtures {
@@ -9223,6 +9240,13 @@ mod ncs_objective_tests {
                     cost_scale_factor: 1_000_000.0,
                 },
                 non_controllable_sources,
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -9283,13 +9307,7 @@ mod ncs_objective_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; N_STAGES],
-                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    crate::time_value::PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
             }
         }

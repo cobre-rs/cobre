@@ -142,11 +142,12 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) has_penalty: bool,
     /// Present-value discounting and delivery hours/ids at each DELIVERY
     /// stage, length `n_study_stages + n_post` — the study's own per-stage
-    /// values concatenated with the post-study continuation
-    /// ([`TimeValue::resolve`]), the first cumulative-discount entry exactly
-    /// `1.0`. The strict predicate `stage_idx + K_i < n_stages` keeps every
-    /// delivery lookup in range.
-    pub(crate) time_value: TimeValue,
+    /// values concatenated with the post-study continuation, the first
+    /// cumulative-discount entry exactly `1.0`. The strict predicate
+    /// `stage_idx + K_i < n_stages` keeps every delivery lookup in range.
+    /// Borrowed from `StageData`'s single owner
+    /// ([`crate::setup::stage_data::StageData`]).
+    pub(crate) time_value: &'a TimeValue,
     /// Per-stage minimum target-storage trajectory, keyed `(hydro_idx, stage_id)
     /// → V_target` \[hm³\]. Computed once by a backward fold from the dead volume
     /// because the fold needs the full per-stage ζ·rate schedule across a hydro's

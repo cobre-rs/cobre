@@ -28,7 +28,7 @@ use cobre_stochastic::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
-use crate::block_clock::M3S_TO_HM3;
+use crate::block_clock::{BlockClock, M3S_TO_HM3};
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
@@ -42,11 +42,23 @@ use crate::setup::template_postprocess::postprocess_templates;
 use crate::setup::{resolve_anticipated_commitments, resolve_state_layout};
 use crate::test_support::state_layout_full;
 use crate::time_value::{
-    PostStudyResolved, compute_cumulative_discount_factors, compute_per_stage_discount_factors,
-    resolve_post_study_artifacts,
+    PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
+    compute_per_stage_discount_factors, resolve_post_study_artifacts,
 };
 
 use super::super::test_support::{ctx_anticipated_and_mask_inputs, state_layout_for};
+
+/// The value `build_template_build_ctx`'s own `time_value` parameter takes at
+/// every direct test call site — resolved through the same production entry
+/// point (`TimeValue::from_system`) rather than hand-assembled.
+fn build_time_value_for(system: &cobre_core::System) -> TimeValue {
+    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+    let study_total_hours: Vec<f64> = study_stages
+        .iter()
+        .map(|s| BlockClock::new(s).total_hours())
+        .collect();
+    TimeValue::from_system(system, &study_total_hours)
+}
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -458,6 +470,7 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -475,6 +488,7 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     let ids: Vec<i32> = ctx.pumping_stations.iter().map(|p| p.id.0).collect();
@@ -522,6 +536,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -539,6 +554,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(
@@ -607,6 +623,7 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -624,6 +641,7 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
@@ -644,6 +662,34 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
             "stage {t}: scalar n_pumping must equal layout.n_pumping",
         );
     }
+}
+
+/// A system with zero study stages returns empty templates — the early
+/// return `build_stage_templates` takes before touching `state_layout`.
+#[test]
+fn build_stage_templates_empty_system_yields_no_templates() {
+    let bus = fixture_bus();
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .build()
+        .expect("bus-only system must build");
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+
+    let result = super::build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("zero-stage system must resolve");
+
+    assert!(result.templates.is_empty());
 }
 
 // ── Contract data threaded into TemplateBuildCtx and StageGeometry ─────────
@@ -800,6 +846,7 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -817,6 +864,7 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(ctx.contracts.len(), 2);
@@ -863,6 +911,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -880,6 +929,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let stage = system
         .stages()
@@ -922,6 +972,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -939,6 +990,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let stage = system
         .stages()
@@ -1071,6 +1123,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let _ = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -1088,6 +1141,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 }
 
@@ -1151,6 +1205,7 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -1168,6 +1223,7 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(ctx.n_anticipated, 2, "n_anticipated");
@@ -1229,6 +1285,7 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -1246,6 +1303,7 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(ctx.n_anticipated, 0, "n_anticipated");
@@ -1634,6 +1692,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx_a, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -1651,6 +1710,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(ctx_a.n_anticipated, 2);
@@ -1723,7 +1783,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         },
         study_stage_ids: ctx_a.study_stage_ids.clone(),
         has_penalty: ctx_a.has_penalty,
-        time_value: ctx_a.time_value.clone(),
+        time_value: ctx_a.time_value,
         filling_v_target: ctx_a.filling_v_target.clone(),
         arc_stage_weights: ctx_a.arc_stage_weights.clone(),
         arc_spread_chrono: ctx_a.arc_spread_chrono.clone(),
@@ -1837,11 +1897,6 @@ fn stage_templates_empty_is_all_empty_with_n_hydros() {
     assert!(
         empty.hydro_productivities_per_stage.is_empty(),
         "hydro_productivities_per_stage"
-    );
-    assert!(empty.discount_factors().is_empty(), "discount_factors");
-    assert!(
-        empty.cumulative_discount_factors().is_empty(),
-        "cumulative_discount_factors"
     );
 }
 
@@ -1987,9 +2042,9 @@ fn discounted_multi_stage_system_with_post_study(
         .expect("discounted_multi_stage_system: valid system")
 }
 
-/// The public build+postprocess path installs real discount factors. The
-/// discount fields are private, so a caller only ever observes the postprocessed
-/// values, never the all-`1.0` placeholder `build_stage_templates` leaves behind.
+/// The public build+postprocess path applies `TimeValue`'s real discount
+/// factors, resolved from the system's non-zero annual discount rate, to the
+/// theta objective coefficient.
 #[test]
 fn postprocessed_stage_templates_carry_discounted_factors() {
     let system = discounted_multi_stage_system();
@@ -2002,6 +2057,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         .expect("resolve_state_layout: valid test fixture");
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
+    let time_value = build_time_value_for(&system);
     let mut templates = super::build_stage_templates(
         &system,
         InflowNonNegativityMethod::None,
@@ -2017,6 +2073,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &topology.arc_arrival_density,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     let _report = postprocess_templates(
@@ -2024,9 +2081,10 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &system,
         &state_layout,
         DEFAULT_COST_SCALE_FACTOR,
+        &time_value,
     );
 
-    let cumulative = templates.cumulative_discount_factors();
+    let cumulative = time_value.cumulative_discount_factors();
     assert_eq!(
         cumulative.len(),
         templates.templates.len(),
@@ -2089,6 +2147,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -2106,6 +2165,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(ctx.time_value.delivery_stage_ids(), ctx.study_stage_ids);
@@ -2131,6 +2191,7 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -2148,6 +2209,7 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(ctx.study_stage_ids, vec![0, 1, 2]);
@@ -2181,6 +2243,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -2198,6 +2261,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     assert_eq!(
@@ -2232,6 +2296,7 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -2249,6 +2314,7 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
 
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -2452,6 +2518,7 @@ fn build_post_study_resolved_for(
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -2469,6 +2536,7 @@ fn build_post_study_resolved_for(
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     ctx.time_value.post_study().clone()
 }
@@ -2867,6 +2935,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(system);
     let (ctx, _, _) = super::build_template_build_ctx(
         system,
         InflowNonNegativityMethod::None,
@@ -2884,6 +2953,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
     let state = Box::leak(Box::new(state_layout_for(ctx)));
@@ -3665,6 +3735,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -3682,6 +3753,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let state = state_layout_for(&ctx);
     let stage = &system.stages()[0];
@@ -3781,6 +3853,7 @@ fn block_layout_and_template(
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(system);
     let (ctx, _, _) = super::build_template_build_ctx(
         system,
         InflowNonNegativityMethod::None,
@@ -3798,6 +3871,7 @@ fn block_layout_and_template(
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
     let state = Box::leak(Box::new(state_layout_for(ctx)));
@@ -4368,6 +4442,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -4385,6 +4460,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let state = state_layout_for(&ctx);
 
@@ -4813,6 +4889,7 @@ fn filling_block_layout_and_template(
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(system);
     let (ctx, _, _) = super::build_template_build_ctx(
         system,
         InflowNonNegativityMethod::None,
@@ -4830,6 +4907,7 @@ fn filling_block_layout_and_template(
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
     let state = Box::leak(Box::new(state_layout_for(ctx)));
@@ -5138,6 +5216,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -5155,6 +5234,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     assert_eq!(ctx.k_max, 1, "ctx.k_max");
     assert_eq!(
@@ -5237,6 +5317,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
     let (ctx, _, _) = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
@@ -5254,6 +5335,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         max_par_order,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     );
     assert_eq!(ctx.anticipated_lead_stages, vec![1]);
 
@@ -5361,6 +5443,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
+        let time_value = build_time_value_for(&system);
         let _ = super::build_stage_templates(
             &system,
             InflowNonNegativityMethod::None,
@@ -5376,6 +5459,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &topology.arc_arrival_density,
             &hydro_cell_index,
             SamplingScheme::InSample,
+            &time_value,
         );
     });
 

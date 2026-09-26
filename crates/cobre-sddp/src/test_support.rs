@@ -58,7 +58,7 @@ use crate::lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_boun
 use crate::lp::builder::StateBox;
 use crate::lp::builder::{
     FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
-    encode_stage_templates_facts,
+    encode_stage_templates_facts, encode_time_value_facts,
 };
 use crate::lp::indexer::{
     CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions, ThermalSys,
@@ -557,7 +557,7 @@ pub fn geometry(
         anticipated_resolution: AnticipatedResolution::default(),
         study_stage_ids: Vec::new(),
         has_penalty: dims.has_inflow_penalty,
-        time_value: TimeValue::from_parts(
+        time_value: &TimeValue::from_parts(
             vec![],
             vec![1.0],
             vec![744.0],
@@ -4030,6 +4030,7 @@ pub fn trunk_fan_setup(
 pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8>> {
     let mut groups = FactGroups::new();
     encode_stage_templates_facts(&setup.stage_data.stage_templates, &mut groups);
+    encode_time_value_facts(&setup.stage_data.time_value, &mut groups);
     groups
 }
 

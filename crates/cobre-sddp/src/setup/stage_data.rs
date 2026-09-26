@@ -7,6 +7,7 @@ use crate::{
     lp::indexer::{CutStateProjection, HydroCellIndex, StateSpace, StudyDimensions},
     scaling_report::ScalingReport,
     simulation::EntityCounts,
+    time_value::TimeValue,
 };
 
 /// All per-stage and stage-indexed data owned by [`super::StudySetup`],
@@ -16,6 +17,11 @@ use crate::{
 pub struct StageData {
     /// LP skeleton templates, one per study stage.
     pub stage_templates: StageTemplates,
+
+    /// Present-value discounting and delivery hours/ids/post-study calendar,
+    /// resolved once in `build_energy_and_templates` — the single owner every
+    /// LP-build and reporting reader borrows from.
+    pub(crate) time_value: TimeValue,
 
     /// Canonical stage-invariant state / cut column ranges and layout-derived
     /// caches — the single owner of these ("role (a)"); per-stage equipment

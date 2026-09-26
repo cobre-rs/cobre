@@ -15,7 +15,7 @@ use crate::hydro_models::{EvaporationModelSet, ProductionModelSet, ResolvedProdu
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::resolved_parameters::ResolvedParameters;
-use crate::time_value::{TimeValue, compute_cumulative_discount_factors};
+use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
@@ -127,25 +127,6 @@ pub struct StageTemplates {
     /// `hydro_productivities_per_stage[stage][h]` is the productivity of hydro `h`
     /// at stage `stage`, accounting for per-stage overrides.  FPHA hydros have 0.0.
     pub hydro_productivities_per_stage: Vec<Vec<f64>>,
-    /// Per-stage one-step discount factor for the transition departing stage `t`:
-    /// `discount_factors[t] = 1 / (1 + r_t)^(Dt / 365.25)` (`r_t` the annual rate,
-    /// `Dt` the stage duration in days); all `1.0` when the rate is `0.0` with no
-    /// overrides. Applied to the theta objective coefficient.
-    ///
-    /// Private with a getter/setter: [`build_stage_templates`] leaves a
-    /// `1.0`-placeholder until [`StageTemplates::set_discount_factors`]. A `pub`
-    /// field would let a caller read the placeholder as the discounted value —
-    /// silently yielding undiscounted NPV. Read via
-    /// [`StageTemplates::discount_factors`].
-    discount_factors: Vec<f64>,
-    /// Cumulative discount factor for reporting: `cumulative[0] = 1.0`,
-    /// `cumulative[t] = cumulative[t-1] * discount_factors[t-1]`. The present value
-    /// of stage `t`'s immediate cost is `cumulative[t] * immediate_cost_t`.
-    ///
-    /// Private for the same reason as [`StageTemplates::discount_factors`] (shares
-    /// the placeholder window). Read via
-    /// [`StageTemplates::cumulative_discount_factors`].
-    cumulative_discount_factors: Vec<f64>,
 }
 
 impl StageTemplates {
@@ -172,31 +153,7 @@ impl StageTemplates {
             geometry_per_stage: Vec::new(),
             diversion_upstream: HashMap::new(),
             hydro_productivities_per_stage: Vec::new(),
-            discount_factors: Vec::new(),
-            cumulative_discount_factors: Vec::new(),
         }
-    }
-
-    /// Per-stage one-step discount factors (read access). A `1.0`-placeholder until
-    /// [`StageTemplates::set_discount_factors`] runs.
-    #[must_use]
-    pub(crate) fn discount_factors(&self) -> &[f64] {
-        &self.discount_factors
-    }
-
-    /// Cumulative discount factors for reporting (read access). A `1.0`-placeholder
-    /// until [`StageTemplates::set_discount_factors`] runs.
-    #[must_use]
-    pub(crate) fn cumulative_discount_factors(&self) -> &[f64] {
-        &self.cumulative_discount_factors
-    }
-
-    /// Install the per-stage discount factors and recompute the cumulative factors
-    /// from them in one call, so the two slices cannot drift out of step (a caller
-    /// cannot set per-stage factors while leaving a stale cumulative vector behind).
-    pub(crate) fn set_discount_factors(&mut self, per_stage: Vec<f64>) {
-        self.cumulative_discount_factors = compute_cumulative_discount_factors(&per_stage);
-        self.discount_factors = per_stage;
     }
 }
 
@@ -642,44 +599,6 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 /// constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == intercept_m3s`.
 ///
-/// # Examples
-///
-/// ```
-/// use chrono::NaiveDate;
-/// use cobre_core::scenario::SamplingScheme;
-/// use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-/// use cobre_sddp::InflowNonNegativityMethod;
-/// use cobre_sddp::hydro_models::PrepareHydroModelsResult;
-/// use cobre_sddp::indexer::{HydroCellIndex, StateSpace};
-/// use cobre_sddp::build_stage_templates;
-/// use cobre_sddp::resolved_parameters::ResolvedParameters;
-/// use cobre_stochastic::par::precompute::PrecomputedPar;
-///
-/// let bus = Bus {
-///     id: EntityId(1),
-///     name: "B1".to_string(),
-///     operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
-///     deficit_segments: vec![DeficitSegment { depth_mw: None, cost_per_mwh: 1000.0 }],
-///     excess_cost: 0.0,
-/// };
-/// let system = SystemBuilder::new().buses(vec![bus]).build().expect("valid");
-/// let method = InflowNonNegativityMethod::None;
-/// let par_lp = PrecomputedPar::build(&[], &[], &[], None).expect("empty ok");
-/// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormal::default();
-/// let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
-/// let resolved_parameters = ResolvedParameters::default();
-/// // No stages, so the state layout is empty too.
-/// let state_layout = StateSpace::new(0, 0, 0, Vec::new(), 0, 0, Vec::new(), &[]);
-/// let hydro_cell_index = HydroCellIndex::build(system.hydros());
-/// let result = build_stage_templates(&system, method, &par_lp, &normal_lp,
-///                                    &hydro_models.production, &hydro_models.evaporation,
-///                                    &resolved_parameters, &state_layout, &[],
-///                                    &std::collections::HashMap::new(),
-///                                    &std::collections::HashMap::new(),
-///                                    &std::collections::HashMap::new(),
-///                                    &hydro_cell_index, SamplingScheme::InSample);
-/// assert!(result.templates.is_empty());
-/// ```
 // Rationale (too_many_arguments): each of the three arc-table parameters threads
 // the single setup-owned derivation (`build_transit_bucket_topology`) through, the
 // same coupling `per_stage_mask` already threads; a wrapper struct used at this one
@@ -687,6 +606,10 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 // implicit_hasher: callers pass a concrete `HashMap`; a `BuildHasher` generic buys
 // nothing.
 #[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
+#[expect(
+    private_interfaces,
+    reason = "time_value borrows the crate-private owner until this function's visibility narrows"
+)]
 #[must_use]
 pub fn build_stage_templates(
     system: &System,
@@ -703,6 +626,7 @@ pub fn build_stage_templates(
     arc_arrival_density: &HashMap<usize, Vec<Option<Vec<f64>>>>,
     hydro_cell_index: &HydroCellIndex,
     load_scheme: SamplingScheme,
+    time_value: &TimeValue,
 ) -> StageTemplates {
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let n_hydros = system.hydros().len();
@@ -739,6 +663,7 @@ pub fn build_stage_templates(
         state_layout.max_par_order,
         hydro_cell_index,
         load_scheme,
+        time_value,
     );
     let n_load_buses = load_bus_indices.len();
     debug_assert!(
@@ -809,6 +734,12 @@ pub fn build_stage_templates_resolving_layout(
     let topology = build_transit_bucket_topology(system, false);
     let (state_layout, _, _) = resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+    let study_total_hours: Vec<f64> = study_stages
+        .iter()
+        .map(|s| BlockClock::new(s).total_hours())
+        .collect();
+    let time_value = TimeValue::from_system(system, &study_total_hours);
     Ok(build_stage_templates(
         system,
         inflow_method,
@@ -824,6 +755,7 @@ pub fn build_stage_templates_resolving_layout(
         &topology.arc_arrival_density,
         &hydro_cell_index,
         SamplingScheme::InSample,
+        &time_value,
     ))
 }
 
@@ -930,6 +862,7 @@ fn build_template_build_ctx<'a>(
     max_par_order: usize,
     hydro_cell_index: &'a HydroCellIndex,
     load_scheme: SamplingScheme,
+    time_value: &'a TimeValue,
 ) -> (
     TemplateBuildCtx<'a>,
     Vec<usize>,
@@ -1049,28 +982,10 @@ fn build_template_build_ctx<'a>(
         "block_clocks length must equal n_study_stages"
     );
 
-    // Same canonical anticipated-local order `resolve_state_layout` derives
-    // (`system.thermals()` filtered on `anticipated_config.is_some()`) —
-    // `anticipated_thermal_indices` above is that exact order, so this reads
-    // back through it rather than re-filtering `system.thermals()` a second time.
-    let anticipated_thermal_ids: Vec<EntityId> = anticipated_thermal_indices
-        .iter()
-        .map(|&idx| system.thermals()[idx.get()].id)
-        .collect();
-
     // Study-stage ids by study stage index: the decision gate keys its
     // operation-window clause on the DELIVERY stage's `stage.id`, mapping the
     // delivery index `t + K_i` to its id through this slice.
     let study_stage_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
-
-    let study_total_hours: Vec<f64> = block_clocks.iter().map(|c| c.total_hours()).collect();
-    let time_value = TimeValue::resolve(
-        &study_stages,
-        &study_total_hours,
-        system.post_study_stages(),
-        &anticipated_thermal_ids,
-        system.policy_graph(),
-    );
 
     let stage_resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
 
@@ -1142,7 +1057,7 @@ fn build_template_build_ctx<'a>(
 
 /// Transpose the per-stage `Vec<StageBuildOutput>` into the parallel per-stage
 /// `Vec`s of [`StageTemplates`], computing the noise-scale, zeta, block-hour,
-/// hydro-productivity, and discount arrays.
+/// and hydro-productivity arrays.
 // Rationale: the args have distinct lifetimes and ownership (some borrowed, some
 // owned), so bundling them into one struct would buy nothing on this single-call
 // cold path while obscuring the transpose inputs.
@@ -1223,8 +1138,6 @@ fn assemble_stage_templates_output(
         geometry_per_stage,
         diversion_upstream: diversion_upstream_output,
         hydro_productivities_per_stage,
-        discount_factors: vec![1.0; n_study],
-        cumulative_discount_factors: vec![1.0; n_study],
     }
 }
 

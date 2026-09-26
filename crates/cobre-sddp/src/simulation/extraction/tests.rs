@@ -7678,7 +7678,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         anticipated_resolution: AnticipatedResolution::default(),
         study_stage_ids: Vec::new(),
         has_penalty: false,
-        time_value: TimeValue::from_parts(
+        time_value: &TimeValue::from_parts(
             vec![],
             vec![1.0],
             vec![730.0],

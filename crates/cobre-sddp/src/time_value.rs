@@ -1,7 +1,7 @@
 //! Present-value discounting of stage costs and the post-study delivery
 //! calendar.
 
-use cobre_core::{EntityId, HorizonGraph, PostStudyStages, PostStudyThermalBound, Stage};
+use cobre_core::{EntityId, HorizonGraph, PostStudyStages, PostStudyThermalBound, Stage, System};
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
 use crate::lp::indexer::AnticipatedLocal;
@@ -87,6 +87,14 @@ impl PostStudyThermalLookup {
                 (b.cost_per_mwh, b.min_mw, b.max_mw)
             })
     }
+
+    /// The one field, for the canonical byte-encoding snapshot — the
+    /// no-`..` destructure fails to compile the moment a field is added.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn canonical_fields(&self) -> &[PostStudyThermalBound] {
+        let Self { bounds } = self;
+        bounds
+    }
 }
 
 /// Setup-side resolved post-study boundary artifacts (`System::
@@ -125,6 +133,18 @@ pub(crate) struct PostStudyResolved {
     anticipated_bounds_stride: usize,
 }
 
+/// Return type of [`PostStudyResolved::canonical_fields`] — a `type` alias
+/// rather than a struct, since the fields are consumed positionally by the
+/// one encoder call site.
+#[cfg(any(test, feature = "test-support"))]
+type PostStudyResolvedCanonicalFields<'a> = (
+    &'a [f64],
+    &'a [f64],
+    &'a PostStudyThermalLookup,
+    &'a [Option<(f64, f64, f64)>],
+    usize,
+);
+
 impl PostStudyResolved {
     /// `(cost_per_mwh, min_mw, max_mw)` declared for anticipated-local plant
     /// `local_idx` at post-study stage `post_study_stage`, or `None` when the
@@ -144,6 +164,27 @@ impl PostStudyResolved {
             .get(local_idx.get() * self.anticipated_bounds_stride + post_study_stage)
             .copied()
             .flatten()
+    }
+
+    /// Every field, in declaration order, for the canonical byte-encoding
+    /// snapshot — the no-`..` destructure fails to compile the moment a field
+    /// is added, so the digest cannot silently drop it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn canonical_fields(&self) -> PostStudyResolvedCanonicalFields<'_> {
+        let Self {
+            total_hours,
+            cumulative_discount_factors,
+            thermal_bounds,
+            anticipated_bounds,
+            anticipated_bounds_stride,
+        } = self;
+        (
+            total_hours,
+            cumulative_discount_factors,
+            thermal_bounds,
+            anticipated_bounds,
+            *anticipated_bounds_stride,
+        )
     }
 }
 
@@ -247,11 +288,35 @@ pub(crate) struct TimeValue {
 }
 
 impl TimeValue {
+    /// Resolve the whole delivery calendar directly from `system`: derives the
+    /// study stages (`id >= 0`), the anticipated thermal ids
+    /// (`system.thermals()` filtered on `anticipated_config.is_some()`, in the
+    /// system's order), the post-study calendar and the policy graph, then
+    /// delegates to [`Self::resolve`]. `study_total_hours` is supplied by the
+    /// caller (`BlockClock`) rather than derived here — `block_clock` is not on
+    /// this module's import allowlist.
+    pub(crate) fn from_system(system: &System, study_total_hours: &[f64]) -> Self {
+        let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
+        let anticipated_thermal_ids: Vec<EntityId> = system
+            .thermals()
+            .iter()
+            .filter(|t| t.anticipated_config.is_some())
+            .map(|t| t.id)
+            .collect();
+        Self::resolve(
+            &study_stages,
+            study_total_hours,
+            system.post_study_stages(),
+            &anticipated_thermal_ids,
+            system.policy_graph(),
+        )
+    }
+
     /// Resolve the whole delivery calendar: the study's own one-step and
     /// cumulative discount factors, [`resolve_post_study_artifacts`]'s
     /// post-study continuation, and the concatenated delivery hours,
     /// cumulative-discount and synthetic-id vectors.
-    pub(crate) fn resolve(
+    fn resolve(
         study_stages: &[&Stage],
         study_total_hours: &[f64],
         post_study: Option<&PostStudyStages>,
@@ -381,6 +446,14 @@ impl TimeValue {
         &self.discount_factors
     }
 
+    /// Study-only cumulative discount factors, length `n_study_stages` — the
+    /// delivery vector's own prefix, bit-identical to
+    /// `compute_cumulative_discount_factors(discount_factors())` because the
+    /// delivery vector starts with that exact result.
+    pub(crate) fn cumulative_discount_factors(&self) -> &[f64] {
+        &self.delivery_cumulative_discount_factors[..self.discount_factors.len()]
+    }
+
     /// Σ `block.duration_hours` at DELIVERY stage `delivery`.
     pub(crate) fn delivery_total_hours(&self, delivery: usize) -> f64 {
         self.delivery_total_hours[delivery]
@@ -402,6 +475,27 @@ impl TimeValue {
     pub(crate) fn relative_delivery_discount(&self, decision: usize, delivery: usize) -> f64 {
         self.delivery_cumulative_discount_factors[delivery]
             / self.delivery_cumulative_discount_factors[decision]
+    }
+
+    /// Every field, in declaration order, for the canonical byte-encoding
+    /// snapshot — the no-`..` destructure fails to compile the moment a field
+    /// is added, so the digest cannot silently drop it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn canonical_fields(&self) -> (&[f64], &[f64], &[f64], &[i32], &PostStudyResolved) {
+        let Self {
+            discount_factors,
+            delivery_cumulative_discount_factors,
+            delivery_total_hours,
+            delivery_stage_ids,
+            post_study,
+        } = self;
+        (
+            discount_factors,
+            delivery_cumulative_discount_factors,
+            delivery_total_hours,
+            delivery_stage_ids,
+            post_study,
+        )
     }
 }
 
@@ -437,6 +531,116 @@ mod tests {
         let d = fixture();
         let tv = time_value_from_cumulative(d.clone());
         assert_eq!(tv.relative_delivery_discount(1, 3), d[3] / d[1]);
+    }
+
+    /// [`TimeValue::cumulative_discount_factors`] (the study-only prefix
+    /// accessor) must equal [`compute_cumulative_discount_factors`] applied to
+    /// [`TimeValue::discount_factors`], bit for bit — it is the same result,
+    /// never a second derivation.
+    #[test]
+    fn cumulative_discount_factors_prefix_matches_recomputation() {
+        let discount_factors = vec![1.0, 0.9, 0.81];
+        let recomputed = super::compute_cumulative_discount_factors(&discount_factors);
+        // A post-study tail entry appended after the study-only prefix, to prove
+        // the accessor truncates to `discount_factors.len()` rather than
+        // returning the whole delivery vector.
+        let mut delivery_cumulative = recomputed.clone();
+        delivery_cumulative.push(0.5);
+        let tv = TimeValue::from_parts(
+            discount_factors,
+            delivery_cumulative,
+            vec![10.0, 10.0, 10.0, 10.0],
+            vec![0, 1, 2, 3],
+            PostStudyResolved::default(),
+        );
+
+        let actual: Vec<u64> = tv
+            .cumulative_discount_factors()
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
+        let expected: Vec<u64> = recomputed.iter().map(|v| v.to_bits()).collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[cfg(test)]
+mod from_system_tests {
+    use super::TimeValue;
+    use chrono::NaiveDate;
+    use cobre_core::temporal::{
+        BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+    };
+    use cobre_core::{
+        AnticipatedConfig, Bus, DeficitSegment, EntityId, Stage, SystemBuilder, Thermal,
+    };
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| unreachable!("hardcoded date is valid"))
+    }
+
+    fn stage(id: i32, start: NaiveDate, end: NaiveDate) -> Stage {
+        Stage {
+            index: 0,
+            id,
+            start_date: start,
+            end_date: end,
+            season_id: None,
+            blocks: vec![],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    /// A two-stage system with one anticipated thermal resolves through
+    /// `from_system` to the same `delivery_stage_ids` a study-only-axis
+    /// (no post-study calendar) delivery calendar carries: the study stage
+    /// ids verbatim.
+    #[test]
+    fn from_system_derives_study_stages_and_anticipated_ids_then_resolves() {
+        let s0 = stage(0, ymd(2024, 1, 1), ymd(2024, 2, 1));
+        let s1 = stage(1, ymd(2024, 2, 1), ymd(2024, 3, 1));
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            operational_start_date: ymd(2024, 1, 1),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(7),
+            name: "T1".to_string(),
+            operational_start_date: ymd(2024, 1, 1),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_per_mwh: 10.0,
+            anticipated_config: Some(AnticipatedConfig::LeadStages(1)),
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .stages(vec![s0, s1])
+            .thermals(vec![thermal])
+            .build()
+            .expect("minimal two-stage anticipated system must build");
+
+        let study_total_hours = vec![744.0, 672.0];
+        let tv = TimeValue::from_system(&system, &study_total_hours);
+
+        assert_eq!(tv.delivery_stage_ids(), &[0, 1]);
     }
 }
 

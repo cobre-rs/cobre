@@ -93,7 +93,7 @@ use cobre_stochastic::{
 };
 
 use crate::{
-    block_clock::M3S_TO_HM3,
+    block_clock::{BlockClock, M3S_TO_HM3},
     config::{CutManagementConfig, EventParams},
     cut::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
@@ -109,6 +109,7 @@ use crate::{
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
     stopping_rule::{StoppingRule, StoppingRuleSet},
+    time_value::TimeValue,
     workspace::CapturedBasis,
 };
 
@@ -545,6 +546,7 @@ impl StudySetup {
             stage_templates,
             scaling_report,
             resolved_parameters,
+            time_value,
         } = build_energy_and_templates(
             system,
             inflow_method,
@@ -755,6 +757,7 @@ impl StudySetup {
         Ok(Self {
             stage_data: stage_data::StageData {
                 stage_templates,
+                time_value,
                 state: state_layout,
                 study_dims,
                 hydro_cell_index,
@@ -968,6 +971,7 @@ struct EnergyAndTemplates {
     stage_templates: StageTemplates,
     scaling_report: ScalingReport,
     resolved_parameters: ResolvedParameters,
+    time_value: TimeValue,
 }
 
 /// Build the energy-conversion set, the resolved parameter table, and the
@@ -1010,6 +1014,13 @@ fn build_energy_and_templates(
         cost_scale_factor,
     )?;
 
+    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+    let study_total_hours: Vec<f64> = study_stages
+        .iter()
+        .map(|s| BlockClock::new(s).total_hours())
+        .collect();
+    let time_value = TimeValue::from_system(system, &study_total_hours);
+
     let mut stage_templates = build_stage_templates(
         system,
         inflow_method,
@@ -1028,6 +1039,7 @@ fn build_energy_and_templates(
             .provenance()
             .load_scheme
             .unwrap_or(SamplingScheme::InSample),
+        &time_value,
     );
 
     let scaling_report = template_postprocess::postprocess_templates(
@@ -1035,6 +1047,7 @@ fn build_energy_and_templates(
         system,
         state_layout,
         cost_scale_factor,
+        &time_value,
     );
 
     if stage_templates.templates.is_empty() {
@@ -1048,6 +1061,7 @@ fn build_energy_and_templates(
         stage_templates,
         scaling_report,
         resolved_parameters,
+        time_value,
     })
 }
 

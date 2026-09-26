@@ -1,8 +1,7 @@
 //! Template post-processing: discount factors and LP scaling.
 
-use cobre_core::{EntityId, System};
+use cobre_core::System;
 
-use crate::block_clock::BlockClock;
 use crate::lp::builder::{self, StageTemplates};
 use crate::lp::indexer::StateSpace;
 use crate::scaling_report::{
@@ -19,49 +18,30 @@ pub(crate) fn postprocess_templates(
     system: &System,
     state_layout: &StateSpace,
     cost_scale_factor: f64,
+    time_value: &TimeValue,
 ) -> ScalingReport {
-    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-
     // Commitment-hold resolution context the box builder's one hand-written
-    // special case needs — resolved once here and threaded
-    // through every stage's `build_state_box` call, mirroring the same
-    // `TimeValue::resolve` inputs `build_stage_templates` uses. Runs
-    // BEFORE column scaling below: the storage/transit-bucket identity families
-    // read `template.col_lower`/`col_upper` verbatim, which must still be the
-    // PHYSICAL bounds `apply_col_scale` has not yet divided in place — the same
-    // physical units as the unscaled trial state (`fill_unscaled` in
+    // special case needs — resolved once here and threaded through every
+    // stage's `build_state_box` call. Runs BEFORE column scaling below: the
+    // storage/transit-bucket identity families read `template.col_lower`/
+    // `col_upper` verbatim, which must still be the PHYSICAL bounds
+    // `apply_col_scale` has not yet divided in place — the same physical units
+    // as the unscaled trial state (`fill_unscaled` in
     // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
     let bounds = system.bounds();
     let mut anticipated_thermal_indices: Vec<usize> = Vec::new();
     let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
-    let mut anticipated_thermal_ids: Vec<EntityId> = Vec::new();
     for (t_idx, thermal) in system.thermals().iter().enumerate() {
         if thermal.anticipated_config.is_some() {
             anticipated_thermal_indices.push(t_idx);
             anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
-            anticipated_thermal_ids.push(thermal.id);
         }
     }
 
-    let study_total_hours: Vec<f64> = study_stages
-        .iter()
-        .map(|s| BlockClock::new(s).total_hours())
-        .collect();
-    let time_value = TimeValue::resolve(
-        &study_stages,
-        &study_total_hours,
-        system.post_study_stages(),
-        &anticipated_thermal_ids,
-        system.policy_graph(),
-    );
-    // The setter derives cumulative factors in the same call, so the two slices
-    // cannot drift.
-    stage_templates.set_discount_factors(time_value.discount_factors().to_vec());
-
     debug_assert_eq!(
-        stage_templates.cumulative_discount_factors().len(),
+        time_value.discount_factors().len(),
         stage_templates.templates.len(),
-        "cumulative_discount_factors must have length n_stages after postprocess"
+        "time_value.discount_factors must have length n_stages"
     );
 
     // Discount theta before column/row scaling: cost scaling divides c_i by K but
@@ -78,7 +58,7 @@ pub(crate) fn postprocess_templates(
             .iter()
             .map(|g| g.theta_col)
             .collect();
-        let discount_factors = stage_templates.discount_factors().to_vec();
+        let discount_factors = time_value.discount_factors();
         debug_assert_eq!(
             theta_cols.len(),
             stage_templates.templates.len(),
@@ -97,8 +77,7 @@ pub(crate) fn postprocess_templates(
             bounds,
             &anticipated_thermal_indices,
             &anticipated_windows,
-            time_value.delivery_stage_ids(),
-            time_value.post_study(),
+            time_value,
         );
         stage_templates.state_boxes.push(state_box);
     }
@@ -156,6 +135,7 @@ mod tests {
     use crate::lp::builder::{StageGeometry, StageTemplates};
     use crate::lp::indexer::StateSpace;
     use crate::test_support::state_layout_full;
+    use crate::time_value::{PostStudyResolved, TimeValue};
     use chrono::NaiveDate;
     use cobre_core::temporal::{
         BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
@@ -235,8 +215,21 @@ mod tests {
             .bounds(ResolvedBounds::empty())
             .build()
             .expect("minimal system must build");
+        let time_value = TimeValue::from_parts(
+            vec![1.0],
+            vec![1.0],
+            vec![0.0],
+            vec![0],
+            PostStudyResolved::default(),
+        );
 
-        postprocess_templates(&mut stage_templates, &system, &state_layout, 1.0);
+        postprocess_templates(
+            &mut stage_templates,
+            &system,
+            &state_layout,
+            1.0,
+            &time_value,
+        );
 
         assert_ne!(
             stage_templates.templates[0].col_scale[0], 1.0,

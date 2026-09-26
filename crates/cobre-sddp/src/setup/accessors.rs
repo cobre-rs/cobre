@@ -246,11 +246,8 @@ impl StudySetup {
             study_stage_ids: &self.study_stage_ids,
             ncs_max_gen: &self.ncs_max_gen,
             ncs_allow_curtailment: &self.ncs_allow_curtailment,
-            discount_factors: self.stage_data.stage_templates.discount_factors(),
-            cumulative_discount_factors: self
-                .stage_data
-                .stage_templates
-                .cumulative_discount_factors(),
+            discount_factors: self.stage_data.time_value.discount_factors(),
+            cumulative_discount_factors: self.stage_data.time_value.cumulative_discount_factors(),
             stage_lag_transitions: &self.stage_data.stage_lag_transitions,
             noise_group_ids: &self.stage_data.noise_group_ids,
             downstream_par_order: self.downstream_par_order,

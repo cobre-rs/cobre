@@ -2278,6 +2278,7 @@ mod zero_cost_tests {
         resolved_parameters: ResolvedParameters,
         production_models: ProductionModelSet,
         evaporation_models: EvaporationModelSet,
+        time_value: TimeValue,
     }
 
     impl AntFixtures {
@@ -2356,17 +2357,34 @@ mod zero_cost_tests {
                 },
                 production_models: ProductionModelSet::new(vec![], 0, 1),
                 evaporation_models: EvaporationModelSet::new(vec![]),
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                    PostStudyResolved::default(),
+                ),
             }
         }
 
         fn make_ctx(
-            &self,
+            &mut self,
             n_anticipated: usize,
             k_max: usize,
             anticipated_lead_stages: Vec<usize>,
             anticipated_thermal_indices: Vec<usize>,
             n_thermals: usize,
         ) -> TemplateBuildCtx<'_> {
+            // Sized to cover every active plant's delivery stage
+            // (`stage_idx + K_i < n_stages`); `fill_anticipated_columns`
+            // indexes these by delivery stage when pricing the decision column.
+            self.time_value = TimeValue::from_parts(
+                vec![],
+                vec![1.0; self.bounds.n_stages() + k_max],
+                vec![744.0; self.bounds.n_stages() + k_max],
+                (0..i32::try_from(self.bounds.n_stages() + k_max).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            );
             TemplateBuildCtx {
                 hydros: &[],
                 thermals: &[],
@@ -2424,16 +2442,7 @@ mod zero_cost_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0)).collect(),
                 has_penalty: false,
-                // Sized to cover every active plant's delivery stage
-                // (`stage_idx + K_i < n_stages`); `fill_anticipated_columns`
-                // indexes these by delivery stage when pricing the decision column.
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; self.bounds.n_stages() + k_max],
-                    vec![744.0; self.bounds.n_stages() + k_max],
-                    (0..i32::try_from(self.bounds.n_stages() + k_max).unwrap_or(0)).collect(),
-                    PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 // No hydros ⇒ no filling targets.
                 filling_v_target: BTreeMap::new(),
             }
@@ -2731,7 +2740,7 @@ mod zero_cost_tests {
     /// dormant-column convention exactly as `fill_stage_columns` composes them.
     #[test]
     fn test_fill_anticipated_columns_state_out_active_and_inactive() {
-        let (fixtures, _) = build_anticipated_ctx_n_stages_6();
+        let (mut fixtures, _) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(
             2,          // n_anticipated
             3,          // k_max
@@ -2811,7 +2820,7 @@ mod zero_cost_tests {
     /// both definition rows must have equality bounds `[0.0, 0.0]`.
     #[test]
     fn test_fill_anticipated_state_out_def_rows_two_active_plants() {
-        let (fixtures, stage) = build_anticipated_ctx_n_stages_6();
+        let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(2, 3, vec![2, 3], vec![0, 1], 0);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -2853,7 +2862,7 @@ mod zero_cost_tests {
     /// - `(def_row_i, -1.0)` on `col_anticipated_decision_start + i`
     #[test]
     fn test_fill_anticipated_state_out_def_entries_two_active_plants() {
-        let (fixtures, stage) = build_anticipated_ctx_n_stages_6();
+        let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(2, 3, vec![2, 3], vec![0, 1], 0);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -2995,7 +3004,7 @@ mod zero_cost_tests {
     #[test]
     fn fill_anticipated_slot_definition_entries_matches_open_coded_carry_formula_across_heterogeneous_plants()
      {
-        let (fixtures, stage) = build_anticipated_ctx_n_stages_6();
+        let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(2, 3, vec![3, 2], vec![0, 1], 2);
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3295,13 +3304,14 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 0);
         let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 0);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
-        ctx.time_value = TimeValue::from_parts(
+        let time_value = TimeValue::from_parts(
             vec![],
             vec![1.0; 11],
             vec![744.0; 11],
             (0..11).collect(),
             PostStudyResolved::default(),
         );
+        ctx.time_value = &time_value;
         let stage = two_block_stage(0, [372.0, 372.0]);
         let state = state_layout_with_resolution(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3345,13 +3355,14 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 0);
         let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 0);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
-        ctx.time_value = TimeValue::from_parts(
+        let time_value = TimeValue::from_parts(
             vec![],
             vec![1.0; 11],
             vec![744.0; 11],
             (0..11).collect(),
             PostStudyResolved::default(),
         );
+        ctx.time_value = &time_value;
         let stage = two_block_stage(0, [372.0, 372.0]);
         let state = state_layout_with_resolution(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3391,13 +3402,14 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 1);
         let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 1);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
-        ctx.time_value = TimeValue::from_parts(
+        let time_value = TimeValue::from_parts(
             vec![],
             vec![1.0; 11],
             vec![744.0; 11],
             (0..11).collect(),
             PostStudyResolved::default(),
         );
+        ctx.time_value = &time_value;
         let stage = two_block_stage(2, [372.0, 372.0]);
         let state = state_layout_with_resolution(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 2);
@@ -3450,7 +3462,7 @@ mod zero_cost_tests {
     /// would catch a future regression in any fixture that adds hydros.
     #[test]
     fn state_fixing_diagonals_absent_from_csc() {
-        let (fixtures, stage) = build_anticipated_ctx_n_stages_6();
+        let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(
             2,          // n_anticipated
             3,          // k_max
@@ -3797,6 +3809,7 @@ mod pumping_water_tests {
         /// default; the end-to-end test sets a pumping-referencing constraint so the
         /// `PumpingFlow`/`PumpingPower` resolver arms run through the real caller.
         generic_constraints: Vec<GenericConstraint>,
+        time_value: TimeValue,
     }
 
     impl PumpFixtures {
@@ -4011,6 +4024,13 @@ mod pumping_water_tests {
                 production_models,
                 evaporation_models,
                 generic_constraints: Vec::new(),
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![744.0; N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    PostStudyResolved::default(),
+                ),
             }
         }
 
@@ -4219,13 +4239,7 @@ mod pumping_water_tests {
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::from_parts(
-                    vec![],
-                    vec![1.0; N_STAGES],
-                    vec![744.0; N_STAGES],
-                    (0..N_STAGES as i32).collect(),
-                    PostStudyResolved::default(),
-                ),
+                time_value: &self.time_value,
                 // These single-stage fixtures decouple `stage.id` from
                 // `stage_idx` (every phase is exercised at `stage_idx = 0` against
                 // one bounds row), so the filling window's stage ids all resolve to

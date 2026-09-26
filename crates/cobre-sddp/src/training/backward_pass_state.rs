@@ -4757,11 +4757,8 @@ mod tests {
             study_stage_ids: &setup.study_stage_ids,
             ncs_max_gen: &setup.ncs_max_gen,
             ncs_allow_curtailment: &setup.ncs_allow_curtailment,
-            discount_factors: setup.stage_data.stage_templates.discount_factors(),
-            cumulative_discount_factors: setup
-                .stage_data
-                .stage_templates
-                .cumulative_discount_factors(),
+            discount_factors: setup.stage_data.time_value.discount_factors(),
+            cumulative_discount_factors: setup.stage_data.time_value.cumulative_discount_factors(),
             stage_lag_transitions: &setup.stage_data.stage_lag_transitions,
             noise_group_ids: &setup.stage_data.noise_group_ids,
             downstream_par_order: setup.downstream_par_order,

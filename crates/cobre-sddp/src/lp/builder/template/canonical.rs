@@ -4,11 +4,12 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use cobre_core::{BlockMode, EntityId};
+use cobre_core::{BlockMode, EntityId, PostStudyThermalBound};
 use cobre_solver::StageTemplate;
 
 use crate::lp::builder::{GenericConstraintRowEntry, StateBox};
 use crate::lp::indexer::{EvaporationIndices, HydroSys};
+use crate::time_value::TimeValue;
 
 use super::{StageGeometry, StageTemplates};
 
@@ -85,7 +86,7 @@ fn put_range(buf: &mut Vec<u8>, range: &Range<usize>) {
 }
 
 /// Group keys [`encode_lp_facts`] writes, guaranteed present even for zero
-/// stages — the fixed schema [`encode_stage_templates_facts`]'s 28-key
+/// stages — the fixed schema [`encode_stage_templates_facts`]'s 24-key
 /// contract depends on.
 const LP_FACT_GROUP_KEYS: [&str; 11] = [
     "lp.dims",
@@ -341,8 +342,6 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
         geometry_per_stage,
         diversion_upstream,
         hydro_productivities_per_stage,
-        discount_factors,
-        cumulative_discount_factors,
     } = templates;
 
     encode_lp_facts(templates, groups);
@@ -377,15 +376,6 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
     let buf = group(groups, "stochastic.load_buses");
     put_usize(buf, *n_load_buses);
     put_usize_slice(buf, load_bus_indices);
-
-    put_f64_slice(
-        group(groups, "time_value.discount_factors"),
-        discount_factors,
-    );
-    put_f64_slice(
-        group(groups, "time_value.cumulative_discount_factors"),
-        cumulative_discount_factors,
-    );
 
     put_usize(group(groups, "reporting.n_hydros"), *n_hydros);
     put_f64(
@@ -425,12 +415,100 @@ pub(crate) fn encode_stage_templates_facts(templates: &StageTemplates, groups: &
     }
 }
 
+fn put_post_study_thermal_bound(buf: &mut Vec<u8>, bound: &PostStudyThermalBound) {
+    let PostStudyThermalBound {
+        thermal_id,
+        post_study_stage_index,
+        cost_per_mwh,
+        min_mw,
+        max_mw,
+    } = bound;
+    put_i32(buf, thermal_id.0);
+    put_usize(buf, *post_study_stage_index);
+    put_f64(buf, *cost_per_mwh);
+    put_f64(buf, *min_mw);
+    put_f64(buf, *max_mw);
+}
+
+fn put_option_triple(buf: &mut Vec<u8>, value: Option<(f64, f64, f64)>) {
+    match value {
+        Some((a, b, c)) => {
+            buf.push(1);
+            put_f64(buf, a);
+            put_f64(buf, b);
+            put_f64(buf, c);
+        }
+        None => buf.push(0),
+    }
+}
+
+/// Encode every fact of [`TimeValue`], destructured exhaustively via
+/// [`TimeValue::canonical_fields`] (and its nested
+/// [`crate::time_value::PostStudyResolved::canonical_fields`]/
+/// [`crate::time_value::PostStudyThermalLookup::canonical_fields`]) so an added
+/// field fails to compile rather than silently escaping the digest.
+/// `time_value.cumulative_discount_factors` is written through
+/// [`TimeValue::cumulative_discount_factors`] (the prefix accessor), never
+/// recomputed, so it stays the single derivation.
+pub(crate) fn encode_time_value_facts(time_value: &TimeValue, groups: &mut FactGroups) {
+    let (
+        discount_factors,
+        delivery_cumulative_discount_factors,
+        delivery_total_hours,
+        delivery_stage_ids,
+        post_study,
+    ) = time_value.canonical_fields();
+
+    put_f64_slice(
+        group(groups, "time_value.discount_factors"),
+        discount_factors,
+    );
+    put_f64_slice(
+        group(groups, "time_value.cumulative_discount_factors"),
+        time_value.cumulative_discount_factors(),
+    );
+    put_f64_slice(
+        group(groups, "time_value.delivery_cumulative_discount_factors"),
+        delivery_cumulative_discount_factors,
+    );
+    put_f64_slice(
+        group(groups, "time_value.delivery_total_hours"),
+        delivery_total_hours,
+    );
+    put_i32_slice(
+        group(groups, "time_value.delivery_stage_ids"),
+        delivery_stage_ids,
+    );
+
+    let (
+        total_hours,
+        post_study_cumulative_discount_factors,
+        thermal_bounds,
+        anticipated_bounds,
+        anticipated_bounds_stride,
+    ) = post_study.canonical_fields();
+    let buf = group(groups, "time_value.post_study");
+    put_f64_slice(buf, total_hours);
+    put_f64_slice(buf, post_study_cumulative_discount_factors);
+    let bounds = thermal_bounds.canonical_fields();
+    put_usize(buf, bounds.len());
+    for bound in bounds {
+        put_post_study_thermal_bound(buf, bound);
+    }
+    put_usize(buf, anticipated_bounds.len());
+    for &bound in anticipated_bounds {
+        put_option_triple(buf, bound);
+    }
+    put_usize(buf, anticipated_bounds_stride);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         EntityId, FactGroups, StageTemplate, StageTemplates, encode_lp_facts,
-        encode_stage_templates_facts,
+        encode_stage_templates_facts, encode_time_value_facts,
     };
+    use crate::time_value::{PostStudyResolved, TimeValue};
 
     fn one_stage(template: StageTemplate) -> FactGroups {
         let mut groups = FactGroups::new();
@@ -530,8 +608,27 @@ mod tests {
                 "solver_meta.n_transfer",
                 "state_boxes",
                 "stochastic.load_buses",
+            ]
+        );
+    }
+
+    #[test]
+    fn time_value_groups_are_the_documented_keys() {
+        let tv =
+            TimeValue::from_parts(vec![], vec![], vec![], vec![], PostStudyResolved::default());
+        let mut groups = FactGroups::new();
+        encode_time_value_facts(&tv, &mut groups);
+        let mut keys: Vec<&str> = groups.keys().copied().collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
                 "time_value.cumulative_discount_factors",
+                "time_value.delivery_cumulative_discount_factors",
+                "time_value.delivery_stage_ids",
+                "time_value.delivery_total_hours",
                 "time_value.discount_factors",
+                "time_value.post_study",
             ]
         );
     }
@@ -554,15 +651,25 @@ mod tests {
 
     #[test]
     fn one_discount_factor_moves_only_its_group() {
-        let mut a = StageTemplates::empty(2, 1.0);
-        let mut b = StageTemplates::empty(2, 1.0);
-        a.discount_factors = vec![1.0];
-        b.discount_factors = vec![0.5];
+        let a = TimeValue::from_parts(
+            vec![1.0],
+            vec![1.0],
+            vec![10.0],
+            vec![0],
+            PostStudyResolved::default(),
+        );
+        let b = TimeValue::from_parts(
+            vec![0.5],
+            vec![1.0],
+            vec![10.0],
+            vec![0],
+            PostStudyResolved::default(),
+        );
 
         let mut groups_a = FactGroups::new();
-        encode_stage_templates_facts(&a, &mut groups_a);
+        encode_time_value_facts(&a, &mut groups_a);
         let mut groups_b = FactGroups::new();
-        encode_stage_templates_facts(&b, &mut groups_b);
+        encode_time_value_facts(&b, &mut groups_b);
 
         for (&key, value) in &groups_a {
             let other = &groups_b[key];

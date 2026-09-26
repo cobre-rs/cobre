@@ -82,6 +82,7 @@ struct ZeroEntityFixtures {
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
     generic_constraints: Vec<GenericConstraint>,
+    time_value: TimeValue,
 }
 
 impl ZeroEntityFixtures {
@@ -104,6 +105,15 @@ impl ZeroEntityFixtures {
             production_models: ProductionModelSet::new(vec![], 0, 1),
             evaporation_models: EvaporationModelSet::new(vec![]),
             generic_constraints: Vec::new(),
+            // Tests that use ZeroEntityFixtures don't exercise discount
+            // factors; n_stages = 1 element vecs won't panic.
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -245,15 +255,7 @@ impl ZeroEntityFixtures {
                 .map(ThermalSys::new)
                 .collect(),
             has_penalty: false,
-            // Tests that use ZeroEntityFixtures don't exercise discount
-            // factors; provide n_stages = 1 element vecs that won't panic.
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -569,6 +571,7 @@ struct UsefulVolumeFixtures {
     evaporation_models: EvaporationModelSet,
     hydro_pos: BTreeMap<EntityId, usize>,
     generic_constraints: Vec<GenericConstraint>,
+    time_value: TimeValue,
 }
 
 impl UsefulVolumeFixtures {
@@ -647,6 +650,13 @@ impl UsefulVolumeFixtures {
             evaporation_models: EvaporationModelSet::new(vec![]),
             hydro_pos,
             generic_constraints: Vec::new(),
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0; n_stages],
+                vec![744.0; n_stages],
+                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -727,13 +737,7 @@ impl UsefulVolumeFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0; n_stages],
-                vec![744.0; n_stages],
-                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -1066,6 +1070,7 @@ struct TwoHydroFixtures {
     resolved_parameters: ResolvedParameters,
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
+    time_value: TimeValue,
 }
 
 impl TwoHydroFixtures {
@@ -1101,6 +1106,13 @@ impl TwoHydroFixtures {
                 EvaporationModel::None,
                 EvaporationModel::None,
             ]),
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -1156,13 +1168,7 @@ impl TwoHydroFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -1366,6 +1372,7 @@ struct FphaMixFixtures {
     resolved_parameters: ResolvedParameters,
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
+    time_value: TimeValue,
 }
 
 impl FphaMixFixtures {
@@ -1415,6 +1422,13 @@ impl FphaMixFixtures {
                 EvaporationModel::None,
                 EvaporationModel::None,
             ]),
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -1470,13 +1484,7 @@ impl FphaMixFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -1527,6 +1535,7 @@ struct FillingMembershipFixtures {
     resolved_parameters: ResolvedParameters,
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
+    time_value: TimeValue,
 }
 
 impl FillingMembershipFixtures {
@@ -1596,6 +1605,13 @@ impl FillingMembershipFixtures {
             },
             production_models: ProductionModelSet::new(models, 2, 1),
             evaporation_models,
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -1651,13 +1667,7 @@ impl FillingMembershipFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -2691,6 +2701,7 @@ struct AntFixturesWithNStages {
     resolved_parameters: ResolvedParameters,
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
+    time_value: TimeValue,
 }
 
 impl AntFixturesWithNStages {
@@ -2712,6 +2723,13 @@ impl AntFixturesWithNStages {
             },
             production_models: ProductionModelSet::new(vec![], 0, 1),
             evaporation_models: EvaporationModelSet::new(vec![]),
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0; n_stages],
+                vec![744.0; n_stages],
+                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -2780,13 +2798,7 @@ impl AntFixturesWithNStages {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0; n_stages],
-                vec![744.0; n_stages],
-                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -2942,6 +2954,7 @@ struct PumpingFixtures {
     /// column-reservation probe exercises the dense per-station arithmetic the
     /// production builder runs.
     stations: Vec<PumpingStation>,
+    time_value: TimeValue,
 }
 
 impl PumpingFixtures {
@@ -2980,11 +2993,17 @@ impl PumpingFixtures {
             production_models: ProductionModelSet::new(vec![], 0, 1),
             evaporation_models: EvaporationModelSet::new(vec![]),
             stations,
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0; n_stages],
+                vec![744.0; n_stages],
+                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            ),
         }
     }
 
     fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let n_stages = self.bounds.n_stages();
         TemplateBuildCtx {
             hydros: &[],
             thermals: &[],
@@ -3038,13 +3057,7 @@ impl PumpingFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0; n_stages],
-                vec![744.0; n_stages],
-                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -3676,6 +3689,7 @@ struct TwoHydroMultiBusFixtures {
     resolved_parameters: ResolvedParameters,
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
+    time_value: TimeValue,
 }
 
 impl TwoHydroMultiBusFixtures {
@@ -3720,6 +3734,13 @@ impl TwoHydroMultiBusFixtures {
                 EvaporationModel::None,
                 EvaporationModel::None,
             ]),
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -3775,13 +3796,7 @@ impl TwoHydroMultiBusFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -3920,6 +3935,7 @@ struct FphaMultiBusFixtures {
     resolved_parameters: ResolvedParameters,
     production_models: ProductionModelSet,
     evaporation_models: EvaporationModelSet,
+    time_value: TimeValue,
 }
 
 impl FphaMultiBusFixtures {
@@ -3972,6 +3988,13 @@ impl FphaMultiBusFixtures {
                 EvaporationModel::None,
                 EvaporationModel::None,
             ]),
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
         }
     }
 
@@ -4027,13 +4050,7 @@ impl FphaMultiBusFixtures {
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
+            time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
         }
     }

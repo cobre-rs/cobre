@@ -4325,6 +4325,133 @@ mod pumping_water_tests {
         }
     }
 
+    /// On a Chronological stage, each station's per-block entries land on its
+    /// own hydro's own block row (`start + hydro_pos * n_blks + blk`), never
+    /// `start + hydro_pos`. Declaration order of the hydros and stations must
+    /// not change the result.
+    #[test]
+    #[ignore = "chronological pumping addresses another hydro's or another block's water row instead of its own"]
+    fn chronological_pumping_entries_land_on_each_hydros_own_block_rows() {
+        let fixtures = PumpFixtures::new(
+            vec![fixture_hydro(3), fixture_hydro(1), fixture_hydro(2)],
+            vec![station(20, 3, 1, 0.0, 30.0), station(10, 2, 3, 0.0, 50.0)],
+        );
+        let ctx = fixtures.make_ctx();
+        let stage = chronological_stage(0, &[300.0, 420.0, 24.0]);
+        let state = state_layout_for(&ctx);
+        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+
+        let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
+        fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
+
+        let n_blks = layout.n_blks;
+        let s_row = layout.rows.water_balance.start();
+        for (p_sys, st) in ctx.pumping_stations.iter().enumerate() {
+            let src = ctx.hydro_pos[&st.source_hydro_id];
+            let dst = ctx.hydro_pos[&st.destination_hydro_id];
+            for blk in 0..n_blks {
+                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                let col = layout.equipment.col_pumping_start + p_sys * n_blks + blk;
+                assert_eq!(
+                    col_entries[col],
+                    vec![
+                        (s_row + src * n_blks + blk, tau),
+                        (s_row + dst * n_blks + blk, -tau),
+                    ],
+                    "station {p_sys} blk {blk}: must land on each hydro's own block row"
+                );
+            }
+        }
+
+        let reordered = PumpFixtures::new(
+            vec![fixture_hydro(1), fixture_hydro(2), fixture_hydro(3)],
+            vec![station(10, 2, 3, 0.0, 50.0), station(20, 3, 1, 0.0, 30.0)],
+        );
+        let reordered_ctx = reordered.make_ctx();
+        let reordered_state = state_layout_for(&reordered_ctx);
+        let reordered_layout = StageLayout::new(&reordered_ctx, &reordered_state, &stage, 0);
+        let mut reordered_entries: Vec<Vec<(usize, f64)>> =
+            vec![Vec::new(); reordered_layout.num_cols];
+        fill_pumping_water_entries(&reordered_ctx, &reordered_layout, &mut reordered_entries);
+
+        assert_eq!(
+            col_entries, reordered_entries,
+            "declaration order must not change the emitted entries"
+        );
+    }
+
+    /// The pumped volume shares its block's water-balance row with that
+    /// hydro's own spillage column, on both the source and the destination
+    /// side, and touches no other water-balance row.
+    #[test]
+    #[ignore = "chronological pumping couples to another hydro's or another block's water row, not its hydro's own spillage row"]
+    fn chronological_pumping_column_shares_block_rows_with_its_hydros_spillage() {
+        let fixtures = PumpFixtures::new(
+            vec![fixture_hydro(3), fixture_hydro(1), fixture_hydro(2)],
+            vec![station(20, 3, 1, 0.0, 30.0), station(10, 2, 3, 0.0, 50.0)],
+        );
+        let ctx = fixtures.make_ctx();
+        let stage = chronological_stage(0, &[300.0, 420.0, 24.0]);
+        let state = state_layout_for(&ctx);
+        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+        let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
+
+        let n_blks = layout.n_blks;
+        let s_row = layout.rows.water_balance.start();
+        for (p_sys, st) in ctx.pumping_stations.iter().enumerate() {
+            let src = ctx.hydro_pos[&st.source_hydro_id];
+            let dst = ctx.hydro_pos[&st.destination_hydro_id];
+            for blk in 0..n_blks {
+                let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
+                let blk_idx = BlockIdx::new(blk);
+                let pump_col = layout.equipment.col_pumping_start + p_sys * n_blks + blk;
+                let r_src = i32::try_from(s_row + src * n_blks + blk).unwrap();
+                let r_dst = i32::try_from(s_row + dst * n_blks + blk).unwrap();
+
+                assert_eq!(
+                    coeff_at(&csc, pump_col, r_src),
+                    tau,
+                    "station {p_sys} blk {blk}: pumping column must carry +tau on the source's own block row"
+                );
+                assert_eq!(
+                    coeff_at(
+                        &csc,
+                        layout.spillage_col(HydroSys::new(src), blk_idx),
+                        r_src
+                    ),
+                    tau,
+                    "station {p_sys} blk {blk}: the source's own spillage must share the same row"
+                );
+                assert_eq!(
+                    coeff_at(&csc, pump_col, r_dst),
+                    -tau,
+                    "station {p_sys} blk {blk}: pumping column must carry -tau on the destination's own block row"
+                );
+                assert_eq!(
+                    coeff_at(
+                        &csc,
+                        layout.spillage_col(HydroSys::new(dst), blk_idx),
+                        r_dst
+                    ),
+                    tau,
+                    "station {p_sys} blk {blk}: the destination's own spillage must share the same row"
+                );
+
+                for row in layout.rows.water_balance.range() {
+                    let row_i32 = i32::try_from(row).unwrap();
+                    if row_i32 == r_src || row_i32 == r_dst {
+                        continue;
+                    }
+                    assert_eq!(
+                        coeff_at(&csc, pump_col, row_i32),
+                        0.0,
+                        "station {p_sys} blk {blk}: pumping column must carry no entry on row {row}"
+                    );
+                }
+            }
+        }
+    }
+
     /// A station whose `source_hydro_id` is absent from `hydro_pos` skips only
     /// the source entry — the destination side is still written, no panic.
     #[test]

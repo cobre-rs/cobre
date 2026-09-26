@@ -960,9 +960,9 @@ fn fill_filled_min_storage_floor_entries(
     }
 }
 
-/// Fill pumping-flow water-balance entries: per block, the pumped-flow column enters the
-/// SOURCE hydro's water row with `+tau_h` (outflow sign) and the DESTINATION's with
-/// `−tau_h` (inflow sign). `tau_h` is the same [`BlockClock::tau`](crate::block_clock::BlockClock::tau)
+/// Fill pumping-flow water-balance entries: per block, the pumped-flow column enters
+/// that block's water row of the SOURCE hydro with `+tau_h` (outflow sign) and of the
+/// DESTINATION hydro with `−tau_h` (inflow sign). `tau_h` is the same [`BlockClock::tau`](crate::block_clock::BlockClock::tau)
 /// value turbine/spillage use, so the coefficient stays bit-identical across sites.
 /// Structural entries are written for every station: a dormant station's column is `[0, 0]`.
 pub(super) fn fill_pumping_water_entries(
@@ -972,7 +972,6 @@ pub(super) fn fill_pumping_water_entries(
 ) {
     let n_blks = layout.n_blks;
     let grid = layout.block_grid();
-    let row_water = layout.rows.water_balance.start();
     for (p_sys, station) in ctx.pumping_stations.iter().enumerate() {
         // Per-side guards are defense-in-depth (`validate_pumping_station_refs` guarantees
         // resolution on a production `System`). Do NOT promote to an unconditional
@@ -980,17 +979,20 @@ pub(super) fn fill_pumping_water_entries(
         let source = ctx.hydro_pos.get(&station.source_hydro_id).copied();
         let destination = ctx.hydro_pos.get(&station.destination_hydro_id).copied();
         for blk in 0..n_blks {
-            let tau_h = layout.clock.tau(BlockIdx::new(blk));
-            let col = grid.flat(
-                layout.equipment.col_pumping_start,
-                p_sys,
-                BlockIdx::new(blk),
-            );
+            let blk_idx = BlockIdx::new(blk);
+            let tau_h = layout.clock.tau(blk_idx);
+            let col = grid.flat(layout.equipment.col_pumping_start, p_sys, blk_idx);
             if let Some(s_idx) = source {
-                col_entries[col].push((row_water + s_idx, tau_h));
+                col_entries[col].push((
+                    layout.water_balance_row(HydroSys::new(s_idx), blk_idx),
+                    tau_h,
+                ));
             }
             if let Some(d_idx) = destination {
-                col_entries[col].push((row_water + d_idx, -tau_h));
+                col_entries[col].push((
+                    layout.water_balance_row(HydroSys::new(d_idx), blk_idx),
+                    -tau_h,
+                ));
             }
         }
     }
@@ -4330,7 +4332,6 @@ mod pumping_water_tests {
     /// `start + hydro_pos`. Declaration order of the hydros and stations must
     /// not change the result.
     #[test]
-    #[ignore = "chronological pumping addresses another hydro's or another block's water row instead of its own"]
     fn chronological_pumping_entries_land_on_each_hydros_own_block_rows() {
         let fixtures = PumpFixtures::new(
             vec![fixture_hydro(3), fixture_hydro(1), fixture_hydro(2)],
@@ -4384,7 +4385,6 @@ mod pumping_water_tests {
     /// hydro's own spillage column, on both the source and the destination
     /// side, and touches no other water-balance row.
     #[test]
-    #[ignore = "chronological pumping couples to another hydro's or another block's water row, not its hydro's own spillage row"]
     fn chronological_pumping_column_shares_block_rows_with_its_hydros_spillage() {
         let fixtures = PumpFixtures::new(
             vec![fixture_hydro(3), fixture_hydro(1), fixture_hydro(2)],

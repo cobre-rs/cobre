@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pumping station on a chronological stage with two or more blocks now
+  moves water between its own source and destination reservoirs in each
+  block.** In 0.16.0 each block's pumped volume was written into another
+  hydro's or another block's water balance, so the station could draw from
+  or fill a reservoir it is not connected to. Parallel-stage results are
+  unchanged.
+
 - **Cuts and the policy file keep every in-flight commitment when anticipated
   thermals have different leads.** A shorter-lead plant's commitment could sit
   in a ring position the cut rows left out, so the cut ignored it and the

@@ -4183,8 +4183,8 @@ fn block_layout_and_template(
 fn chronological_water_balance_chained_rows() {
     let (layout, t, tau) = block_layout_and_template(BlockMode::Chronological, 2);
     let h = 0_usize;
-    let row0 = layout.rows.water_balance.start + h * 2;
-    let row1 = layout.rows.water_balance.start + h * 2 + 1;
+    let row0 = layout.rows.water_balance.start() + h * 2;
+    let row1 = layout.rows.water_balance.start() + h * 2 + 1;
 
     let entry = |col: usize, row: usize| -> f64 {
         let es = csc_entries_for_col(&t, col);
@@ -4259,10 +4259,10 @@ fn chronological_water_balance_telescopes_to_parallel() {
     // Interior storage columns are shifted into chronological's control region, so
     // parallel and chronological do NOT share control-region column indices; compare
     // per SEMANTIC column via each layout's accessors.
-    let par_row = par_layout.rows.water_balance.start + h;
+    let par_row = par_layout.rows.water_balance.start() + h;
     let chr_sum = |chr_col: usize| -> f64 {
         (0..n_blks)
-            .map(|k| dense_chr[chr_layout.rows.water_balance.start + h * n_blks + k][chr_col])
+            .map(|k| dense_chr[chr_layout.rows.water_balance.start() + h * n_blks + k][chr_col])
             .sum()
     };
     let assert_telescopes = |par_col: usize, chr_col: usize, label: &str| {
@@ -4332,7 +4332,7 @@ fn chronological_water_balance_telescopes_to_parallel() {
     // The telescoped RHS recovers the parallel RHS: Σ_k −(τ_k·withdrawal) =
     // −(ζ·withdrawal).
     let chr_rhs_sum: f64 = (0..n_blks)
-        .map(|k| chr_t.row_lower[chr_layout.rows.water_balance.start + h * n_blks + k])
+        .map(|k| chr_t.row_lower[chr_layout.rows.water_balance.start() + h * n_blks + k])
         .sum();
     let par_rhs = par_t.row_lower[par_row];
     assert!(
@@ -4517,11 +4517,13 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
         "contract_export"
     );
     assert_eq!(
-        geometry.water_balance, layout.rows.water_balance,
+        geometry.water_balance,
+        layout.rows.water_balance.range(),
         "water_balance"
     );
     assert_eq!(
-        geometry.load_balance, layout.rows.load_balance,
+        geometry.load_balance,
+        layout.rows.load_balance.range(),
         "load_balance"
     );
     assert_eq!(
@@ -4871,7 +4873,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
 fn chronological_k1_water_row_byte_identical() {
     let parallel = block_template(BlockMode::Parallel, 1);
     let (chrono_layout, chrono, _tau) = block_layout_and_template(BlockMode::Chronological, 1);
-    let row = chrono_layout.rows.water_balance.start;
+    let row = chrono_layout.rows.water_balance.start();
 
     let dense_par = csc_to_dense(&parallel);
     let dense_chr = csc_to_dense(&chrono);
@@ -5253,7 +5255,7 @@ fn chronological_prefilling_d38_d42_per_block() {
 
     for k in 1..=n_blks {
         let blk = k - 1;
-        let row = layout.rows.water_balance.start + h_pre * n_blks + blk;
+        let row = layout.rows.water_balance.start() + h_pre * n_blks + blk;
         assert_eq!(
             entry(
                 layout.block_storage_col(HydroSys::new(h_pre), Boundary::from_index(k, n_blks)),

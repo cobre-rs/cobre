@@ -22,7 +22,7 @@ use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, CutStateProjection, EvapLocal,
+    AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, BusSys, CutStateProjection, EvapLocal,
     FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, StateDim, StateRegion,
     anticipated_resolution_for,
 };
@@ -33,6 +33,7 @@ use crate::test_support::{
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 
+use super::super::entries::build_stage_matrix_entries;
 use super::super::test_support::{state_layout_for, zero_hydro_penalties};
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET, RangeCursor,
@@ -1336,38 +1337,110 @@ fn chronological_water_balance_row_count() {
     let stage_parallel = stage_with_blocks(BlockMode::Parallel, 3);
     let parallel = StageLayout::new(&ctx, &state, &stage_parallel, 0);
     assert_eq!(
-        parallel.rows.water_balance.end - parallel.rows.water_balance.start,
+        parallel.rows.water_balance.end() - parallel.rows.water_balance.start(),
         2,
         "parallel n_h=2 n_blks=3 water_balance spans n_h = 2 rows"
     );
     assert_eq!(
-        parallel.rows.load_balance.start, parallel.rows.water_balance.end,
+        parallel.rows.load_balance.start(),
+        parallel.rows.water_balance.end(),
         "parallel load_balance.start chains off water_balance.end"
     );
 
     let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
     let chrono_k3 = StageLayout::new(&ctx, &state, &stage_chrono_k3, 0);
     assert_eq!(
-        chrono_k3.rows.water_balance.end - chrono_k3.rows.water_balance.start,
+        chrono_k3.rows.water_balance.end() - chrono_k3.rows.water_balance.start(),
         6,
         "chronological n_h=2 n_blks=3 water_balance spans n_h * n_blks = 6 rows"
     );
     assert_eq!(
-        chrono_k3.rows.load_balance.start, chrono_k3.rows.water_balance.end,
+        chrono_k3.rows.load_balance.start(),
+        chrono_k3.rows.water_balance.end(),
         "chronological K=3 load_balance.start chains off water_balance.end"
     );
 
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
     let chrono_k1 = StageLayout::new(&ctx, &state, &stage_chrono_k1, 0);
     assert_eq!(
-        chrono_k1.rows.water_balance.end - chrono_k1.rows.water_balance.start,
+        chrono_k1.rows.water_balance.end() - chrono_k1.rows.water_balance.start(),
         2,
         "chronological n_h=2 n_blks=1 water_balance spans n_h = 2 rows, identical to parallel"
     );
     assert_eq!(
-        chrono_k1.rows.load_balance.start, chrono_k1.rows.water_balance.end,
+        chrono_k1.rows.load_balance.start(),
+        chrono_k1.rows.water_balance.end(),
         "chronological K=1 load_balance.start chains off water_balance.end"
     );
+}
+
+/// `StageLayout::water_balance_row`/`load_balance_row` and the
+/// `StageGeometry` snapshot [`StageLayout::geometry`] builds from the same
+/// `StageLayout` must agree for every hydro, bus and block, in both block
+/// modes — the two are built from the same `ConstraintRows` families.
+#[test]
+fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
+    let fixtures = TwoHydroFixtures::new();
+    let mut ctx = fixtures.make_ctx();
+    ctx.n_buses = 3;
+    let state = state_layout_for(&ctx);
+    let n_blks = 3;
+
+    for block_mode in [BlockMode::Parallel, BlockMode::Chronological] {
+        let stage = stage_with_blocks(block_mode, n_blks);
+        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+        let geometry = layout.geometry(block_mode);
+
+        for h in 0..ctx.n_hydros {
+            for blk in 0..n_blks {
+                assert_eq!(
+                    layout.water_balance_row(HydroSys::new(h), BlockIdx::new(blk)),
+                    geometry.water_balance_row(HydroSys::new(h), BlockIdx::new(blk)),
+                    "water_balance_row disagrees at hydro {h} block {blk} under {block_mode:?}"
+                );
+            }
+        }
+        for bus in 0..ctx.n_buses {
+            for blk in 0..n_blks {
+                assert_eq!(
+                    layout.load_balance_row(BusSys::new(bus), BlockIdx::new(blk)),
+                    geometry.load_balance_row(BusSys::new(bus), BlockIdx::new(blk)),
+                    "load_balance_row disagrees at bus {bus} block {blk} under {block_mode:?}"
+                );
+            }
+        }
+    }
+}
+
+/// In parallel mode `push_z_inflow_coupling` loops
+/// `0..water_balance.rows_per_entity(n_blks) == 1`, so `z_h`'s column carries
+/// exactly one WATER-ROW entry per target hydro regardless of `n_blks` — a
+/// `Σ_k` per-block loop would inflate the routed-entry count instead. `z_h`
+/// also carries a second entry on its own z-inflow definition row
+/// ([`super::super::entries::fill_z_inflow_entries`]), which this test does
+/// not count.
+#[test]
+fn parallel_z_inflow_column_enters_each_target_water_row_once() {
+    let fixtures = TwoHydroFixtures::new();
+    let ctx = fixtures.make_ctx();
+    let state = state_layout_for(&ctx);
+    let stage = stage_with_blocks(BlockMode::Parallel, 3);
+    let layout = StageLayout::new(&ctx, &state, &stage, 0);
+
+    let col_entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
+    let water_rows = layout.rows.water_balance.range();
+
+    for h in 0..ctx.n_hydros {
+        let z_h = layout.col_z_inflow_start() + h;
+        let water_row_entries = col_entries[z_h]
+            .iter()
+            .filter(|&&(row, _)| water_rows.contains(&row))
+            .count();
+        assert_eq!(
+            water_row_entries, 1,
+            "hydro {h}'s z-inflow column must carry exactly one water-row entry in parallel mode"
+        );
+    }
 }
 
 // ── FPHA-local inverse map ───────────────────────────────────────────────
@@ -2362,7 +2435,8 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
     // equals ctx.n_hydros (no n_state offset). With state-fixing rows it
     // would be n_state + ctx.n_hydros.
     assert_eq!(
-        layout.rows.water_balance.start, ctx.n_hydros,
+        layout.rows.water_balance.start(),
+        ctx.n_hydros,
         "row_water_balance_start does not include the n_state offset"
     );
 }

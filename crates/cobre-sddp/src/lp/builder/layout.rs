@@ -16,9 +16,9 @@ use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
 };
 use crate::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, Boundary, EvapLocal,
-    EvaporationIndices, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys,
-    RangeCursor, StateSpace, StorageBoundaryGrid, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
+    EvapLocal, EvaporationIndices, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys,
+    LineSys, RangeCursor, StateSpace, StorageBoundaryGrid, anticipated_resolution_for,
     for_each_live_commitment_slot, is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
@@ -439,13 +439,10 @@ pub(crate) struct ConstraintRows {
     /// Row index of the first z-inflow definition constraint. Row 0; state pinning
     /// uses column bounds, so no state-fixing rows precede the z-inflow block.
     pub(crate) z_inflow_row_start: usize,
-    /// Row range for water balance constraints: `n_h` rows in parallel mode,
-    /// `n_h * n_blks` in chronological mode (the `K` chained per-hydro rows). Rows
-    /// are block-major like `load_balance`: the row for `(h, k)` is
-    /// `water_balance.start + h * n_blks + k` (entity-outer, block-inner) via
-    /// [`BlockGrid::flat`](crate::indexer::BlockGrid::flat); the transposed
-    /// `k * n_h + h` is the wrong-but-compiling alternative.
-    pub(crate) water_balance: Range<usize>,
+    /// Water balance row family: `n_h` rows in parallel mode, `n_h * n_blks` in
+    /// chronological mode (the `K` chained per-hydro rows), addressed through
+    /// [`StageLayout::water_balance_row`].
+    pub(crate) water_balance: BlockRowFamily,
     /// Row range for travel-time bucket definition rows: `b_d^out − b_{d+1}^in
     /// − deposit_d = 0`, one row per (plant, lag) bucket REACHABLE at this
     /// stage (`state.transit_bucket_column_order[slot]`'s lag within this stage's
@@ -466,8 +463,9 @@ pub(crate) struct ConstraintRows {
     /// matching deposit in [`super::entries`]'s arc-release fill is dropped
     /// there, not misdirected to another row). Length `state.n_buckets`.
     pub(crate) transit_bucket_row_pos: Vec<Option<usize>>,
-    /// Row range for load balance constraints (one per bus per block).
-    pub(crate) load_balance: Range<usize>,
+    /// Load balance row family (one per bus per block), addressed through
+    /// [`StageLayout::load_balance_row`].
+    pub(crate) load_balance: BlockRowFamily,
     /// Row cursor at which the evaporation row block begins (`fpha_rows_end`),
     /// even when the FPHA block is empty.
     pub(crate) fpha_rows_end: usize,
@@ -1319,11 +1317,10 @@ impl<'a> StageLayout<'a> {
         let mut row = RangeCursor::new(0);
         let z_inflow_row_start = row.pos();
         row.alloc(n_h);
-        let n_water_blocks = match stage.block_mode {
-            BlockMode::Chronological => n_blks,
-            BlockMode::Parallel => 1,
+        let water_balance = match stage.block_mode {
+            BlockMode::Chronological => BlockRowFamily::per_block(row.alloc(n_h * n_blks)),
+            BlockMode::Parallel => BlockRowFamily::one_per_entity(row.alloc(n_h)),
         };
-        let water_balance = row.alloc(n_h * n_water_blocks);
         // Sized from this stage's reachable count, not the stage-invariant
         // `state.n_buckets`: `build_transit_bucket_row_pos` masks a lag beyond
         // `ctx.per_stage_mask[stage_idx]`'s per-plant cap out of the row range
@@ -1335,7 +1332,7 @@ impl<'a> StageLayout<'a> {
             stage_idx,
         );
         let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
-        let load_balance = row.alloc(ctx.n_buses * n_blks);
+        let load_balance = BlockRowFamily::per_block(row.alloc(ctx.n_buses * n_blks));
 
         // Only the end cursor is kept here (the per-hydro ranges live on
         // `StageData.indexer`); `fpha_rows_end` is the evaporation-row start even
@@ -1811,11 +1808,11 @@ impl<'a> StageLayout<'a> {
     // ── Role-(b) accessors (read StageLayout's own fields) ───────────────────────
 
     /// First FPHA row; the FPHA block follows the load-balance rows, so this is
-    /// the load-balance end cursor — reads `self.rows.load_balance.end`.
+    /// the load-balance end cursor — reads `self.rows.load_balance.end()`.
     #[inline]
     #[must_use]
     pub(crate) fn row_fpha_start(&self) -> usize {
-        self.rows.load_balance.end
+        self.rows.load_balance.end()
     }
 
     /// Start of evaporation constraint rows (one per `(evap hydro, slot)`,
@@ -1826,6 +1823,29 @@ impl<'a> StageLayout<'a> {
     #[must_use]
     pub(crate) fn row_evap_start(&self) -> usize {
         self.rows.fpha_rows_end
+    }
+
+    /// Hydro `h`'s water-balance row for block `blk`, striding by `self.n_blks`
+    /// per [`BlockRowFamily::row`]: its own block row in chronological mode, its
+    /// single stage row in parallel mode (every block collapses to that row).
+    #[inline]
+    #[must_use]
+    pub(crate) fn water_balance_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.rows.water_balance.row(h.get(), blk, self.n_blks)
+    }
+
+    /// Bus `bus`'s load-balance row for block `blk`, striding by `self.n_blks`.
+    #[inline]
+    #[must_use]
+    pub(crate) fn load_balance_row(&self, bus: BusSys, blk: BlockIdx) -> usize {
+        self.rows.load_balance.row(bus.get(), blk, self.n_blks)
+    }
+
+    /// Hydro `h`'s z-inflow definition row.
+    #[inline]
+    #[must_use]
+    pub(crate) fn z_inflow_row(&self, h: HydroSys) -> usize {
+        self.rows.z_inflow_row_start + h.get()
     }
 
     // ── Range accessors mirrored onto `StageGeometry` (own fields) ──────────────
@@ -1898,6 +1918,13 @@ impl<'a> StageLayout<'a> {
     /// (rebuilt per MPI rank, never serialized).
     #[must_use]
     pub(crate) fn geometry(&self, block_mode: BlockMode) -> StageGeometry {
+        debug_assert_eq!(
+            self.rows.water_balance.rows_per_entity(self.n_blks),
+            match block_mode {
+                BlockMode::Parallel => 1,
+                BlockMode::Chronological => self.n_blks,
+            }
+        );
         StageGeometry {
             theta_col: self.col_theta(),
             turbine: self.equipment.turbine.clone(),
@@ -1924,8 +1951,8 @@ impl<'a> StageLayout<'a> {
             generation_below_slack: self.slack.oper_violation.generation_below_slack.clone(),
             contract_import: self.equipment.contract_import.clone(),
             contract_export: self.equipment.contract_export.clone(),
-            water_balance: self.rows.water_balance.clone(),
-            load_balance: self.rows.load_balance.clone(),
+            water_balance: self.rows.water_balance.range(),
+            load_balance: self.rows.load_balance.range(),
             fpha: self.row_fpha_start()..self.rows.fpha_rows_end,
             filling_target: self.filling_target(),
             filling_target_col: self.filling_target_col(),

@@ -413,7 +413,7 @@ pub(super) fn build_single_stage_template(
     stage_idx: usize,
 ) -> StageBuildOutput {
     let layout = StageLayout::new(ctx, state, stage, stage_idx);
-    let load_balance_row_start = layout.rows.load_balance.start;
+    let load_balance_row_start = layout.rows.load_balance.start();
 
     let (col_lower, mut col_upper, mut objective) =
         columns::fill_stage_columns(ctx, stage, stage_idx, &layout);

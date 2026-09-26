@@ -8,6 +8,12 @@
 //! `chronological_noise_study` backs the chronological inflow-noise-ownership
 //! test in `tests/chronological_inflow_noise.rs` and the `(Chronological,
 //! inflow)` cell of the patch-ownership sweep.
+//! `mixed_lead_anticipated_study` exercises two anticipated thermals with
+//! different lead depths on one study, a combination no committed deck
+//! combines.
+//! `chronological_noise_study`'s `pumping_station` field adds a pumping
+//! station whose source hydro sits at a nonzero canonical position, a
+//! combination no committed deck combines.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 
@@ -23,8 +29,8 @@ use cobre_core::{
     BusStagePenalties, ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph,
     HydroBlockBounds, HydroStageBounds, HydroStorage, InitialConditions, LineBlockBounds,
     LineStagePenalties, NcsStagePenalties, NonControllableSource, PenaltiesCountsSpec,
-    PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds, ResolvedPenalties, SystemBuilder,
-    ThermalBlockBounds, ThermalStageBounds,
+    PenaltiesDefaults, PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedPenalties,
+    SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_io::config::{
     Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -335,6 +341,309 @@ fn build_config() -> Config {
 #[must_use]
 pub fn discounted_anticipated_study() -> (cobre_core::System, Config) {
     (build_system(), build_config())
+}
+
+const MIXED_LEAD_N_STAGES: usize = 5;
+const MIXED_LEAD_BUS_ID: EntityId = EntityId(1);
+const MIXED_LEAD_HYDRO_ID: EntityId = EntityId(2);
+const MIXED_LEAD_SHORT_THERMAL_ID: EntityId = EntityId(10);
+const MIXED_LEAD_LONG_THERMAL_ID: EntityId = EntityId(20);
+const MIXED_LEAD_SHORT_LEAD: u32 = 1;
+const MIXED_LEAD_LONG_LEAD: u32 = 3;
+/// Actual calendar hours of 2025's Jan-May, one block per stage.
+const MIXED_LEAD_MONTH_HOURS: [f64; MIXED_LEAD_N_STAGES] = [744.0, 672.0, 744.0, 720.0, 744.0];
+
+fn mixed_lead_stage_date(index: usize) -> NaiveDate {
+    NaiveDate::from_ymd_opt(2025, 1 + index as u32, 1)
+        .expect("mixed_lead_anticipated_study: valid date")
+}
+
+// Rationale: the entity/bounds/penalties construction is one sequential
+// fixture; splitting it into helper fns would fragment the declared shape
+// across call sites with no reuse benefit.
+#[allow(clippy::too_many_lines)]
+fn build_mixed_lead_system(reversed: bool) -> cobre_core::System {
+    let bus = make_bus(
+        MIXED_LEAD_BUS_ID,
+        BusSpec {
+            name: "B1".to_string(),
+            operational_start_date: mixed_lead_stage_date(0),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        },
+    );
+
+    let hydro = make_hydro(
+        MIXED_LEAD_HYDRO_ID,
+        HydroSpec {
+            name: "H1".to_string(),
+            operational_start_date: mixed_lead_stage_date(0),
+            bus_id: MIXED_LEAD_BUS_ID,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            penalties: hydro_penalties(),
+            ..Default::default()
+        },
+    );
+
+    let thermal_short = make_thermal(
+        MIXED_LEAD_SHORT_THERMAL_ID,
+        ThermalSpec {
+            name: "T_short".to_string(),
+            operational_start_date: mixed_lead_stage_date(0),
+            bus_id: MIXED_LEAD_BUS_ID,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_per_mwh: 50.0,
+            anticipated_config: Some(AnticipatedConfig::LeadStages(MIXED_LEAD_SHORT_LEAD)),
+            ..Default::default()
+        },
+    );
+    let thermal_long = make_thermal(
+        MIXED_LEAD_LONG_THERMAL_ID,
+        ThermalSpec {
+            name: "T_long".to_string(),
+            operational_start_date: mixed_lead_stage_date(0),
+            bus_id: MIXED_LEAD_BUS_ID,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_per_mwh: 50.0,
+            anticipated_config: Some(AnticipatedConfig::LeadStages(MIXED_LEAD_LONG_LEAD)),
+            ..Default::default()
+        },
+    );
+
+    let stages: Vec<Stage> = (0..MIXED_LEAD_N_STAGES)
+        .map(|i| {
+            make_stage(
+                i,
+                StageSpec {
+                    start_date: mixed_lead_stage_date(i),
+                    end_date: mixed_lead_stage_date(i + 1),
+                    season_id: None,
+                    blocks: vec![Block {
+                        index: 0,
+                        name: "BLK0".to_string(),
+                        duration_hours: MIXED_LEAD_MONTH_HOURS[i],
+                    }],
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: true,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 1,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                },
+            )
+        })
+        .collect();
+
+    let inflow_models: Vec<InflowModel> = (0..MIXED_LEAD_N_STAGES)
+        .map(|i| InflowModel {
+            hydro_id: MIXED_LEAD_HYDRO_ID,
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 10.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+
+    let load_models: Vec<LoadModel> = (0..MIXED_LEAD_N_STAGES)
+        .map(|i| LoadModel {
+            bus_id: MIXED_LEAD_BUS_ID,
+            stage_id: i as i32,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        })
+        .collect();
+
+    let k_max = MIXED_LEAD_LONG_LEAD as usize;
+    let thermal_axis = MIXED_LEAD_N_STAGES + k_max;
+    let mut bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 1,
+            n_thermals: 2,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: MIXED_LEAD_N_STAGES,
+            k_max,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds {
+                max_turbined_m3s: 100.0,
+                max_generation_mw: 250.0,
+                ..Default::default()
+            },
+            thermal: ThermalStageBounds { cost_per_mwh: 50.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    // The padding region [n_stages, n_stages + k_max) is the delivery-stage
+    // axis `fill_anticipated_columns` reads; it must carry each thermal's own
+    // cost and capacity so its decision column's objective coefficient is
+    // non-zero, for both thermals regardless of their own (shallower) lead.
+    for thermal_idx in 0..2 {
+        for s in 0..thermal_axis {
+            *bounds.thermal_bounds_mut(thermal_idx, s) = ThermalStageBounds { cost_per_mwh: 50.0 };
+            *bounds.thermal_block_base_mut(thermal_idx, s) = ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            };
+        }
+    }
+
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 1,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages: MIXED_LEAD_N_STAGES,
+        },
+        &PenaltiesDefaults {
+            hydro: hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    // Each thermal's own pre-study commitment history, built the way
+    // `build_system` builds its single thermal's: one zero-MW window per
+    // pre-study stage its own lead decides.
+    let past_anticipated_commitments = [
+        (MIXED_LEAD_SHORT_THERMAL_ID, MIXED_LEAD_SHORT_LEAD),
+        (MIXED_LEAD_LONG_THERMAL_ID, MIXED_LEAD_LONG_LEAD),
+    ]
+    .into_iter()
+    .flat_map(|(thermal_id, lead)| {
+        (0..lead as usize).map(move |i| AnticipatedCommitmentHistory {
+            thermal_id,
+            start_date: mixed_lead_stage_date(i),
+            end_date: mixed_lead_stage_date(i + 1),
+            value_mw: 0.0,
+        })
+    })
+    .collect();
+
+    let initial_conditions = InitialConditions {
+        storage: vec![HydroStorage {
+            hydro_id: MIXED_LEAD_HYDRO_ID,
+            value_hm3: 100.0,
+        }],
+        filling_storage: vec![],
+        past_anticipated_commitments,
+        recent_observations: vec![],
+        past_defluences: vec![],
+    };
+
+    let policy_graph = HorizonGraph {
+        stage_discount_rate_overrides: std::collections::BTreeMap::new(),
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate: 0.06,
+        transitions: vec![],
+        nodes: Vec::new(),
+        season_map: None,
+    };
+
+    let mut buses = vec![bus];
+    let mut hydros = vec![hydro];
+    let mut thermals = vec![thermal_short, thermal_long];
+    if reversed {
+        buses.reverse();
+        hydros.reverse();
+        thermals.reverse();
+    }
+
+    SystemBuilder::new()
+        .buses(buses)
+        .hydros(hydros)
+        .thermals(thermals)
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .bounds(bounds)
+        .penalties(penalties)
+        .initial_conditions(initial_conditions)
+        .policy_graph(policy_graph)
+        .build()
+        .expect("mixed_lead_anticipated_study: valid system")
+}
+
+fn build_mixed_lead_config() -> Config {
+    Config {
+        schema: None,
+        modeling: ModelingConfig {
+            inflow_non_negativity: InflowNonNegativityConfig {
+                method: CfgInflowMethod::None,
+            },
+            cost_scale_factor: None,
+        },
+        training: TrainingConfig {
+            enabled: true,
+            tree_seed: Some(42),
+            stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
+            stopping_mode: cobre_io::config::StoppingMode::Any,
+            cut_selection: RowSelectionConfig::default(),
+            solver: TrainingSolverConfig::default(),
+            parallelism: cobre_io::config::ParallelismConfig::default(),
+            scenario_source: None,
+            selection: Some(TrainingSelection::Sampled { forward_passes: 1 }),
+        },
+        upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+        policy: PolicyConfig::default(),
+        simulation: IoSimulationConfig::default(),
+        exports: ExportsConfig::default(),
+        estimation: EstimationConfig::default(),
+    }
+}
+
+/// 5 monthly stages (2025-01 to 2025-05, one block each) discounted at 6%/yr,
+/// with two anticipated thermals of different lead depths (`LeadStages(1)`
+/// and `LeadStages(3)`) so the long lead's last two decisions target a
+/// post-study delivery: a mixed-lead combination no committed deck exercises.
+/// `reversed == true` reverses every entity vector before `SystemBuilder::build`.
+#[must_use]
+pub fn mixed_lead_anticipated_study(reversed: bool) -> (cobre_core::System, Config) {
+    (build_mixed_lead_system(reversed), build_mixed_lead_config())
 }
 
 const EVAP_N_STAGES: usize = 2;
@@ -845,6 +1154,12 @@ pub struct ChronologicalNoiseSpec {
     pub max_storage_hm3: f64,
     /// Stage scenario branching factor (root opening count).
     pub branching_factor: usize,
+    /// Adds one pumping station from hydro id 2 (canonical position 1) to
+    /// hydro id 1 (canonical position 0), exercising the chronological
+    /// pumping defect no committed deck combines.
+    pub pumping_station: bool,
+    /// Reverses every entity vector before `SystemBuilder::build`.
+    pub reverse_declaration_order: bool,
 }
 
 impl Default for ChronologicalNoiseSpec {
@@ -853,6 +1168,8 @@ impl Default for ChronologicalNoiseSpec {
             block_modes: [BlockMode::Chronological; 2],
             max_storage_hm3: 10_000.0,
             branching_factor: 1,
+            pumping_station: false,
+            reverse_declaration_order: false,
         }
     }
 }
@@ -898,7 +1215,7 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
         },
     );
 
-    let hydros = CHRONOLOGICAL_NOISE_HYDRO_IDS
+    let mut hydros: Vec<_> = CHRONOLOGICAL_NOISE_HYDRO_IDS
         .iter()
         .map(|&id| {
             make_hydro(
@@ -986,7 +1303,7 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
             n_hydros: CHRONOLOGICAL_NOISE_HYDRO_IDS.len(),
             n_thermals: 1,
             n_lines: 0,
-            n_pumping: 0,
+            n_pumping: usize::from(spec.pumping_station),
             n_contracts: 0,
             n_stages: CHRONOLOGICAL_NOISE_N_STAGES,
             k_max: 0,
@@ -1016,7 +1333,7 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
             },
             pumping_block: PumpingBlockBounds {
                 min_flow_m3s: 0.0,
-                max_flow_m3s: 0.0,
+                max_flow_m3s: 50.0,
             },
             contract_block: ContractBlockBounds {
                 min_mw: 0.0,
@@ -1058,21 +1375,51 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
         past_defluences: vec![],
     };
 
+    let mut buses = vec![bus];
+    let mut thermals = vec![make_thermal(
+        EntityId(20),
+        ThermalSpec {
+            name: "T".to_string(),
+            operational_start_date: start,
+            bus_id: EntityId(CHRONOLOGICAL_NOISE_BUS_ID),
+            cost_per_mwh: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 400.0,
+            anticipated_config: None,
+            ..Default::default()
+        },
+    )];
+    // Source position 1 (hydro id 2) != 0 exercises the known chronological
+    // pumping defect, whose `row_water + s_idx` resolves onto another
+    // hydro's block row.
+    let mut pumping_stations = if spec.pumping_station {
+        vec![PumpingStation {
+            id: EntityId(10),
+            name: "P1".to_string(),
+            operational_start_date: start,
+            bus_id: EntityId(CHRONOLOGICAL_NOISE_BUS_ID),
+            source_hydro_id: EntityId(CHRONOLOGICAL_NOISE_HYDRO_IDS[1]),
+            destination_hydro_id: EntityId(CHRONOLOGICAL_NOISE_HYDRO_IDS[0]),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            consumption_mw_per_m3s: 0.5,
+            min_flow_m3s: 0.0,
+            max_flow_m3s: 50.0,
+        }]
+    } else {
+        vec![]
+    };
+    if spec.reverse_declaration_order {
+        buses.reverse();
+        hydros.reverse();
+        thermals.reverse();
+        pumping_stations.reverse();
+    }
+
     SystemBuilder::new()
-        .buses(vec![bus])
-        .thermals(vec![make_thermal(
-            EntityId(20),
-            ThermalSpec {
-                name: "T".to_string(),
-                operational_start_date: start,
-                bus_id: EntityId(CHRONOLOGICAL_NOISE_BUS_ID),
-                cost_per_mwh: 100.0,
-                min_generation_mw: 0.0,
-                max_generation_mw: 400.0,
-                anticipated_config: None,
-                ..Default::default()
-            },
-        )])
+        .buses(buses)
+        .thermals(thermals)
+        .pumping_stations(pumping_stations)
         .hydros(hydros)
         .stages(stages)
         .inflow_models(inflow_models)

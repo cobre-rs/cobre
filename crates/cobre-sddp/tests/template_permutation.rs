@@ -7,10 +7,15 @@
 
 mod common;
 
+use cobre_sddp::StudySetup;
 use cobre_sddp::test_support::template_fact_groups;
 
+use common::build_setup_in_code;
 use common::decks::{SLOW_DECKS, committed_decks};
 use common::fresh_setup_with;
+use common::in_code_studies::{
+    ChronologicalNoiseSpec, chronological_noise_study, mixed_lead_anticipated_study,
+};
 use common::permute::permute_case;
 
 const SEED: u64 = 0x5EED_C0BE_5EED_C0BE;
@@ -50,6 +55,59 @@ fn every_deck_template_is_invariant_to_declaration_order() {
         mismatches
             .iter()
             .map(|(deck, group)| format!("  {deck}\t{group}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+fn mismatched_groups(base_setup: &StudySetup, reversed_setup: &StudySetup) -> Vec<String> {
+    let base = template_fact_groups(base_setup);
+    let reversed = template_fact_groups(reversed_setup);
+    assert!(
+        base.keys().eq(reversed.keys()),
+        "reversed fact-group key set differs from base (base={:?}, reversed={:?})",
+        base.keys().collect::<Vec<_>>(),
+        reversed.keys().collect::<Vec<_>>(),
+    );
+    base.iter()
+        .filter(|(group, base_bytes)| reversed.get(*group) != Some(*base_bytes))
+        .map(|(group, _)| (*group).to_string())
+        .collect()
+}
+
+#[test]
+fn every_in_code_study_template_is_invariant_to_declaration_order() {
+    let mut mismatches: Vec<(String, String)> = Vec::new();
+
+    let (system, config) = mixed_lead_anticipated_study(false);
+    let base_setup = build_setup_in_code(system, &config);
+    let (system, config) = mixed_lead_anticipated_study(true);
+    let reversed_setup = build_setup_in_code(system, &config);
+    for group in mismatched_groups(&base_setup, &reversed_setup) {
+        mismatches.push(("in-code/mixed-lead-anticipated".to_string(), group));
+    }
+
+    let (system, config) = chronological_noise_study(&ChronologicalNoiseSpec {
+        pumping_station: true,
+        ..ChronologicalNoiseSpec::default()
+    });
+    let base_setup = build_setup_in_code(system, &config);
+    let (system, config) = chronological_noise_study(&ChronologicalNoiseSpec {
+        pumping_station: true,
+        reverse_declaration_order: true,
+        ..ChronologicalNoiseSpec::default()
+    });
+    let reversed_setup = build_setup_in_code(system, &config);
+    for group in mismatched_groups(&base_setup, &reversed_setup) {
+        mismatches.push(("in-code/chronological-pumping".to_string(), group));
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "template facts differ under declaration-order reversal for (study, group) pairs:\n{}",
+        mismatches
+            .iter()
+            .map(|(study, group)| format!("  {study}\t{group}"))
             .collect::<Vec<_>>()
             .join("\n")
     );

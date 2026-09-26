@@ -29,7 +29,8 @@ use cobre_solver::{ActiveSolver, StageTemplate};
 
 use common::decks::{SLOW_DECKS, committed_decks};
 use common::in_code_studies::{
-    ChronologicalNoiseSpec, chronological_noise_study, stochastic_parallel_study,
+    ChronologicalNoiseSpec, chronological_noise_study, mixed_lead_anticipated_study,
+    stochastic_parallel_study,
 };
 use common::{build_setup_in_code, fresh_setup_with};
 
@@ -304,12 +305,14 @@ fn every_noise_dimension_patches_only_its_own_entity() {
     let slow_tests_enabled = cfg!(feature = "slow-tests");
     let mut violations: Vec<String> = Vec::new();
     let mut vacuity: BTreeMap<(&'static str, &'static str), usize> = BTreeMap::new();
+    let mut swept: Vec<String> = Vec::new();
 
     for deck in committed_decks() {
         if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
             continue;
         }
         let setup = fresh_setup_with(&deck.dir, |_| {});
+        swept.push(deck.key.clone());
         sweep_setup(&deck.key, &setup, &[], &mut violations, &mut vacuity);
     }
 
@@ -321,8 +324,10 @@ fn every_noise_dimension_patches_only_its_own_entity() {
         .collect();
     let stochastic_setup = build_setup_in_code(stochastic_system, &stochastic_config);
     let ncs_dense_col = ncs_dense_col_map(&system_ncs_ids, &stochastic_setup);
+    let label = "in-code/stochastic-parallel";
+    swept.push(label.to_string());
     sweep_setup(
-        "in-code/stochastic-parallel",
+        label,
         &stochastic_setup,
         &ncs_dense_col,
         &mut violations,
@@ -332,14 +337,40 @@ fn every_noise_dimension_patches_only_its_own_entity() {
     let (chronological_system, chronological_config) =
         chronological_noise_study(&ChronologicalNoiseSpec::default());
     let chronological_setup = build_setup_in_code(chronological_system, &chronological_config);
+    let label = "in-code/chronological-noise";
+    swept.push(label.to_string());
     sweep_setup(
-        "in-code/chronological-noise",
+        label,
         &chronological_setup,
         &[],
         &mut violations,
         &mut vacuity,
     );
 
+    let (mixed_lead_system, mixed_lead_config) = mixed_lead_anticipated_study(false);
+    let mixed_lead_setup = build_setup_in_code(mixed_lead_system, &mixed_lead_config);
+    let label = "in-code/mixed-lead-anticipated";
+    swept.push(label.to_string());
+    sweep_setup(label, &mixed_lead_setup, &[], &mut violations, &mut vacuity);
+
+    let (chronological_pumping_system, chronological_pumping_config) =
+        chronological_noise_study(&ChronologicalNoiseSpec {
+            pumping_station: true,
+            ..ChronologicalNoiseSpec::default()
+        });
+    let chronological_pumping_setup =
+        build_setup_in_code(chronological_pumping_system, &chronological_pumping_config);
+    let label = "in-code/chronological-pumping";
+    swept.push(label.to_string());
+    sweep_setup(
+        label,
+        &chronological_pumping_setup,
+        &[],
+        &mut violations,
+        &mut vacuity,
+    );
+
+    eprintln!("swept labels: {swept:?}");
     eprintln!("patch-ownership vacuity counts, (block_mode, family) -> nonvacuous triples:");
     for (&(mode, family), count) in &vacuity {
         eprintln!("  ({mode}, {family}): {count}");

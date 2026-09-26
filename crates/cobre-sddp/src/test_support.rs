@@ -1133,19 +1133,11 @@ pub struct CanonicalCutProbe {
     pub pinned_x_hat: Vec<f64>,
 }
 
-/// Drive the real read-back canonicalization and the real backward
-/// cut-intercept write for one opening.
-///
-/// The caller supplies a RAW producer-stage state (`raw_producer_state`,
-/// possibly outside the producer's admissible box); production does the
-/// clamping — [`assemble_outgoing_state`] canonicalizes it exactly as the
-/// forward/simulation read-back seam does. That canonical value is the single
-/// `x_hat` threaded into BOTH the pin ([`patch_backward_opening_for_probe`] →
-/// `StageSolvePrep::run` → `set_col_bounds`) and the intercept
-/// ([`write_opening_outcome`]), mirroring the backward opening loop. The state
-/// the LP was pinned at is recovered separately from the solved primal — an
-/// independent data path — so [`CanonicalCutProbe::pinned_x_hat`] cross-checks
-/// the pin against the cut instead of re-deriving the intercept's own formula.
+/// Canonicalize a RAW producer-stage state exactly as the forward/simulation
+/// read-back seam does (`raw_producer_state`, possibly outside the producer's
+/// admissible box; [`assemble_outgoing_state`] performs the clamp), then
+/// delegate to [`write_backward_opening_outcome_at_canonical_state_for_probe`]
+/// with the resulting canonical `x_hat`.
 ///
 /// # Panics
 ///
@@ -1155,10 +1147,6 @@ pub struct CanonicalCutProbe {
 /// # Errors
 ///
 /// Propagates [`SddpError`] from the stage solve.
-// Rationale (too_many_arguments): a test-only probe that threads the same
-// borrows the production backward opening loop passes individually (workspace,
-// contexts, pool, cut-state, stage/node ids, trial state, noise); grouping them
-// into a struct would diverge from the call shape it mirrors.
 #[allow(clippy::too_many_arguments)]
 pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
@@ -1224,10 +1212,59 @@ pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     );
     let canonical_x_hat = canonical_state[..layout.n_state].to_vec();
 
+    write_backward_opening_outcome_at_canonical_state_for_probe(
+        ws,
+        ctx,
+        training_ctx,
+        cut_pool,
+        cut_state,
+        stage,
+        node_id,
+        &canonical_x_hat,
+        raw_noise,
+    )
+}
+
+/// Drive the real read-back canonicalization and the real backward
+/// cut-intercept write for one opening at an already-canonical state `x̂`.
+///
+/// That canonical value is the single `x_hat` threaded into BOTH the pin
+/// ([`patch_backward_opening_for_probe`] → `StageSolvePrep::run` →
+/// `set_col_bounds`) and the intercept ([`write_opening_outcome`]), mirroring
+/// the backward opening loop. The state the LP was pinned at is recovered
+/// separately from the solved primal — an independent data path — so
+/// [`CanonicalCutProbe::pinned_x_hat`] cross-checks the pin against the cut
+/// instead of re-deriving the intercept's own formula.
+///
+/// # Panics
+///
+/// Panics if `canonical_x_hat.len() != StateSpace::n_state`.
+///
+/// # Errors
+///
+/// Propagates [`SddpError`] from the stage solve.
+pub fn write_backward_opening_outcome_at_canonical_state_for_probe<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    ctx: &StageContext<'_>,
+    training_ctx: &TrainingContext<'_>,
+    cut_pool: &CutPool,
+    cut_state: &CutStateProjection,
+    stage: StageIdx,
+    node_id: NodeId,
+    canonical_x_hat: &[f64],
+    raw_noise: &[f64],
+) -> Result<CanonicalCutProbe, SddpError> {
+    let layout = training_ctx.state;
+    assert_eq!(
+        canonical_x_hat.len(),
+        layout.n_state,
+        "canonical_x_hat must have one entry per state dimension"
+    );
+
     let template = ctx.template(stage);
     ws.solver.reset_solver_state();
     ws.solver.load_model(template);
-    patch_backward_opening_for_probe(ws, ctx, training_ctx, stage, &canonical_x_hat, raw_noise);
+    patch_backward_opening_for_probe(ws, ctx, training_ctx, stage, canonical_x_hat, raw_noise);
 
     let mut stats_before = SolverStatistics::default();
     ws.solver.statistics_into(&mut stats_before);
@@ -1269,14 +1306,14 @@ pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
         cut_state,
         0,
         objective,
-        &canonical_x_hat,
+        canonical_x_hat,
         &stats_before,
         &stats_after,
     );
 
     Ok(CanonicalCutProbe {
         outcome: ws.backward_accum.outcomes[0].clone(),
-        canonical_x_hat,
+        canonical_x_hat: canonical_x_hat.to_vec(),
         pinned_x_hat,
     })
 }

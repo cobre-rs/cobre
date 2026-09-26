@@ -27,27 +27,45 @@ the state layout (`StateSpace`) — rather than resolving raw input itself.
 
 ### 2. Update
 
-Patch the parts of a template that change between solves, without allocating:
-noise on right-hand sides (inflows, loads), the column bounds that pin the incoming
-state, and the cut rows appended to a solver instance. Which rows and columns a
-patch touches is decided at build time; the per-solve work only writes precomputed
-values into precomputed positions (`PatchBuffer`).
+Patch the parts of a template that change between solves, without allocating.
+Which rows and columns a patch touches is decided at build time; the per-solve work
+only writes precomputed values into precomputed positions (`PatchBuffer`). The
+per-solve edits are:
+
+- the column bounds that pin the incoming state (`fill_col_state_patches`);
+- the right-hand sides of the inflow-definition rows (`fill_z_inflow_patches`) and of
+  the load-balance rows (`fill_load_patches`);
+- the column bounds of stochastic non-controllable sources (`apply_ncs_col_bounds`);
+- the future-cost column θ, pinned to zero at the terminal stage;
+- the cut rows appended to, or toggled on, a solver instance (owned by the cut layer,
+  which reads the builder's row count, θ column and column scales).
+
+The objective is set at build time and is not part of the per-solve update.
 
 - **Must not:** allocate on the per-solve path, or decide at solve time which rows
   or columns to touch.
 
 ### 3. Address
 
-Give the algorithm fast access to the parts of each LP it reads or writes: to apply
-patches, to read the outgoing state, to read duals and reduced costs for cut
-coefficients, and to extract simulation output (`StageGeometry`, `StateSpace`,
-`CutStateProjection`). Each row or column family has one address formula, owned in
-one place, with its block stride taken from one source. Consumers call accessors
-instead of computing `start + offset` by hand. Per-solve consumers get contiguous
-ranges or precomputed index vectors.
+Give the algorithm fast access to the parts of each LP it reads or writes. Two kinds
+of consumer read the address facts, with different needs:
 
-- **Must not:** hold the same address fact in two structures, or let a consumer
-  compute an entity's row or column by hand.
+- **Per-solve training** (forward pass, backward pass, lower bound) reads the state
+  layout (`StateSpace`), the cut projections (`CutStateProjection`), each template's
+  row and column counts and scales, and the positions its patches write to. These
+  reads must be contiguous ranges or precomputed index vectors.
+- **Output decoding** (simulation extraction, policy export) reads the full per-stage
+  address map (`StageGeometry`) and its inverse, which classifies a row or column
+  back to its entity and block (`classify_incoming_column` for state columns).
+
+Each row or column family has one address formula, owned in one place, with its block
+stride taken from one source. Consumers call accessors instead of computing
+`start + offset` by hand. A materialized copy of an address is allowed only when it
+serves a named per-solve access pattern, is written from the single owner when the
+templates are built, and is never recomputed independently.
+
+- **Must not:** derive the same address fact in two places, or let a consumer compute
+  an entity's row or column by hand.
 
 ### 4. Keep the invariants the algorithm relies on
 
@@ -73,6 +91,19 @@ depends on. Their full statements, with the regression tests that pin them, are 
 - **Formulation contracts:** FPHA uses average storage, NCS availability is a
   dimensionless factor, and anticipated deliveries are discounted relative to their
   decision stage.
+- **Layout conventions the runtime relies on without re-deriving them:**
+  - state columns come first in every stage LP, and a state dimension's outgoing
+    column index equals its state index (`assemble_outgoing_state` copies the
+    leading block of the primal);
+  - the inflow-definition rows occupy the same range at every stage;
+  - a stage's base row count is fixed and cut rows are appended after it, the
+    boundary that basis reconstruction (`ReconstructionTarget`) and cut-dual
+    extraction read;
+  - a column scale has one meaning: state pins and reduced costs are divided by it,
+    and commitment columns are left unscaled;
+  - state boxes are built from physical bounds before column scaling is applied;
+  - θ is the same column at every stage, and its objective coefficient is the
+    stage's one-step discount factor.
 
 - **Must not:** change the code behind one of these without a test that fails when
   the invariant breaks. A byte-identical snapshot proves that a change moved nothing;

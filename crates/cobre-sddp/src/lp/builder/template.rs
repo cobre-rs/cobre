@@ -15,11 +15,7 @@ use crate::hydro_models::{EvaporationModelSet, ProductionModelSet, ResolvedProdu
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::resolved_parameters::ResolvedParameters;
-use crate::setup::resolve_post_study_artifacts;
-use crate::setup::template_postprocess::{
-    compute_cumulative_discount_factors, compute_per_stage_discount_factors,
-};
-use crate::time_value::TimeValue;
+use crate::time_value::{TimeValue, compute_cumulative_discount_factors};
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
@@ -1044,17 +1040,9 @@ fn build_template_build_ctx<'a>(
     // discount factors and stage hours from the ctx at LP build time (before
     // postprocess runs).
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let per_stage_discount =
-        compute_per_stage_discount_factors(&study_stages, system.policy_graph());
-    let cumulative_discount_factors = compute_cumulative_discount_factors(&per_stage_discount);
     let block_clocks: Vec<BlockClock<'_>> =
         study_stages.iter().map(|s| BlockClock::new(s)).collect();
 
-    debug_assert_eq!(
-        cumulative_discount_factors.len(),
-        study_stages.len(),
-        "cumulative_discount_factors length must equal n_study_stages"
-    );
     debug_assert_eq!(
         block_clocks.len(),
         study_stages.len(),
@@ -1070,71 +1058,18 @@ fn build_template_build_ctx<'a>(
         .map(|&idx| system.thermals()[idx.get()].id)
         .collect();
 
-    let post_study_resolved = resolve_post_study_artifacts(
-        system.post_study_stages(),
-        &anticipated_thermal_ids,
-        system.policy_graph(),
-        cumulative_discount_factors.last().copied().unwrap_or(1.0),
-        per_stage_discount.last().copied().unwrap_or(1.0),
-    );
-
     // Study-stage ids by study stage index: the decision gate keys its
     // operation-window clause on the DELIVERY stage's `stage.id`, mapping the
     // delivery index `t + K_i` to its id through this slice.
     let study_stage_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
 
-    // Concatenate rather than recompute: `resolve_post_study_artifacts` already
-    // establishes that the post-study half continues the study recurrence, so a
-    // second derivation would risk diverging from it.
-    let delivery_total_hours: Vec<f64> = block_clocks
-        .iter()
-        .map(|c| c.total_hours())
-        .chain(post_study_resolved.total_hours.iter().copied())
-        .collect();
-    let delivery_cumulative_discount_factors: Vec<f64> = cumulative_discount_factors
-        .iter()
-        .copied()
-        .chain(
-            post_study_resolved
-                .cumulative_discount_factors
-                .iter()
-                .copied(),
-        )
-        .collect();
-    // Synthetic continuation from `study_stage_ids.last()` (never
-    // `study_stages.len()` — the `s.id >= 0` filter breaks that relation), never
-    // `post_study_calendar_stages`'s own `Stage::id`: those restart at `0` and
-    // would make a post-study delivery compare as an early study stage.
-    let n_post = post_study_resolved.total_hours.len();
-    let next_delivery_id = study_stage_ids.last().map_or(0, |&last| last + 1);
-    let end_delivery_id =
-        next_delivery_id.saturating_add(i32::try_from(n_post).unwrap_or(i32::MAX));
-    let delivery_stage_ids: Vec<i32> = study_stage_ids
-        .iter()
-        .copied()
-        .chain(next_delivery_id..end_delivery_id)
-        .collect();
-
-    let n_delivery = study_stage_ids.len() + n_post;
-    debug_assert_eq!(
-        delivery_total_hours.len(),
-        n_delivery,
-        "delivery_total_hours length must equal n_study_stages + n_post"
-    );
-    debug_assert_eq!(
-        delivery_cumulative_discount_factors.len(),
-        n_delivery,
-        "delivery_cumulative_discount_factors length must equal n_study_stages + n_post"
-    );
-    debug_assert_eq!(
-        delivery_stage_ids.len(),
-        n_delivery,
-        "delivery_stage_ids length must equal n_study_stages + n_post"
-    );
-    debug_assert!(
-        delivery_stage_ids.windows(2).all(|w| w[0] < w[1]),
-        "delivery_stage_ids must be strictly increasing — commissioning_active's \
-         monotonicity depends on it"
+    let study_total_hours: Vec<f64> = block_clocks.iter().map(|c| c.total_hours()).collect();
+    let time_value = TimeValue::resolve(
+        &study_stages,
+        &study_total_hours,
+        system.post_study_stages(),
+        &anticipated_thermal_ids,
+        system.policy_graph(),
     );
 
     let stage_resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
@@ -1193,16 +1128,13 @@ fn build_template_build_ctx<'a>(
         anticipated_windows,
         anticipated_resolution,
         study_stage_ids,
-        delivery_stage_ids,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
-        time_value: TimeValue::new(delivery_cumulative_discount_factors),
-        delivery_total_hours,
+        time_value,
         filling_v_target,
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
         per_stage_mask,
-        post_study_resolved,
     };
 
     (ctx, load_bus_indices, diversion_upstream_output)

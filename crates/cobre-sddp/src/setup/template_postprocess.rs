@@ -1,58 +1,15 @@
 //! Template post-processing: discount factors and LP scaling.
 
-use cobre_core::{EntityId, HorizonGraph, Stage, System};
+use cobre_core::{EntityId, System};
 
+use crate::block_clock::BlockClock;
 use crate::lp::builder::{self, StageTemplates};
 use crate::lp::indexer::StateSpace;
 use crate::scaling_report::{
     LpDimensions, ScalingReport, StageScalingReport, build_scaling_report,
     compute_coefficient_range, summarize_scale_factors,
 };
-
-/// Compute per-stage one-step discount factors from study stages and a policy graph.
-///
-/// `discount_factors[t] = 1 / (1 + r_t)^(Dt / 365.25)` where `r_t` is the annual
-/// discount rate for stage `t` (`HorizonGraph::stage_discount_rate_overrides` keyed
-/// by `Stage::id`, else the global `annual_discount_rate`) and `Dt` is the stage
-/// duration in days. When `rate == 0.0`, the factor is `1.0` (no discounting).
-pub(crate) fn compute_per_stage_discount_factors(
-    study_stages: &[&Stage],
-    pg: &HorizonGraph,
-) -> Vec<f64> {
-    study_stages
-        .iter()
-        .map(|stage| {
-            let rate = pg
-                .stage_discount_rate_overrides
-                .get(&stage.id)
-                .copied()
-                .unwrap_or(pg.annual_discount_rate);
-            if rate == 0.0 {
-                1.0
-            } else {
-                let dt_days = f64::from(
-                    i32::try_from((stage.end_date - stage.start_date).num_days())
-                        .unwrap_or(i32::MAX),
-                );
-                1.0 / (1.0 + rate).powf(dt_days / 365.25)
-            }
-        })
-        .collect()
-}
-
-/// Compute cumulative discount factors from per-stage one-step factors.
-///
-/// Length is `per_stage.len()` exactly: the strict anticipated-decision predicate
-/// (`stage_idx + K_i < n_stages`) keeps every delivery lookup within
-/// `[0, n_stages)`, so no boundary-stage entry is needed.
-pub(crate) fn compute_cumulative_discount_factors(per_stage: &[f64]) -> Vec<f64> {
-    let n = per_stage.len();
-    let mut cumulative = vec![1.0; n];
-    for t in 1..n {
-        cumulative[t] = cumulative[t - 1] * per_stage[t - 1];
-    }
-    cumulative
-}
+use crate::time_value::TimeValue;
 
 /// Apply discount factors and LP scaling to stage templates.
 ///
@@ -65,12 +22,41 @@ pub(crate) fn postprocess_templates(
 ) -> ScalingReport {
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
+    // Commitment-hold resolution context the box builder's one hand-written
+    // special case needs — resolved once here and threaded
+    // through every stage's `build_state_box` call, mirroring the same
+    // `TimeValue::resolve` inputs `build_stage_templates` uses. Runs
+    // BEFORE column scaling below: the storage/transit-bucket identity families
+    // read `template.col_lower`/`col_upper` verbatim, which must still be the
+    // PHYSICAL bounds `apply_col_scale` has not yet divided in place — the same
+    // physical units as the unscaled trial state (`fill_unscaled` in
+    // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
+    let bounds = system.bounds();
+    let mut anticipated_thermal_indices: Vec<usize> = Vec::new();
+    let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
+    let mut anticipated_thermal_ids: Vec<EntityId> = Vec::new();
+    for (t_idx, thermal) in system.thermals().iter().enumerate() {
+        if thermal.anticipated_config.is_some() {
+            anticipated_thermal_indices.push(t_idx);
+            anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
+            anticipated_thermal_ids.push(thermal.id);
+        }
+    }
+
+    let study_total_hours: Vec<f64> = study_stages
+        .iter()
+        .map(|s| BlockClock::new(s).total_hours())
+        .collect();
+    let time_value = TimeValue::resolve(
+        &study_stages,
+        &study_total_hours,
+        system.post_study_stages(),
+        &anticipated_thermal_ids,
+        system.policy_graph(),
+    );
     // The setter derives cumulative factors in the same call, so the two slices
     // cannot drift.
-    stage_templates.set_discount_factors(compute_per_stage_discount_factors(
-        &study_stages,
-        system.policy_graph(),
-    ));
+    stage_templates.set_discount_factors(time_value.discount_factors().to_vec());
 
     debug_assert_eq!(
         stage_templates.cumulative_discount_factors().len(),
@@ -103,54 +89,6 @@ pub(crate) fn postprocess_templates(
         }
     }
 
-    // Commitment-hold resolution context the box builder's one hand-written
-    // special case needs — resolved once here and threaded
-    // through every stage's `build_state_box` call, mirroring the same
-    // `resolve_post_study_artifacts` inputs `build_stage_templates` uses. Runs
-    // BEFORE column scaling below: the storage/transit-bucket identity families
-    // read `template.col_lower`/`col_upper` verbatim, which must still be the
-    // PHYSICAL bounds `apply_col_scale` has not yet divided in place — the same
-    // physical units as the unscaled trial state (`fill_unscaled` in
-    // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
-    let bounds = system.bounds();
-    let mut anticipated_thermal_indices: Vec<usize> = Vec::new();
-    let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
-    let mut anticipated_thermal_ids: Vec<EntityId> = Vec::new();
-    for (t_idx, thermal) in system.thermals().iter().enumerate() {
-        if thermal.anticipated_config.is_some() {
-            anticipated_thermal_indices.push(t_idx);
-            anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
-            anticipated_thermal_ids.push(thermal.id);
-        }
-    }
-    let last_real_cumulative = stage_templates
-        .cumulative_discount_factors()
-        .last()
-        .copied()
-        .unwrap_or(1.0);
-    let last_real_per_stage = stage_templates
-        .discount_factors()
-        .last()
-        .copied()
-        .unwrap_or(1.0);
-    let post_study_resolved = super::resolve_post_study_artifacts(
-        system.post_study_stages(),
-        &anticipated_thermal_ids,
-        system.policy_graph(),
-        last_real_cumulative,
-        last_real_per_stage,
-    );
-    let study_stage_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
-    let n_post = post_study_resolved.total_hours.len();
-    let next_delivery_id = study_stage_ids.last().map_or(0, |&last| last + 1);
-    let end_delivery_id =
-        next_delivery_id.saturating_add(i32::try_from(n_post).unwrap_or(i32::MAX));
-    let delivery_stage_ids: Vec<i32> = study_stage_ids
-        .iter()
-        .copied()
-        .chain(next_delivery_id..end_delivery_id)
-        .collect();
-
     for stage_idx in 0..stage_templates.templates.len() {
         let state_box = builder::build_state_box(
             &stage_templates.templates[stage_idx],
@@ -159,8 +97,8 @@ pub(crate) fn postprocess_templates(
             bounds,
             &anticipated_thermal_indices,
             &anticipated_windows,
-            &delivery_stage_ids,
-            &post_study_resolved,
+            time_value.delivery_stage_ids(),
+            time_value.post_study(),
         );
         stage_templates.state_boxes.push(state_box);
     }
@@ -214,21 +152,16 @@ pub(crate) fn postprocess_templates(
     clippy::float_cmp
 )]
 mod tests {
-    use super::{
-        compute_cumulative_discount_factors, compute_per_stage_discount_factors,
-        postprocess_templates,
-    };
+    use super::postprocess_templates;
     use crate::lp::builder::{StageGeometry, StageTemplates};
     use crate::lp::indexer::StateSpace;
     use crate::test_support::state_layout_full;
     use chrono::NaiveDate;
     use cobre_core::temporal::{
-        BlockMode, NoiseMethod, PolicyGraphType, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig,
+        BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
     };
-    use cobre_core::{HorizonGraph, ResolvedBounds, SystemBuilder};
+    use cobre_core::{ResolvedBounds, SystemBuilder};
     use cobre_solver::StageTemplate;
-    use std::collections::BTreeMap;
 
     fn one_year_stage(id: i32) -> Stage {
         Stage {
@@ -248,100 +181,6 @@ mod tests {
                 branching_factor: 1,
                 noise_method: NoiseMethod::Saa,
             },
-        }
-    }
-
-    /// A `stages[].annual_discount_rate_override` (carried on
-    /// `HorizonGraph::stage_discount_rate_overrides`) sets that stage's rate,
-    /// overriding the global `annual_discount_rate` (B2).
-    #[test]
-    fn stage_discount_override_is_read_off_the_stage() {
-        let stage = one_year_stage(0);
-        let days = f64::from((stage.end_date - stage.start_date).num_days() as i32);
-        let mut overrides = BTreeMap::new();
-        overrides.insert(0, 0.10);
-        let pg = HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.06,
-            transitions: vec![],
-            nodes: vec![],
-            stage_discount_rate_overrides: overrides,
-            season_map: None,
-        };
-
-        let factors = compute_per_stage_discount_factors(&[&stage], &pg);
-        let expected = 1.0 / (1.0_f64 + 0.10).powf(days / 365.25);
-        assert!(
-            (factors[0] - expected).abs() < 1e-12,
-            "stage override 0.10 must set the rate, got {}",
-            factors[0]
-        );
-        let global = 1.0 / (1.0_f64 + 0.06).powf(days / 365.25);
-        assert!(
-            (factors[0] - global).abs() > 1e-6,
-            "override must differ from the global-rate factor"
-        );
-    }
-
-    /// A stage with no override falls back to the global `annual_discount_rate`.
-    #[test]
-    fn stage_without_override_uses_global_rate() {
-        let stage = one_year_stage(0);
-        let days = f64::from((stage.end_date - stage.start_date).num_days() as i32);
-        let pg = HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.06,
-            transitions: vec![],
-            nodes: vec![],
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        };
-
-        let factors = compute_per_stage_discount_factors(&[&stage], &pg);
-        let expected = 1.0 / (1.0_f64 + 0.06).powf(days / 365.25);
-        assert!(
-            (factors[0] - expected).abs() < 1e-12,
-            "absent override must fall back to the global rate, got {}",
-            factors[0]
-        );
-    }
-
-    #[test]
-    fn cumulative_discount_factors_length_matches_n_stages() {
-        let n_stages = 4_usize;
-        let per_stage = vec![0.95_f64; n_stages];
-        let cumulative = compute_cumulative_discount_factors(&per_stage);
-
-        assert_eq!(
-            cumulative.len(),
-            n_stages,
-            "cumulative_discount_factors length must equal n_stages = {n_stages}"
-        );
-
-        assert_eq!(cumulative[0], 1.0, "cumulative[0] == 1.0 (present value)");
-        assert_eq!(
-            cumulative[1], 0.95,
-            "cumulative[1] == 0.95 = 1.0 * per_stage[0]"
-        );
-        // Approximate: repeated multiplication may differ from powi(3) by a ULP
-        // (floating-point associativity).
-        assert!(
-            (cumulative[n_stages - 1] - 0.95_f64.powi(3)).abs() < 1e-15,
-            "cumulative[n_stages-1] must be within 1e-15 of 0.95^(n_stages-1) (got {})",
-            cumulative[n_stages - 1]
-        );
-    }
-
-    #[test]
-    fn cumulative_discount_factors_all_ones_when_rate_zero() {
-        let per_stage = vec![1.0_f64; 3];
-        let cumulative = compute_cumulative_discount_factors(&per_stage);
-        assert_eq!(cumulative.len(), 3);
-        for (i, &v) in cumulative.iter().enumerate() {
-            assert_eq!(
-                v, 1.0,
-                "cumulative[{i}] must be 1.0 when per-stage factor is 1.0"
-            );
         }
     }
 

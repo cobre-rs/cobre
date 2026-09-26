@@ -22,7 +22,6 @@ use crate::indexer::{
     is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
-use crate::setup::PostStudyResolved;
 use crate::time_value::TimeValue;
 
 use super::delivery_ring::for_each_ring_residue;
@@ -134,31 +133,20 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) anticipated_resolution: AnticipatedResolution,
     /// `study_stage_ids[t] = stage.id`, length `n_study_stages`.
     // Rationale: read only by the study-only-axis regression assertions in
-    // `template::tests` (`ctx.delivery_stage_ids == ctx.study_stage_ids`);
-    // the decision gate's window clause reads `delivery_stage_ids` in
-    // production.
+    // `template::tests` (`ctx.time_value.delivery_stage_ids() ==
+    // ctx.study_stage_ids`); the decision gate's window clause reads
+    // `ctx.time_value.delivery_stage_ids()` in production.
     #[allow(dead_code)]
     pub(crate) study_stage_ids: Vec<i32>,
-    /// `study_stage_ids` continued past the horizon by a synthetic id sequence
-    /// (`max(study_stage_ids) + 1 ..`), length `n_study_stages + n_post`; indexed
-    /// by DELIVERY stage, not study stage. Never `post_study_calendar_stages`'s
-    /// own `Stage::id` — those restart at `0` and would collide with a real
-    /// study id. The decision gate's window clause keys on this slice, mapping
-    /// delivery index `t + K_i` through `id(t + K_i)`.
-    pub(crate) delivery_stage_ids: Vec<i32>,
     /// Whether any penalty method is active.
     pub(crate) has_penalty: bool,
-    /// Present-value discounting at each DELIVERY stage, length
-    /// `n_study_stages + n_post` — the study's own per-stage factors
-    /// concatenated with `post_study_resolved.cumulative_discount_factors`, the
-    /// first entry exactly `1.0`. The strict predicate `stage_idx + K_i <
-    /// n_stages` keeps every delivery lookup in range.
+    /// Present-value discounting and delivery hours/ids at each DELIVERY
+    /// stage, length `n_study_stages + n_post` — the study's own per-stage
+    /// values concatenated with the post-study continuation
+    /// ([`TimeValue::resolve`]), the first cumulative-discount entry exactly
+    /// `1.0`. The strict predicate `stage_idx + K_i < n_stages` keeps every
+    /// delivery lookup in range.
     pub(crate) time_value: TimeValue,
-    /// Σ `block.duration_hours` per DELIVERY stage, length
-    /// `n_study_stages + n_post` — the study's own per-stage hours
-    /// concatenated with `post_study_resolved.total_hours` (same in-range
-    /// guarantee as [`Self::time_value`]).
-    pub(crate) delivery_total_hours: Vec<f64>,
     /// Per-stage minimum target-storage trajectory, keyed `(hydro_idx, stage_id)
     /// → V_target` \[hm³\]. Computed once by a backward fold from the dead volume
     /// because the fold needs the full per-stage ζ·rate schedule across a hydro's
@@ -196,15 +184,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// Gates which bucket-definition rows [`StageLayout::new`] emits; see
     /// [`crate::setup::bucket_topology::TransitBucketTopology::per_stage_mask`].
     pub(crate) per_stage_mask: Vec<Vec<usize>>,
-    /// Resolved post-study boundary artifacts
-    /// ([`crate::setup::resolve_post_study_artifacts`]) — the fuel cost/bounds
-    /// and discount continuation [`super::columns::fill_anticipated_columns`]
-    /// books onto a post-horizon delivery's decision column via
-    /// `anticipated_bound`. The sole owner, computed once per template build
-    /// from this function's `system` parameter (see
-    /// [`super::template::build_template_build_ctx`]); `PostStudyResolved::default()`
-    /// (empty) without a declared post-horizon commitment.
-    pub(crate) post_study_resolved: PostStudyResolved,
 }
 
 /// Column/row offsets for one stage's in-study anticipated-ring layout
@@ -1434,7 +1413,7 @@ impl<'a> StageLayout<'a> {
                 n_stages,
                 stage_idx,
                 &ctx.anticipated_windows,
-                &ctx.delivery_stage_ids,
+                ctx.time_value.delivery_stage_ids(),
             );
         let row_anticipated_state_out_def_start = row.alloc(n_anticipated_state_out_def_rows).start;
 

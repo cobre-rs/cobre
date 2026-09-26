@@ -35,10 +35,9 @@ use crate::lp::indexer::{
     StudyDimensions,
 };
 use crate::resolved_parameters::ResolvedParameters;
-use crate::setup::PostStudyResolved;
 use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 use crate::test_support;
-use crate::time_value::TimeValue;
+use crate::time_value::{PostStudyResolved, TimeValue};
 
 // -------------------------------------------------------------------------
 // HydroReverseLookup per-stage membership
@@ -7678,16 +7677,19 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         anticipated_windows: vec![],
         anticipated_resolution: AnticipatedResolution::default(),
         study_stage_ids: Vec::new(),
-        delivery_stage_ids: Vec::new(),
         has_penalty: false,
-        time_value: TimeValue::new(vec![1.0]),
-        delivery_total_hours: vec![730.0],
+        time_value: TimeValue::from_parts(
+            vec![],
+            vec![1.0],
+            vec![730.0],
+            vec![0],
+            PostStudyResolved::default(),
+        ),
         filling_v_target: BTreeMap::new(),
         arc_stage_weights: HashMap::new(),
         arc_spread_chrono: HashMap::new(),
         arc_arrival_density: HashMap::new(),
         per_stage_mask: Vec::new(),
-        post_study_resolved: PostStudyResolved::default(),
     };
 
     let state = test_support::state_layout(0, 0);

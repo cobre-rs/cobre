@@ -2249,8 +2249,7 @@ mod zero_cost_tests {
     use crate::indexer::{BlockIdx, HydroCellIndex, ThermalSys};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
     use crate::resolved_parameters::ResolvedParameters;
-    use crate::setup::PostStudyResolved;
-    use crate::time_value::TimeValue;
+    use crate::time_value::{PostStudyResolved, TimeValue};
 
     use super::super::columns::{ColumnBufs, fill_stage_columns, fill_thermal_columns};
     use super::super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
@@ -2406,7 +2405,6 @@ mod zero_cost_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals,
                 n_lines: 0,
@@ -2425,14 +2423,17 @@ mod zero_cost_tests {
                 anticipated_windows: vec![(None, None); n_anticipated],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0)).collect(),
-                delivery_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0))
-                    .collect(),
                 has_penalty: false,
                 // Sized to cover every active plant's delivery stage
                 // (`stage_idx + K_i < n_stages`); `fill_anticipated_columns`
                 // indexes these by delivery stage when pricing the decision column.
-                time_value: TimeValue::new(vec![1.0; self.bounds.n_stages() + k_max]),
-                delivery_total_hours: vec![744.0; self.bounds.n_stages() + k_max],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; self.bounds.n_stages() + k_max],
+                    vec![744.0; self.bounds.n_stages() + k_max],
+                    (0..i32::try_from(self.bounds.n_stages() + k_max).unwrap_or(0)).collect(),
+                    PostStudyResolved::default(),
+                ),
                 // No hydros ⇒ no filling targets.
                 filling_v_target: BTreeMap::new(),
             }
@@ -3294,7 +3295,13 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 0);
         let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 0);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
-        ctx.delivery_stage_ids = (0..11).collect();
+        ctx.time_value = TimeValue::from_parts(
+            vec![],
+            vec![1.0; 11],
+            vec![744.0; 11],
+            (0..11).collect(),
+            PostStudyResolved::default(),
+        );
         let stage = two_block_stage(0, [372.0, 372.0]);
         let state = state_layout_with_resolution(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3338,7 +3345,13 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 0);
         let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 0);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
-        ctx.delivery_stage_ids = (0..11).collect();
+        ctx.time_value = TimeValue::from_parts(
+            vec![],
+            vec![1.0; 11],
+            vec![744.0; 11],
+            (0..11).collect(),
+            PostStudyResolved::default(),
+        );
         let stage = two_block_stage(0, [372.0, 372.0]);
         let state = state_layout_with_resolution(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -3378,7 +3391,13 @@ mod zero_cost_tests {
         fixtures.bounds = AntFixtures::bounds_with_n_stages(4, 4, 1);
         let mut ctx = fixtures.make_ctx(1, 4, vec![4], vec![0], 1);
         ctx.anticipated_resolution = plant0_excised_window_g3_resolution();
-        ctx.delivery_stage_ids = (0..11).collect();
+        ctx.time_value = TimeValue::from_parts(
+            vec![],
+            vec![1.0; 11],
+            vec![744.0; 11],
+            (0..11).collect(),
+            PostStudyResolved::default(),
+        );
         let stage = two_block_stage(2, [372.0, 372.0]);
         let state = state_layout_with_resolution(&ctx);
         let layout = StageLayout::new(&ctx, &state, &stage, 2);
@@ -3530,9 +3549,8 @@ mod pumping_water_tests {
     };
     use crate::lead_time::{AnticipatedResolution, SpreadResolution, resolve_spread};
     use crate::resolved_parameters::ResolvedParameters;
-    use crate::setup::PostStudyResolved;
     use crate::test_support::make_unit_group;
-    use crate::time_value::TimeValue;
+    use crate::time_value::{PostStudyResolved, TimeValue};
 
     use super::super::columns::{ColumnBufs, fill_pumping_columns, fill_stage_columns};
     use super::super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
@@ -4188,7 +4206,6 @@ mod pumping_water_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: PostStudyResolved::default(),
                 n_hydros: self.hydros.len(),
                 n_thermals: self.thermals.len(),
                 n_lines: self.lines.len(),
@@ -4201,10 +4218,14 @@ mod pumping_water_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; N_STAGES]),
-                delivery_total_hours: vec![744.0; N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![744.0; N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    PostStudyResolved::default(),
+                ),
                 // These single-stage fixtures decouple `stage.id` from
                 // `stage_idx` (every phase is exercised at `stage_idx = 0` against
                 // one bounds row), so the filling window's stage ids all resolve to

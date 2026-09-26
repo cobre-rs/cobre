@@ -2288,7 +2288,7 @@ base is safe here only because a load-time rule rejects a `block_id` bound row
 on an anticipated thermal — see `cobre-io`'s
 `check_block_id_on_anticipated_thermal`),
 `thermal_bounds(thermal_idx, delivery_stage).cost_per_mwh` for its cost,
-`delivery_total_hours[delivery_stage]` for its hours,
+`TimeValue::delivery_total_hours(delivery_stage)` for its hours,
 `TimeValue::relative_delivery_discount(stage_idx, delivery_stage)` (the delivery
 stage's cumulative discount over the decision stage's, `D(m)/D(t)`, one
 division) for its discount, so the objective `cost * hours * D(m)/D(t)` is in

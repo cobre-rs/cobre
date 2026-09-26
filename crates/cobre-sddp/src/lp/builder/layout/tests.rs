@@ -27,9 +27,8 @@ use crate::indexer::{
 };
 use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 use crate::resolved_parameters::ResolvedParameters;
-use crate::setup::PostStudyResolved;
 use crate::test_support::{make_unit_group, state_layout};
-use crate::time_value::TimeValue;
+use crate::time_value::{PostStudyResolved, TimeValue};
 
 use super::super::test_support::{state_layout_for, zero_hydro_penalties};
 use super::{
@@ -224,7 +223,6 @@ impl ZeroEntityFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 0,
             n_thermals: 0,
             n_lines: 0,
@@ -242,7 +240,6 @@ impl ZeroEntityFixtures {
             anticipated_windows: vec![(None, None); n_anticipated],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0)).collect(),
-            delivery_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0)).collect(),
             anticipated_thermal_indices: anticipated_thermal_indices
                 .into_iter()
                 .map(ThermalSys::new)
@@ -250,8 +247,13 @@ impl ZeroEntityFixtures {
             has_penalty: false,
             // Tests that use ZeroEntityFixtures don't exercise discount
             // factors; provide n_stages = 1 element vecs that won't panic.
-            time_value: TimeValue::new(vec![1.0]),
-            delivery_total_hours: vec![744.0],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -712,7 +714,6 @@ impl UsefulVolumeFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 0,
             n_thermals: 0,
             n_lines: 0,
@@ -725,10 +726,14 @@ impl UsefulVolumeFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
-            delivery_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0; n_stages]),
-            delivery_total_hours: vec![744.0; n_stages],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0; n_stages],
+                vec![744.0; n_stages],
+                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -1138,7 +1143,6 @@ impl TwoHydroFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 2,
             n_thermals: 0,
             n_lines: 0,
@@ -1151,10 +1155,14 @@ impl TwoHydroFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
-            delivery_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0]),
-            delivery_total_hours: vec![744.0],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -1449,7 +1457,6 @@ impl FphaMixFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 3,
             n_thermals: 0,
             n_lines: 0,
@@ -1462,10 +1469,14 @@ impl FphaMixFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
-            delivery_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0]),
-            delivery_total_hours: vec![744.0],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -1627,7 +1638,6 @@ impl FillingMembershipFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 2,
             n_thermals: 0,
             n_lines: 0,
@@ -1640,10 +1650,14 @@ impl FillingMembershipFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
-            delivery_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0]),
-            delivery_total_hours: vec![744.0],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -2747,7 +2761,6 @@ impl AntFixturesWithNStages {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 0,
             n_thermals: 0,
             n_lines: 0,
@@ -2766,10 +2779,14 @@ impl AntFixturesWithNStages {
             anticipated_windows: vec![(None, None); n_anticipated],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
-            delivery_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0; n_stages]),
-            delivery_total_hours: vec![744.0; n_stages],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0; n_stages],
+                vec![744.0; n_stages],
+                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -3008,7 +3025,6 @@ impl PumpingFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 0,
             n_thermals: 0,
             n_lines: 0,
@@ -3021,10 +3037,14 @@ impl PumpingFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
-            delivery_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0; n_stages]),
-            delivery_total_hours: vec![744.0; n_stages],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0; n_stages],
+                vec![744.0; n_stages],
+                (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -3742,7 +3762,6 @@ impl TwoHydroMultiBusFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 2,
             n_thermals: 0,
             n_lines: 0,
@@ -3755,10 +3774,14 @@ impl TwoHydroMultiBusFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
-            delivery_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0]),
-            delivery_total_hours: vec![744.0],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }
@@ -3991,7 +4014,6 @@ impl FphaMultiBusFixtures {
             arc_spread_chrono: HashMap::new(),
             arc_arrival_density: HashMap::new(),
             per_stage_mask: Vec::new(),
-            post_study_resolved: PostStudyResolved::default(),
             n_hydros: 3,
             n_thermals: 0,
             n_lines: 0,
@@ -4004,10 +4026,14 @@ impl FphaMultiBusFixtures {
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
             study_stage_ids: vec![],
-            delivery_stage_ids: vec![],
             has_penalty: false,
-            time_value: TimeValue::new(vec![1.0]),
-            delivery_total_hours: vec![744.0],
+            time_value: TimeValue::from_parts(
+                vec![],
+                vec![1.0],
+                vec![744.0],
+                vec![0],
+                PostStudyResolved::default(),
+            ),
             filling_v_target: BTreeMap::new(),
         }
     }

@@ -562,11 +562,11 @@ pub(super) fn fill_thermal_columns(
 /// decision stage `stage_idx`, never `stage_idx + constant` — split on
 /// `delivery_stage < n_stages`. In study, `thermal_block_base` supplies
 /// `[min, max]` and `thermal_bounds` supplies `cost_per_mwh`. Post study,
-/// `ctx.post_study_resolved.anticipated_bound` supplies `(cost, min_mw,
+/// `ctx.time_value.post_study().anticipated_bound` supplies `(cost, min_mw,
 /// max_mw)` from the post-study table ALONE — no intersection with a second
 /// declaration, since `post_study_stages.json` is the sole post-horizon bound
 /// surface. Both branches read delivery hours from the EXTENDED
-/// `ctx.delivery_total_hours` vector, price via
+/// `ctx.time_value.delivery_total_hours` vector, price via
 /// `ctx.time_value.relative_delivery_discount(stage_idx, delivery_stage)`, and
 /// bound the ring slot [`for_each_ring_residue`] resolves for the decision's
 /// own delivery target (`ring_index(delivery_stage) mod k_max`). A missing
@@ -626,7 +626,7 @@ pub(super) fn fill_anticipated_columns(
             delivery_stage,
             n_delivery,
             &ctx.anticipated_windows,
-            &ctx.delivery_stage_ids,
+            ctx.time_value.delivery_stage_ids(),
         ) {
             active_count += 1;
             bufs.col_lower[state_out_col] = f64::NEG_INFINITY;
@@ -648,7 +648,8 @@ pub(super) fn fill_anticipated_columns(
                     .cost_per_mwh;
                 Some((cap.min_generation_mw, cap.max_generation_mw, cost))
             } else {
-                ctx.post_study_resolved
+                ctx.time_value
+                    .post_study()
                     .anticipated_bound(AnticipatedLocal::new(res.plant), delivery_stage - n_stages)
                     .map(|(cost, min_mw, max_mw)| (min_mw, max_mw, cost))
             };
@@ -657,7 +658,7 @@ pub(super) fn fill_anticipated_columns(
                 bufs.col_lower[decision_col] = min_mw;
                 bufs.col_upper[decision_col] = max_mw;
 
-                let delivery_hours = ctx.delivery_total_hours[delivery_stage];
+                let delivery_hours = ctx.time_value.delivery_total_hours(delivery_stage);
                 bufs.objective[decision_col] = cost
                     * delivery_hours
                     * ctx
@@ -1600,7 +1601,6 @@ mod interior_storage_bound_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 1,
                 n_thermals: 0,
                 n_lines: 0,
@@ -1613,10 +1613,14 @@ mod interior_storage_bound_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0]),
-                delivery_total_hours: vec![744.0],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -2104,7 +2108,6 @@ mod diversion_bound_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 1,
                 n_thermals: 0,
                 n_lines: 0,
@@ -2117,10 +2120,14 @@ mod diversion_bound_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0]),
-                delivery_total_hours: vec![744.0],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -2535,7 +2542,6 @@ mod filling_phase_gating_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 1,
                 n_thermals: 0,
                 n_lines: 0,
@@ -2548,10 +2554,14 @@ mod filling_phase_gating_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0]),
-                delivery_total_hours: vec![744.0],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -3414,8 +3424,7 @@ mod anticipated_objective_tests {
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
     use crate::resolved_parameters::ResolvedParameters;
-    use crate::setup::PostStudyResolved;
-    use crate::time_value::TimeValue;
+    use crate::time_value::{PostStudyResolved, TimeValue, resolve_post_study_artifacts};
 
     use super::super::layout::ResolvedTables;
     use super::super::test_support::{
@@ -3550,7 +3559,6 @@ mod anticipated_objective_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals: 2,
                 n_lines: 0,
@@ -3566,10 +3574,14 @@ mod anticipated_objective_tests {
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
-                delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0, 0.9, 0.81, 0.729, 0.6561, 0.59049]),
-                delivery_total_hours: vec![744.0; N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0, 0.9, 0.81, 0.729, 0.6561, 0.59049],
+                    vec![744.0; N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -3662,7 +3674,7 @@ mod anticipated_objective_tests {
         // units: cost_per_mwh(delivery) * total_hours[delivery] * relative_discount.
         let decision_col = layout.anticipated.col_anticipated_decision_start;
         let expected_npv = DELIVERY_COST_PER_MWH
-            * ctx.delivery_total_hours[DELIVERY_STAGE]
+            * ctx.time_value.delivery_total_hours(DELIVERY_STAGE)
             * ctx
                 .time_value
                 .relative_delivery_discount(STAGE_IDX, DELIVERY_STAGE);
@@ -3838,7 +3850,6 @@ mod anticipated_objective_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals: 1,
                 n_lines: 0,
@@ -3851,10 +3862,14 @@ mod anticipated_objective_tests {
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..self.n_stages as i32).collect(),
-                delivery_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(self.discount.clone()),
-                delivery_total_hours: self.hours.clone(),
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    self.discount.clone(),
+                    self.hours.clone(),
+                    (0..self.n_stages as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -3919,7 +3934,7 @@ mod anticipated_objective_tests {
              min_generation_mw, not the decision stage's",
         );
         let expected_obj = cost
-            * ctx.delivery_total_hours[delivery]
+            * ctx.time_value.delivery_total_hours(delivery)
             * ctx.time_value.relative_delivery_discount(0, delivery);
         assert_eq!(
             objective[decision_col], expected_obj,
@@ -4058,7 +4073,7 @@ mod anticipated_objective_tests {
                 )
                 .collect(),
         };
-        crate::setup::resolve_post_study_artifacts(
+        resolve_post_study_artifacts(
             Some(&post_study),
             &[PSA_THERMAL_ID],
             &HorizonGraph::default(),
@@ -4197,7 +4212,6 @@ mod anticipated_objective_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: self.post_study_resolved.clone(),
                 n_hydros: 0,
                 n_thermals: 1,
                 n_lines: 0,
@@ -4210,10 +4224,14 @@ mod anticipated_objective_tests {
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: self.resolution.clone(),
                 study_stage_ids: (0..i32::try_from(PSA_N_STAGES).unwrap()).collect(),
-                delivery_stage_ids: self.delivery_stage_ids.clone(),
                 has_penalty: false,
-                time_value: TimeValue::new(self.delivery_discount.clone()),
-                delivery_total_hours: self.delivery_hours.clone(),
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    self.delivery_discount.clone(),
+                    self.delivery_hours.clone(),
+                    self.delivery_stage_ids.clone(),
+                    self.post_study_resolved.clone(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -4245,7 +4263,7 @@ mod anticipated_objective_tests {
             "col_lower must equal thermal_block_base's min_generation_mw at the delivery stage"
         );
         let expected_obj = cost
-            * ctx.delivery_total_hours[delivery]
+            * ctx.time_value.delivery_total_hours(delivery)
             * ctx.time_value.relative_delivery_discount(0, delivery);
         assert_eq!(
             objective[decision_col], expected_obj,
@@ -4277,7 +4295,7 @@ mod anticipated_objective_tests {
             "col_upper must equal the post-study cell's max_mw"
         );
         let expected_obj = 42.0
-            * ctx.delivery_total_hours[delivery]
+            * ctx.time_value.delivery_total_hours(delivery)
             * ctx.time_value.relative_delivery_discount(1, delivery);
         assert_eq!(
             objective[decision_col], expected_obj,
@@ -4717,7 +4735,6 @@ mod block_family_slack_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: N_HYDROS,
                 n_thermals: 0,
                 n_lines: 0,
@@ -4730,10 +4747,14 @@ mod block_family_slack_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0]),
-                delivery_total_hours: vec![BLOCK_HOURS[0] + BLOCK_HOURS[1]],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![BLOCK_HOURS[0] + BLOCK_HOURS[1]],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -5169,7 +5190,6 @@ mod evaporation_slack_objective_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 1,
                 n_thermals: 0,
                 n_lines: 0,
@@ -5182,10 +5202,14 @@ mod evaporation_slack_objective_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0]),
-                delivery_total_hours: vec![744.0],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0],
+                    vec![744.0],
+                    vec![0],
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -5492,7 +5516,6 @@ mod contract_column_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals: 0,
                 n_lines: 0,
@@ -5505,10 +5528,14 @@ mod contract_column_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: vec![],
-                delivery_stage_ids: vec![],
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; N_STAGES]),
-                delivery_total_hours: vec![744.0; N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![744.0; N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -5839,7 +5866,6 @@ mod thermal_block_bound_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals: self.thermals.len(),
                 n_lines: 0,
@@ -5852,10 +5878,14 @@ mod thermal_block_bound_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
-                delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; N_STAGES]),
-                delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -6404,7 +6434,6 @@ mod line_contract_pumping_block_bound_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals: 0,
                 n_lines: self.lines.len(),
@@ -6417,10 +6446,14 @@ mod line_contract_pumping_block_bound_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
-                delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; N_STAGES]),
-                delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -7152,7 +7185,6 @@ mod hydro_block_bound_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: self.hydros.len(),
                 n_thermals: 0,
                 n_lines: 0,
@@ -7165,10 +7197,14 @@ mod hydro_block_bound_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
-                delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; N_STAGES]),
-                delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -8266,7 +8302,6 @@ mod cell_column_bound_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: self.hydros.len(),
                 n_thermals: 0,
                 n_lines: 0,
@@ -8279,10 +8314,14 @@ mod cell_column_bound_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..self.n_stages as i32).collect(),
-                delivery_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; self.n_stages]),
-                delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); self.n_stages],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; self.n_stages],
+                    vec![BLOCK_HOURS.iter().sum(); self.n_stages],
+                    (0..self.n_stages as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }
@@ -9231,7 +9270,6 @@ mod ncs_objective_tests {
                 arc_spread_chrono: HashMap::new(),
                 arc_arrival_density: HashMap::new(),
                 per_stage_mask: Vec::new(),
-                post_study_resolved: crate::setup::PostStudyResolved::default(),
                 n_hydros: 0,
                 n_thermals: 0,
                 n_lines: 0,
@@ -9244,10 +9282,14 @@ mod ncs_objective_tests {
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
                 study_stage_ids: (0..N_STAGES as i32).collect(),
-                delivery_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
-                time_value: TimeValue::new(vec![1.0; N_STAGES]),
-                delivery_total_hours: vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                time_value: TimeValue::from_parts(
+                    vec![],
+                    vec![1.0; N_STAGES],
+                    vec![BLOCK_HOURS.iter().sum(); N_STAGES],
+                    (0..N_STAGES as i32).collect(),
+                    crate::time_value::PostStudyResolved::default(),
+                ),
                 filling_v_target: BTreeMap::new(),
             }
         }

@@ -69,14 +69,13 @@ use crate::policy::policy_load::{
 };
 use crate::resolved_parameters::ResolvedParameters;
 use crate::risk_measure::BackwardOutcome;
-use crate::setup::PostStudyResolved;
 use crate::setup::node_graph::{
     NodeGraph, NodeId, NodePos, OpeningSource, StageIdx, build_node_graph,
     enumerated_node_visit_counts, enumerated_scenario_count,
 };
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
-use crate::time_value::TimeValue;
+use crate::time_value::{PostStudyResolved, TimeValue};
 use crate::training::backward::{
     extract_state_duals_only, fill_external_opening_noise, write_opening_outcome,
 };
@@ -557,16 +556,19 @@ pub fn geometry(
         anticipated_windows: vec![(None, None); dims.n_anticipated],
         anticipated_resolution: AnticipatedResolution::default(),
         study_stage_ids: Vec::new(),
-        delivery_stage_ids: Vec::new(),
         has_penalty: dims.has_inflow_penalty,
-        time_value: TimeValue::new(vec![1.0]),
-        delivery_total_hours: vec![744.0],
+        time_value: TimeValue::from_parts(
+            vec![],
+            vec![1.0],
+            vec![744.0],
+            vec![0],
+            PostStudyResolved::default(),
+        ),
         filling_v_target: BTreeMap::new(),
         arc_stage_weights: HashMap::new(),
         arc_spread_chrono: HashMap::new(),
         arc_arrival_density: HashMap::new(),
         per_stage_mask: Vec::new(),
-        post_study_resolved: PostStudyResolved::default(),
     };
 
     let state = state_layout_full(

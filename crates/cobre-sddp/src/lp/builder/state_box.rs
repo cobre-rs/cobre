@@ -14,7 +14,7 @@ use crate::indexer::{
     AnticipatedLocal, StateSpace, anticipated_resolution_for,
     is_anticipated_decision_active_for_delivery,
 };
-use crate::setup::PostStudyResolved;
+use crate::time_value::PostStudyResolved;
 
 /// Admissible interval per outgoing state dimension, both fields length
 /// [`StateSpace::n_state`]. A reachable dimension has `lower <= upper` by

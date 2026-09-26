@@ -38,14 +38,13 @@ use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
 use crate::resolved_parameters::ResolvedParameters;
 use crate::setup::bucket_topology::build_transit_bucket_topology;
-use crate::setup::template_postprocess::{
-    compute_cumulative_discount_factors, compute_per_stage_discount_factors, postprocess_templates,
-};
-use crate::setup::{
-    PostStudyResolved, resolve_anticipated_commitments, resolve_post_study_artifacts,
-    resolve_state_layout,
-};
+use crate::setup::template_postprocess::postprocess_templates;
+use crate::setup::{resolve_anticipated_commitments, resolve_state_layout};
 use crate::test_support::state_layout_full;
+use crate::time_value::{
+    PostStudyResolved, compute_cumulative_discount_factors, compute_per_stage_discount_factors,
+    resolve_post_study_artifacts,
+};
 
 use super::super::test_support::{ctx_anticipated_and_mask_inputs, state_layout_for};
 
@@ -1723,16 +1722,13 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             max_fanout: ctx_a.anticipated_resolution.max_fanout,
         },
         study_stage_ids: ctx_a.study_stage_ids.clone(),
-        delivery_stage_ids: ctx_a.delivery_stage_ids.clone(),
         has_penalty: ctx_a.has_penalty,
         time_value: ctx_a.time_value.clone(),
-        delivery_total_hours: ctx_a.delivery_total_hours.clone(),
         filling_v_target: ctx_a.filling_v_target.clone(),
         arc_stage_weights: ctx_a.arc_stage_weights.clone(),
         arc_spread_chrono: ctx_a.arc_spread_chrono.clone(),
         arc_arrival_density: ctx_a.arc_arrival_density.clone(),
         per_stage_mask: ctx_a.per_stage_mask.clone(),
-        post_study_resolved: ctx_a.post_study_resolved.clone(),
     };
 
     assert_eq!(
@@ -2112,7 +2108,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         SamplingScheme::InSample,
     );
 
-    assert_eq!(ctx.delivery_stage_ids, ctx.study_stage_ids);
+    assert_eq!(ctx.time_value.delivery_stage_ids(), ctx.study_stage_ids);
 }
 
 /// Three study stages (ids `[0, 1, 2]`) plus two post-study stages continue
@@ -2155,11 +2151,14 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
     );
 
     assert_eq!(ctx.study_stage_ids, vec![0, 1, 2]);
-    assert_eq!(ctx.delivery_stage_ids, vec![0, 1, 2, 3, 4]);
+    assert_eq!(ctx.time_value.delivery_stage_ids(), vec![0, 1, 2, 3, 4]);
     assert!(
-        ctx.delivery_stage_ids.windows(2).all(|w| w[0] < w[1]),
+        ctx.time_value
+            .delivery_stage_ids()
+            .windows(2)
+            .all(|w| w[0] < w[1]),
         "delivery_stage_ids must be strictly increasing, got {:?}",
-        ctx.delivery_stage_ids
+        ctx.time_value.delivery_stage_ids()
     );
 }
 
@@ -2202,12 +2201,12 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
     );
 
     assert_eq!(
-        ctx.delivery_total_hours[3],
+        ctx.time_value.delivery_total_hours(3),
         post_study.stages[0].duration_hours
     );
     assert_eq!(
         ctx.time_value.relative_delivery_discount(0, 3),
-        ctx.post_study_resolved.cumulative_discount_factors[0]
+        ctx.time_value.post_study().cumulative_discount_factors[0]
     );
 }
 
@@ -2215,7 +2214,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
 /// `compute_cumulative_discount_factors` run over the study's own per-stage
 /// factors concatenated with the post-study per-stage factors — the same
 /// identity `continued_cumulative_discount_matches_extended_horizon`
-/// (`crate::setup`) already pins for the post-study half alone.
+/// (`crate::time_value`) already pins for the post-study half alone.
 #[test]
 fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let post_study = two_post_study_stages();
@@ -2427,7 +2426,7 @@ fn three_post_study_stages() -> Vec<PostStudyStage> {
     ]
 }
 
-/// Build `ctx.post_study_resolved` for a two-anticipated-thermal,
+/// Build `ctx.time_value.post_study()` for a two-anticipated-thermal,
 /// three-post-study-stage system declaring exactly `thermal_bounds`.
 fn build_post_study_resolved_for(
     ids: [i32; 2],
@@ -2471,14 +2470,14 @@ fn build_post_study_resolved_for(
         &hydro_cell_index,
         SamplingScheme::InSample,
     );
-    ctx.post_study_resolved
+    ctx.time_value.post_study().clone()
 }
 
 /// Given `post_study` is `None`, `resolve_post_study_artifacts` returns
 /// [`PostStudyResolved::default`] and the accessor returns `None` on the empty
 /// table, never a panic.
 #[test]
-fn resolve_post_study_artifacts_none_returns_default_and_empty_table() {
+fn post_study_artifacts_none_returns_default_and_empty_table() {
     let resolved =
         resolve_post_study_artifacts(None, &[], &cobre_core::HorizonGraph::default(), 1.0, 1.0);
 
@@ -2528,7 +2527,7 @@ const FULL_TABLE_VALUES: [[(f64, f64, f64); 3]; 2] = [
 
 /// Every `(local, stage)` cell of `ids` x 3 stages, valued from
 /// [`FULL_TABLE_VALUES`], sorted canonically by `(thermal_id,
-/// post_study_stage_index)` — [`PostStudyThermalLookup::new`](crate::setup::PostStudyThermalLookup::new)'s
+/// post_study_stage_index)` — [`PostStudyThermalLookup::new`](crate::time_value::PostStudyThermalLookup::new)'s
 /// own precondition, which anticipated-local order (`ids` here) does not
 /// generally satisfy.
 fn full_two_plant_three_stage_bounds(ids: [i32; 2]) -> Vec<PostStudyThermalBound> {
@@ -2552,7 +2551,7 @@ fn full_two_plant_three_stage_bounds(ids: [i32; 2]) -> Vec<PostStudyThermalBound
 }
 
 /// A fully-declared 2-plant x 3-stage deck: every cell of the dense table
-/// agrees exactly with [`PostStudyThermalLookup::lookup`](crate::setup::PostStudyThermalLookup::lookup)
+/// agrees exactly with [`PostStudyThermalLookup::lookup`](crate::time_value::PostStudyThermalLookup::lookup)
 /// for the corresponding `EntityId` — pins the table as a faithful projection
 /// of the lookup, not merely a plausible one.
 #[test]

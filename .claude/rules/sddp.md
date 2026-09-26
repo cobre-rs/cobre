@@ -1947,7 +1947,7 @@ Read: `lead_time/mod.rs` (`PointResolution::ring_index`, `physical_target`,
 The ring depth is `k_max = max(occupancy_max, n_none_in_study)`, resolved in
 ring-axis (excised) space and owned by `PointResolution::ring_depth`: the
 global `k_max = max_i ring_depth_i` (`AnticipatedResolution::resolve`) and the
-per-plant reachability bound `k_i` (`StateSpace::anticipated_lead_stages`, the
+per-plant lead `k_i` (`StateSpace::anticipated_lead_stages`, the
 `LeadTime` arm) both read it. The `LeadStages(l)` arm instead returns `l`
 VERBATIM — the byte-identity anchor `n_none_in_study <= l` by construction
 makes safe (`debug_assert!(ring_depth() <= l)`). Sizing from `occupancy_max`
@@ -2050,17 +2050,21 @@ instead of a full `k_max` stages past it, silently zeroing a real post-study
 delivery; `t_out + slot_idx` (the older retired shift-ring form, wrong
 whenever `t_out mod k_max != 0`); and dating the raw ring-axis `r` directly
 instead of `physical_target(r)` — it lands on the excised fixed post-horizon
-window's stub stage whenever a plant declares one. Reachability uses the
-plant's OWN `StateSpace::anticipated_lead_stages[plant]` bound (`slot_idx <
-k_i`), not a depth- or decider-only check
-(`AnticipatedResolution::decision_sets`/`depth` count only within-study-decided
-commitments and silently exclude a still-draining pre-study seed): a slot beyond
-that bound is structural padding dated at the sentinel even when its delivery
-target `m` still lands inside the horizon — the multi-plant heterogeneous-lead
-case, where plants sharing one `k_max`-wide ring have different reachable widths,
-unaffected by which anchor `reachable_delivery_target` resolves against.
-`build_stage_entity_manifest` applies this before populating
-`EntitySlot::interval_start`/`interval_end`.
+window's stub stage whenever a plant declares one. A ring slot is live at
+the pool's stage `t` if and only if `for_each_live_commitment_slot` visits
+it: its target lands in the window `{t+1 ..= t+k_max}`, inside the delivery
+calendar, and is ready (`PointResolution::is_ready_at`). The retired
+per-plant lead bound `slot_idx < k_i` is the wrong-but-compiling
+alternative — under residue keying a short-lead plant cycles through every
+residue, so a slot beyond its own lead can still be a live carry or
+deposit — the multi-plant heterogeneous-lead case, where plants sharing one
+`k_max`-wide ring have different reachable widths.
+`build_stage_entity_manifest` applies this same rule before populating
+`EntitySlot::interval_start`/`interval_end`, and
+`StateSpace::set_anticipated_resolution` applies it to the cut mask as the
+union of this rule over every decision stage (`StateSpace::set_nonzero_mask`
+includes the whole commitment-hold region until a resolution is attached,
+since nothing can be excluded without reachability data).
 
 The sign / `col_scale` invariants are unchanged from storage and the water buckets:
 the incoming column's reduced cost is DIVIDED by `col_scale` on extract
@@ -2095,12 +2099,15 @@ the backward-cut coefficient-propagation regressions
 manifest delivery-anchor regressions
 (`anticipated_slot_delivery_anchor_matches_delivery_stage_year_month`,
 `anticipated_slot_delivery_anchor_past_horizon_is_sentinel`,
-`anticipated_slot_padding_beyond_own_lead_is_sentinel`), and the
+`anticipated_short_lead_slot_dates_the_residue_it_latches`), the
 outgoing-anchor re-anchoring regressions
 (`terminal_maturing_residue_dates_onto_its_post_study_delivery`,
 `terminal_maturing_residue_stays_sentinel_without_a_post_study_calendar`,
 `anticipated_slot_date_matches_the_resolved_physical_delivery_stage`,
-`anticipated_padding_slots_beyond_plant_lead_stay_sentinel`). The ring-axis
+`anticipated_slots_the_lp_does_not_latch_stay_sentinel`), and the
+mixed-lead reachability regressions
+(`mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches`,
+`mixed_lead_manifest_dates_exactly_the_slots_the_lp_latches`). The ring-axis
 excision itself is additionally pinned by the collision/identity regressions
 `excision_keeps_each_study_stage_fishing_its_own_seed`,
 `zero_gap_with_post_study_resolves_an_identity_ring_and_occupancy_depth`, and

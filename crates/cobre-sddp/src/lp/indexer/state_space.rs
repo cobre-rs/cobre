@@ -15,7 +15,7 @@
 
 use std::ops::Range;
 
-use super::{InCol, OutCol, RangeCursor, StateDim};
+use super::{InCol, OutCol, RangeCursor, StateDim, for_each_live_commitment_slot};
 use crate::lead_time::AnticipatedResolution;
 
 use cobre_core::temporal::StageStateConfig;
@@ -206,8 +206,7 @@ impl StateSpace {
     /// Inherits the [`Self::set_nonzero_mask`] and
     /// [`Self::finalize_state_column_map`] debug assertions:
     /// `transit_bucket_column_order.len() == n_buckets`,
-    /// `effective_lag_count.len() == hydro_count`,
-    /// `anticipated_lead_stages.len() == n_anticipated`, lag/lead bounds, and
+    /// `effective_lag_count.len() == hydro_count`, lag bounds, and
     /// `state_to_lp_column_map.len() == n_state`.
     #[must_use]
     pub fn new(
@@ -296,13 +295,17 @@ impl StateSpace {
             state_to_lp_column_map: Vec::new(),
         };
 
-        let anticipated_k = layout.anticipated_lead_stages.clone();
-        layout.set_nonzero_mask(effective_lag_count, &anticipated_k);
+        layout.set_nonzero_mask(effective_lag_count);
         layout.finalize_state_column_map();
         layout
     }
 
-    /// Attach the setup-computed [`AnticipatedResolution`].
+    /// Attach the setup-computed [`AnticipatedResolution`] and rebuild the
+    /// commitment-hold tail of [`Self::nonzero_state_indices`] as the union,
+    /// over every decision stage, of the LP's own latch set
+    /// ([`super::for_each_live_commitment_slot`]) — [`Self::set_nonzero_mask`]
+    /// left that tail as the whole region, since no reachability data was
+    /// available yet.
     ///
     /// # Panics (debug builds only)
     ///
@@ -334,6 +337,36 @@ impl StateSpace {
         );
         self.n_delivery = n_delivery;
         self.anticipated_resolution = resolution;
+
+        let n_anticipated = self.n_anticipated;
+        let n_decision = self
+            .anticipated_resolution
+            .per_plant
+            .first()
+            .map_or(0, |plant| plant.decision_sets.len());
+        let mut live = vec![false; n_anticipated * self.k_max];
+        for stage_idx in 0..n_decision {
+            for_each_live_commitment_slot(self, n_decision, stage_idx, |res, _| {
+                live[res.slot * n_anticipated + res.plant] = true;
+            });
+        }
+
+        let start = self.state_dim_range(StateRegion::CommitmentHold).start;
+        let cut = self
+            .nonzero_state_indices
+            .partition_point(|d| *d < StateDim::new(start));
+        self.nonzero_state_indices.truncate(cut);
+        self.nonzero_state_indices.extend(
+            live.iter()
+                .enumerate()
+                .filter(|&(_, &is_live)| is_live)
+                .map(|(offset, _)| StateDim::new(start + offset)),
+        );
+
+        debug_assert!(
+            self.nonzero_state_indices.windows(2).all(|w| w[0] < w[1]),
+            "nonzero_state_indices must be sorted and unique"
+        );
     }
 
     /// First column of the control region (`theta + 1`): the state region
@@ -658,7 +691,7 @@ impl StateSpace {
     }
 
     /// Compute and store [`Self::nonzero_state_indices`] from per-hydro
-    /// lag-slot counts and per-plant anticipated lead-stage counts.
+    /// lag-slot counts.
     ///
     /// `lag_counts` must have length `hydro_count`; `lag_counts[h]` is the count
     /// of lag slots that may carry non-zero cut coefficients for hydro `h`. It
@@ -669,40 +702,36 @@ impl StateSpace {
     /// at convergence). Storage `[0, N)` is always included.
     ///
     /// Every travel-time bucket slot is always included — bucket depth is
-    /// already sized as the per-stage reachability union, so (unlike the
-    /// commitment-hold region's slots) there is no padding to exclude.
+    /// already sized as the per-stage reachability union, so there is no
+    /// padding to exclude. The commitment-hold region is included in full for
+    /// the same reason this method runs with no reachability data yet
+    /// available: [`Self::set_anticipated_resolution`] later rebuilds this
+    /// region's tail from the LP's own per-stage latch set
+    /// ([`super::for_each_live_commitment_slot`]) once a resolution is
+    /// attached.
     ///
-    /// For the commitment-hold region, anticipated plant `i`
-    /// only has slots `0..K_i` included; the trailing `k_max − K_i` are
-    /// padding whose cut coefficients are structurally zero (no decision
-    /// writes them). Including padding over-estimates cut hyperplanes — the
-    /// same failure mode as the lag block above.
-    ///
-    /// The loop iterates lag/slot-first so the emitted indices stay strictly
+    /// The loop iterates lag-first so the emitted indices stay strictly
     /// ascending (the sortedness the `debug_assert` enforces).
     ///
     /// # Panics (debug builds only)
     ///
-    /// Panics if `lag_counts.len() != hydro_count`,
-    /// `anticipated_lead_stages.len() != n_anticipated`, any
-    /// `lag_counts[h] > max_par_order`, or any
-    /// `anticipated_lead_stages[p] > k_max`.
-    pub fn set_nonzero_mask(&mut self, lag_counts: &[usize], anticipated_lead_stages: &[usize]) {
+    /// Panics if `lag_counts.len() != hydro_count` or any
+    /// `lag_counts[h] > max_par_order`.
+    pub fn set_nonzero_mask(&mut self, lag_counts: &[usize]) {
         debug_assert_eq!(lag_counts.len(), self.hydro_count);
-        debug_assert_eq!(anticipated_lead_stages.len(), self.n_anticipated);
 
         let n_lag_active: usize = lag_counts.iter().copied().sum();
-        let n_ant_active: usize = anticipated_lead_stages.iter().copied().sum();
+        let n_ant_state = self.n_anticipated * self.k_max;
         let mut mask =
-            Vec::with_capacity(self.hydro_count + n_lag_active + self.n_buckets + n_ant_active);
+            Vec::with_capacity(self.hydro_count + n_lag_active + self.n_buckets + n_ant_state);
 
-        // REGION_ORDER fixes the walk order; storage and buckets have no
-        // padding to exclude and extend their full range, lag and
-        // commitment-hold each keep their own per-region active-slot filter
-        // (padding stays excluded — see the doc comment above).
+        // REGION_ORDER fixes the walk order; storage, buckets and
+        // commitment-hold have no padding to exclude and extend their full
+        // range, lag keeps its own active-slot filter (padding stays
+        // excluded — see the doc comment above).
         for region in REGION_ORDER {
             match region {
-                StateRegion::Storage | StateRegion::Buckets => {
+                StateRegion::Storage | StateRegion::Buckets | StateRegion::CommitmentHold => {
                     mask.extend(self.state_dim_range(region).map(StateDim::new));
                 }
                 StateRegion::Lag => {
@@ -712,17 +741,6 @@ impl StateSpace {
                             debug_assert!(lag_count <= self.max_par_order);
                             if lag < lag_count {
                                 mask.push(StateDim::new(start + lag * self.hydro_count + h));
-                            }
-                        }
-                    }
-                }
-                StateRegion::CommitmentHold => {
-                    let start = self.state_dim_range(region).start;
-                    for slot in 0..self.k_max {
-                        for (plant, &k_i) in anticipated_lead_stages.iter().enumerate() {
-                            debug_assert!(k_i <= self.k_max);
-                            if slot < k_i {
-                                mask.push(StateDim::new(start + slot * self.n_anticipated + plant));
                             }
                         }
                     }
@@ -742,7 +760,7 @@ impl StateSpace {
 #[cfg(test)]
 mod tests {
     use super::{AnticipatedResolution, InCol, OutCol, StateDim, StateSpace};
-    use crate::lead_time::PointResolution;
+    use crate::lead_time::{DeliveryAxis, LeadTime, PointResolution};
 
     /// Build a [`StateSpace`] finalized the way production `resolve_state_layout`
     /// does: full `max_par_order` lag stride for every hydro (the coverage the
@@ -1146,7 +1164,7 @@ mod tests {
         // inflow_lags.start = N = 4
         // Lag-major layout: slot = 4 + lag * N + h
         let mut idx = finalized(4, 6, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[0, 1, 3, 6], &[]);
+        idx.set_nonzero_mask(&[0, 1, 3, 6]);
 
         // Storage: [0, 1, 2, 3]
         // lag0: h1→4+0*4+1=5, h2→6, h3→7
@@ -1178,7 +1196,7 @@ mod tests {
     fn nonzero_mask_zero_par_order() {
         // max_par_order=0: no lags, mask = storage only
         let mut idx = finalized(3, 0, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[0, 0, 0], &[]);
+        idx.set_nonzero_mask(&[0, 0, 0]);
         assert_eq!(idx.nonzero_state_indices.len(), 3);
         assert_eq!(&idx.nonzero_state_indices, &[0, 1, 2].map(StateDim::new));
     }
@@ -1187,7 +1205,7 @@ mod tests {
     fn nonzero_mask_all_full_order() {
         // All hydros at max AR order: mask covers all n_state indices
         let mut idx = finalized(2, 3, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[3, 3], &[]);
+        idx.set_nonzero_mask(&[3, 3]);
         // n_state = 2*(1+3) = 8, mask should have 2 + 2*3 = 8
         assert_eq!(idx.nonzero_state_indices.len(), 8);
         assert_eq!(idx.nonzero_state_indices.len(), idx.n_state);
@@ -1210,7 +1228,7 @@ mod tests {
         // therefore uses all 12 lag slots. max_par_order = 12 (widened by
         // PrecomputedPar when any model has an annual component).
         let mut idx = finalized(2, 12, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[4, 12], &[]);
+        idx.set_nonzero_mask(&[4, 12]);
 
         // n_state = 2 * (1 + 12) = 26.
         // Mask = [storage 0..2] + [lag * 2 + h for lag in 0..lag_count[h]]
@@ -1247,8 +1265,9 @@ mod tests {
 
     // ── Commitment-hold in-study nonzero mask tests ────────────────────────
 
-    /// Every anticipated plant uses every slot (`K_i == k_max`): all
-    /// `n_anticipated * k_max` anticipated indices are included in the mask.
+    /// With no resolution attached, the commitment-hold region is included in
+    /// full regardless of `anticipated_lead_stages`: all `n_anticipated *
+    /// k_max` indices are in the mask.
     #[test]
     fn nonzero_mask_commitment_hold_in_study_full_kmax() {
         // 2 anticipated plants, k_max = 3, no hydros, no lags.
@@ -1260,7 +1279,7 @@ mod tests {
         assert_eq!(idx.n_anticipated, 2);
         assert_eq!(idx.k_max, 3);
 
-        idx.set_nonzero_mask(&[], &[3, 3]);
+        idx.set_nonzero_mask(&[]);
 
         // Every slot is occupied, so all 6 indices appear.
         // slot=0: 0, 1; slot=1: 2, 3; slot=2: 4, 5.
@@ -1270,29 +1289,25 @@ mod tests {
         );
     }
 
-    /// `K_i < k_max` for some plants: padded slots are excluded.
-    /// Configuration: `n_anticipated = 2`, `k_max = 3`,
-    /// `anticipated_lead_stages = [3, 1]`.
+    /// Nothing can be excluded from the commitment-hold region without
+    /// reachability data: with no resolution attached, `anticipated_lead_stages`
+    /// values below `k_max` (`[3, 1]`) do not shrink the mask — every slot
+    /// stays included until [`StateSpace::set_anticipated_resolution`] rebuilds
+    /// this tail from the LP's own latch set.
     #[test]
-    fn nonzero_mask_commitment_hold_in_study_partial_padding() {
+    fn nonzero_mask_commitment_hold_in_study_without_resolution_ignores_lead_stages() {
         // 3 hydros, max_par_order = 2, 2 anticipated plants, k_max = 3.
         // inflow_lags = [3, 9), commit_out.start = 9.
         let mut idx = finalized(3, 2, 2, 3, vec![3, 1]);
 
         assert_eq!(idx.commit_out.start, 9);
-        idx.set_nonzero_mask(&[2, 2, 2], &[3, 1]);
+        idx.set_nonzero_mask(&[2, 2, 2]);
 
-        // Storage [0, 1, 2] + lag (h0,h1,h2 full = 6 slots) +
-        // anticipated: slot=0 plant=0 → 9, plant=1 → 10 (K_1=1 so slot 0 included);
-        //              slot=1 plant=0 → 11 (K_0=3); plant=1 → padded (slot 1 >= 1).
-        //              slot=2 plant=0 → 13 (K_0=3); plant=1 → padded.
-        // The anticipated portion expected: [9, 10, 11, 13].
+        // Storage [0, 1, 2] + lag (h0,h1,h2 full = 6 slots) + the whole
+        // 6-slot commitment-hold region [9, 15).
         let mask = &idx.nonzero_state_indices;
         let ant_portion: Vec<usize> = mask.iter().map(|d| d.get()).filter(|&i| i >= 9).collect();
-        assert_eq!(ant_portion, vec![9, 10, 11, 13]);
-        // Padded slots NOT present.
-        assert!(!mask.contains(&StateDim::new(12)));
-        assert!(!mask.contains(&StateDim::new(14)));
+        assert_eq!(ant_portion, vec![9, 10, 11, 12, 13, 14]);
     }
 
     /// Anticipated-only: no hydros, no lags, only anticipated state.
@@ -1303,30 +1318,26 @@ mod tests {
         assert_eq!(idx.hydro_count, 0);
         assert_eq!(idx.commit_out.start, 0);
 
-        idx.set_nonzero_mask(&[], &[2]);
+        idx.set_nonzero_mask(&[]);
 
         // Only anticipated indices: slot=0 plant=0 → 0; slot=1 plant=0 → 1.
         assert_eq!(idx.nonzero_state_indices, [0, 1].map(StateDim::new));
     }
 
-    /// Heterogeneous `K_i` across plants, including a plant with `K_i = k_max`
-    /// and another with `K_i < k_max`.
+    /// Heterogeneous `anticipated_lead_stages` across plants is likewise
+    /// ignored with no resolution attached: every one of the
+    /// `n_anticipated * k_max` slots stays in the mask.
     #[test]
-    fn nonzero_mask_commitment_hold_in_study_mixed_k_values() {
+    fn nonzero_mask_commitment_hold_in_study_mixed_lead_stages_without_resolution_is_full_region() {
         // n_anticipated = 3, k_max = 4. Lead stages = [4, 2, 1].
         // commit_out.start = 0 (no hydros).
         let mut idx = finalized(0, 0, 3, 4, vec![4, 2, 1]);
 
-        idx.set_nonzero_mask(&[], &[4, 2, 1]);
+        idx.set_nonzero_mask(&[]);
 
-        // slot=0 plant=0→0, plant=1→1, plant=2→2 (all K_i > 0).
-        // slot=1 plant=0→3, plant=1→4 (K_1=2). plant=2 padded.
-        // slot=2 plant=0→6 (K_0=4). plant=1 padded. plant=2 padded.
-        // slot=3 plant=0→9 (K_0=4). Others padded.
-        // Expected: [0, 1, 2, 3, 4, 6, 9].
         assert_eq!(
             idx.nonzero_state_indices,
-            [0, 1, 2, 3, 4, 6, 9].map(StateDim::new)
+            (0..12).map(StateDim::new).collect::<Vec<_>>()
         );
     }
 
@@ -1334,7 +1345,7 @@ mod tests {
     #[test]
     fn nonzero_mask_commitment_hold_in_study_zero_anticipated_matches_existing() {
         let mut idx_with = finalized(4, 6, 0, 0, vec![]);
-        idx_with.set_nonzero_mask(&[0, 1, 3, 6], &[]);
+        idx_with.set_nonzero_mask(&[0, 1, 3, 6]);
 
         // Same expected mask as `nonzero_mask_mixed_ar_orders`:
         // [0,1,2,3] (storage) + [5,6,7,10,11,14,15,19,23,27] (lags).
@@ -1352,7 +1363,7 @@ mod tests {
         // must keep the global mask sorted.
         let mut idx = finalized(3, 2, 2, 3, vec![2, 3]);
 
-        idx.set_nonzero_mask(&[1, 2, 0], &[2, 3]);
+        idx.set_nonzero_mask(&[1, 2, 0]);
 
         assert!(
             idx.nonzero_state_indices.windows(2).all(|w| w[0] < w[1]),
@@ -1361,32 +1372,79 @@ mod tests {
         );
     }
 
-    /// Plant with `K_i == k_max` (boundary, no padding): all its slots are
-    /// included.
+    /// A plant with `anticipated_lead_stages == k_max` (the boundary): with
+    /// no resolution attached, all its slots are included, same as every
+    /// other lead value.
     #[test]
     fn nonzero_mask_commitment_hold_in_study_boundary_k_eq_kmax() {
         // 1 anticipated plant, K_0 = k_max = 3, no hydros.
         let mut idx = finalized(0, 0, 1, 3, vec![3]);
 
-        idx.set_nonzero_mask(&[], &[3]);
+        idx.set_nonzero_mask(&[]);
 
         // All k_max slots included: slot 0,1,2 → indices 0,1,2.
         assert_eq!(idx.nonzero_state_indices, [0, 1, 2].map(StateDim::new));
     }
 
-    /// `K_i == 0` excludes all slots for that plant (defensive — the parse
-    /// layer rejects `K_i == 0`, but the helper must remain robust if
-    /// invoked with zero).
+    /// A plant with `anticipated_lead_stages == 0` is likewise not excluded
+    /// with no resolution attached: nothing can be excluded without
+    /// reachability data, so both plants' slots stay in the mask.
     #[test]
-    fn nonzero_mask_commitment_hold_in_study_boundary_k_zero_excluded() {
+    fn nonzero_mask_commitment_hold_in_study_k_zero_without_resolution_is_not_excluded() {
         // 2 anticipated plants, k_max = 2. Lead stages = [2, 0].
         let mut idx = finalized(0, 0, 2, 2, vec![2, 0]);
 
-        idx.set_nonzero_mask(&[], &[2, 0]);
+        idx.set_nonzero_mask(&[]);
 
-        // Plant 0 (K_0=2) emits slot=0→0, slot=1→2. Plant 1 (K_1=0) emits
-        // nothing. Expected mask: [0, 2].
-        assert_eq!(idx.nonzero_state_indices, [0, 2].map(StateDim::new));
+        assert_eq!(idx.nonzero_state_indices, [0, 1, 2, 3].map(StateDim::new));
+    }
+
+    /// Once a resolution is attached, a single shared lead across every
+    /// plant reproduces the retired rule's own outcome: over `n_decision = 4`
+    /// stages `(>= k_max = 2)`, each plant cycles through every residue, so
+    /// the commitment-hold tail of the mask is the whole region — the same
+    /// mask the retired per-plant-lead-bounded rule produced for a
+    /// single-lead study.
+    #[test]
+    fn single_lead_nonzero_mask_keeps_the_whole_commitment_region() {
+        let mut idx = finalized(0, 0, 2, 2, vec![2, 2]);
+        idx.set_anticipated_resolution(AnticipatedResolution::resolve(
+            &[LeadTime::Stages(2), LeadTime::Stages(2)],
+            DeliveryAxis {
+                stage_lengths_hours: &[720.0; 4],
+                n_decision: 4,
+                n_delivery: 4,
+            },
+        ));
+
+        assert_eq!(idx.nonzero_state_indices, [0, 1, 2, 3].map(StateDim::new));
+    }
+
+    /// Accepted edge case: a single-lead study shorter than its own lead. The
+    /// plant's lead (`K = 3`) exceeds the study's own delivery axis
+    /// (`n_decision = n_delivery = 2`), so every window's ring-axis target
+    /// `r >= n_delivery` is skipped except `r = 1` (the only in-window index
+    /// below `n_delivery`, reachable only from `stage_idx = 0`, `depth = 0`).
+    /// Residues 0 and 2 are never latched at any stage. Hand-derived against
+    /// the ring's own addressing formula, never against
+    /// `for_each_live_commitment_slot` — the oracle this test pins is
+    /// independent of the code under test.
+    #[test]
+    fn single_lead_shorter_than_its_own_lead_mask_omits_the_never_latched_slots() {
+        let mut idx = finalized(0, 0, 1, 3, vec![3]);
+        let point = PointResolution {
+            decider: vec![None, None],
+            decision_sets: vec![Vec::new(), Vec::new()],
+            depth: vec![0, 0],
+            occupancy: vec![1, 0],
+        };
+        idx.set_anticipated_resolution(AnticipatedResolution {
+            per_plant: vec![point],
+            k_max: 3,
+            max_fanout: 0,
+        });
+
+        assert_eq!(idx.nonzero_state_indices, [1].map(StateDim::new));
     }
 
     // ── Bucket block tests ─────────────────────────────────────────────────
@@ -1479,7 +1537,7 @@ mod tests {
         // lag_count=1 (lag slot 1 masked out); hydro 1 has lag_count=2 (full).
         let mut idx = finalized_with_transit_buckets(2, 2, 2, vec![(0, 1), (0, 2)], 0, 0, vec![]);
 
-        idx.set_nonzero_mask(&[1, 2], &[]);
+        idx.set_nonzero_mask(&[1, 2]);
 
         assert_eq!(idx.transit_buckets_out, 6..8);
         assert_eq!(

@@ -24,44 +24,12 @@ use cobre_io::output::policy::{
 
 use crate::SddpError;
 use crate::cut::FutureCostFunction;
-use crate::lead_time::PointResolution;
 use crate::lp::builder::delivery_ring::DeliveryRing;
-use crate::lp::indexer::{CutSlot, CutStateProjection, StateRegion, StateSpace};
+use crate::lp::indexer::{
+    CutSlot, CutStateProjection, StateRegion, StateSpace, for_each_live_commitment_slot,
+};
 use crate::setup::{NodeGraph, NodePos, extended_delivery_stages, post_study_delivery_calendar};
 use crate::training::TrainingResult;
-
-/// The ring slot's RING-AXIS delivery target: the next `r >= anchor_stage_idx`
-/// whose residue `r mod k_max` equals `slot_idx`. Every production call site
-/// passes the OUTGOING anchor (`current_stage_idx + 1`,
-/// [`build_stage_entity_manifest`]'s `outgoing_anchor`), never the entering
-/// `current_stage_idx`. Sole owner of the residue arithmetic a ring slot's
-/// `interval_start`/`interval_end` derive from — a second copy of the formula
-/// is how a slot fans out undated or zeroes a dated one.
-fn modular_delivery_target(slot_idx: usize, anchor_stage_idx: usize, k_max: usize) -> usize {
-    let delta = (slot_idx + k_max - anchor_stage_idx % k_max) % k_max;
-    anchor_stage_idx + delta
-}
-
-/// The reachable ring slot's PHYSICAL delivery target:
-/// [`modular_delivery_target`] mapped through
-/// [`PointResolution::physical_target`], or `None` when the slot is structural
-/// padding beyond the plant's own lead (`slot_idx >= k_i`, frozen `[0, 0]`,
-/// not a real commitment even when its target still lands in-horizon). Dating
-/// on the raw ring-axis index instead of mapping it through `physical_target`
-/// is the wrong-but-compiling alternative: it lands on the excised fixed
-/// post-horizon window's stub stage whenever a plant declares one
-/// ([`PointResolution::ring_index`]).
-fn reachable_delivery_target(
-    slot_idx: usize,
-    k_i: usize,
-    anchor_stage_idx: usize,
-    k_max: usize,
-    resolution: &PointResolution,
-) -> Option<usize> {
-    (slot_idx < k_i).then(|| {
-        resolution.physical_target(modular_delivery_target(slot_idx, anchor_stage_idx, k_max))
-    })
-}
 
 /// The sentinel-or-dated `(interval_start, interval_end)` pair for a resolved
 /// delivery `stage`: sentinel when `None`; otherwise the day-accurate
@@ -111,12 +79,13 @@ fn lag_reference_anchor(all_stages: &[Stage], pool_pos_in_all: Option<usize>, la
 /// post-horizon lane.
 ///
 /// A ring slot's `interval_start`/`interval_end` are the day-accurate
-/// `YYYYMMDD` anchors of its modular delivery stage — resolved against the
-/// OUTGOING anchor (`current_stage_idx + 1`, the state leaving this pool's own
-/// stage, the same state a cut couples to), over `study_stages` extended by
-/// [`post_study_delivery_calendar`]. A target past that calendar, or a padding
-/// slot beyond the plant's own lead, carries the sentinel for both fields.
-/// With no post-study stages the walk is byte-identical to a study-only one.
+/// `YYYYMMDD` anchors of the physical delivery it holds at the pool's own
+/// stage — live exactly when [`for_each_live_commitment_slot`] visits it
+/// (the LP's own latch set: carry plus deposit), over `study_stages` extended
+/// by [`post_study_delivery_calendar`]. A slot the sweep does not latch this
+/// stage, or whose target lands past that calendar, carries the sentinel for
+/// both fields. With no post-study stages the walk is byte-identical to a
+/// study-only one.
 ///
 /// An inflow-lag slot's `reference_date` is the referenced past stage's own
 /// full `start_date`, [`encode_slot_date`]-encoded, via
@@ -151,8 +120,6 @@ pub fn build_stage_entity_manifest(
     // decider/depth and the bucket topology both index.
     let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let current_stage_idx = study_stages.iter().position(|s| s.id == stage_id);
-    // Pool `p` prices the state leaving stage `p` — the state entering `p + 1`.
-    let outgoing_anchor = current_stage_idx.map(|t| t + 1);
     // Full stage ordering (pre-study stages included) — the basis
     // `lag_reference_anchor` walks, since a deep lag can reach into the
     // pre-study window `study_stages` excludes.
@@ -163,43 +130,20 @@ pub fn build_stage_entity_manifest(
     let bucket_arrival_stage =
         |lag: usize| current_stage_idx.and_then(|t| delivery_stages.get(t + lag).copied());
 
+    let n_anticipated = global_layout.n_anticipated;
+    let mut live_target = vec![None; n_anticipated * global_layout.k_max];
+    if let Some(t) = current_stage_idx {
+        for_each_live_commitment_slot(global_layout, study_stages.len(), t, |res, _| {
+            live_target[res.slot * n_anticipated + res.plant] = Some(res.target);
+        });
+    }
+
     let anticipated_slot = |offset: usize| -> EntitySlot {
         let (slot_idx, plant_pos) = anticipated_ring.slot_lane_at(offset);
         let plant = anticipated_thermals[plant_pos];
-        // `slot_idx` is the ring's modular residue, NOT a distance-to-maturity:
-        // dating the slot at `t + slot_idx` is wrong whenever `t mod k_max != 0`.
-        // Reachability uses the SAME per-plant bound the LP masking itself uses
-        // (`anticipated_lead_stages[plant_pos]`): a slot beyond it is structural
-        // padding (frozen `[0, 0]`), not a real commitment, even when its target
-        // still lands inside the horizon.
-        let k_i = global_layout.anticipated_lead_stages[plant_pos];
-        let resolved = outgoing_anchor.and_then(|t| {
-            let m = reachable_delivery_target(
-                slot_idx,
-                k_i,
-                t,
-                global_layout.k_max,
-                &global_layout.anticipated_resolution.per_plant[plant_pos],
-            )?;
-            delivery_stages.get(m).map(|&stage| (t, m, stage))
-        });
-        if let Some((t, m, _)) = resolved {
-            // Cross-check against `resolve_point`, the single owner of c(m):
-            // a within-study decider must have fired by `t`; a pre-study
-            // (IC-seeded) delivery has no decider entry and is exempt.
-            debug_assert!(
-                global_layout
-                    .anticipated_resolution
-                    .per_plant
-                    .get(plant_pos)
-                    .and_then(|resolution| resolution.decider.get(m))
-                    .copied()
-                    .flatten()
-                    .is_none_or(|decided_at| decided_at <= t),
-                "anticipated delivery {m} observed at stage {t} was not yet decided"
-            );
-        }
-        let (interval_start, interval_end) = slot_interval(resolved.map(|(_, _, stage)| stage));
+        let resolved_stage = live_target[slot_idx * n_anticipated + plant_pos]
+            .and_then(|m| delivery_stages.get(m).copied());
+        let (interval_start, interval_end) = slot_interval(resolved_stage);
         EntitySlot::anticipated(
             plant.id.0,
             slot_idx as u32,
@@ -827,7 +771,7 @@ pub fn build_stage_states_payloads<'a>(
 mod tests {
     use super::{
         EntitySlot, HashMap, StateFamily, build_stage_entity_manifest, build_stage_states_payloads,
-        modular_delivery_target, reachable_delivery_target, reserve_boundary_inflow_lag_slots,
+        reserve_boundary_inflow_lag_slots,
     };
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
     use crate::lp::indexer::{CutStateProjection, StateSpace};
@@ -1648,9 +1592,11 @@ mod tests {
     }
 
     /// `System` with 1 hydro and two anticipated thermals of DIFFERENT
-    /// `LeadStages` (id 1: ℓ=1, id 2: ℓ=2) over the same three monthly stages as
-    /// [`system_1h_1ant_3monthly`], sharing one `k_max=2` ring.
-    fn system_1h_2ant_3monthly() -> System {
+    /// `LeadStages` (id 1: ℓ=1, id 2: ℓ=2) over `n_stages` consecutive monthly
+    /// stages starting 2024-04 (the first three match
+    /// [`system_1h_1ant_3monthly`]'s own; stage 3, when present, starts
+    /// 2024-07-01), sharing one `k_max=2` ring.
+    fn system_1h_2ant_monthly(n_stages: usize) -> System {
         let bounds = ResolvedBounds::new(
             &BoundsCountsSpec {
                 n_hydros: 1,
@@ -1658,23 +1604,22 @@ mod tests {
                 n_lines: 0,
                 n_pumping: 0,
                 n_contracts: 0,
-                n_stages: 3,
+                n_stages,
                 k_max: 2,
             },
             &bounds_defaults(),
         );
+        let stages = (0..n_stages)
+            .map(|i| make_stage_ym(i, i as i32, 2024, 4 + i as u32))
+            .collect();
         SystemBuilder::new()
             .buses(vec![make_bus()])
             .hydros(vec![make_hydro(1, None, None)])
             .thermals(vec![anticipated_thermal(1, 1), anticipated_thermal(2, 2)])
-            .stages(vec![
-                make_stage_ym(0, 0, 2024, 4),
-                make_stage_ym(1, 1, 2024, 5),
-                make_stage_ym(2, 2, 2024, 6),
-            ])
+            .stages(stages)
             .bounds(bounds)
             .build()
-            .expect("valid 3-stage 2-anticipated-plant system")
+            .expect("valid multi-stage 2-anticipated-plant system")
     }
 
     /// `System` with 1 hydro and 1 anticipated thermal (`LeadStages(3)`, so the
@@ -2006,14 +1951,80 @@ mod tests {
         );
     }
 
-    /// A slot beyond a plant's OWN `anticipated_lead_stages` is structural
-    /// padding (frozen `[0, 0]`), so it reads the sentinel regardless of
-    /// where its ring-axis target would otherwise land: with plants ℓ=1 and
-    /// ℓ=2 sharing one `k_max=2` ring, the ℓ=1 plant's slot 1 is padding at
-    /// every stage, while the ℓ=2 plant's slot 1 is reachable.
+    /// Leads `(1, 3)`, `k_max = 3`, 4 study stages, no post-study calendar:
+    /// every anticipated slot's date must match the LP's own latch set
+    /// (carry plus deposit), never the retired per-plant-lead-bounded rule,
+    /// under which the ℓ=1 plant's slot 1 (a fresh deposit at stage 0) would
+    /// read the sentinel instead of its real date.
     #[test]
-    fn anticipated_slot_padding_beyond_own_lead_is_sentinel() {
-        let system = system_1h_2ant_3monthly();
+    fn mixed_lead_manifest_dates_exactly_the_slots_the_lp_latches() {
+        let system = system_1h_2ant_monthly(4);
+        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 3]);
+        global.set_anticipated_resolution(AnticipatedResolution::resolve(
+            &[LeadTime::Stages(1), LeadTime::Stages(3)],
+            DeliveryAxis {
+                stage_lengths_hours: &[720.0; 4],
+                n_decision: 4,
+                n_delivery: 4,
+            },
+        ));
+        let projection = CutStateProjection::new(&global, ALL_ENABLED);
+
+        // (stage_id, entity_id, subindex) -> expected interval_start; every
+        // other anticipated slot must read the sentinel.
+        let dated: [(i32, i32, u32, i32); 9] = [
+            (0, 1, 1, 20240501),
+            (0, 2, 0, 20240701),
+            (0, 2, 1, 20240501),
+            (0, 2, 2, 20240601),
+            (1, 1, 2, 20240601),
+            (1, 2, 0, 20240701),
+            (1, 2, 2, 20240601),
+            (2, 1, 0, 20240701),
+            (2, 2, 0, 20240701),
+        ];
+
+        for stage_id in 0..4i32 {
+            let manifest = build_stage_entity_manifest(
+                &system,
+                &global,
+                &crate::setup::resolve_anticipated_thermal_indices(&system),
+                &projection,
+                stage_id,
+            );
+            for entity_id in [1, 2] {
+                for subindex in 0..3u32 {
+                    let expected = dated
+                        .iter()
+                        .find(|&&(s, e, i, _)| s == stage_id && e == entity_id && i == subindex)
+                        .map_or(ENTITY_SLOT_DATE_SENTINEL, |&(_, _, _, date)| date);
+                    let slot = manifest
+                        .iter()
+                        .find(|s| {
+                            s.entity_type == StateFamily::AnticipatedThermalState.code()
+                                && s.entity_id == entity_id
+                                && s.subindex == subindex
+                        })
+                        .expect("every (entity_id, subindex) must own a manifest entry");
+                    assert_eq!(
+                        slot.interval_start, expected,
+                        "stage {stage_id} entity {entity_id} slot {subindex}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A ring slot's liveness is derived from the LP's own reachability
+    /// sweep ([`for_each_live_commitment_slot`]), never from the plant's own
+    /// lead: with plants ℓ=1 and ℓ=2 sharing one `k_max=2` ring, at stage 0
+    /// the ℓ=1 plant's only live residue is its own deposit (slot 1) — slot
+    /// 0 stays sentinel even though it is inside the plant's nominal lead —
+    /// while the ℓ=2 plant is live on both slots (its own deposit at slot 0,
+    /// a carry at slot 1).
+    #[test]
+    fn anticipated_short_lead_slot_dates_the_residue_it_latches() {
+        let system = system_1h_2ant_monthly(3);
         let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(1), LeadTime::Stages(2)],
@@ -2025,10 +2036,6 @@ mod tests {
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
-        // Stage index 0, outgoing anchor t_out = 1: slot 0 (residue 0, the
-        // class matching stage index 0's own residue) next recurs at index 2
-        // for both plants; slot 1 (residue 1) matures at the outgoing instant
-        // itself (index 1).
         let manifest = build_stage_entity_manifest(
             &system,
             &global,
@@ -2042,29 +2049,84 @@ mod tests {
         assert_eq!(manifest[2].entity_id, 1, "slot0/plant0 = ℓ=1 plant");
         assert_eq!(manifest[2].subindex, 0);
         assert_eq!(
-            manifest[2].interval_start, 20240601,
-            "ℓ=1 plant slot 0 next recurs at index 2 (2024-06)"
+            manifest[2].interval_start, ENTITY_SLOT_DATE_SENTINEL,
+            "ℓ=1 plant slot 0 is not latched by the LP at stage 0"
         );
 
         assert_eq!(manifest[3].entity_id, 2, "slot0/plant1 = ℓ=2 plant");
         assert_eq!(manifest[3].subindex, 0);
         assert_eq!(
             manifest[3].interval_start, 20240601,
-            "ℓ=2 plant slot 0 next recurs at index 2 (2024-06)"
+            "ℓ=2 plant slot 0 is its own deposit, maturing at index 2 (2024-06)"
         );
 
         assert_eq!(manifest[4].entity_id, 1, "slot1/plant0 = ℓ=1 plant");
         assert_eq!(manifest[4].subindex, 1);
         assert_eq!(
-            manifest[4].interval_start, ENTITY_SLOT_DATE_SENTINEL,
-            "ℓ=1 plant slot 1 is structural padding beyond its own lead"
+            manifest[4].interval_start, 20240501,
+            "ℓ=1 plant slot 1 is its own deposit, maturing at index 1 (2024-05)"
         );
 
         assert_eq!(manifest[5].entity_id, 2, "slot1/plant1 = ℓ=2 plant");
         assert_eq!(manifest[5].subindex, 1);
         assert_eq!(
             manifest[5].interval_start, 20240501,
-            "ℓ=2 plant slot 1 matures at the outgoing instant itself (index 1, 2024-05)"
+            "ℓ=2 plant slot 1 is a carry, maturing at index 1 (2024-05)"
+        );
+    }
+
+    /// A `LeadTime::Time` plant's ring slot whose target is inside the
+    /// delivery window but not yet decided (`is_ready_at` false, a future
+    /// `decider`) stays sentinel — distinct from horizon truncation
+    /// (`anticipated_slot_leadtime_mode_yields_real_anchor` covers
+    /// `target >= n_delivery`, filtered before `is_ready_at` ever runs).
+    #[test]
+    fn anticipated_leadtime_undecided_in_window_slot_stays_sentinel() {
+        let system = system_1h_2ant_monthly(3);
+        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
+        let resolution = AnticipatedResolution::resolve(
+            &[LeadTime::Time(720.0), LeadTime::Stages(2)],
+            DeliveryAxis {
+                stage_lengths_hours: &[720.0; 3],
+                n_decision: 3,
+                n_delivery: 3,
+            },
+        );
+
+        // Independent oracle over the Time-mode plant's own decider table
+        // (never `for_each_live_commitment_slot`): target 2 sits inside the
+        // delivery window but is decided only at stage 1, a future stage
+        // relative to the queried stage 0; target 1 is a fresh deposit
+        // exactly at stage 0.
+        let point = &resolution.per_plant[0];
+        assert_eq!(point.decider[2], Some(1));
+        assert!(
+            !point.is_ready_at(2, 0),
+            "target 2 is not yet decided at stage 0"
+        );
+        assert_eq!(point.decider[1], Some(0));
+        assert!(point.is_ready_at(1, 0), "target 1 is a deposit at stage 0");
+
+        global.set_anticipated_resolution(resolution);
+        let projection = CutStateProjection::new(&global, ALL_ENABLED);
+        let manifest = build_stage_entity_manifest(
+            &system,
+            &global,
+            &crate::setup::resolve_anticipated_thermal_indices(&system),
+            &projection,
+            0,
+        );
+
+        // Layout N=1, L=1, A=2, k_max=2: anticipated j=2..6, slot-major/plant-minor.
+        assert_eq!(manifest[2].entity_id, 1, "slot0/plant0 targets delivery 2");
+        assert_eq!(
+            manifest[2].interval_start, ENTITY_SLOT_DATE_SENTINEL,
+            "delivery 2 is undecided at stage 0, not past the horizon"
+        );
+        assert_eq!(manifest[4].entity_id, 1, "slot1/plant0 targets delivery 1");
+        assert_eq!(
+            manifest[4].interval_start, 20240501,
+            "delivery 1 is the plant's own deposit at stage 0"
         );
     }
 
@@ -2091,7 +2153,7 @@ mod tests {
             DeliveryAxis {
                 stage_lengths_hours: &[720.0; 3],
                 n_decision: 3,
-                n_delivery: 3,
+                n_delivery: 4,
             },
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
@@ -2229,7 +2291,7 @@ mod tests {
             DeliveryAxis {
                 stage_lengths_hours: &[720.0; 3],
                 n_decision: 3,
-                n_delivery: 3,
+                n_delivery: 4,
             },
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
@@ -2290,7 +2352,7 @@ mod tests {
             DeliveryAxis {
                 stage_lengths_hours: &[720.0; 64],
                 n_decision: 64,
-                n_delivery: 64,
+                n_delivery: 66,
             },
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
@@ -2360,10 +2422,11 @@ mod tests {
     /// For every `(stage_id, slot_idx)` combination over a fixture whose ring
     /// reaches both in-study and post-study targets, a live anticipated
     /// slot's `interval_start` equals `encode_slot_date` of the `start_date`
-    /// of the stage `reachable_delivery_target` resolves for that slot at
-    /// the OUTGOING anchor — the correspondence
-    /// [`build_stage_entity_manifest`]'s rustdoc promises, checked directly
-    /// against the resolver rather than against a fixed date.
+    /// of the unique delivery `m` the LP itself would latch into that slot at
+    /// that stage — an oracle independent of the code under test: the unique
+    /// `m > t` with `m < n_delivery`, `resolution.is_ready_at(m, t)`, and
+    /// `global.commitment_hold_in_study_offset(0, m)` landing on `slot_idx`,
+    /// or the sentinel when no such `m` exists.
     #[test]
     fn anticipated_slot_date_matches_the_resolved_physical_delivery_stage() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
@@ -2381,7 +2444,8 @@ mod tests {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
         let post_study_calendar = post_study_delivery_calendar(&system);
         let delivery_stages = extended_delivery_stages(&study_stages, &post_study_calendar);
-        let k_i = global.anticipated_lead_stages[0];
+        let n_delivery = global.delivery_stage_count(study_stages.len());
+        let resolution = &global.anticipated_resolution.per_plant[0];
 
         for stage_id in 0..3i32 {
             let manifest = build_stage_entity_manifest(
@@ -2395,7 +2459,6 @@ mod tests {
                 .iter()
                 .position(|s| s.id == stage_id)
                 .expect("stage_id must resolve to a study stage");
-            let outgoing_anchor = current_stage_idx + 1;
 
             for slot_idx in 0..global.k_max {
                 let slot = manifest
@@ -2405,32 +2468,31 @@ mod tests {
                             && s.subindex == slot_idx as u32
                     })
                     .expect("every ring slot_idx must own a manifest entry");
-                let expected = reachable_delivery_target(
-                    slot_idx,
-                    k_i,
-                    outgoing_anchor,
-                    global.k_max,
-                    &global.anticipated_resolution.per_plant[0],
-                )
-                .and_then(|m| delivery_stages.get(m))
-                .map_or(ENTITY_SLOT_DATE_SENTINEL, |s| {
-                    encode_slot_date(s.start_date)
-                });
+                let expected = (current_stage_idx + 1..n_delivery)
+                    .find(|&m| {
+                        resolution.is_ready_at(m, current_stage_idx)
+                            && global.commitment_hold_in_study_offset(0, m) == slot_idx
+                    })
+                    .map_or(ENTITY_SLOT_DATE_SENTINEL, |m| {
+                        encode_slot_date(delivery_stages[m].start_date)
+                    });
                 assert_eq!(
                     slot.interval_start, expected,
-                    "stage {stage_id} slot {slot_idx} must match the resolver's own physical target"
+                    "stage {stage_id} slot {slot_idx} must match the independent latch-set oracle"
                 );
             }
         }
     }
 
-    /// A slot beyond a plant's own `anticipated_lead_stages` (`slot_idx >=
-    /// k_i`) stays sentinel-dated at every stage: the reachability gate does
-    /// not depend on which anchor `reachable_delivery_target` resolves
-    /// against, so it is unaffected by the outgoing re-anchoring above.
+    /// A slot the LP does not latch at a given stage stays sentinel-dated at
+    /// that stage — and only that stage: for the ℓ=1 plant, slot 0 is
+    /// sentinel at stage 0 (not yet decided) but dated at stage 1 (its own
+    /// deposit), and slot 1 is dated at stage 0 (its own deposit) but
+    /// sentinel from stage 1 on (past `n_delivery`) — never a fixed
+    /// `slot_idx >= k_i` bound independent of the stage.
     #[test]
-    fn anticipated_padding_slots_beyond_plant_lead_stay_sentinel() {
-        let system = system_1h_2ant_3monthly();
+    fn anticipated_slots_the_lp_does_not_latch_stay_sentinel() {
+        let system = system_1h_2ant_monthly(3);
         let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
         global.set_anticipated_resolution(AnticipatedResolution::resolve(
             &[LeadTime::Stages(1), LeadTime::Stages(2)],
@@ -2442,6 +2504,10 @@ mod tests {
         ));
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
+        // (stage_id, subindex) -> expected interval_start for the ℓ=1 plant
+        // (entity id 1); every other combination stays sentinel.
+        let dated: [(i32, u32, i32); 2] = [(0, 1, 20240501), (1, 0, 20240601)];
+
         for stage_id in 0..3i32 {
             let manifest = build_stage_entity_manifest(
                 &system,
@@ -2450,18 +2516,24 @@ mod tests {
                 &projection,
                 stage_id,
             );
-            let padding = manifest
-                .iter()
-                .find(|s| {
-                    s.entity_type == StateFamily::AnticipatedThermalState.code()
-                        && s.entity_id == 1
-                        && s.subindex == 1
-                })
-                .expect("the ℓ=1 plant must own a subindex-1 slot");
-            assert_eq!(
-                padding.interval_start, ENTITY_SLOT_DATE_SENTINEL,
-                "stage {stage_id}: slot_idx 1 exceeds the ℓ=1 plant's own lead"
-            );
+            for subindex in 0..2u32 {
+                let expected = dated
+                    .iter()
+                    .find(|&&(s, i, _)| s == stage_id && i == subindex)
+                    .map_or(ENTITY_SLOT_DATE_SENTINEL, |&(_, _, date)| date);
+                let slot = manifest
+                    .iter()
+                    .find(|s| {
+                        s.entity_type == StateFamily::AnticipatedThermalState.code()
+                            && s.entity_id == 1
+                            && s.subindex == subindex
+                    })
+                    .expect("the ℓ=1 plant must own this subindex slot");
+                assert_eq!(
+                    slot.interval_start, expected,
+                    "stage {stage_id} slot {subindex}"
+                );
+            }
         }
     }
 
@@ -2587,36 +2659,6 @@ mod tests {
             manifest[5].interval_start, ENTITY_SLOT_DATE_SENTINEL,
             "ring slot 3 (ring index 7) maps past the extended calendar (m=10 >= n_delivery=10)"
         );
-    }
-
-    /// With no fixed post-horizon window (`g = 0`), `physical_target` is the
-    /// identity, so `reachable_delivery_target` returns exactly
-    /// `modular_delivery_target`'s ring-axis index for every reachable slot —
-    /// the ring-index byte-neutrality obligation, holding for every existing
-    /// (`g = 0`) deck.
-    #[test]
-    fn reachable_delivery_target_identity_when_no_fixed_window() {
-        let resolution = AnticipatedResolution::resolve(
-            &[LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        );
-        let point = &resolution.per_plant[0];
-        let k_max = resolution.k_max;
-
-        for t in 0..3 {
-            for slot_idx in 0..k_max {
-                assert_eq!(
-                    reachable_delivery_target(slot_idx, k_max, t, k_max, point),
-                    Some(modular_delivery_target(slot_idx, t, k_max)),
-                    "slot {slot_idx} at stage {t}: g=0 must be byte-neutral with the \
-                     pre-amendment ring formula"
-                );
-            }
-        }
     }
 
     // -- build_stage_states_payloads: node-vs-pool manifest indexing --

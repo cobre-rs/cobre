@@ -568,9 +568,12 @@ mod anticipated_two_plants_smoke {
         BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
     };
 
-    // Pinned from a converged run of this fixture (no closed form); re-pin only
-    // after a deliberate fixture change.
-    const EXPECTED_LB: f64 = 13_020_000.000_000_002_f64;
+    // Closed form over 744 h stages: each stage's residual (150 MW load minus its
+    // delivered commitments; seeded ones are sunk) at the cheapest source the
+    // lead times still reach — stage 0: 70 MW @500; stage 1: 95 @500; stage 2:
+    // 100 K2 @50 + 20 @500; stage 3: 100 K2 @50 + 15 @500; stages 4 and 5:
+    // 80 K4 @40 + 70 K2 @50 each.
+    const EXPECTED_LB: f64 = 91_809_600.0_f64;
 
     // ---------------------------------------------------------------------------
     // System builder
@@ -579,7 +582,8 @@ mod anticipated_two_plants_smoke {
     /// Build the 6-stage two-anticipated-plant system. `SystemBuilder::build()` sorts
     /// thermals by id into `[id=2 (ant K=2), id=4 (backup), id=5 (ant K=4)]`, so the
     /// anticipated-local indices the assertions use are plant 0 → id=2, plant 1 → id=5.
-    /// The backup thermal alone covers the 150 MW load, so the LP is always feasible.
+    /// The bus's deficit segment is unbounded, so the LP is always feasible
+    /// regardless of thermal capacity.
     fn build_system_two_anticipated() -> cobre_core::System {
         use chrono::NaiveDate;
 
@@ -789,7 +793,7 @@ mod anticipated_two_plants_smoke {
             }
         }
 
-        let bounds = ResolvedBounds::new(
+        let mut bounds = ResolvedBounds::new(
             &BoundsCountsSpec {
                 n_hydros: 1,
                 n_thermals: 3,
@@ -823,6 +827,21 @@ mod anticipated_two_plants_smoke {
             },
         );
 
+        for (t_idx, thermal) in [&thermal_ant_k2, &thermal_backup, &thermal_ant_k4]
+            .into_iter()
+            .enumerate()
+        {
+            for stage_idx in 0..n_st {
+                *bounds.thermal_bounds_mut(t_idx, stage_idx) = ThermalStageBounds {
+                    cost_per_mwh: thermal.cost_per_mwh,
+                };
+                *bounds.thermal_block_base_mut(t_idx, stage_idx) = ThermalBlockBounds {
+                    min_generation_mw: thermal.min_generation_mw,
+                    max_generation_mw: thermal.max_generation_mw,
+                };
+            }
+        }
+
         let penalties = ResolvedPenalties::new(
             &PenaltiesCountsSpec {
                 n_hydros: 1,
@@ -842,7 +861,7 @@ mod anticipated_two_plants_smoke {
         );
 
         // Seed lengths force locked deliveries: plant 0 at stages 0..=1, plant 1 at
-        // stages 0..=3 — the committed costs the lower bound includes.
+        // stages 0..=3 — sunk, so the lower bound prices only the residual load.
         let initial_conditions = InitialConditions {
             storage: vec![HydroStorage {
                 hydro_id: EntityId(3),

@@ -43,7 +43,9 @@
 //!
 //! - `anticipated_gate` — the anticipated-decision temporal-gating free
 //!   functions (`is_anticipated_decision_active_for_delivery`,
-//!   `anticipated_resolution_for`).
+//!   `anticipated_resolution_for`), plus the anticipated ring's
+//!   delivery-axis → ring-slot sweep (`for_each_ring_residue`) and its
+//!   readiness-filtered form (`for_each_live_commitment_slot`).
 //! - `layout` — the per-stage geometry satellite type [`EvaporationIndices`]
 //!   (locating one hydro's evaporation columns/row within a stage LP).
 //! - `index` — the base typed vocabulary: [`StateDim`], [`InCol`]/[`OutCol`]
@@ -95,7 +97,8 @@ mod storage_boundary_grid;
 mod study_dimensions;
 
 pub(crate) use anticipated_gate::{
-    anticipated_resolution_for, is_anticipated_decision_active_for_delivery,
+    anticipated_resolution_for, for_each_live_commitment_slot, for_each_ring_residue,
+    is_anticipated_decision_active_for_delivery,
 };
 pub use block_grid::BlockGrid;
 pub use cut_state_projection::CutStateProjection;

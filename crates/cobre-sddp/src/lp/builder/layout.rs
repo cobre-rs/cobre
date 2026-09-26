@@ -18,13 +18,12 @@ use crate::hydro_models::{
 use crate::indexer::{
     AnticipatedLocal, BlockGrid, BlockIdx, Boundary, EvapLocal, EvaporationIndices, FphaCellLocal,
     FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, RangeCursor, StateSpace,
-    StorageBoundaryGrid, ThermalSys, anticipated_resolution_for,
+    StorageBoundaryGrid, ThermalSys, anticipated_resolution_for, for_each_live_commitment_slot,
     is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::time_value::TimeValue;
 
-use super::delivery_ring::for_each_ring_residue;
 use super::template::StageGeometry;
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET,
@@ -654,20 +653,21 @@ fn build_transit_bucket_row_pos(
 /// (`decider[m] == Some(stage_idx)`, the deposit-row family
 /// `row_anticipated_state_out_def_start` owns it instead), beyond the
 /// EXTENDED delivery calendar (`m >= state.delivery_stage_count(n_stages)`),
-/// or not yet ready (`PointResolution::is_ready_at`, structural padding).
-/// Masking on the study horizon (`m >= n_stages`) instead is the
-/// wrong-but-compiling alternative: it would freeze `[0, 0]` a slot the
-/// terminal boundary must carry, zeroing a commitment the FCF prices. This
-/// covers only STRICTLY FUTURE, not-yet-due deliveries; the commitment
-/// maturing EXACTLY this stage (`m == stage_idx`) is the single governing
-/// branch's fish-or-carry decision, owned by
+/// or not yet ready ([`for_each_live_commitment_slot`]'s own filter,
+/// structural padding). Masking on the study horizon (`m >= n_stages`)
+/// instead is the wrong-but-compiling alternative: it would freeze `[0, 0]`
+/// a slot the terminal boundary must carry, zeroing a commitment the FCF
+/// prices. This covers only STRICTLY FUTURE, not-yet-due deliveries; the
+/// commitment maturing EXACTLY this stage (`m == stage_idx`) is the single
+/// governing branch's fish-or-carry decision, owned by
 /// [`build_anticipated_fishing_row_pos`] and its entries-side `if`/`else` —
 /// never duplicated here.
 ///
-/// The strictly-future ring-window sweep and its per-plant physical-target
-/// resolution are owned by [`for_each_ring_residue`]; this builder only
-/// classifies each visited residue as carry (`is_interior`), deposit, or
-/// not-yet-ready. Returns the mapping and the reachable count.
+/// The strictly-future ring-window sweep, its readiness filter, and its
+/// per-plant physical-target resolution are owned by
+/// [`for_each_live_commitment_slot`]; this builder only classifies each
+/// visited (already-live) residue as carry or deposit. Returns the mapping
+/// and the reachable count.
 fn build_anticipated_slot_row_pos(
     state: &StateSpace,
     n_stages: usize,
@@ -676,10 +676,9 @@ fn build_anticipated_slot_row_pos(
     let n_anticipated = state.n_anticipated;
     let mut row_pos = vec![None; n_anticipated * state.k_max];
     let mut n_reachable = 0_usize;
-    for_each_ring_residue(state, n_stages, stage_idx, |res, point| {
+    for_each_live_commitment_slot(state, n_stages, stage_idx, |res, point| {
         let is_deposit = point.decider.get(res.target).copied().flatten() == Some(stage_idx);
-        let is_interior = !is_deposit && point.is_ready_at(res.target, stage_idx);
-        if is_interior {
+        if !is_deposit {
             row_pos[res.slot * n_anticipated + res.plant] = Some(n_reachable);
             n_reachable += 1;
         }

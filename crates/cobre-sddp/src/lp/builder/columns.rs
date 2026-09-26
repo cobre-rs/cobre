@@ -6,11 +6,12 @@ use cobre_core::{
 use crate::hydro_models::{EvaporationModel, ResolvedProductionModel};
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal,
-    FphaLocal, HydroCell, HydroSys, LineSys, is_anticipated_decision_active_for_delivery,
+    FphaLocal, HydroCell, HydroSys, LineSys, for_each_ring_residue,
+    is_anticipated_decision_active_for_delivery,
 };
 
 use super::EVAPORATION_FLOW_SAFETY_MARGIN;
-use super::delivery_ring::{DeliveryRing, for_each_ring_residue};
+use super::delivery_ring::DeliveryRing;
 use super::layout::{StageLayout, TemplateBuildCtx};
 use crate::generic_constraints::contract_family_slot;
 

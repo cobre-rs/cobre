@@ -435,13 +435,15 @@ The anticipated ring occupies the whole merged **commitment-hold** region
 slot-major/plant-minor, keyed by delivery-target residue. There is no separate
 appended block: a slot whose delivery target lands past the horizon (`m >=
 n_stages`, reachable only when `post_study_stages.json` extends the delivery axis)
-is one of the ring's own slots, not a trailing lane. Slots beyond a plant's own
-lead `K_i` are structural padding, frozen `[0,0]`.
+is one of the ring's own slots, not a trailing lane. A plant's commitment for
+delivery `m` occupies slot `ring_index(m) mod k_max`, so every plant cycles
+through all `k_max` slots over the horizon; only a slot the LP never latches
+is structurally zero.
 
 `n_anticipated` is the count of thermals with `anticipated_config.is_some()` in
 canonical `System::thermals()` order. The stage-0 seed writes
 `past_anticipated_commitments` into the outgoing block at `slot·n_ant + local_idx`,
-`.take(K_i)` (using the plant's own lead, not `k_max`, so padding stays zero), with
+`.take(K_i)` (seeds exactly the plant's own pre-study deliveries), with
 ids resolved through a position map (never `binary_search`, which breaks under
 staggered commissioning).
 

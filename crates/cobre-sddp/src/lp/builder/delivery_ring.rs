@@ -11,15 +11,13 @@
 //! out/in state-index ranges: a [`DeliveryRing`] borrows them for one
 //! construction and never re-derives or persists an independent copy. The
 //! block-mode-coupled per-lag deposit fill stays at each ring's own call
-//! site; this module owns the shared skeleton plus, for the anticipated ring
-//! alone, [`for_each_ring_residue`] — the single owner of its
-//! delivery-axis → ring-slot map.
+//! site; this module owns only the shared skeleton — the anticipated ring's
+//! delivery-axis → ring-slot map is owned by
+//! [`crate::lp::indexer::anticipated_gate::for_each_ring_residue`].
 
-use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::indexer::{AnticipatedLocal, StateSpace, anticipated_resolution_for};
-use crate::lead_time::PointResolution;
+use crate::indexer::StateSpace;
 
 use super::columns::ColumnBufs;
 
@@ -316,80 +314,6 @@ impl DeliveryRing {
             self.n_lanes
         );
         slot * self.n_lanes + lane
-    }
-}
-
-/// One anticipated ring-window visit: a plant's modular ring slot and its own
-/// physical delivery target for one ring-axis position. Bundled `Copy` struct
-/// rather than separate closure arguments, mirroring
-/// [`super::fpha_cursor::FphaVisit`].
-#[derive(Debug, Clone, Copy)]
-pub(super) struct RingResidue {
-    /// Modular ring slot `ring_index(target) mod k_max` this visit lands on.
-    pub(super) slot: usize,
-    /// Anticipated-local plant (ring lane) index.
-    pub(super) plant: usize,
-    /// The plant's own physical delivery target at this ring-axis position
-    /// ([`PointResolution::physical_target`] of the window index).
-    pub(super) target: usize,
-}
-
-/// Walk the stage's strictly-future anticipated ring window
-/// `{stage_idx + 1 ..= stage_idx + k_max}`, invoking `visit` once per
-/// `(ring residue, plant)` in depth-major/plant-minor order.
-///
-/// Single owner of the anticipated delivery-axis → ring-slot map the three
-/// anticipated fills share: each visit resolves the ring-axis slot and the
-/// plant's OWN physical delivery target through its per-plant excision, so
-/// `slot = ring_index(target) mod k_max` has one home instead of three inlined
-/// residue loops. Keying the slot on the raw delivery axis (`m mod k_max`) is
-/// the forbidden alternative — injective only on a contiguous run, which a
-/// plant's excised fixed post-horizon window breaks; see
-/// [`PointResolution::ring_index`]/[`PointResolution::physical_target`] (the
-/// ring-axis contract) and [`DeliveryRing`]'s out/in columns, pinned via
-/// `state_to_lp_incoming_column` (the column-bound-pinning contract).
-///
-/// The depth-major/plant-minor order is load-bearing: the carry-row family
-/// compacts its row positions in exactly this order. A plant whose physical
-/// target lands beyond the extended delivery calendar
-/// (`target >= delivery_stage_count`) is skipped, never visited. The closure
-/// is a monomorphised `FnMut` reusing the caller's buffers — no `Box<dyn>` and
-/// no per-residue allocation; the per-stage resolution set is built once and
-/// reused across the whole window.
-pub(super) fn for_each_ring_residue<F>(
-    state: &StateSpace,
-    n_stages: usize,
-    stage_idx: usize,
-    mut visit: F,
-) where
-    F: FnMut(RingResidue, &PointResolution),
-{
-    let n_anticipated = state.n_anticipated;
-    let k_max = state.k_max;
-    if n_anticipated == 0 || k_max == 0 {
-        return;
-    }
-    let n_delivery = state.delivery_stage_count(n_stages);
-    let points: Vec<Cow<'_, PointResolution>> = (0..n_anticipated)
-        .map(|plant| anticipated_resolution_for(state, AnticipatedLocal::new(plant), n_stages))
-        .collect();
-    for depth in 0..k_max {
-        let r = stage_idx + depth + 1;
-        let slot = r % k_max;
-        for (plant, point) in points.iter().enumerate() {
-            let target = point.physical_target(r);
-            if target >= n_delivery {
-                continue;
-            }
-            visit(
-                RingResidue {
-                    slot,
-                    plant,
-                    target,
-                },
-                point,
-            );
-        }
     }
 }
 

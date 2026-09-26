@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cuts and the policy file keep every in-flight commitment when anticipated
+  thermals have different leads.** A shorter-lead plant's commitment could sit
+  in a ring position the cut rows left out, so the cut ignored it and the
+  lower bound could be wrong. The policy file also gave that commitment no
+  delivery date, and gave a date to some empty positions. Studies whose
+  anticipated thermals all share one lead are unaffected.
+
 - **BREAKING — Python: a study-setup validation failure now raises
   `cobre.errors.ValidationError`, matching the CLI.** Configuration problems
   detected while building a study (for example a gap stopping rule under

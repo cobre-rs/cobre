@@ -6,9 +6,10 @@ use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
     BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, StateSpace,
+    for_each_ring_residue,
 };
 
-use super::delivery_ring::{DeliveryRing, for_each_ring_residue};
+use super::delivery_ring::DeliveryRing;
 use super::fpha_cursor::for_each_fpha_plane;
 use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
 use crate::generic_constraints::{

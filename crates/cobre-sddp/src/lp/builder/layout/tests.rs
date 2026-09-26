@@ -22,19 +22,21 @@ use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::indexer::{
-    BlockIdx, Boundary, EvapLocal, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys,
-    LineSys, ThermalSys,
+    AnticipatedLocal, BlockIdx, Boundary, CutStateProjection, EvapLocal, FphaCellLocal, FphaLocal,
+    HydroCell, HydroCellIndex, HydroSys, LineSys, StateDim, StateRegion, ThermalSys,
+    anticipated_resolution_for,
 };
 use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 use crate::resolved_parameters::ResolvedParameters;
-use crate::test_support::{make_unit_group, state_layout};
+use crate::test_support::{make_unit_group, state_layout, state_layout_full};
 use crate::time_value::{PostStudyResolved, TimeValue};
 
 use super::super::test_support::{state_layout_for, zero_hydro_penalties};
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET, RangeCursor,
-    ResolvedTables, StageLayout, StateSpace, TemplateBuildCtx, build_anticipated_fishing_row_pos,
-    build_anticipated_slot_row_pos, build_transit_bucket_row_pos, fold_endpoint,
+    ResolvedTables, StageLayout, StateSpace, TemplateBuildCtx, build_anticipated_decision_row_pos,
+    build_anticipated_fishing_row_pos, build_anticipated_slot_row_pos,
+    build_transit_bucket_row_pos, fold_endpoint,
 };
 
 // ── RangeCursor ──────────────────────────────────────────────────────────
@@ -2620,6 +2622,84 @@ fn anticipated_slot_row_pos_masks_per_plant_at_the_extended_axis_bound() {
          masked while plant B's own physical target (3) is still classified"
     );
     assert_eq!(n_reachable, 3);
+}
+
+// ── Mixed-lead reachability: mask vs. the LP's own latch set ─────────────
+
+/// Leads `(1, 3)`, `k_max = 3`, 4 study stages, no post-study calendar. At
+/// every stage the mask's commitment-hold tail must equal the union, over
+/// every stage, of the LP's own carry map ([`build_anticipated_slot_row_pos`])
+/// plus its deposit map ([`build_anticipated_decision_row_pos`]) — never the
+/// retired per-plant-lead-bounded rule, under which the lead-1 plant's slot 1
+/// at stage 0 would be excluded even though the LP latches it (a fresh
+/// deposit).
+#[test]
+fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
+    let mut state = state_layout_full(1, 1, 2, vec![1, 3]);
+    state.set_anticipated_resolution(AnticipatedResolution::resolve(
+        &[LeadTime::Stages(1), LeadTime::Stages(3)],
+        DeliveryAxis {
+            stage_lengths_hours: &[720.0; 4],
+            n_decision: 4,
+            n_delivery: 4,
+        },
+    ));
+
+    let expected_by_stage: [&[usize]; 4] = [&[2, 3, 5, 1], &[4, 5, 1], &[0, 1], &[]];
+
+    let mut latched: Vec<usize> = Vec::new();
+    for (t, &expected) in expected_by_stage.iter().enumerate() {
+        let mut this_stage: Vec<usize> = build_anticipated_slot_row_pos(&state, 4, t)
+            .0
+            .iter()
+            .enumerate()
+            .filter_map(|(o, pos)| pos.is_some().then_some(o))
+            .collect();
+
+        let (decision_pos, _) =
+            build_anticipated_decision_row_pos(&state, 4, t, &[(None, None); 2], &[0, 1, 2, 3]);
+        for (p, pos) in decision_pos.iter().enumerate() {
+            if pos.is_some() {
+                let m = anticipated_resolution_for(&state, AnticipatedLocal::new(p), 4)
+                    .genuine_decisions_at(t)
+                    .next()
+                    .expect("a decision-row position implies a genuine decision this stage");
+                this_stage.push(state.commitment_hold_in_study_offset(p, m));
+            }
+        }
+
+        this_stage.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(this_stage, expected, "stage {t}: latched offsets");
+
+        latched.extend_from_slice(&this_stage);
+    }
+    latched.sort_unstable();
+    latched.dedup();
+
+    let start = state.state_dim_range(StateRegion::CommitmentHold).start;
+    for &o in &latched {
+        assert!(
+            state
+                .nonzero_state_indices
+                .contains(&StateDim::new(start + o)),
+            "offset {o} is latched by the LP but missing from the mask"
+        );
+    }
+
+    let projection = CutStateProjection::new(
+        &state,
+        StageStateConfig {
+            storage: true,
+            inflow_lags: true,
+        },
+    );
+    assert_eq!(
+        projection.render_len(),
+        state.nonzero_state_indices.len(),
+        "an all-enabled projection must render exactly the global mask"
+    );
 }
 
 /// Fishing-count invariance under the same extended axis as the carry test

@@ -17,7 +17,7 @@ use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::resolved_parameters::ResolvedParameters;
 use crate::time_value::TimeValue;
 
-use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, one_per_entity_col};
+use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, one_per_entity};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
@@ -327,42 +327,42 @@ impl StageGeometry {
     #[inline]
     #[must_use]
     pub fn anticipated_decision_col(&self, local: AnticipatedLocal) -> usize {
-        one_per_entity_col(&self.anticipated_decision, local.get())
+        one_per_entity(&self.anticipated_decision, local.get())
     }
 
     /// Hydro `h`'s inflow-penalty slack column.
     #[inline]
     #[must_use]
     pub fn inflow_slack_col(&self, h: HydroSys) -> usize {
-        one_per_entity_col(&self.inflow_slack, h.get())
+        one_per_entity(&self.inflow_slack, h.get())
     }
 
     /// Hydro `h`'s below-withdrawal-target slack column.
     #[inline]
     #[must_use]
     pub fn withdrawal_slack_neg_col(&self, h: HydroSys) -> usize {
-        one_per_entity_col(&self.withdrawal_slack_neg, h.get())
+        one_per_entity(&self.withdrawal_slack_neg, h.get())
     }
 
     /// Hydro `h`'s above-withdrawal-target slack column.
     #[inline]
     #[must_use]
     pub fn withdrawal_slack_pos_col(&self, h: HydroSys) -> usize {
-        one_per_entity_col(&self.withdrawal_slack_pos, h.get())
+        one_per_entity(&self.withdrawal_slack_pos, h.get())
     }
 
     /// Filling-target-local `local`'s `σ_fill` slack column.
     #[inline]
     #[must_use]
     pub fn filling_target_slack_col(&self, local: FillingTargetLocal) -> usize {
-        one_per_entity_col(&self.filling_target_col, local.get())
+        one_per_entity(&self.filling_target_col, local.get())
     }
 
     /// Floor-local `local`'s `σ^{v-}` operating-floor slack column.
     #[inline]
     #[must_use]
     pub fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
-        one_per_entity_col(&self.filled_min_storage_floor_col, local.get())
+        one_per_entity(&self.filled_min_storage_floor_col, local.get())
     }
 }
 

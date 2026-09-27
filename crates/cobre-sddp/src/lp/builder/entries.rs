@@ -928,17 +928,16 @@ fn fill_prefilling_shortcircuit(
 /// — that double-counts the soft floor (a guard test asserts no `lp/builder` file
 /// references the dual-extraction entry point).
 fn fill_filling_target_entries(layout: &StageLayout, col_entries: &mut [Vec<(usize, f64)>]) {
-    let row_start = layout.filling.row_filling_target_start;
     for (local_idx, &h) in layout
         .filling
         .filling_target_hydro_indices
         .iter()
         .enumerate()
     {
-        let row = row_start + local_idx;
+        let local = FillingTargetLocal::new(local_idx);
+        let row = layout.filling_target_row(local);
         col_entries[layout.state.storage_outgoing_col(h).get()].push((row, 1.0));
-        col_entries[layout.filling_target_slack_col(FillingTargetLocal::new(local_idx))]
-            .push((row, 1.0));
+        col_entries[layout.filling_target_slack_col(local)].push((row, 1.0));
     }
 }
 
@@ -953,17 +952,16 @@ fn fill_filled_min_storage_floor_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let row_start = layout.filling.row_filled_min_storage_floor_start;
     for (local_idx, &h) in layout
         .filling
         .filled_min_storage_floor_hydro_indices
         .iter()
         .enumerate()
     {
-        let row = row_start + local_idx;
+        let local = FloorLocal::new(local_idx);
+        let row = layout.filled_min_storage_floor_row(local);
         col_entries[layout.state.storage_outgoing_col(h).get()].push((row, 1.0));
-        col_entries[layout.filled_min_storage_floor_slack_col(FloorLocal::new(local_idx))]
-            .push((row, 1.0));
+        col_entries[layout.filled_min_storage_floor_slack_col(local)].push((row, 1.0));
     }
 }
 
@@ -1314,7 +1312,7 @@ pub(super) fn fill_generic_constraint_entries(
     };
 
     for (entry_idx, entry) in layout.generic_constraint_rows.iter().enumerate() {
-        let row = layout.rows.row_generic_start + entry_idx;
+        let row = layout.generic_row(entry_idx);
         let constraint = &ctx.generic_constraints[entry.constraint_idx];
         // A collapsed stage-level row is priced by the stage's total hours (it stands in
         // for one row per block); the total is penalty-conserving either way.

@@ -1,7 +1,7 @@
 use cobre_core::{BlockMode, Stage};
 
 use crate::hydro_models::EvaporationModel;
-use crate::indexer::{BlockIdx, BusSys, HydroCell, HydroSys};
+use crate::indexer::{BlockIdx, BusSys, FillingTargetLocal, FloorLocal, HydroCell, HydroSys};
 
 use super::columns::{GroupBoundLookup, cell_min_generation, cell_min_turbined};
 use super::fpha_cursor::for_each_fpha_plane;
@@ -235,7 +235,6 @@ fn fill_filling_target_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    let row_start = layout.filling.row_filling_target_start;
     for (local_idx, &h) in layout
         .filling
         .filling_target_hydro_indices
@@ -253,7 +252,7 @@ fn fill_filling_target_rows(
                 h.get()
             );
         };
-        let row = row_start + local_idx;
+        let row = layout.filling_target_row(FillingTargetLocal::new(local_idx));
         row_lower[row] = v_target;
         row_upper[row] = f64::INFINITY;
     }
@@ -282,7 +281,6 @@ fn fill_filled_min_storage_floor_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    let row_start = layout.filling.row_filled_min_storage_floor_start;
     for (local_idx, &h) in layout
         .filling
         .filled_min_storage_floor_hydro_indices
@@ -294,7 +292,7 @@ fn fill_filled_min_storage_floor_rows(
             .bounds
             .hydro_bounds(h.get(), stage_idx)
             .min_storage_hm3;
-        let row = row_start + local_idx;
+        let row = layout.filled_min_storage_floor_row(FloorLocal::new(local_idx));
         row_lower[row] = min_storage;
         row_upper[row] = f64::INFINITY;
     }

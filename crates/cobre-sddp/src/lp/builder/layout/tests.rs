@@ -4686,7 +4686,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
             .clone()
             .nth(local_idx)
             .expect("local_idx within filling_target range");
-        let actual = layout.filling.row_filling_target_start + local_idx;
+        let actual = layout.filling_target_row(FillingTargetLocal::new(local_idx));
         assert_eq!(
             actual, expected,
             "filling target row disagreement at local {local_idx}"
@@ -4700,7 +4700,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
             .clone()
             .nth(local_idx)
             .expect("local_idx within filled_min_storage_floor range");
-        let actual = layout.filling.row_filled_min_storage_floor_start + local_idx;
+        let actual = layout.filled_min_storage_floor_row(FloorLocal::new(local_idx));
         assert_eq!(
             actual, expected,
             "floor row disagreement at local {local_idx}"
@@ -4724,7 +4724,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
     );
     for i in 0..layout.generic_constraint_rows.len() {
         let expected = layout.rows.row_generic_start + i;
-        let actual = layout.rows.row_generic_start + i;
+        let actual = layout.generic_row(i);
         assert_eq!(actual, expected, "generic row disagreement at i={i}");
         counts[7] += 1;
     }

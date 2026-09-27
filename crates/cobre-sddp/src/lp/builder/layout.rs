@@ -1557,13 +1557,13 @@ impl<'a> StageLayout<'a> {
     }
 }
 
-/// Entity `i`'s column in a one-per-entity family `family`.
+/// Entity `i`'s index in a one-per-entity family `family`.
 #[inline]
 #[must_use]
-pub(super) fn one_per_entity_col(family: &Range<usize>, i: usize) -> usize {
-    let col = family.start + i;
-    debug_assert!(col < family.end, "column {col} outside {family:?}");
-    col
+pub(super) fn one_per_entity(family: &Range<usize>, i: usize) -> usize {
+    let idx = family.start + i;
+    debug_assert!(idx < family.end, "index {idx} outside {family:?}");
+    idx
 }
 
 impl StageLayout<'_> {
@@ -1683,37 +1683,37 @@ impl StageLayout<'_> {
     /// Hydro `h`'s inflow-penalty slack column.
     #[inline]
     pub(crate) fn inflow_slack_col(&self, h: HydroSys) -> usize {
-        one_per_entity_col(&self.slack.inflow_slack, h.get())
+        one_per_entity(&self.slack.inflow_slack, h.get())
     }
 
     /// Hydro `h`'s below-withdrawal-target slack column.
     #[inline]
     pub(crate) fn withdrawal_slack_neg_col(&self, h: HydroSys) -> usize {
-        one_per_entity_col(&self.slack.withdrawal_slack_neg, h.get())
+        one_per_entity(&self.slack.withdrawal_slack_neg, h.get())
     }
 
     /// Hydro `h`'s above-withdrawal-target slack column.
     #[inline]
     pub(crate) fn withdrawal_slack_pos_col(&self, h: HydroSys) -> usize {
-        one_per_entity_col(&self.slack.withdrawal_slack_pos, h.get())
+        one_per_entity(&self.slack.withdrawal_slack_pos, h.get())
     }
 
     /// Anticipated-local `local`'s ring decision column.
     #[inline]
     pub(crate) fn anticipated_decision_col(&self, local: AnticipatedLocal) -> usize {
-        one_per_entity_col(&self.anticipated_decision(), local.get())
+        one_per_entity(&self.anticipated_decision(), local.get())
     }
 
     /// Filling-target-local `local`'s `σ_fill` slack column.
     #[inline]
     pub(crate) fn filling_target_slack_col(&self, local: FillingTargetLocal) -> usize {
-        one_per_entity_col(&self.filling_target_col(), local.get())
+        one_per_entity(&self.filling_target_col(), local.get())
     }
 
     /// Floor-local `local`'s `σ^{v-}` operating-floor slack column.
     #[inline]
     pub(crate) fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
-        one_per_entity_col(&self.filled_min_storage_floor_col(), local.get())
+        one_per_entity(&self.filled_min_storage_floor_col(), local.get())
     }
 
     /// NCS entity `ncs_sys`'s generation column for block `blk`.
@@ -1819,6 +1819,32 @@ impl StageLayout<'_> {
     #[must_use]
     pub(crate) fn row_evap_start(&self) -> usize {
         self.rows.fpha_rows_end
+    }
+
+    /// Filling-target-local `local`'s soft `σ_fill` row, over [`Self::filling_target`].
+    #[inline]
+    #[must_use]
+    pub(crate) fn filling_target_row(&self, local: FillingTargetLocal) -> usize {
+        one_per_entity(&self.filling_target(), local.get())
+    }
+
+    /// Floor-local `local`'s soft `σ^{v-}` operating-floor row, over
+    /// [`Self::filled_min_storage_floor`].
+    #[inline]
+    #[must_use]
+    pub(crate) fn filled_min_storage_floor_row(&self, local: FloorLocal) -> usize {
+        one_per_entity(&self.filled_min_storage_floor(), local.get())
+    }
+
+    /// Generic constraint row `entry_idx`'s row, over
+    /// `row_generic_start..row_generic_start + n_generic_rows`.
+    #[inline]
+    #[must_use]
+    pub(crate) fn generic_row(&self, entry_idx: usize) -> usize {
+        one_per_entity(
+            &(self.rows.row_generic_start..self.rows.row_generic_start + self.rows.n_generic_rows),
+            entry_idx,
+        )
     }
 
     /// Hydro `h`'s water-balance row for block `blk`, striding by `self.n_blks`

@@ -258,6 +258,8 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
         )?;
     }
 
+    let hydro = training_ctx.stochastic.class_dimensions().hydro_range();
+
     objectives_buf.clear();
 
     for opening_idx in 0..n_openings {
@@ -272,14 +274,13 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
                 par_lp,
                 0,
                 &scratch.lag_matrix_buf,
-                &raw_noise[..n_hydros],
+                &raw_noise[hydro.clone()],
                 &mut scratch.par_inflow_buf,
             );
         }
 
         compute_effective_eta(
-            raw_noise,
-            n_hydros,
+            &raw_noise[hydro.clone()],
             *training_ctx.inflow_method,
             &scratch.par_inflow_buf,
             &scratch.eta_floor_buf,
@@ -671,13 +672,36 @@ mod tests {
         .unwrap()
     }
 
-    /// Wrap a pre-built stage-0 [`OpeningTree`] into a degenerate, entity-free
-    /// [`StochasticContext`] (`n_stochastic_ncs() == 0`, `par().n_stages() == 0`)
-    /// so a test can pass a real `&StochasticContext` in place of the retired
-    /// `stochastic: None` field. `user_tree` bypasses generation entirely, so the
+    /// Wrap a pre-built stage-0 [`OpeningTree`] into a degenerate
+    /// [`StochasticContext`] carrying `n_hydros` bare hydro entities and no
+    /// load/NCS/inflow models (`n_stochastic_ncs() == 0`,
+    /// `par().n_stages() == 0`), so a test can pass a real `&StochasticContext`
+    /// in place of the retired `stochastic: None` field with a hydro count that
+    /// agrees with the LP-side `StageContext.n_hydros` the caller's fixture
+    /// derives independently. `user_tree` bypasses generation entirely, so the
     /// injected tree's shape is preserved verbatim.
-    fn wrap_opening_tree(tree: OpeningTree) -> StochasticContext {
-        let system = SystemBuilder::new().build().expect("empty system is valid");
+    #[allow(clippy::cast_possible_wrap)]
+    fn wrap_opening_tree(n_hydros: usize, tree: OpeningTree) -> StochasticContext {
+        use cobre_core::test_support::{BusSpec, HydroSpec, make_bus, make_hydro};
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(BusSpec {
+                id: 0,
+                ..Default::default()
+            })])
+            .hydros(
+                (0..n_hydros)
+                    .map(|i| {
+                        make_hydro(HydroSpec {
+                            id: i as i32 + 1,
+                            bus_id: 0,
+                            ..Default::default()
+                        })
+                    })
+                    .collect(),
+            )
+            .build()
+            .expect("hydro-only system with no inflow models must be valid");
         build_stochastic_context(
             &system,
             42,
@@ -981,7 +1005,7 @@ mod tests {
         ) -> Self {
             let state = test_support::state_layout(hydro_count, 0);
             let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 2);
-            let stochastic = wrap_opening_tree(opening_tree);
+            let stochastic = wrap_opening_tree(n_hydros, opening_tree);
             let node_graph = test_support::chain_node_graph(&stochastic);
             Self {
                 state_boxes: permissive_state_boxes(state.n_state, 1),
@@ -2435,8 +2459,8 @@ mod tests {
     /// [`filling_study_templates`] system carries (`dim = 2`).
     ///
     /// The per-opening noise vector must have at least `n_hydros` entries because
-    /// `lb_evaluate_stage_0` slices `raw_noise[..n_hydros]`; a 1-hydro tree (the
-    /// sibling `simple_opening_tree`) would under-size it. Identity correlation
+    /// `lb_evaluate_stage_0` slices the noise vector's hydro segment; a 1-hydro
+    /// tree (the sibling `simple_opening_tree`) would under-size it. Identity correlation
     /// between the two inflow entities keeps the tree shape trivial.
     fn filling_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
@@ -2759,7 +2783,7 @@ mod tests {
         let mut patch_buf = PatchBuffer::new(state.hydro_count, state.max_par_order, 0, 0, 0, 0, 0);
         let opening_tree = filling_opening_tree(1);
         let rm = RiskMeasure::Expectation;
-        let stochastic = wrap_opening_tree(opening_tree);
+        let stochastic = wrap_opening_tree(state.hydro_count, opening_tree);
         let state_boxes = permissive_state_boxes(state.n_state, templates.templates.len());
 
         let fixture = StageContextFixture::new(
@@ -2850,7 +2874,7 @@ mod tests {
         let rm = RiskMeasure::Expectation;
         let comm = LocalComm;
         let mut solver = MockSolver::with_objectives(vec![0.0]);
-        let stochastic = wrap_opening_tree(opening_tree);
+        let stochastic = wrap_opening_tree(state.hydro_count, opening_tree);
         let state_boxes = permissive_state_boxes(state.n_state, 1);
 
         let geometry = equipment_free_geometry(&[0]);
@@ -3056,7 +3080,7 @@ mod tests {
     #[test]
     #[allow(clippy::cast_precision_loss)]
     fn assemble_root_outcome_weights_chain_pins_uniform_bit_pattern() {
-        let stochastic = wrap_opening_tree(simple_opening_tree(5));
+        let stochastic = wrap_opening_tree(1, simple_opening_tree(5));
         let node_graph = test_support::chain_node_graph(&stochastic);
 
         let mut weights = Vec::new();

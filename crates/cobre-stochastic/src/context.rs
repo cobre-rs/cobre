@@ -346,7 +346,7 @@ impl StochasticContext {
         self.class_dimensions
     }
 
-    /// Returns the noise dimension (`n_hydros + n_load_buses + n_stochastic_ncs`).
+    /// Returns the noise dimension (the noise-vector layout's total width).
     #[must_use]
     #[inline]
     pub fn dim(&self) -> usize {

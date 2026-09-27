@@ -3,7 +3,7 @@
 //! row/column bounds for one opening.
 
 use cobre_solver::SolverInterface;
-use cobre_stochastic::ExternalScenarioLibrary;
+use cobre_stochastic::{ClassDimensions, ExternalScenarioLibrary};
 
 use crate::{
     context::{StageContext, TrainingContext},
@@ -82,11 +82,7 @@ pub(crate) fn fill_external_opening_noise(
 ) -> Result<(), SddpError> {
     let stochastic = training_ctx.stochastic;
     assemble_external_opening_noise(
-        [
-            stochastic.n_hydros(),
-            stochastic.n_load_buses(),
-            stochastic.n_stochastic_ncs(),
-        ],
+        stochastic.class_dimensions(),
         [
             training_ctx.external_inflow_library,
             training_ctx.external_load_library,
@@ -113,7 +109,7 @@ const EXTERNAL_CLASS_NAMES: [&str; 3] = ["inflow", "load", "ncs"];
 ///
 /// [`SddpError::Validation`] when a class has a nonempty segment but no library.
 fn assemble_external_opening_noise(
-    class_dims: [usize; 3],
+    dims: ClassDimensions,
     libraries: [Option<&ExternalScenarioLibrary>; 3],
     stage: usize,
     k: usize,
@@ -121,18 +117,14 @@ fn assemble_external_opening_noise(
     buf: &mut Vec<f64>,
 ) -> Result<(), SddpError> {
     buf.clear();
-    buf.resize(class_dims.iter().sum(), 0.0);
-    let mut offset = 0;
-    for ((&dim, library), class) in class_dims.iter().zip(libraries).zip(EXTERNAL_CLASS_NAMES) {
-        fill_external_class(
-            &mut buf[offset..offset + dim],
-            library,
-            stage,
-            k,
-            class,
-            node_id,
-        )?;
-        offset += dim;
+    buf.resize(dims.total(), 0.0);
+    let (hydro, load, ncs) = dims.split_segments_mut(buf);
+    for ((segment, library), class) in [hydro, load, ncs]
+        .into_iter()
+        .zip(libraries)
+        .zip(EXTERNAL_CLASS_NAMES)
+    {
+        fill_external_class(segment, library, stage, k, class, node_id)?;
     }
     Ok(())
 }
@@ -176,7 +168,7 @@ pub(crate) fn resolve_backward_basis<'a>(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
-    use cobre_stochastic::ExternalScenarioLibrary;
+    use cobre_stochastic::{ClassDimensions, ExternalScenarioLibrary};
 
     use super::{NodeId, assemble_external_opening_noise, fill_external_class};
     use crate::SddpError;
@@ -212,7 +204,11 @@ mod tests {
 
         let mut buf = vec![f64::NAN; 1]; // deliberately wrong-length; resize must fix it
         assemble_external_opening_noise(
-            [2, 1, 2],
+            ClassDimensions {
+                n_hydros: 2,
+                n_load_buses: 1,
+                n_ncs: 2,
+            },
             [Some(&inflow), Some(&load), Some(&ncs)],
             stage,
             k,
@@ -238,7 +234,11 @@ mod tests {
 
         let mut buf = Vec::new();
         assemble_external_opening_noise(
-            [3, 0, 0],
+            ClassDimensions {
+                n_hydros: 3,
+                n_load_buses: 0,
+                n_ncs: 0,
+            },
             [Some(&inflow), None, None],
             stage,
             k,
@@ -255,7 +255,11 @@ mod tests {
         // never a silent fallback to the generated opening tree.
         let mut buf = Vec::new();
         let err = assemble_external_opening_noise(
-            [2, 0, 0],
+            ClassDimensions {
+                n_hydros: 2,
+                n_load_buses: 0,
+                n_ncs: 0,
+            },
             [None, None, None],
             1,
             2,

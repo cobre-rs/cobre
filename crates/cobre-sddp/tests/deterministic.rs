@@ -10652,9 +10652,9 @@ mod water_terminal_fcf_valuation {
     /// column (never assumed equal to a pin), since the ring's shift-row
     /// definition (`b_d^out = b_{d+1}^in + k_d * D`) makes the outgoing value
     /// an affine, not identity, function of whichever incoming slot is
-    /// pinned. `raw_noise` is sized from `ctx`'s own hydro/load-bus/
-    /// stochastic-NCS counts (never hand-picked), so an all-zero draw is
-    /// always the correct shape regardless of which fixture calls this.
+    /// pinned. `raw_noise` is sized from `training_ctx.stochastic.dim()`
+    /// (never hand-picked), so an all-zero draw is always the correct shape
+    /// regardless of which fixture calls this.
     fn terminal_theta(
         setup: &StudySetup,
         template: &StageTemplate,
@@ -10673,8 +10673,7 @@ mod water_terminal_fcf_valuation {
         let theta_col = setup.stage_state().theta;
         let terminal_stage = setup.num_stages() - 1;
 
-        let raw_noise =
-            vec![0.0_f64; ctx.n_hydros + ctx.n_load_buses + ctx.ncs_stochastic_dense_col.len()];
+        let raw_noise = vec![0.0_f64; training_ctx.stochastic.dim()];
 
         ws.solver.reset_solver_state();
         ws.solver.load_model(template);

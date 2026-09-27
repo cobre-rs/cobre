@@ -1,5 +1,5 @@
 //! Generalized patched-template capture (`capture_patched_node_template_at`,
-//! `raw_noise_len`, `node_opening_noise`) must agree with the existing
+//! `node_opening_noise`) must agree with the existing
 //! node-capture helpers and must produce the raw-noise length every opening
 //! of a node expects. The one-hot patch-ownership sweep
 //! (`every_noise_dimension_patches_only_its_own_entity`) then uses that
@@ -24,7 +24,7 @@ use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::{NodePos, StageIdx};
 use cobre_sddp::test_support::{
     capture_patched_node_template, capture_patched_node_template_at, lower_bound_root_templates,
-    node_opening_noise, oracle_initial_state, raw_noise_len, stage_state_box_bounds, state_space,
+    node_opening_noise, oracle_initial_state, stage_state_box_bounds, state_space,
 };
 use cobre_solver::{ActiveSolver, StageTemplate};
 
@@ -40,7 +40,7 @@ fn capture_at_initial_state_matches_node_capture() {
     let case_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/deterministic/d02-single-hydro");
     let setup = fresh_setup_with(&case_dir, |_| {});
-    let zero_noise = vec![0.0_f64; raw_noise_len(&setup)];
+    let zero_noise = vec![0.0_f64; setup.stochastic.dim()];
     let initial_state = oracle_initial_state(&setup);
 
     for pos in (0..setup.node_graph.nodes.len()).map(NodePos) {
@@ -58,7 +58,7 @@ fn capture_at_initial_state_matches_node_capture() {
 fn node_opening_noise_has_the_raw_noise_length() {
     let case_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/1dtoy");
     let setup = fresh_setup_with(&case_dir, |_| {});
-    let expected_len = raw_noise_len(&setup);
+    let expected_len = setup.stochastic.dim();
 
     for pos in (0..setup.node_graph.nodes.len()).map(NodePos) {
         let openings = setup.node_graph.nodes[pos].openings;
@@ -236,10 +236,8 @@ fn sweep_setup(
     violations: &mut Vec<String>,
     vacuity: &mut BTreeMap<(&'static str, &'static str), usize>,
 ) {
-    let n_dims = raw_noise_len(setup);
-    let n_load = setup.stage_data.stage_templates.n_load_buses;
-    let n_ncs_stochastic = setup.stochastic.n_stochastic_ncs();
-    let n_hydros = n_dims - n_load - n_ncs_stochastic;
+    let dims = setup.stochastic.class_dimensions();
+    let n_dims = dims.total();
     let initial_state = oracle_initial_state(setup);
     let zero_noise = vec![0.0_f64; n_dims];
 
@@ -267,7 +265,7 @@ fn sweep_setup(
                 continue;
             }
 
-            if dim < n_hydros {
+            if dims.hydro_range().contains(&dim) {
                 *vacuity.entry((mode_tag, "inflow")).or_insert(0) += 1;
                 check_inflow(
                     deck_key,
@@ -278,13 +276,14 @@ fn sweep_setup(
                     &changed,
                     violations,
                 );
-            } else if dim < n_hydros + n_load {
+            } else if dims.load_bus_range().contains(&dim) {
                 *vacuity.entry((mode_tag, "load")).or_insert(0) += 1;
-                let bus_pos = setup.stage_data.stage_templates.load_bus_indices[dim - n_hydros];
+                let bus_pos = setup.stage_data.stage_templates.load_bus_indices
+                    [dim - dims.load_bus_range().start];
                 check_load(deck_key, pos, dim, bus_pos, geom, &changed, violations);
             } else {
                 *vacuity.entry((mode_tag, "ncs")).or_insert(0) += 1;
-                let r = dim - n_hydros - n_load;
+                let r = dim - dims.ncs_range().start;
                 let sys_idx = *ncs_dense_col.get(r).unwrap_or_else(|| {
                     panic!(
                         "{deck_key}: no dense-column mapping for stochastic NCS slot {r} \

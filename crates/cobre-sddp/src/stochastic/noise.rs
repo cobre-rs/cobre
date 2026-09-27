@@ -22,21 +22,21 @@ use crate::{
 /// hydro's eta is raised to `eta_floor` (the value producing zero inflow);
 /// other methods pass raw eta through.
 pub(crate) fn compute_effective_eta(
-    raw_noise: &[f64],
-    n_hydros: usize,
+    hydro_noise: &[f64],
     inflow_method: InflowNonNegativityMethod,
     par_inflows: &[f64],
     eta_floor: &[f64],
     effective_eta: &mut Vec<f64>,
 ) {
     effective_eta.clear();
+    let n_hydros = hydro_noise.len();
 
     match inflow_method {
         InflowNonNegativityMethod::Truncation
         | InflowNonNegativityMethod::TruncationWithPenalty => {
             let has_negative = par_inflows.iter().take(n_hydros).any(|&a| a < 0.0);
             for h in 0..n_hydros {
-                let eta = raw_noise[h];
+                let eta = hydro_noise[h];
                 let clamped = if has_negative && par_inflows[h] < 0.0 {
                     eta.max(eta_floor[h])
                 } else {
@@ -46,7 +46,7 @@ pub(crate) fn compute_effective_eta(
             }
         }
         InflowNonNegativityMethod::None | InflowNonNegativityMethod::Penalty => {
-            effective_eta.extend_from_slice(&raw_noise[..n_hydros]);
+            effective_eta.extend_from_slice(hydro_noise);
         }
     }
 }
@@ -75,7 +75,9 @@ pub(crate) fn transform_inflow_noise(
 ) {
     let inflow_method = training_ctx.inflow_method;
     let stochastic = training_ctx.stochastic;
-    let n_hydros = stochastic.n_hydros();
+    let dims = stochastic.class_dimensions();
+    let n_hydros = dims.n_hydros;
+    let hydro_noise = &raw_noise[dims.hydro_range()];
     let state = training_ctx.state;
 
     scratch.z_inflow_rhs_buf.clear();
@@ -95,13 +97,11 @@ pub(crate) fn transform_inflow_noise(
 
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
-            // raw_noise is [hydros | load | NCS]; slice the hydro prefix —
-            // evaluate_par_batch expects the n_hydros PAR series only.
             evaluate_par_batch(
                 par_lp,
                 stage.0,
                 &scratch.lag_matrix_buf,
-                &raw_noise[..n_hydros],
+                hydro_noise,
                 &mut scratch.par_inflow_buf,
             );
 
@@ -123,8 +123,7 @@ pub(crate) fn transform_inflow_noise(
     }
 
     compute_effective_eta(
-        raw_noise,
-        n_hydros,
+        hydro_noise,
         *inflow_method,
         &scratch.par_inflow_buf,
         &scratch.eta_floor_buf,
@@ -308,15 +307,13 @@ pub(crate) fn transform_load_noise(
     block_count: usize,
     load_rhs_buf: &mut Vec<f64>,
 ) {
-    let n_hydros = stochastic.n_hydros();
-    let n_load_buses = stochastic.n_load_buses();
+    let dims = stochastic.class_dimensions();
     load_rhs_buf.clear();
-    if n_load_buses == 0 {
+    if dims.n_load_buses == 0 {
         return;
     }
     let load_lp = stochastic.normal();
-    for lb_idx in 0..n_load_buses {
-        let eta = raw_noise[n_hydros + lb_idx];
+    for (lb_idx, &eta) in raw_noise[dims.load_bus_range()].iter().enumerate() {
         let mean = load_lp.mean(stage.0, lb_idx);
         let std = load_lp.std(stage.0, lb_idx);
         let realization = (mean + std * eta).max(0.0);
@@ -354,10 +351,10 @@ pub(crate) fn transform_ncs_noise(
     ncs_col_lower_buf: &mut Vec<f64>,
     ncs_col_upper_buf: &mut Vec<f64>,
 ) {
-    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    let dims = stochastic.class_dimensions();
     ncs_col_upper_buf.clear();
     ncs_col_lower_buf.clear();
-    if n_stochastic_ncs == 0 {
+    if dims.n_ncs == 0 {
         return;
     }
     debug_assert_eq!(
@@ -366,9 +363,7 @@ pub(crate) fn transform_ncs_noise(
         "ncs_allow_curtailment and ncs_max_gen must have matching length",
     );
     let ncs_lp = stochastic.ncs_normal();
-    let ncs_noise_start = stochastic.n_hydros() + stochastic.n_load_buses();
-    for ncs_idx in 0..n_stochastic_ncs {
-        let eta = raw_noise[ncs_noise_start + ncs_idx];
+    for (ncs_idx, &eta) in raw_noise[dims.ncs_range()].iter().enumerate() {
         let mean = ncs_lp.mean(stage.0, ncs_idx);
         let std = ncs_lp.std(stage.0, ncs_idx);
         let max_gen = ncs_max_gen[ncs_idx];
@@ -1250,7 +1245,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::None,
             &par_inflows,
             &eta_floor,
@@ -1267,7 +1261,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::Penalty,
             &par_inflows,
             &eta_floor,
@@ -1285,7 +1278,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::Truncation,
             &par_inflows,
             &eta_floor,
@@ -1305,7 +1297,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::Truncation,
             &par_inflows,
             &eta_floor,
@@ -1323,7 +1314,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::TruncationWithPenalty,
             &par_inflows,
             &eta_floor,

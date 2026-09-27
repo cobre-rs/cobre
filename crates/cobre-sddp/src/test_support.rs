@@ -2607,15 +2607,6 @@ impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
     }
 }
 
-/// The `[hydro | load-bus | NCS]` raw-noise vector length:
-/// `hydro_count + n_load_buses + n_stochastic_ncs`.
-#[must_use]
-pub fn raw_noise_len(setup: &StudySetup) -> usize {
-    setup.stage_data.state.hydro_count
-        + setup.stage_data.stage_templates.n_load_buses
-        + setup.stochastic.n_stochastic_ncs()
-}
-
 /// `setup`'s stage-invariant [`StateSpace`] — `StudySetup::stage_data.state` is
 /// `pub(crate)`; this is the test-support reach-through.
 #[must_use]
@@ -2631,7 +2622,7 @@ pub fn state_space(setup: &StudySetup) -> &StateSpace {
 fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
     let stage = setup.node_graph.nodes[node_pos].stage;
     let n_hydros = setup.stage_data.state.hydro_count;
-    let mut raw = vec![0.0_f64; raw_noise_len(setup)];
+    let mut raw = vec![0.0_f64; setup.stochastic.dim()];
     let openings = setup.node_graph.nodes[node_pos].openings;
     if openings.source == OpeningSource::External
         && let Some(lib) = setup.scenario_libraries.training.external_inflow.as_ref()
@@ -2675,14 +2666,14 @@ pub fn capture_patched_node_template_with_inflow_noise(
     node_pos: NodePos,
     inflow_eta: &[f64],
 ) -> StageTemplate {
-    let n_hydros = setup.stage_data.state.hydro_count;
+    let hydro = setup.stochastic.class_dimensions().hydro_range();
     assert_eq!(
         inflow_eta.len(),
-        n_hydros,
+        hydro.len(),
         "inflow_eta must hold one standardized draw per hydro"
     );
-    let mut raw_noise = vec![0.0_f64; raw_noise_len(setup)];
-    raw_noise[..n_hydros].copy_from_slice(inflow_eta);
+    let mut raw_noise = vec![0.0_f64; setup.stochastic.dim()];
+    raw_noise[hydro].copy_from_slice(inflow_eta);
     capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial_state)
 }
 
@@ -2692,7 +2683,7 @@ pub fn capture_patched_node_template_with_inflow_noise(
 ///
 /// # Panics
 ///
-/// Panics if `raw_noise.len() != raw_noise_len(setup)`, if
+/// Panics if `raw_noise.len() != setup.stochastic.dim()`, if
 /// `incoming_state.len() != setup.stage_data.state.n_state`, if `node_pos`
 /// (or its resolved stage) is out of range, or if the template is absent
 /// after [`StageSolvePrep::run`].
@@ -2705,7 +2696,7 @@ pub fn capture_patched_node_template_at(
 ) -> StageTemplate {
     assert_eq!(
         raw_noise.len(),
-        raw_noise_len(setup),
+        setup.stochastic.dim(),
         "raw_noise must be the `[hydro | load-bus | NCS]` raw-noise length"
     );
     assert_eq!(

@@ -27,6 +27,8 @@
 //! σ-key from above (there is no path to improve), so the σ computation is a
 //! live fallback, not dead machinery.
 
+use std::ops::Range;
+
 use cobre_core::{EntityId, System};
 use cobre_stochastic::{OpeningTreeView, StochasticContext};
 
@@ -73,7 +75,11 @@ pub(crate) fn build_noise_key_table(
         keys.push(stage_keys);
     }
 
-    apply_chain_order(&mut keys, &tree, n_hydros);
+    apply_chain_order(
+        &mut keys,
+        &tree,
+        stochastic.class_dimensions().hydro_range(),
+    );
 
     Ok(keys)
 }
@@ -225,18 +231,18 @@ fn shortest_chain_path(distances: &[f64], n_o: usize) -> Vec<usize> {
 }
 
 /// Row-major pairwise unweighted-L2 distance matrix over the canonical
-/// `[..n_hydros]` noise prefix of stage `stage`'s `n_o` openings.
+/// hydro-segment noise prefix of stage `stage`'s `n_o` openings.
 fn l2_distance_matrix(
     tree: &OpeningTreeView<'_>,
     stage: usize,
     n_o: usize,
-    n_hydros: usize,
+    hydro_segment: Range<usize>,
 ) -> Vec<f64> {
     let mut distances = vec![0.0_f64; n_o * n_o];
     for i in 0..n_o {
-        let opening_i = &tree.opening(stage, i)[..n_hydros];
+        let opening_i = &tree.opening(stage, i)[hydro_segment.clone()];
         for j in (i + 1)..n_o {
-            let opening_j = &tree.opening(stage, j)[..n_hydros];
+            let opening_j = &tree.opening(stage, j)[hydro_segment.clone()];
             let d = opening_i
                 .iter()
                 .zip(opening_j)
@@ -259,13 +265,17 @@ fn chain_position_key(n_o: usize, pos: usize) -> f64 {
 /// positions (`keys[stage][ω] = n_o - pos`, where `pos` is ω's index in the
 /// winning path); a stage below 3 openings keeps its σ-key — there is no path
 /// to improve.
-fn apply_chain_order(keys: &mut [Vec<f64>], tree: &OpeningTreeView<'_>, n_hydros: usize) {
+fn apply_chain_order(
+    keys: &mut [Vec<f64>],
+    tree: &OpeningTreeView<'_>,
+    hydro_segment: Range<usize>,
+) {
     for (stage, stage_keys) in keys.iter_mut().enumerate() {
         let n_o = stage_keys.len();
         if n_o < 3 {
             continue;
         }
-        let distances = l2_distance_matrix(tree, stage, n_o, n_hydros);
+        let distances = l2_distance_matrix(tree, stage, n_o, hydro_segment.clone());
         let path = shortest_chain_path(&distances, n_o);
         for (pos, &omega) in path.iter().enumerate() {
             stage_keys[omega] = chain_position_key(n_o, pos);

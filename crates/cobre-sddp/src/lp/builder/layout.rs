@@ -1537,14 +1537,14 @@ impl<'a> StageLayout<'a> {
         }
     }
 
-    /// Resolve a block-major LP column address: `start + entity * n_blks + blk`
+    /// Resolve a block-major LP row or column address: `start + entity * n_blks + blk`
     /// (entity is the OUTER stride factor, block the INNER offset). The transposed
     /// `blk * n_entities + entity` is the wrong-but-compiling alternative — same
     /// length, but it interleaves columns across entities and silently misbuilds the
     /// LP. Delegates to [`BlockGrid::flat`](crate::indexer::BlockGrid::flat), the
     /// single owner of the stride arithmetic.
     #[inline]
-    pub(crate) fn block_col(&self, start: usize, entity: usize, blk: BlockIdx) -> usize {
+    pub(crate) fn block_flat(&self, start: usize, entity: usize, blk: BlockIdx) -> usize {
         self.block_grid().flat(start, entity, blk)
     }
 
@@ -1560,7 +1560,7 @@ impl<'a> StageLayout<'a> {
 /// Entity `i`'s index in a one-per-entity family `family`.
 #[inline]
 #[must_use]
-pub(super) fn one_per_entity(family: &Range<usize>, i: usize) -> usize {
+pub(super) fn entity_flat(family: &Range<usize>, i: usize) -> usize {
     let idx = family.start + i;
     debug_assert!(idx < family.end, "index {idx} outside {family:?}");
     idx
@@ -1591,25 +1591,25 @@ impl StageLayout<'_> {
     /// Turbine-flow column for cell `c`, block `blk`.
     #[inline]
     pub(crate) fn turbine_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.turbine.start, c.get(), blk)
+        self.block_flat(self.equipment.turbine.start, c.get(), blk)
     }
 
     /// Spillage column for hydro `h`, block `blk`.
     #[inline]
     pub(crate) fn spillage_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.spillage.start, h.get(), blk)
+        self.block_flat(self.equipment.spillage.start, h.get(), blk)
     }
 
     /// Diversion-flow column for hydro `h`, block `blk`.
     #[inline]
     pub(crate) fn diversion_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.diversion.start, h.get(), blk)
+        self.block_flat(self.equipment.diversion.start, h.get(), blk)
     }
 
     /// FPHA generation column for FPHA-cell-local index `c`, block `blk`.
     #[inline]
     pub(crate) fn generation_col(&self, c: FphaCellLocal, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.generation_col_start, c.get(), blk)
+        self.block_flat(self.equipment.generation_col_start, c.get(), blk)
     }
 
     /// FPHA-local plant `local_idx`'s first cell, as an [`FphaCellLocal`]. This is
@@ -1652,19 +1652,19 @@ impl StageLayout<'_> {
     /// Forward line-flow column for line `l`, block `blk`.
     #[inline]
     pub(crate) fn line_fwd_col(&self, l: LineSys, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.line_fwd.start, l.get(), blk)
+        self.block_flat(self.equipment.line_fwd.start, l.get(), blk)
     }
 
     /// Reverse line-flow column for line `l`, block `blk`.
     #[inline]
     pub(crate) fn line_rev_col(&self, l: LineSys, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.line_rev.start, l.get(), blk)
+        self.block_flat(self.equipment.line_rev.start, l.get(), blk)
     }
 
     /// Outflow-below-minimum slack column for hydro `h`, block `blk`.
     #[inline]
     pub(crate) fn outflow_below_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        self.block_col(
+        self.block_flat(
             self.slack.oper_violation.outflow_below_slack.start,
             h.get(),
             blk,
@@ -1674,7 +1674,7 @@ impl StageLayout<'_> {
     /// Outflow-above-maximum slack column for hydro `h`, block `blk`.
     #[inline]
     pub(crate) fn outflow_above_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        self.block_col(
+        self.block_flat(
             self.slack.oper_violation.outflow_above_slack.start,
             h.get(),
             blk,
@@ -1684,7 +1684,7 @@ impl StageLayout<'_> {
     /// Turbine-below-minimum slack column for cell `c`, block `blk`.
     #[inline]
     pub(crate) fn turbine_below_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
-        self.block_col(
+        self.block_flat(
             self.slack.oper_violation.turbine_below_slack.start,
             c.get(),
             blk,
@@ -1694,7 +1694,7 @@ impl StageLayout<'_> {
     /// Generation-below-minimum slack column for cell `c`, block `blk`.
     #[inline]
     pub(crate) fn generation_below_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
-        self.block_col(
+        self.block_flat(
             self.slack.oper_violation.generation_below_slack.start,
             c.get(),
             blk,
@@ -1704,25 +1704,25 @@ impl StageLayout<'_> {
     /// Hydro `h`'s inflow-penalty slack column.
     #[inline]
     pub(crate) fn inflow_slack_col(&self, h: HydroSys) -> usize {
-        one_per_entity(&self.slack.inflow_slack, h.get())
+        entity_flat(&self.slack.inflow_slack, h.get())
     }
 
     /// Hydro `h`'s below-withdrawal-target slack column.
     #[inline]
     pub(crate) fn withdrawal_slack_neg_col(&self, h: HydroSys) -> usize {
-        one_per_entity(&self.slack.withdrawal_slack_neg, h.get())
+        entity_flat(&self.slack.withdrawal_slack_neg, h.get())
     }
 
     /// Hydro `h`'s above-withdrawal-target slack column.
     #[inline]
     pub(crate) fn withdrawal_slack_pos_col(&self, h: HydroSys) -> usize {
-        one_per_entity(&self.slack.withdrawal_slack_pos, h.get())
+        entity_flat(&self.slack.withdrawal_slack_pos, h.get())
     }
 
     /// Anticipated-local `local`'s ring decision column.
     #[inline]
     pub(crate) fn anticipated_decision_col(&self, local: AnticipatedLocal) -> usize {
-        one_per_entity(&self.anticipated_decision(), local.get())
+        entity_flat(&self.anticipated_decision(), local.get())
     }
 
     /// Anticipated-local `local`'s commitment-maturity row, or `None` when no
@@ -1766,25 +1766,25 @@ impl StageLayout<'_> {
     /// Filling-target-local `local`'s `σ_fill` slack column.
     #[inline]
     pub(crate) fn filling_target_slack_col(&self, local: FillingTargetLocal) -> usize {
-        one_per_entity(&self.filling_target_col(), local.get())
+        entity_flat(&self.filling_target_col(), local.get())
     }
 
     /// Floor-local `local`'s `σ^{v-}` operating-floor slack column.
     #[inline]
     pub(crate) fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
-        one_per_entity(&self.filled_min_storage_floor_col(), local.get())
+        entity_flat(&self.filled_min_storage_floor_col(), local.get())
     }
 
     /// NCS entity `ncs_sys`'s generation column for block `blk`.
     #[inline]
     pub(crate) fn ncs_generation_col(&self, ncs_sys: NcsSys, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.col_ncs_start, ncs_sys.get(), blk)
+        self.block_flat(self.equipment.col_ncs_start, ncs_sys.get(), blk)
     }
 
     /// Pumping station `pumping_sys`'s flow column for block `blk`.
     #[inline]
     pub(crate) fn pumping_flow_col(&self, pumping_sys: PumpingSys, blk: BlockIdx) -> usize {
-        self.block_col(self.equipment.col_pumping_start, pumping_sys.get(), blk)
+        self.block_flat(self.equipment.col_pumping_start, pumping_sys.get(), blk)
     }
 
     /// Base column of the `(evap hydro local_idx, slot)` triple, slot-major
@@ -1890,7 +1890,7 @@ impl StageLayout<'_> {
     #[inline]
     #[must_use]
     pub(crate) fn filling_target_row(&self, local: FillingTargetLocal) -> usize {
-        one_per_entity(&self.filling_target(), local.get())
+        entity_flat(&self.filling_target(), local.get())
     }
 
     /// Floor-local `local`'s soft `σ^{v-}` operating-floor row, over
@@ -1898,7 +1898,7 @@ impl StageLayout<'_> {
     #[inline]
     #[must_use]
     pub(crate) fn filled_min_storage_floor_row(&self, local: FloorLocal) -> usize {
-        one_per_entity(&self.filled_min_storage_floor(), local.get())
+        entity_flat(&self.filled_min_storage_floor(), local.get())
     }
 
     /// Generic constraint row `entry_idx`'s row, over
@@ -1906,7 +1906,7 @@ impl StageLayout<'_> {
     #[inline]
     #[must_use]
     pub(crate) fn generic_row(&self, entry_idx: usize) -> usize {
-        one_per_entity(
+        entity_flat(
             &(self.rows.row_generic_start..self.rows.row_generic_start + self.rows.n_generic_rows),
             entry_idx,
         )

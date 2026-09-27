@@ -3576,7 +3576,7 @@ fn commissioning_active_gates_on_stage_id_with_half_open_window() {
 /// (`blk * n_entities + entity`) or a swapped evap offset would differ from
 /// the open-coded expression and fail the assertion. `turbine_col` and
 /// `generation_col` address a CELL (`HydroCell`/`FphaCellLocal`), not a plant
-/// (`HydroSys`/`FphaLocal`) — the arithmetic `block_col` delegates to is
+/// (`HydroSys`/`FphaLocal`) — the arithmetic `block_flat` delegates to is
 /// unchanged, only the meaning of `entity` for these two accessors is.
 #[test]
 fn column_accessors_match_open_coded_formulas() {
@@ -3596,14 +3596,14 @@ fn column_accessors_match_open_coded_formulas() {
     let n_blks = layout.n_blks;
     assert_eq!(n_blks, 4, "fixture must build a 4-block layout");
 
-    // Generic block_col against its definition, across a grid that makes the
+    // Generic block_flat against its definition, across a grid that makes the
     // entity (outer) and block (inner) factors distinguishable.
     for entity in [0_usize, 1, 2, 5] {
         for blk in 0..n_blks {
             assert_eq!(
-                layout.block_col(layout.equipment.turbine.start, entity, BlockIdx::new(blk)),
+                layout.block_flat(layout.equipment.turbine.start, entity, BlockIdx::new(blk)),
                 layout.equipment.turbine.start + entity * n_blks + blk,
-                "block_col(entity={entity}, blk={blk})"
+                "block_flat(entity={entity}, blk={blk})"
             );
         }
     }

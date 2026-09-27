@@ -182,31 +182,46 @@ fn filling_target_and_floor_slack_primal_present_and_absent() {
     );
 }
 
-/// End-to-end (no-turbine / stage-aggregate branch): a filling hydro whose
-/// `σ_fill` slack BINDS surfaces the non-zero primal in
-/// `filling_target_violation_hm3`, while a non-filling hydro stays `0.0`. The
-/// `geom(2, 1)` fixture has an empty `turbine` range, so `extract_hydros` takes
-/// the no-turbine branch — exercising that read site directly.
+/// A filling hydro whose `σ_fill` slack BINDS surfaces the non-zero primal in
+/// `filling_target_violation_hm3`, while a non-filling hydro stays `0.0`.
 #[test]
-fn extract_reads_binding_filling_target_slack_no_turbine_branch() {
+fn extract_reads_binding_filling_target_slack() {
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let ec = zero_energy_conversion(2, 1);
 
-    // make_primal_2_1 lays out columns [0..9) with theta at 8. Append the single
-    // σ_fill slack column at index 9 carrying the binding violation (hm³).
-    let sigma_fill = 4.25_f64;
-    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 0.0);
-    primal.push(sigma_fill); // column 9 = σ_fill for hydro 0
-    let dual = vec![0.0; 8];
+    let dims = test_support::GeometryDims {
+        hydro_count: 2,
+        max_par_order: 1,
+        n_thermals: 1,
+        n_lines: 1,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let base = test_support::geometry(&dims, vec![], &[], vec![]);
+    let n_cols = base.generation_below_slack.end;
 
-    // Hydro 0 is the lone filling hydro at its terminal Filling stage; hydro 1 is
-    // non-filling. The σ_fill column block is the single column [9, 10).
+    // Hydro 0 is the lone filling hydro at its terminal Filling stage; hydro 1
+    // is non-filling. The σ_fill slack column is appended past the base
+    // geometry's last column.
+    let sigma_fill = 4.25_f64;
     let geom = StageGeometry {
         filling_target_hydro_indices: vec![HydroSys::new(0)],
-        filling_target_col: 9..10,
-        ..test_support::geom(2, 1)
+        filling_target_col: n_cols..n_cols + 1,
+        ..base
     };
+
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 0.0);
+    primal.resize(n_cols, 0.0);
+    primal.push(sigma_fill);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&geom)];
+    let row_lower = vec![0.0; geometry_row_capacity(&geom)];
 
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
     let result = extract_stage_result(
@@ -214,8 +229,8 @@ fn extract_reads_binding_filling_target_slack_no_turbine_branch() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -250,7 +265,7 @@ fn extract_reads_binding_filling_target_slack_no_turbine_branch() {
         0,
     );
 
-    // No-turbine branch ⇒ one row per hydro, in hydro_ids order.
+    // n_blks=1 ⇒ one row per (hydro, block), in hydro_ids order.
     assert_eq!(result.hydros.len(), 2);
     // Hydro 0 (filling, slack binds) reports the σ_fill primal — not 0.0.
     assert_eq!(result.hydros[0].filling_target_violation_hm3, sigma_fill);
@@ -261,42 +276,49 @@ fn extract_reads_binding_filling_target_slack_no_turbine_branch() {
     assert_eq!(result.hydros[1].storage_violation_below_hm3, 0.0);
 }
 
-/// End-to-end (per-block / turbine branch): a filling hydro whose `σ^{v-}`
-/// operating-floor slack BINDS surfaces the non-zero primal in
-/// `storage_violation_below_hm3` on every per-block row (the slack is
-/// stage-level), while a hydro absent from the family stays `0.0`. A non-empty
-/// `turbine` range routes `extract_hydros` through the per-block branch.
+/// A filling hydro whose `σ^{v-}` operating-floor slack BINDS surfaces the
+/// non-zero primal in `storage_violation_below_hm3` on every per-block row
+/// (the slack is stage-level), while a hydro absent from the family stays `0.0`.
 #[test]
 fn extract_reads_binding_filled_min_storage_floor_slack_per_block_branch() {
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let ec = zero_energy_conversion(2, 1);
 
-    // n_blks = 1, two hydros. Columns [0..9) per make_primal_2_1 (theta at 8).
-    // Turbine columns at [9, 11) (one per hydro, n_blks=1), spillage at [11, 13),
-    // and the single σ^{v-} slack column for hydro 1 at index 13.
-    let sigma_floor = 2.75_f64;
-    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 0.0);
-    primal.extend_from_slice(&[
-        1.0,
-        2.0, // turbine[0], turbine[1]
-        0.0,
-        0.0,         // spillage[0], spillage[1]
-        sigma_floor, // column 13 = σ^{v-} for hydro 1
-    ]);
-    let dual = vec![0.0; 8];
-    let objective_coeffs = vec![0.0; primal.len()];
+    let dims = test_support::GeometryDims {
+        hydro_count: 2,
+        max_par_order: 1,
+        n_thermals: 1,
+        n_lines: 1,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let base = test_support::geometry(&dims, vec![], &[], vec![]);
+    let n_cols = base.generation_below_slack.end;
 
     // Hydro 1 owns the lone σ^{v-} column at this Operating stage; hydro 0 is
-    // absent from the floor family. turbine/spillage are dense (one col/hydro).
+    // absent from the floor family. The slack column is appended past the base
+    // geometry's last column.
+    let sigma_floor = 2.75_f64;
     let geom = StageGeometry {
-        turbine: 9..11,
-        spillage: 11..13,
-        n_blks: 1,
         filled_min_storage_floor_hydro_indices: vec![HydroSys::new(1)],
-        filled_min_storage_floor_col: 13..14,
-        ..test_support::geom(2, 1)
+        filled_min_storage_floor_col: n_cols..n_cols + 1,
+        ..base
     };
+
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 0.0);
+    primal.resize(n_cols, 0.0);
+    primal[geom.turbine.start] = 1.0; // turbine h0 b0
+    primal[geom.turbine.start + 1] = 2.0; // turbine h1 b0
+    primal.push(sigma_floor);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&geom)];
+    let row_lower = vec![0.0; geometry_row_capacity(&geom)];
 
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
     let result = extract_stage_result(
@@ -305,14 +327,14 @@ fn extract_reads_binding_filled_min_storage_floor_slack_per_block_branch() {
             dual: &dual,
             objective: 0.0,
             objective_coeffs: &objective_coeffs,
-            row_lower: &[],
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
             geometry: &geom,
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             state: &state,
-            n_blks: 1,
+            n_blks: geom.n_blks,
             entity_counts: &make_entity_counts_2_hydros(),
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
             block_hours: &[100.0],
@@ -485,6 +507,12 @@ fn make_primal_2_1(
     ]
 }
 
+/// Row-vector length covering every row family `extract_stage_result` reads
+/// unconditionally: water-balance duals and load-balance duals/`row_lower`.
+fn geometry_row_capacity(geom: &StageGeometry) -> usize {
+    geom.water_balance.end().max(geom.load_balance.end())
+}
+
 #[test]
 fn extract_costs_has_one_entry_matching_stage_id() {
     // Acceptance criterion: costs contains exactly one entry whose stage_id
@@ -609,11 +637,27 @@ fn extract_cost_splits_objective_correctly() {
 fn extract_hydro_storage_values_from_primal() {
     // Hydro h=0: storage[0]=100, storage_in[4]=90
     // Hydro h=1: storage[1]=200, storage_in[5]=180
-    let indexer = test_support::geom(2, 1);
+    let dims = test_support::GeometryDims {
+        hydro_count: 2,
+        max_par_order: 1,
+        n_thermals: 1,
+        n_lines: 1,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
-    let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
-    let dual = vec![0.0; 4];
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
     let ec = zero_energy_conversion(2, 1);
 
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
@@ -622,8 +666,8 @@ fn extract_hydro_storage_values_from_primal() {
             primal: &primal,
             dual: &dual,
             objective: 1500.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -734,12 +778,27 @@ fn extract_inflow_lag_values_from_primal() {
 #[test]
 fn extract_no_lags_when_max_par_order_zero() {
     // Stage geometry (N=2, L=0): no inflow_lag columns → empty inflow_lags vec.
-    let indexer = test_support::geom(2, 0);
+    let dims = test_support::GeometryDims {
+        hydro_count: 2,
+        max_par_order: 0,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 0,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 0);
     // Layout: storage[0..2], z_inflow[2..4], storage_in[4..6], theta=6
-    let primal = vec![100.0, 200.0, 0.0, 0.0, 90.0, 180.0, 500.0];
-    let dual = vec![];
+    let mut primal = vec![100.0, 200.0, 0.0, 0.0, 90.0, 180.0, 500.0];
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
     let counts = EntityCounts {
         hydro_ids: vec![10, 20],
         hydro_productivities: vec![1.0, 1.0],
@@ -757,7 +816,7 @@ fn extract_no_lags_when_max_par_order_zero() {
             primal: &primal,
             dual: &dual,
             objective: 600.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -860,11 +919,27 @@ fn extract_stage_id_propagates_to_all_results() {
 
 #[test]
 fn extract_equipment_zero_when_indexer_has_no_equipment_ranges() {
-    let indexer = test_support::geom(2, 1);
+    let dims = test_support::GeometryDims {
+        hydro_count: 2,
+        max_par_order: 1,
+        n_thermals: 1,
+        n_lines: 1,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
-    let primal = make_primal_2_1([0.0; 2], [0.0; 2], [0.0; 2], 0.0);
-    let dual = vec![0.0; 4];
+    let mut primal = make_primal_2_1([0.0; 2], [0.0; 2], [0.0; 2], 0.0);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
     let ec = zero_energy_conversion(2, 1);
 
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
@@ -873,8 +948,8 @@ fn extract_equipment_zero_when_indexer_has_no_equipment_ranges() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -909,22 +984,22 @@ fn extract_equipment_zero_when_indexer_has_no_equipment_ranges() {
         0,
     );
 
-    // Thermal — one entry per thermal entity, all zero.
+    // Thermal — one entry per (thermal, block); n_blks=1 ⇒ one entry, all zero.
     assert_eq!(result.thermals.len(), 1);
     assert_eq!(result.thermals[0].generation_mw, 0.0);
     assert_eq!(result.thermals[0].generation_cost, 0.0);
-    assert_eq!(result.thermals[0].block_id, None);
+    assert_eq!(result.thermals[0].block_id, Some(0));
 
-    // Exchange — one entry per line entity, all zero.
+    // Exchange — one entry per (line, block); n_blks=1 ⇒ one entry, all zero.
     assert_eq!(result.exchanges.len(), 1);
     assert_eq!(result.exchanges[0].direct_flow_mw, 0.0);
-    assert_eq!(result.exchanges[0].block_id, None);
+    assert_eq!(result.exchanges[0].block_id, Some(0));
 
-    // Bus — one entry per bus entity, all zero.
+    // Bus — one entry per (bus, block); n_blks=1 ⇒ one entry, all zero.
     assert_eq!(result.buses.len(), 1);
     assert_eq!(result.buses[0].deficit_mw, 0.0);
     assert_eq!(result.buses[0].spot_price, 0.0);
-    assert_eq!(result.buses[0].block_id, None);
+    assert_eq!(result.buses[0].block_id, Some(0));
 }
 
 /// Verify that equipment columns are read from the primal vector when the
@@ -2428,18 +2503,18 @@ fn extract_thermals_per_block_committed_none_for_non_anticipated() {
     }
 }
 
-/// No-block branch, K=1, `stage_index=1`, `n_stages=2` (delivery).
+/// K=1, `stage_index=1`, `n_stages=2` (delivery).
 /// Expects `anticipated_committed_mw == Some(0.0)`.
 #[test]
 fn extract_thermals_no_block_committed_at_delivery_is_zero() {
-    // N=0, T=1, n_blks=0 (no-block branch), n_anticipated=1, k_max=1, K_i=1
+    // N=0, T=1, n_blks=1, n_anticipated=1, k_max=1, K_i=1
     let eq_counts = test_support::GeometryDims {
         hydro_count: 0,
         max_par_order: 0,
         n_thermals: 1,
         n_lines: 0,
         n_buses: 0,
-        n_blks: 0,
+        n_blks: 1,
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
@@ -2449,10 +2524,6 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
     let state = test_support::state_layout_full(0, 0, 1, vec![1]);
-    assert!(
-        indexer.thermal.is_empty(),
-        "n_blks=0 must yield empty thermal range"
-    );
 
     let lookup = super::ThermalReverseLookup::build(&study_dims, 1);
     let spec_delivery = StageExtractionSpec {
@@ -2494,8 +2565,8 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
         anticipated_windows: &[(None, None)],
         study_stage_ids: &[0, 1, 2, 3, 4, 5],
     };
-    // No-block branch: the fishing-constraint LHS sum vanishes and the anticipated
-    // patch pins slot 0 to incoming (0.0 here), so the helper returns Some(0.0).
+    // The commitment-hold ring's slot 0 (incoming) is zero-seeded here, so the
+    // helper returns Some(0.0) regardless of the thermal-generation columns.
     let n_cols = indexer.anticipated_decision.end.max(1);
     let primal = vec![0.0_f64; n_cols];
     let obj = vec![0.0_f64; n_cols];
@@ -2532,7 +2603,7 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
     );
 }
 
-/// No-block branch, K=1, `stage_index=0`, `n_stages=2`. Pre-delivery
+/// K=1, `stage_index=0`, `n_stages=2`. Pre-delivery
 /// under a maturity gate, but the always-active fishing predicate
 /// reads slot 0 of `commit_in` regardless. Expects `Some(0.0)`
 /// (zero-initialised slot 0).
@@ -2544,7 +2615,7 @@ fn extract_thermals_no_block_committed_reads_slot0_when_seed_zero() {
         n_thermals: 1,
         n_lines: 0,
         n_buses: 0,
-        n_blks: 0,
+        n_blks: 1,
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 1,
@@ -3041,8 +3112,8 @@ fn test_slack_extraction_with_penalty_active() {
     primal[indexer.inflow_slack.start + 1] = 0.0; // slack h1
 
     let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 4];
-    let row_lower = vec![0.0_f64; indexer.load_balance.end().max(1)];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![10, 20],
@@ -3144,8 +3215,8 @@ fn test_slack_extraction_without_penalty_is_zero() {
     let n_cols = indexer.generation_below_slack.end; // includes withdrawal_slack columns
     let primal = vec![1.0_f64; n_cols]; // all ones
     let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 4];
-    let row_lower = vec![0.0_f64; indexer.load_balance.end().max(1)];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![10, 20],
@@ -3209,122 +3280,6 @@ fn test_slack_extraction_without_penalty_is_zero() {
     }
 }
 
-/// Verify that the fallback path (no equipment ranges) also reads slack
-/// when `has_inflow_penalty == true`.
-#[test]
-fn test_slack_extraction_fallback_path_with_penalty() {
-    // Zero blocks (turbine.is_empty()) with
-    // has_inflow_penalty=true — exercises the empty-equipment-range extraction path.
-    // N=2, L=1, T=0, Ln=0, B=0, K=0, has_inflow_penalty=true
-    let eq_counts = test_support::GeometryDims {
-        hydro_count: 2,
-        max_par_order: 1,
-        n_thermals: 0,
-        n_lines: 0,
-        n_buses: 0,
-        n_blks: 0,
-        has_inflow_penalty: true,
-        max_deficit_segments: 1,
-        n_anticipated: 0,
-        lead_stages: 0,
-        anticipated_plants: AnticipatedPlants::default(),
-    };
-    let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
-    let study_dims = test_support::study_dims_for(&eq_counts);
-    let state = test_support::state_layout_full(2, 1, 0, vec![]);
-
-    // turbine is empty (n_blks=0) → fallback path
-    assert!(
-        indexer.turbine.is_empty(),
-        "turbine must be empty to trigger fallback"
-    );
-    assert!(
-        study_dims.has_inflow_penalty,
-        "has_inflow_penalty must be true"
-    );
-
-    // Layout: storage[0..2], lags[2..4], storage_in[4..6], theta=6,
-    //         inflow_slack=[7..9), withdrawal_slack=[9..11)
-    let n_cols = indexer.generation_below_slack.end;
-    let mut primal = vec![0.0_f64; n_cols];
-    primal[0] = 150.0; // storage h0
-    primal[1] = 250.0; // storage h1
-    primal[2] = 55.0; // lag h0
-    primal[3] = 65.0; // lag h1
-    primal[4] = 140.0; // storage_in h0
-    primal[5] = 240.0; // storage_in h1
-    primal[6] = 0.0; // theta
-    primal[indexer.inflow_slack.start] = 3.0; // slack h0
-    primal[indexer.inflow_slack.start + 1] = 0.0; // slack h1
-
-    let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 4];
-    let row_lower = vec![0.0_f64; 1];
-
-    let counts = EntityCounts {
-        hydro_ids: vec![10, 20],
-        hydro_productivities: vec![1.0, 1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
-
-    let ec = zero_energy_conversion(2, 1);
-    let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
-    let result = extract_stage_result(
-        &SolutionView {
-            primal: &primal,
-            dual: &dual,
-            objective: 0.0,
-            objective_coeffs: &obj,
-            row_lower: &row_lower,
-        },
-        &StageExtractionSpec {
-            study_dims: &study_dims,
-            geometry: &indexer,
-            hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            state: &state,
-            n_blks: indexer.n_blks,
-            entity_counts: &counts,
-            inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
-            generic_constraint_entries: &[],
-            n_ncs: 0,
-            ncs_entity_ids: &[],
-            ncs_col_upper: &[],
-            n_pumping: 0,
-            pumping_consumption_mw_per_m3s: &[],
-            contract_prices: &[],
-            contract_is_import: &[],
-            diversion_upstream: &HashMap::new(),
-            hydro_productivities: &[1.0, 1.0],
-            col_scale: &[],
-            row_scale: &[],
-            cumulative_discount_factor: 1.0,
-            cost_scale_factor: 1_000_000.0,
-            energy_conversion: &ec,
-            hydro_min_storage_hm3: &[0.0; 2],
-            stage_index: 0,
-            n_stages: 1,
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-        },
-        0,
-    );
-
-    // Fallback: one entry per hydro (block_id = None)
-    assert_eq!(result.hydros.len(), 2);
-    assert!(
-        (result.hydros[0].inflow_nonnegativity_slack_m3s - 3.0).abs() < 1e-12,
-        "hydro 0 fallback slack should be 3.0, got {}",
-        result.hydros[0].inflow_nonnegativity_slack_m3s
-    );
-    assert_eq!(result.hydros[1].inflow_nonnegativity_slack_m3s, 0.0);
-}
-
 // ── FPHA and Evaporation extraction tests ────────────────────────────────
 
 /// Build a `StageGeometry` with 2 hydros (h0 = FPHA, h1 = constant-productivity),
@@ -3383,8 +3338,8 @@ fn fpha_generation_read_from_lp_column() {
     primal[13] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
 
     let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
@@ -3470,8 +3425,8 @@ fn fpha_productivity_placeholder_zero() {
     let n_cols = indexer.generation_below_slack.end;
     let primal = vec![0.0_f64; n_cols];
     let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
@@ -3587,8 +3542,8 @@ fn evaporation_read_from_lp_column() {
     primal[7] = 3.5; // evaporation outflow — acceptance criterion value
 
     let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 1];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1],
@@ -3675,8 +3630,8 @@ fn evaporation_violation_is_sum_of_slacks() {
     primal[9] = 0.0; // f_evap_minus (over-evaporation -> pos)
 
     let obj = vec![0.0_f64; n_cols];
-    let dual = vec![0.0_f64; 1];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1],
@@ -3769,8 +3724,8 @@ fn turbined_cost_in_compute_cost_result() {
     // h0 turbine column 7: objective_coeff=0.01
     obj[7] = 0.01;
 
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
@@ -3857,8 +3812,8 @@ fn cost_breakdown_sums_to_immediate_identity_scale() {
     //                           = 1.0 * 500 + 0.01 * 30 = 500.3
     let objective_val = 500.3_f64;
 
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
@@ -3972,8 +3927,8 @@ fn contract_cost_active_import_equals_price_power_hours_via_cost_result() {
     // objective = theta + contract = 500 + 40 * 0.146 = 505.84
     let objective_val = 500.0 + 40.0 * (200.0 * 730.0 / 1_000_000.0);
 
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&geometry)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&geometry)];
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
         hydro_productivities: vec![0.0, 1.5],
@@ -4066,8 +4021,8 @@ fn cost_breakdown_sums_to_immediate_with_active_export_contract_via_cost_result(
     obj[export_col] = -150.0 * 730.0 / 1_000_000.0;
     let objective_val = 500.0 + 30.0 * 0.01 + 30.0 * (-150.0 * 730.0 / 1_000_000.0);
 
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&geometry)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&geometry)];
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
         hydro_productivities: vec![0.0, 1.5],
@@ -4172,8 +4127,8 @@ fn cost_unscaled_by_col_scale() {
     let mut col_scale = vec![1.0_f64; n_cols];
     col_scale[7] = 2.0;
 
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
@@ -4300,8 +4255,8 @@ fn hydro_violation_cost_decomposition() {
     // Total objective for the LP (sum of primal * obj):
     let total_obj: f64 = primal.iter().zip(obj.iter()).map(|(p, o)| p * o).sum();
 
-    let dual = vec![0.0_f64; 2];
-    let row_lower = vec![0.0_f64; 1];
+    let dual = vec![0.0_f64; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0_f64; geometry_row_capacity(&indexer)];
 
     let counts = EntityCounts {
         hydro_ids: vec![1, 2],
@@ -4448,11 +4403,27 @@ fn stored_energy_initial_uses_v_min_offset() {
     // EnergyConversionSet::new with no with_integrated defaults the integrated
     // grid to a clone of the reference-point one, so this is the coinciding
     // case) → stored_energy_initial = (110 - 100) * 4 * 1e6 / 3600 ≈ 11_111.111…
-    let indexer = test_support::geom(1, 1);
+    let dims = test_support::GeometryDims {
+        hydro_count: 1,
+        max_par_order: 1,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 1);
-    let primal = make_primal_1_1(120.0, 110.0, 0.0);
-    let dual = vec![0.0; 2];
+    let mut primal = make_primal_1_1(120.0, 110.0, 0.0);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
     let ec = one_hydro_energy_set(0.9, 4.0);
 
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 1);
@@ -4461,8 +4432,8 @@ fn stored_energy_initial_uses_v_min_offset() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -4523,11 +4494,27 @@ fn stored_energy_initial_uses_v_min_offset() {
 fn incremental_inflow_energy_uses_rho_acum() {
     // ρ_acum = 4.0, incremental_inflow = 50.0 →
     // incremental_inflow_energy = 4.0 * 50.0 = 200.0 (exactly).
-    let indexer = test_support::geom(1, 1);
+    let dims = test_support::GeometryDims {
+        hydro_count: 1,
+        max_par_order: 1,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 1);
-    let primal = make_primal_1_1(120.0, 110.0, 0.0);
-    let dual = vec![0.0; 2];
+    let mut primal = make_primal_1_1(120.0, 110.0, 0.0);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
     let ec = one_hydro_energy_set(0.9, 4.0);
 
     let result = extract_stage_result(
@@ -4535,8 +4522,8 @@ fn incremental_inflow_energy_uses_rho_acum() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -4593,19 +4580,35 @@ fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
     let ec = one_hydro_energy_set(0.9, rho_acum)
         .with_integrated(vec![vec![0.9]], vec![vec![rho_acum_integrated]]);
 
-    let indexer = test_support::geom(1, 1);
+    let dims = test_support::GeometryDims {
+        hydro_count: 1,
+        max_par_order: 1,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 1);
-    let primal = make_primal_1_1(120.0, 110.0, 0.0);
-    let dual = vec![0.0; 2];
+    let mut primal = make_primal_1_1(120.0, 110.0, 0.0);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
 
     let result = extract_stage_result(
         &SolutionView {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -4754,19 +4757,35 @@ fn stored_energy_mw_divides_by_stage_total_hours() {
     let block_hours = [100.0_f64, 200.0, 300.0];
     let stage_total_hours: f64 = block_hours.iter().sum();
 
-    let indexer = test_support::geom(1, 1);
+    let dims = test_support::GeometryDims {
+        hydro_count: 1,
+        max_par_order: 1,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 1);
-    let primal = make_primal_1_1(storage_final, storage_initial, 0.0);
-    let dual = vec![0.0; 2];
+    let mut primal = make_primal_1_1(storage_final, storage_initial, 0.0);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
 
     let result = extract_stage_result(
         &SolutionView {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -4881,15 +4900,29 @@ fn stored_energy_mw_divides_by_stage_total_hours() {
 
 #[test]
 fn stage_path_propagates_productivity_values() {
-    // The per-stage path (block_hours empty) must read ρ_eq and ρ_acum
-    // from the supplied EnergyConversionSet and surface them on the
-    // result. The per-block path shares the same HydroStageContext,
-    // so by construction it cannot disagree.
-    let indexer = test_support::geom(1, 1);
+    // Must read ρ_eq and ρ_acum from the supplied EnergyConversionSet and
+    // surface them on the result.
+    let dims = test_support::GeometryDims {
+        hydro_count: 1,
+        max_par_order: 1,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 1);
-    let primal = make_primal_1_1(120.0, 110.0, 0.0);
-    let dual = vec![0.0; 2];
+    let mut primal = make_primal_1_1(120.0, 110.0, 0.0);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
     let ec = one_hydro_energy_set(0.85, 3.5);
 
     let stage_result = extract_stage_result(
@@ -4897,8 +4930,8 @@ fn stage_path_propagates_productivity_values() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
@@ -4947,10 +4980,25 @@ fn integrated_productivity_columns_read_the_mean_evaluator_on_both_branches() {
     // Reference point ρ_eq = 0.9, ρ_acum = 4.0; the mean-evaluator grids are
     // installed distinct (1.5, 6.0) so a column reading the reference-point pair
     // instead of the integrated accessor would fail this test.
+    let dims = test_support::GeometryDims {
+        hydro_count: 1,
+        max_par_order: 1,
+        n_thermals: 0,
+        n_lines: 0,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 1);
     let ec = one_hydro_energy_set(0.9, 4.0).with_integrated(vec![vec![1.5]], vec![vec![6.0]]);
-    let dual = vec![0.0; 2];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
 
     let assert_columns = |h: &SimulationHydroResult| {
         assert!(
@@ -4975,23 +5023,24 @@ fn integrated_productivity_columns_read_the_mean_evaluator_on_both_branches() {
         );
     };
 
-    // No-turbine branch: an empty `turbine` range routes `extract_hydros`
-    // through `extract_hydro_no_turbine`.
-    let primal = make_primal_1_1(120.0, 110.0, 0.0);
-    let no_turbine = extract_stage_result(
+    // First independently-built call: zero turbine primal, empty block_hours.
+    let mut primal_a = make_primal_1_1(120.0, 110.0, 0.0);
+    primal_a.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs_a = vec![0.0; primal_a.len()];
+    let result_a = extract_stage_result(
         &SolutionView {
-            primal: &primal,
+            primal: &primal_a,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs_a,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
-            geometry: &test_support::geom(1, 1),
+            geometry: &indexer,
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             state: &state,
-            n_blks: 0,
+            n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &[10.0],
             block_hours: &[],
@@ -5018,35 +5067,29 @@ fn integrated_productivity_columns_read_the_mean_evaluator_on_both_branches() {
         },
         0,
     );
-    assert_eq!(no_turbine.hydros.len(), 1);
-    assert_columns(&no_turbine.hydros[0]);
+    assert_eq!(result_a.hydros.len(), 1);
+    assert_columns(&result_a.hydros[0]);
 
-    // Per-block branch: a non-empty `turbine` range with `n_blks = 1` routes
-    // `extract_hydros` through `extract_hydro_per_block`. Turbine col at index 5,
-    // spillage col at index 6, appended after the base N=1,L=1 primal.
-    let mut primal_pb = make_primal_1_1(120.0, 110.0, 0.0);
-    primal_pb.extend_from_slice(&[5.0, 0.0]);
-    let objective_coeffs = vec![0.0; primal_pb.len()];
-    let geom_pb = StageGeometry {
-        turbine: 5..6,
-        spillage: 6..7,
-        n_blks: 1,
-        ..test_support::geom(1, 1)
-    };
-    let per_block = extract_stage_result(
+    // Second independently-built call: a non-zero turbine primal and non-empty
+    // block_hours, over the same real geometry — must not disagree with the first.
+    let mut primal_b = make_primal_1_1(120.0, 110.0, 0.0);
+    primal_b.resize(indexer.generation_below_slack.end, 0.0);
+    primal_b[indexer.turbine.start] = 5.0;
+    let objective_coeffs_b = vec![0.0; primal_b.len()];
+    let result_b = extract_stage_result(
         &SolutionView {
-            primal: &primal_pb,
+            primal: &primal_b,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &objective_coeffs,
-            row_lower: &[],
+            objective_coeffs: &objective_coeffs_b,
+            row_lower: &row_lower,
         },
         &StageExtractionSpec {
             study_dims: &study_dims,
-            geometry: &geom_pb,
+            geometry: &indexer,
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             state: &state,
-            n_blks: 1,
+            n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &[10.0],
             block_hours: &[720.0],
@@ -5073,8 +5116,8 @@ fn integrated_productivity_columns_read_the_mean_evaluator_on_both_branches() {
         },
         0,
     );
-    assert_eq!(per_block.hydros.len(), 1);
-    assert_columns(&per_block.hydros[0]);
+    assert_eq!(result_b.hydros.len(), 1);
+    assert_columns(&result_b.hydros[0]);
 }
 
 // -------------------------------------------------------------------------
@@ -5727,6 +5770,12 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
             }
         })
         .collect();
+    // One hydro: a single stage-level water-balance row in Parallel mode
+    // (every block reads it), one row per block in Chronological mode.
+    let water_balance = match block_mode {
+        BlockMode::Chronological => BlockRowFamily::per_block(0..k),
+        BlockMode::Parallel => BlockRowFamily::one_per_entity(0..1),
+    };
     StageGeometry {
         turbine: turbine_start..spillage_start,
         spillage: spillage_start..evap_start,
@@ -5735,6 +5784,7 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
         block_mode,
         evap_indices,
         evap_hydro_indices: vec![HydroSys::new(0)],
+        water_balance,
         ..StageGeometry::default()
     }
 }
@@ -6299,6 +6349,7 @@ fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
     let primal = make_transit_bucket_primal(&[11.0, 22.0], &[7.0, 8.0]);
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
+    let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
 
     let result = extract_stage_result(
         &SolutionView {
@@ -6315,7 +6366,7 @@ fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
             state: &state,
             n_blks: geometry.n_blks,
             entity_counts: &make_entity_counts_2_hydros(),
-            inflow_m3s_per_hydro: &[],
+            inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
             block_hours: &[],
             generic_constraint_entries: &[],
             n_ncs: 0,
@@ -6434,6 +6485,7 @@ fn extract_transit_buckets_rows_follow_canonical_column_order() {
     let primal = make_transit_bucket_primal(&[11.0, 22.0, 33.0], &[7.0, 8.0, 9.0]);
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
+    let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
 
     let result = extract_stage_result(
         &SolutionView {
@@ -6450,7 +6502,7 @@ fn extract_transit_buckets_rows_follow_canonical_column_order() {
             state: &state,
             n_blks: geometry.n_blks,
             entity_counts: &make_entity_counts_2_hydros(),
-            inflow_m3s_per_hydro: &[],
+            inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
             block_hours: &[],
             generic_constraint_entries: &[],
             n_ncs: 0,
@@ -6536,6 +6588,7 @@ fn split_plant_multi_bus_extraction_fixture() -> (StateSpace, StageGeometry, Hyd
         generation: 17..21,
         fpha_hydro_indices: vec![HydroSys::new(1)],
         n_blks: 2,
+        water_balance: BlockRowFamily::one_per_entity(0..2),
         ..StageGeometry::default()
     };
     (state, geometry, hydro_cell_index)
@@ -6704,6 +6757,7 @@ fn split_middle_plant_fixture() -> (StateSpace, StageGeometry, HydroCellIndex, V
         turbine: 10..18,
         spillage: 18..24,
         n_blks: 2,
+        water_balance: BlockRowFamily::one_per_entity(0..3),
         ..StageGeometry::default()
     };
     // theta = 3*(3+0) = 9, equipment starts at 10 (state_layout(3, 0)).
@@ -6732,7 +6786,7 @@ fn extract_hydro_bus_generation_emits_one_row_per_cell_per_block() {
     let (state, geometry, hydro_cell_index, primal) = split_middle_plant_fixture();
     let study_dims = test_support::study_dims();
     let ec = zero_energy_conversion(3, 1);
-    let dual: Vec<f64> = vec![];
+    let dual: Vec<f64> = vec![0.0; geometry_row_capacity(&geometry)];
     let objective_coeffs = vec![0.0; primal.len()];
 
     let result = extract_stage_result(
@@ -6830,7 +6884,7 @@ fn extract_hydro_bus_generation_constant_productivity_uses_own_hydro_productivit
     let (state, geometry, hydro_cell_index, primal) = split_middle_plant_fixture();
     let study_dims = test_support::study_dims();
     let ec = zero_energy_conversion(3, 1);
-    let dual: Vec<f64> = vec![];
+    let dual: Vec<f64> = vec![0.0; geometry_row_capacity(&geometry)];
     let objective_coeffs = vec![0.0; primal.len()];
 
     let result = extract_stage_result(
@@ -6969,6 +7023,7 @@ fn order_sensitive_split_plant_fixture() -> (StateSpace, StageGeometry, HydroCel
         turbine: 7..11,
         spillage: 11..13,
         n_blks: 1,
+        water_balance: BlockRowFamily::one_per_entity(0..2),
         ..StageGeometry::default()
     };
     // theta = 2*(3+0) = 6, equipment starts at 7 (state_layout(2, 0)).
@@ -6988,7 +7043,7 @@ fn hydro_bus_rows_sum_bit_exactly_to_the_plant_turbined_row() {
     let (state, geometry, hydro_cell_index, primal) = order_sensitive_split_plant_fixture();
     let study_dims = test_support::study_dims();
     let ec = zero_energy_conversion(2, 1);
-    let dual: Vec<f64> = vec![];
+    let dual: Vec<f64> = vec![0.0; geometry_row_capacity(&geometry)];
     let objective_coeffs = vec![0.0; primal.len()];
 
     let result = extract_stage_result(
@@ -7157,94 +7212,6 @@ fn extract_hydro_bus_generation_maps_fpha_cells_by_plant_relative_offset() {
     let plant1_hydros: Vec<_> = result.hydros.iter().filter(|h| h.hydro_id == 200).collect();
     assert_eq!(sum_blk0.to_bits(), plant1_hydros[0].generation_mw.to_bits());
     assert_eq!(sum_blk1.to_bits(), plant1_hydros[1].generation_mw.to_bits());
-}
-
-/// The no-turbine branch emits one row per CELL (not per hydro): reuses
-/// `split_plant_multi_bus_extraction_fixture`'s 3-cell `HydroCellIndex` (1 +
-/// 2) with a fresh empty-`turbine` geometry, so `hydro_cell_index.n_cells()`
-/// (3) and `entity_counts.hydro_ids.len()` (2) genuinely differ.
-#[test]
-fn extract_hydro_bus_generation_no_turbine_branch_emits_zero_rows_per_cell() {
-    let (state, _geometry_with_turbine, hydro_cell_index) =
-        split_plant_multi_bus_extraction_fixture();
-    let study_dims = test_support::study_dims();
-    let ec = zero_energy_conversion(2, 1);
-    assert_eq!(hydro_cell_index.n_cells(), 3);
-
-    let geometry = StageGeometry {
-        n_blks: 2,
-        ..StageGeometry::default()
-    };
-    assert!(
-        geometry.turbine.is_empty(),
-        "fixture must take the no-turbine branch"
-    );
-
-    let primal = vec![0.0_f64; 7]; // state region only, unused otherwise
-    let dual: Vec<f64> = vec![];
-    let objective_coeffs = vec![0.0; primal.len()];
-
-    let result = extract_stage_result(
-        &SolutionView {
-            primal: &primal,
-            dual: &dual,
-            objective: 0.0,
-            objective_coeffs: &objective_coeffs,
-            row_lower: &[],
-        },
-        &StageExtractionSpec {
-            study_dims: &study_dims,
-            geometry: &geometry,
-            hydro_cell_index: &hydro_cell_index,
-            state: &state,
-            n_blks: geometry.n_blks,
-            entity_counts: &EntityCounts {
-                hydro_ids: vec![100, 200],
-                hydro_productivities: vec![0.0; 2],
-                thermal_ids: vec![],
-                line_ids: vec![],
-                bus_ids: vec![],
-                pumping_station_ids: vec![],
-                contract_ids: vec![],
-                non_controllable_ids: vec![],
-            },
-            inflow_m3s_per_hydro: &[0.0, 0.0],
-            block_hours: &[],
-            generic_constraint_entries: &[],
-            n_ncs: 0,
-            ncs_entity_ids: &[],
-            ncs_col_upper: &[],
-            n_pumping: 0,
-            pumping_consumption_mw_per_m3s: &[],
-            contract_prices: &[],
-            contract_is_import: &[],
-            diversion_upstream: &HashMap::new(),
-            hydro_productivities: &[2.0, 0.0],
-            col_scale: &[],
-            row_scale: &[],
-            cumulative_discount_factor: 1.0,
-            cost_scale_factor: 1_000_000.0,
-            energy_conversion: &ec,
-            hydro_min_storage_hm3: &[0.0; 2],
-            stage_index: 0,
-            n_stages: 1,
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-        },
-        0,
-    );
-
-    assert_eq!(
-        result.hydro_bus_generation.len(),
-        hydro_cell_index.n_cells(),
-        "one row per cell, not per hydro"
-    );
-    assert_eq!(result.hydro_bus_generation.len(), 3);
-    for row in &result.hydro_bus_generation {
-        assert_eq!(row.block_id, None);
-        assert_eq!(row.turbined_m3s, 0.0);
-        assert_eq!(row.generation_mw, 0.0);
-    }
 }
 
 // -------------------------------------------------------------------------

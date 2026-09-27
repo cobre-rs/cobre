@@ -33,7 +33,7 @@ use cobre_stochastic::{StochasticContext, select_transition_child};
 
 use cobre_sddp::{
     CapturedBasis, EnergyConversionSet, Phase, SimulationError,
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::FutureCostFunction,
     horizon_mode::HorizonMode,
     indexer::{StateSpace, StudyDimensions},
@@ -44,7 +44,7 @@ use cobre_sddp::{
         StageIdx, Traversal,
     },
     simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
-    test_support::all_enabled_cut_state_layouts,
+    test_support::{StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry},
     workspace::{SolverWorkspace, WorkspaceSizing},
 };
 
@@ -544,32 +544,12 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -680,32 +660,12 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -807,32 +767,12 @@ fn simulate_infeasible_at_scenario2_stage3() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -933,32 +873,12 @@ fn simulate_channel_closed_returns_error() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1059,32 +979,12 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let run_result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1183,32 +1083,12 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let run_result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1308,32 +1188,12 @@ fn simulate_channel_receives_results_in_scenario_order() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1429,32 +1289,12 @@ fn test_simulation_parallel_cost_determinism() {
     let (tx1, _rx1) = mpsc::sync_channel(64);
     let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result_1 = cobre_sddp::simulate(
         &mut workspaces_1,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1528,32 +1368,12 @@ fn test_simulation_parallel_cost_determinism() {
         })
         .collect();
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result_4 = cobre_sddp::simulate(
         &mut workspaces_4,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1678,32 +1498,12 @@ fn simulate_emits_progress_events() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1824,32 +1624,12 @@ fn simulate_no_events_when_sender_is_none() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1955,32 +1735,12 @@ fn simulate_progress_events_received_before_return() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2097,32 +1857,12 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2237,32 +1977,12 @@ fn simulate_emits_simulation_finished_as_last_event() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2388,32 +2108,12 @@ fn simulate_progress_scenario_cost_is_finite() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2523,32 +2223,12 @@ fn simulate_frozen_path_issues_zero_add_rows() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2651,32 +2331,12 @@ fn simulate_fallback_path_issues_expected_add_rows() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2781,32 +2441,12 @@ fn simulate_frozen_length_mismatch_returns_error() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -2951,32 +2591,12 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -3120,32 +2740,12 @@ fn simulate_with_empty_stage_bases_cold_starts() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -3353,32 +2953,12 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
     let result = cobre_sddp::simulate(
         &mut workspaces,
-        &StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture.ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &node_graph,

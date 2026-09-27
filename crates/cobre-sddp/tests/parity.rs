@@ -783,7 +783,7 @@ mod determinism {
     use cobre_sddp::{
         Phase, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
         config::{CutManagementConfig, EventConfig, LoopConfig},
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         energy_conversion::{EnergyConversion, EnergyConversionSet},
         forward::{ForwardBound, ForwardResult, sync_forward},
@@ -795,6 +795,7 @@ mod determinism {
         setup::node_graph::Traversal,
         simulate,
         simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+        test_support::{StageContextFixture, equipment_free_geometry},
         train,
         workspace::{SolverWorkspace, WorkspaceSizing},
     };
@@ -1273,30 +1274,11 @@ mod determinism {
             .unwrap();
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-        let stage_ctx = StageContext {
-            geometry_per_stage: &[],
-            templates: &fx.templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[1usize; 5],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1usize; 5]);
+        let stage_ctx_fixture =
+            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+                .n_hydros_override(0);
+        let stage_ctx = stage_ctx_fixture.ctx();
         let result = pool
             .install(|| {
                 train(
@@ -1409,34 +1391,15 @@ mod determinism {
             .unwrap();
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
+        let geometry = equipment_free_geometry(&[0usize; 5]);
+        let stage_ctx_fixture =
+            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+                .n_hydros_override(0);
         let cost_buffer = pool
             .install(|| {
                 simulate(
                     &mut workspaces,
-                    &StageContext {
-                        geometry_per_stage: &[],
-                        templates: &fx.templates,
-                        n_hydros: 0,
-                        cost_scale_factor: 1_000_000.0,
-                        n_load_buses: 0,
-                        load_balance_row_starts: &[],
-                        load_bus_indices: &[],
-                        state_boxes: &state_boxes,
-                        block_counts_per_stage: &[],
-                        ncs_col_starts: &[],
-                        n_ncs: 0,
-                        ncs_stochastic_dense_col: &[],
-                        ncs_stochastic_windows: &[],
-                        anticipated_windows: &[],
-                        study_stage_ids: &[],
-                        ncs_max_gen: &[],
-                        ncs_allow_curtailment: &[],
-                        discount_factors: &[],
-                        cumulative_discount_factors: &[],
-                        stage_lag_transitions: &[],
-                        noise_group_ids: &[],
-                        downstream_par_order: 0,
-                    },
+                    &stage_ctx_fixture.ctx(),
                     fcf,
                     &TrainingContext {
                         node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),

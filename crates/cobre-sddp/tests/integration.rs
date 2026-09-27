@@ -44,13 +44,14 @@ use cobre_stochastic::{
 use cobre_sddp::{
     SddpError, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::fcf::FutureCostFunction,
     horizon_mode::HorizonMode,
     indexer::{CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lp::builder::StateBox,
     risk_measure::RiskMeasure,
+    test_support::{StageContextFixture, equipment_free_geometry},
     train,
 };
 
@@ -554,30 +555,11 @@ fn run_one_deterministic_pass(
     let mut fcf = make_fcf(fx.n_stages);
     let mut solver = MockSolver::with_fixed(50.0);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     train(
         &mut solver,
         TrainingConfig {
@@ -666,30 +648,11 @@ fn train_converges_with_mock_solver() {
     };
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -785,30 +748,11 @@ fn train_lb_monotonically_nondecreasing() {
     };
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     train(
         &mut solver,
         config,
@@ -893,30 +837,11 @@ fn train_emits_correct_event_sequence() {
     };
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     train(
         &mut solver,
         config,
@@ -985,30 +910,11 @@ fn train_stops_at_iteration_limit() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -1086,30 +992,11 @@ fn train_stops_on_graceful_shutdown() {
     };
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -1177,30 +1064,11 @@ fn train_propagates_infeasible_error() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -1311,30 +1179,11 @@ fn d17_level1_cut_selection_convergence() {
     };
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -1444,30 +1293,11 @@ fn d17_level1_cut_selection_reconstruction() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
 
     let result = train(
         &mut solver,
@@ -1583,30 +1413,11 @@ fn d18_lml1_cut_selection_convergence() {
     };
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -1761,30 +1572,11 @@ fn frozen_backward_pass_smoke_test() {
     // dual slice to match, where MockSolver's fixed 2-element dual would panic.
     let mut solver = ExpandingMockSolver::with_objectives(vec![50.0]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        state_boxes: &state_boxes,
-        block_counts_per_stage: &[1_usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1_usize, 1, 1]);
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
 
     let outcome = train(
         &mut solver,

@@ -53,7 +53,7 @@ use cobre_sddp::{
     SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     aggregate_simulation, build_training_output,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::FutureCostFunction,
     energy_conversion::{EnergyConversion, EnergyConversionSet},
     horizon_mode::HorizonMode,
@@ -72,9 +72,9 @@ use cobre_sddp::{
     },
     solver_stats::SolverStatsDelta,
     test_support::{
-        branching_tree_setup_enumerated, extensive_form_optimum, k_fan_setup_enumerated,
-        node_prefix_counts, node_scenario_count, single_path_enumerated_setup,
-        trunk_fan_setup_enumerated, water_binding_external_fan_setup,
+        StageContextFixture, branching_tree_setup_enumerated, equipment_free_geometry,
+        extensive_form_optimum, k_fan_setup_enumerated, node_prefix_counts, node_scenario_count,
+        single_path_enumerated_setup, trunk_fan_setup_enumerated, water_binding_external_fan_setup,
     },
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
@@ -637,32 +637,12 @@ fn train_simulate_write_cycle() {
         },
     };
 
-    let block_counts_per_stage = vec![1usize; fx.n_stages];
+    let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
     let study_dims = study_dims_for(0, 0, 0, 0, false);
     let training_context = TrainingContext {
@@ -825,32 +805,13 @@ fn train_simulate_write_cycle() {
     let ec = zero_energy_conversion_set(fx.n_stages);
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
+    let geometry_sim = equipment_free_geometry(&vec![0usize; fx.n_stages]);
+    let stage_ctx_fixture_sim =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry_sim)
+            .n_hydros_override(0);
     simulate(
         &mut sim_workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &fx.templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx_fixture_sim.ctx(),
         &fcf,
         &training_context,
         &sim_config,
@@ -1348,32 +1309,11 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let mut fcf = make_fcf(n_stages);
 
-    let block_counts = vec![1usize; n_stages];
+    let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &templates_result.load_balance_row_starts,
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+        .load_balance_row_starts(&templates_result.load_balance_row_starts);
+    let stage_ctx = stage_ctx_fixture.ctx();
 
     let training_config = TrainingConfig {
         loop_config: LoopConfig {
@@ -1568,32 +1508,12 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         },
     };
 
-    let block_counts_per_stage = vec![1usize; fx.n_stages];
+    let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture =
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
     let study_dims = study_dims_for(0, 0, 0, 0, false);
     let node_graph = cobre_sddp::test_support::chain_node_graph(&fx.stochastic);

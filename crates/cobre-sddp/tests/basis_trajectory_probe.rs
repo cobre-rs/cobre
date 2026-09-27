@@ -57,7 +57,9 @@ use cobre_sddp::indexer::{StateDim, StateSpace};
 use cobre_sddp::setup::NodeId;
 use cobre_sddp::setup::NodePos;
 use cobre_sddp::setup::StageIdx;
-use cobre_sddp::test_support::{patch_backward_opening_for_probe, solve_stage_for_probe};
+use cobre_sddp::test_support::{
+    StageContextFixture, patch_backward_opening_for_probe, solve_stage_for_probe,
+};
 use cobre_sddp::workspace::{BasisStore, CapturedBasis, SolverWorkspace};
 use cobre_sddp::{PrepareHydroModelsResult, StudySetup, TrajectoryRecord};
 
@@ -313,31 +315,6 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         "fixture arithmetic sanity: z_inflow must be the first row family"
     );
 
-    let ctx = StageContext {
-        state_boxes: &[],
-        geometry_per_stage: std::slice::from_ref(&geom),
-        templates: &[],
-        n_hydros,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[n_blks],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[0],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[1.0],
-        cumulative_discount_factors: &[1.0],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
-
     let total_rows = base_row_count + 5; // + 5 synthetic cut rows
     let template = StageTemplate {
         num_cols: 1,
@@ -359,6 +336,17 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
+
+    let fixture = StageContextFixture::new(
+        &state,
+        std::slice::from_ref(&template),
+        &[],
+        std::slice::from_ref(&geom),
+    )
+    .study_stage_ids(&[0])
+    .discount_factors(&[1.0])
+    .cumulative_discount_factors(&[1.0]);
+    let ctx = fixture.ctx();
 
     let fam = classify_stage_rows(&ctx, &state, 0, &template, base_row_count);
     let c = census(&fam);

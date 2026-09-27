@@ -1332,7 +1332,7 @@ mod by_node_scratch {
     use cobre_io::config::BackwardScheduler;
     use cobre_sddp::{
         BackwardPassInputs, BackwardPassState, ExchangeBuffers,
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
         forward::EnumeratedForwardScratch,
@@ -1342,7 +1342,8 @@ mod by_node_scratch {
         risk_measure::RiskMeasure,
         setup::Traversal,
         test_support::{
-            all_enabled_cut_state_layouts, state_layout, study_dims, trial_state_records,
+            StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
+            state_layout, study_dims, trial_state_records,
         },
         workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
     };
@@ -1694,30 +1695,11 @@ mod by_node_scratch {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[0, 0]);
+        let fixture =
+            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry)
+                .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1834,30 +1816,11 @@ mod by_node_scratch {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[0, 0]);
+        let fixture =
+            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry)
+                .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),

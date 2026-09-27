@@ -32,13 +32,14 @@ use cobre_core::{
 use cobre_sddp::{
     SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::fcf::FutureCostFunction,
     horizon_mode::HorizonMode,
     indexer::{BlockRowFamily, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lp::builder::{StageGeometry, StateBox},
     risk_measure::RiskMeasure,
+    test_support::{StageContextFixture, equipment_free_geometry},
     train,
 };
 use cobre_solver::{
@@ -420,7 +421,6 @@ fn test_stochastic_load_training_completes() {
     // matters here, not the row-start value.
     let load_balance_row_starts = vec![1usize; n_stages];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize; n_stages];
     let geometry_per_stage = vec![
         StageGeometry {
             load_balance: BlockRowFamily::per_block(1..2),
@@ -431,30 +431,12 @@ fn test_stochastic_load_training_completes() {
     ];
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &geometry_per_stage,
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses,
-        load_balance_row_starts: &load_balance_row_starts,
-        load_bus_indices: &load_bus_indices,
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+            .n_hydros_override(0)
+            .load_balance_row_starts(&load_balance_row_starts)
+            .load_bus_indices(&load_bus_indices);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -541,33 +523,12 @@ fn test_deterministic_load_training_matches_baseline() {
     let mut solver = MockSolver::with_fixed(100.0);
     let comm = StubComm;
 
-    let block_counts_per_stage = vec![1usize; n_stages];
+    let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -639,7 +600,6 @@ fn test_deterministic_load_training_matches_baseline() {
 #[test]
 fn test_stochastic_load_seed_determinism() {
     let n_stages = 2usize;
-    let n_load_buses = 1usize;
 
     let run_training = || {
         let stochastic = build_context_with_load(n_stages, 500.0, 50.0);
@@ -681,7 +641,6 @@ fn test_stochastic_load_seed_determinism() {
 
         let load_balance_row_starts = vec![1usize; n_stages];
         let load_bus_indices = vec![0usize];
-        let block_counts_per_stage = vec![1usize; n_stages];
         let geometry_per_stage = vec![
             StageGeometry {
                 load_balance: BlockRowFamily::per_block(1..2),
@@ -692,30 +651,12 @@ fn test_stochastic_load_seed_determinism() {
         ];
 
         let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-        let stage_ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let stage_ctx_fixture =
+            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+                .n_hydros_override(0)
+                .load_balance_row_starts(&load_balance_row_starts)
+                .load_bus_indices(&load_bus_indices);
+        let stage_ctx = stage_ctx_fixture.ctx();
         let result = train(
             &mut solver,
             config,

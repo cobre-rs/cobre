@@ -42,7 +42,7 @@ use cobre_sddp::{
     Phase, ResolvedParameters, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet,
     TrainingConfig,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::FutureCostFunction,
     energy_conversion::{EnergyConversion, EnergyConversionSet},
     horizon_mode::HorizonMode,
@@ -483,33 +483,13 @@ fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
 
 fn base_stage_context<'a>(
     fx: &'a Fixture,
-    block_counts: &'a [usize],
     state_boxes: &'a [StateBox],
-) -> StageContext<'a> {
-    StageContext {
+) -> cobre_sddp::test_support::StageContextFixture<'a> {
+    cobre_sddp::test_support::StageContextFixture::from_stage_templates(
+        &fx.state,
+        &fx.stage_templates,
         state_boxes,
-        geometry_per_stage: &fx.stage_templates.geometry_per_stage,
-        templates: &fx.stage_templates.templates,
-        n_hydros: fx.stage_templates.n_hydros,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: fx.stage_templates.n_load_buses,
-        load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
-        load_bus_indices: &fx.stage_templates.load_bus_indices,
-        block_counts_per_stage: block_counts,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    }
+    )
 }
 
 fn train_fixture(
@@ -530,7 +510,8 @@ fn train_fixture(
     let max_blocks = block_counts.iter().copied().max().unwrap_or(1);
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, n_stages);
-    let stage_ctx = base_stage_context(fx, &block_counts, &state_boxes);
+    let stage_ctx_fixture = base_stage_context(fx, &state_boxes);
+    let stage_ctx = stage_ctx_fixture.ctx();
     train(
         &mut solver,
         TrainingConfig {
@@ -620,13 +601,6 @@ fn simulate_fixture(
     )];
     let comm = StubComm;
 
-    let block_counts_sim: Vec<usize> = fx
-        .stage_templates
-        .block_hours_per_stage
-        .iter()
-        .map(Vec::len)
-        .collect();
-
     let zero_ec = EnergyConversion {
         equivalent_productivity_mw_per_m3s: 0.0,
         reference_volume_hm3: 0.0,
@@ -640,9 +614,11 @@ fn simulate_fixture(
     );
 
     let state_boxes_sim = permissive_state_boxes(fx.state.n_state, N_STAGES);
+    let stage_ctx_fixture_sim = base_stage_context(fx, &state_boxes_sim);
+    let stage_ctx_sim = stage_ctx_fixture_sim.ctx();
     simulate(
         &mut sim_workspaces,
-        &base_stage_context(fx, &block_counts_sim, &state_boxes_sim),
+        &stage_ctx_sim,
         fcf,
         &TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),

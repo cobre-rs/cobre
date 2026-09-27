@@ -773,14 +773,14 @@ mod lb_conformance {
     use cobre_core::SystemBuilder;
     use cobre_core::scenario::SamplingScheme;
     use cobre_sddp::{
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         horizon_mode::HorizonMode,
         indexer::{StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
         lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound},
         lp::builder::PatchBuffer,
         risk_measure::RiskMeasure,
-        test_support::cut_state_projection,
+        test_support::{StageContextFixture, cut_state_projection, equipment_free_geometry},
         workspace::{ScratchBuffers, WorkspaceSizing},
     };
     use cobre_solver::RowBatch;
@@ -860,30 +860,10 @@ mod lb_conformance {
         let comm = LocalComm;
         let stochastic = wrap_opening_tree(opening_tree);
 
-        let ctx = StageContext {
-            state_boxes: &[],
-            templates: &templates,
-            geometry_per_stage: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1]);
+        let fixture = StageContextFixture::new(&state_layout, &templates, &[], &geometry)
+            .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let study_dims = StudyDimensions::default();
         let cut_state_layouts = vec![

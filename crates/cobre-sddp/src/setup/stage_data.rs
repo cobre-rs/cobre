@@ -59,16 +59,14 @@ pub struct StageData {
     pub(crate) pumping_consumption_mw_per_m3s: Vec<f64>,
 
     /// Per-stage RESOLVED contract price \[$/`MWh`\]: one inner `Vec` per study
-    /// stage, flat with the per-stage stride `block_counts_per_stage[t]` — index
-    /// `c * n_blks + blk`, `c` ID-sorted to match `entity_counts.contract_ids`. The
+    /// stage, flat with the per-stage stride `stage_templates.geometry_per_stage[t].n_blks`
+    /// — index `c * n_blks + blk`, `c` ID-sorted to match `entity_counts.contract_ids`. The
     /// resolved, possibly block-overridden `contract_bounds_at_block(c, t, blk).price_per_mwh`.
     pub(crate) contract_prices_per_stage: Vec<Vec<f64>>,
 
     /// Direction per contract, ID-sorted to match `entity_counts.contract_ids`
     /// (`true` = import). Stage-invariant.
     pub(crate) contract_is_import: Vec<bool>,
-
-    pub(crate) block_counts_per_stage: Vec<usize>,
 
     /// Precomputed lag accumulation weights and period-finalization flags,
     /// one entry per study stage.

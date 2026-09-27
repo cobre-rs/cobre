@@ -44,8 +44,9 @@ impl BlockGrid {
     /// Construct a [`BlockGrid`] from its two stride constants.
     ///
     /// Source `n_blks` from the per-stage block count the LP was built with
-    /// (`StageLayout` / `block_counts_per_stage[t]`), never a study-global value,
-    /// so the grid cannot disagree with the LP it addresses.
+    /// (`StageLayout` / [`StageGeometry::n_blks`](crate::lp::builder::StageGeometry::n_blks)),
+    /// never a study-global value, so the grid cannot disagree with the LP it
+    /// addresses.
     #[inline]
     #[must_use]
     pub fn new(n_blks: usize, max_deficit_segments: usize) -> Self {

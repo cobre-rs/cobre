@@ -2019,7 +2019,7 @@ fn d33_per_stage_block_count_varies() {
 
     // `block_hours_per_stage[t].len()` is the block count of stage `t`
     // (`compute_stage_hours` collects one `duration_hours` per block of the
-    // stage), which equals `block_counts_per_stage[t]` threaded through the
+    // stage), which equals `StageGeometry::n_blks` threaded through the
     // pipeline.
     let block_counts: Vec<usize> = setup
         .stage_data

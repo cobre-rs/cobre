@@ -47,7 +47,8 @@ fn stage_templates_load_balance_family_starts_after_the_water_rows() {
 
     // N=2 hydros, L=0: row_water_balance_start = n_hydros (z_inflow occupies rows
     // [0, n_hydros)); row_load_balance_start = row_water_balance_start + n_hydros.
-    let expected_row_start = result.n_hydros + result.n_hydros;
+    let n_hydros = system.hydros().len();
+    let expected_row_start = n_hydros + n_hydros;
     assert_eq!(
         result.geometry_per_stage[0].load_balance.start(),
         expected_row_start,
@@ -75,7 +76,8 @@ fn stage_templates_n_load_buses_matches_stochastic_buses() {
     .expect("constant productivity ok");
 
     assert_eq!(
-        result.n_load_buses, 1,
+        result.n_load_buses(),
+        1,
         "only B2 has std_mw > 0 → n_load_buses must be 1"
     );
     assert_eq!(
@@ -104,7 +106,8 @@ fn stage_templates_no_load_buses_gives_zero() {
     .expect("constant productivity ok");
 
     assert_eq!(
-        result.n_load_buses, 0,
+        result.n_load_buses(),
+        0,
         "system with std_mw = 0 everywhere must give n_load_buses = 0"
     );
     assert!(

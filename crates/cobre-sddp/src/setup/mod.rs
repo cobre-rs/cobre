@@ -772,7 +772,6 @@ impl StudySetup {
                 pumping_consumption_mw_per_m3s,
                 contract_prices_per_stage,
                 contract_is_import,
-                block_counts_per_stage: blocks_per_stage,
                 stage_lag_transitions,
                 noise_group_ids,
                 scaling_report,
@@ -2094,8 +2093,8 @@ fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
 /// Build the per-study-stage risk measures from the system's stage risk configs.
 ///
 /// One entry per study stage (`id >= 0`), in stage-index order, matching the
-/// `block_counts_per_stage` / template ordering the cut-management pipeline
-/// indexes by stage.
+/// `stage_templates.geometry_per_stage` / template ordering the cut-management
+/// pipeline indexes by stage.
 fn build_risk_measures(system: &System) -> Vec<RiskMeasure> {
     system
         .stages()

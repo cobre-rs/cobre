@@ -661,7 +661,7 @@ pub struct StageExtractionSpec<'a> {
     /// Single owner of the study-invariant, non-state LP shape (entity counts and
     /// optional-column presence flags).
     pub study_dims: &'a StudyDimensions,
-    /// Per-stage dispatch block count, sourced from `block_counts_per_stage[t]`.
+    /// Per-stage dispatch block count, sourced from `StageGeometry::n_blks`.
     /// Strides every equipment-column family at this stage.
     pub n_blks: usize,
     /// Stage-correct equipment geometry, resolved per stage from `StageLayout`

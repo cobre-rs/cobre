@@ -668,7 +668,10 @@ fn accessor_methods_return_expected_values() {
     assert_eq!(setup.simulation_config.n_scenarios, 0); // simulation disabled by default
     assert_eq!(setup.policy_path, "./policy");
 
-    assert_eq!(setup.stage_data.block_counts_per_stage.len(), n_stages);
+    assert_eq!(
+        setup.stage_data.stage_templates.geometry_per_stage.len(),
+        n_stages
+    );
     assert!(setup.loop_params.max_blocks > 0);
 
     assert_eq!(setup.horizon.num_stages(), n_stages);
@@ -827,8 +830,8 @@ fn stage_ctx_fields_match_study_setup() {
     );
     assert_eq!(
         ctx.geometry_per_stage.len(),
-        setup.stage_data.block_counts_per_stage.len(),
-        "block_counts_per_stage length mismatch"
+        n_stages,
+        "geometry_per_stage length mismatch"
     );
 }
 
@@ -9351,11 +9354,8 @@ fn anticipated_plants_build_returns_canonical_order_of_anticipated_thermals() {
 
 /// Two-contract, no-hydro/thermal system for exercising
 /// `build_contract_prices_per_stage` directly, with a caller-supplied `bounds`
-/// table (its contract/stage counts must match `block_counts_per_stage`).
-fn system_with_contracts(
-    block_counts_per_stage: &[usize],
-    bounds: ResolvedBounds,
-) -> cobre_core::System {
+/// table (its contract/stage counts must match `blocks_per_stage`).
+fn system_with_contracts(blocks_per_stage: &[usize], bounds: ResolvedBounds) -> cobre_core::System {
     use chrono::NaiveDate;
 
     let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -9367,7 +9367,7 @@ fn system_with_contracts(
         excess_cost: 0.0,
     };
 
-    let stages: Vec<Stage> = block_counts_per_stage
+    let stages: Vec<Stage> = blocks_per_stage
         .iter()
         .enumerate()
         .map(|(i, &n_blk)| Stage {
@@ -9456,8 +9456,8 @@ fn zero_bounds_defaults(contract_price: f64) -> BoundsDefaults {
 }
 
 /// A two-contract study with per-stage block counts `[3, 2]` (differing,
-/// so a stride bug reading a global max-blocks count instead of
-/// `block_counts_per_stage[t]` would misreport stage 1's length), a price that
+/// so a stride bug reading a global max-blocks count instead of the
+/// per-stage geometry would misreport stage 1's length), a price that
 /// varies per contract AND per stage (so a stage-axis bug — reading stage 0's
 /// price for every `t` — cannot hide behind a uniform fixture), and no
 /// per-block price row — every one of the `n_contracts * n_blks` cells per
@@ -9465,7 +9465,7 @@ fn zero_bounds_defaults(contract_price: f64) -> BoundsDefaults {
 /// `price_per_mwh`.
 #[test]
 fn test_contract_prices_per_block_are_uniform_without_overlay() {
-    let block_counts_per_stage = [3_usize, 2_usize];
+    let blocks_per_stage = [3_usize, 2_usize];
     let n_contracts = 2;
     let mut bounds = ResolvedBounds::new(
         &BoundsCountsSpec {
@@ -9474,7 +9474,7 @@ fn test_contract_prices_per_block_are_uniform_without_overlay() {
             n_lines: 0,
             n_pumping: 0,
             n_contracts,
-            n_stages: block_counts_per_stage.len(),
+            n_stages: blocks_per_stage.len(),
             k_max: 0,
         },
         &zero_bounds_defaults(80.0),
@@ -9483,15 +9483,15 @@ fn test_contract_prices_per_block_are_uniform_without_overlay() {
     bounds.contract_bounds_mut(0, 1).price_per_mwh = 130.0;
     bounds.contract_bounds_mut(1, 0).price_per_mwh = 95.0;
     bounds.contract_bounds_mut(1, 1).price_per_mwh = 150.0;
-    let system = system_with_contracts(&block_counts_per_stage, bounds);
+    let system = system_with_contracts(&blocks_per_stage, bounds);
 
     let prices = build_contract_prices_per_stage(
         &system,
-        &test_support::equipment_free_geometry(&block_counts_per_stage),
+        &test_support::equipment_free_geometry(&blocks_per_stage),
     );
 
-    assert_eq!(prices.len(), block_counts_per_stage.len());
-    for (t, &n_blks) in block_counts_per_stage.iter().enumerate() {
+    assert_eq!(prices.len(), blocks_per_stage.len());
+    for (t, &n_blks) in blocks_per_stage.iter().enumerate() {
         assert_eq!(
             prices[t].len(),
             n_contracts * n_blks,
@@ -9515,7 +9515,7 @@ fn test_contract_prices_per_block_are_uniform_without_overlay() {
 /// are unaffected by contract 0's override.
 #[test]
 fn test_contract_price_table_carries_per_block_override() {
-    let block_counts_per_stage = [3_usize];
+    let blocks_per_stage = [3_usize];
     let mut bounds = ResolvedBounds::new(
         &BoundsCountsSpec {
             n_hydros: 0,
@@ -9546,11 +9546,11 @@ fn test_contract_price_table_carries_per_block_override() {
     };
     bounds.set_block_overlay(overlay);
 
-    let system = system_with_contracts(&block_counts_per_stage, bounds);
+    let system = system_with_contracts(&blocks_per_stage, bounds);
 
     let prices = build_contract_prices_per_stage(
         &system,
-        &test_support::equipment_free_geometry(&block_counts_per_stage),
+        &test_support::equipment_free_geometry(&blocks_per_stage),
     );
 
     assert_eq!(

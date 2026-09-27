@@ -185,7 +185,7 @@ mod tests {
     fn postprocess_templates_storage_box_is_physical_not_scaled() {
         const PHYSICAL_UPPER: f64 = 200.0;
 
-        let mut stage_templates = StageTemplates::empty(0, 1.0);
+        let mut stage_templates = StageTemplates::empty(1.0);
         stage_templates
             .templates
             .push(scaled_storage_template(PHYSICAL_UPPER));
@@ -272,7 +272,7 @@ mod tests {
 
         let num_cols = state_layout.theta + 2;
         let build = |discount_factors: Vec<f64>| -> StageTemplates {
-            let mut stage_templates = StageTemplates::empty(0, 1.0);
+            let mut stage_templates = StageTemplates::empty(1.0);
             for _ in 0..2 {
                 stage_templates.templates.push(StageTemplate {
                     num_cols,

@@ -52,21 +52,14 @@ pub struct StageTemplates {
     /// `n_blocks`). Converts load-balance duals $/MW → $/`MWh`:
     /// `spot_price = dual / block_hours`.
     pub block_hours_per_stage: Vec<Vec<f64>>,
-    /// Number of hydro plants (N).
-    pub n_hydros: usize,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`,
     /// [`ResolvedParameters::cost_scale_factor`]). Every non-theta objective
     /// coefficient was divided by this at template build time; cost-domain
     /// reporting boundaries multiply back by it.
     pub cost_scale_factor: f64,
-    /// Number of buses with stochastic load noise (`std_mw > 0`); equals
-    /// `normal_lp.n_entities()`. Load noise occupies opening-tree noise-vector
-    /// indices `[n_hydros, n_hydros + n_load_buses)`.
-    pub n_load_buses: usize,
-    /// Position in the `buses` slice for each stochastic load bus, length
-    /// `n_load_buses`, sorted by [`cobre_core::EntityId`] for declaration-order
-    /// invariance. Bus `i`'s load-balance base row is
-    /// [`StageGeometry::load_balance_row`].
+    /// Position in the `buses` slice for each stochastic load bus, sorted by
+    /// [`cobre_core::EntityId`] for declaration-order invariance. Bus `i`'s
+    /// load-balance base row is [`StageGeometry::load_balance_row`].
     pub load_bus_indices: Vec<usize>,
     /// Per-stage metadata for active generic constraint rows: one
     /// [`GenericConstraintRowEntry`] per active `(constraint, block)` pair at
@@ -104,19 +97,17 @@ pub struct StageTemplates {
 }
 
 impl StageTemplates {
-    /// All-empty [`StageTemplates`] for a study with zero stages. `n_hydros` and
-    /// `cost_scale_factor` carry through; both are system-level values
-    /// well-defined even with no stages.
+    /// All-empty [`StageTemplates`] for a study with zero stages.
+    /// `cost_scale_factor` carries through — a system-level value well-defined
+    /// even with no stages.
     #[must_use]
-    pub(crate) fn empty(n_hydros: usize, cost_scale_factor: f64) -> Self {
+    pub(crate) fn empty(cost_scale_factor: f64) -> Self {
         Self {
             templates: Vec::new(),
             state_boxes: Vec::new(),
             zeta_per_stage: Vec::new(),
             block_hours_per_stage: Vec::new(),
-            n_hydros,
             cost_scale_factor,
-            n_load_buses: 0,
             load_bus_indices: Vec::new(),
             generic_constraint_row_entries: Vec::new(),
             n_ncs: 0,
@@ -125,6 +116,13 @@ impl StageTemplates {
             diversion_upstream: HashMap::new(),
             hydro_productivities_per_stage: Vec::new(),
         }
+    }
+
+    /// Buses with stochastic load noise.
+    #[inline]
+    #[must_use]
+    pub fn n_load_buses(&self) -> usize {
+        self.load_bus_indices.len()
     }
 }
 
@@ -682,7 +680,7 @@ pub fn build_stage_templates(
     );
 
     if study_stages.is_empty() {
-        return StageTemplates::empty(n_hydros, resolved_parameters.cost_scale_factor);
+        return StageTemplates::empty(resolved_parameters.cost_scale_factor);
     }
 
     let load_models = deterministic_load_models(system, load_scheme);
@@ -742,8 +740,6 @@ pub fn build_stage_templates(
         diversion_upstream_output,
         &study_stages,
         &ctx,
-        n_hydros,
-        n_load_buses,
         n_study,
     )
 }
@@ -1101,8 +1097,6 @@ fn assemble_stage_templates_output(
     diversion_upstream_output: HashMap<EntityId, Vec<usize>>,
     study_stages: &[&Stage],
     ctx: &TemplateBuildCtx<'_>,
-    n_hydros: usize,
-    n_load_buses: usize,
     n_study: usize,
 ) -> StageTemplates {
     // Index `s` of every parallel Vec must refer to the same stage, so preserve the
@@ -1147,7 +1141,7 @@ fn assemble_stage_templates_output(
 
     let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
         .map(|s| {
-            (0..n_hydros)
+            (0..ctx.n_hydros)
                 .map(|h| match ctx.production_models.model(h, s) {
                     ResolvedProductionModel::ConstantProductivity { productivity } => *productivity,
                     ResolvedProductionModel::Fpha { .. } => 0.0,
@@ -1161,9 +1155,7 @@ fn assemble_stage_templates_output(
         state_boxes: Vec::new(),
         zeta_per_stage,
         block_hours_per_stage,
-        n_hydros,
         cost_scale_factor: ctx.resolved.resolved_parameters.cost_scale_factor,
-        n_load_buses,
         load_bus_indices,
         generic_constraint_row_entries,
         n_ncs,

@@ -2179,15 +2179,12 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
 
 // ── StageTemplates::empty ──────────────────────────────────────────────────
 
-/// Pins the all-empty shape (every per-stage collection empty, `n_hydros == n`)
-/// the empty-study early return relies on.
+/// Pins the all-empty shape the empty-study early return relies on.
 #[test]
-fn stage_templates_empty_is_all_empty_with_n_hydros() {
-    let n = 7_usize;
-    let empty = super::StageTemplates::empty(n, DEFAULT_COST_SCALE_FACTOR);
+fn stage_templates_empty_is_all_empty() {
+    let empty = super::StageTemplates::empty(DEFAULT_COST_SCALE_FACTOR);
 
-    assert_eq!(empty.n_hydros, n, "empty(n).n_hydros must equal n");
-    assert_eq!(empty.n_load_buses, 0, "n_load_buses must be 0");
+    assert_eq!(empty.n_load_buses(), 0, "n_load_buses must be 0");
 
     assert!(empty.templates.is_empty(), "templates");
     assert!(empty.zeta_per_stage.is_empty(), "zeta_per_stage");

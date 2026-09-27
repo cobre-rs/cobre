@@ -334,9 +334,7 @@ pub(crate) fn encode_stage_templates_facts(
         state_boxes,
         zeta_per_stage,
         block_hours_per_stage,
-        n_hydros,
         cost_scale_factor,
-        n_load_buses,
         load_bus_indices,
         generic_constraint_row_entries,
         n_ncs,
@@ -377,10 +375,9 @@ pub(crate) fn encode_stage_templates_facts(
     }
 
     let buf = group(groups, "stochastic.load_buses");
-    put_usize(buf, *n_load_buses);
+    put_usize(buf, load_bus_indices.len());
     put_usize_slice(buf, load_bus_indices);
 
-    put_usize(group(groups, "reporting.n_hydros"), *n_hydros);
     put_f64(
         group(groups, "reporting.cost_scale_factor"),
         *cost_scale_factor,
@@ -580,7 +577,7 @@ mod tests {
 
     #[test]
     fn stage_templates_groups_are_the_documented_keys() {
-        let templates = StageTemplates::empty(2, 1.0);
+        let templates = StageTemplates::empty(1.0);
         let mut groups = FactGroups::new();
         encode_stage_templates_facts(&templates, &state_layout(0, 0), &mut groups);
         let mut keys: Vec<&str> = groups.keys().copied().collect();
@@ -603,7 +600,6 @@ mod tests {
                 "reporting.diversion_upstream",
                 "reporting.generic_constraint_row_entries",
                 "reporting.hydro_productivities_per_stage",
-                "reporting.n_hydros",
                 "reporting.zeta_per_stage",
                 "solver_meta.max_par_order",
                 "solver_meta.n_dual_relevant",
@@ -638,8 +634,8 @@ mod tests {
 
     #[test]
     fn diversion_order_does_not_change_the_bytes() {
-        let mut a = StageTemplates::empty(2, 1.0);
-        let mut b = StageTemplates::empty(2, 1.0);
+        let mut a = StageTemplates::empty(1.0);
+        let mut b = StageTemplates::empty(1.0);
         a.diversion_upstream.insert(EntityId(1), vec![10, 11]);
         a.diversion_upstream.insert(EntityId(2), vec![20]);
         b.diversion_upstream.insert(EntityId(2), vec![20]);

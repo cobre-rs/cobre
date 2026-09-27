@@ -677,7 +677,7 @@ mod tests {
     /// load/NCS/inflow models (`n_stochastic_ncs() == 0`,
     /// `par().n_stages() == 0`), so a test can pass a real `&StochasticContext`
     /// in place of the retired `stochastic: None` field with a hydro count that
-    /// agrees with the LP-side `StageContext.n_hydros` the caller's fixture
+    /// agrees with the LP-side `StateSpace::hydro_count` the caller's fixture
     /// derives independently. `user_tree` bypasses generation entirely, so the
     /// injected tree's shape is preserved verbatim.
     #[allow(clippy::cast_possible_wrap)]
@@ -2547,8 +2547,7 @@ mod tests {
     #[test]
     fn lower_bound_template_matches_forward_for_filling_stage() {
         let (templates, h_a, h_b) = filling_study_templates();
-        let n_hydros = templates.n_hydros;
-        assert_eq!(n_hydros, 2, "fixture has two filling hydros");
+        let n_hydros = 2;
 
         // Stage 0 is H_A's terminal Filling stage: the per-stage geometry the
         // template was frozen with must carry the filling_target (σ_fill) row family

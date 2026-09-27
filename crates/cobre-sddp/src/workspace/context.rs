@@ -28,25 +28,14 @@ pub struct StageContext<'a> {
     /// Per-stage equipment geometry: `geometry_per_stage[t]` holds stage `t`'s
     /// column and row ranges; a single global stage-0 geometry would carry
     /// `n_blks`-striped bases that misread any stage with a differing block count.
-    /// Empty `&[]` in tests without a stage table — the reader falls back to
-    /// `StageGeometry::default`.
     pub geometry_per_stage: &'a [StageGeometry],
-    /// Hydro plants with LP variables.
-    pub n_hydros: usize,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`),
     /// mirroring [`StageTemplates::cost_scale_factor`](crate::lp::builder::StageTemplates::cost_scale_factor).
     /// Multiplies a scaled-objective quantity back to currency units at the
     /// stage-cost / immediate-cost reporting boundary.
     pub cost_scale_factor: f64,
-    /// Buses with stochastic load noise.
-    pub n_load_buses: usize,
     /// Bus indices for stochastic load mapping.
     pub load_bus_indices: &'a [usize],
-    /// Blocks per stage.
-    pub block_counts_per_stage: &'a [usize],
-    /// Full-system NCS column count, identical at every stage (the dense layout
-    /// keeps a dormant NCS's column).
-    pub n_ncs: usize,
     /// Stage-invariant stochastic-slot → dense NCS column index map, id-sorted in
     /// `StochasticContext::ncs_entity_ids` order — the order `transform_ncs_noise`
     /// emits its bound buffers. Length equals `n_stochastic_ncs`.
@@ -127,11 +116,11 @@ impl StageContext<'_> {
         &self.state_boxes[t.0]
     }
 
-    /// Blocks at stage `t`, or `0` when `block_counts_per_stage` is unpopulated.
+    /// Blocks at stage `t`.
     #[inline]
     #[must_use]
     pub fn block_count(&self, t: StageIdx) -> usize {
-        self.block_counts_per_stage.get(t.0).copied().unwrap_or(0)
+        self.geometry_per_stage[t.0].n_blks
     }
 
     /// One-step discount factor for the transition departing stage `t`, or

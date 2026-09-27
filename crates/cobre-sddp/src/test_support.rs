@@ -643,20 +643,14 @@ pub fn equipment_free_geometry(block_counts: &[usize]) -> Vec<StageGeometry> {
         .collect()
 }
 
-/// Test-only [`StageContext`] builder that derives `n_hydros` from the
-/// [`StateSpace`] it is given and `block_counts_per_stage` from each stage's
-/// [`StageGeometry::n_blks`], instead of setting either independently — the
-/// stage-LP builder contract's count-ownership rule, applied to test fixtures.
-/// Slice fields default to `&[]`; a setter exists only for a field some
-/// literal in the crate sets away from that default.
+/// Test-only [`StageContext`] builder. Slice fields default to `&[]`; a
+/// setter exists only for a field some literal in the crate sets away from
+/// that default.
 pub struct StageContextFixture<'a> {
     templates: &'a [StageTemplate],
     state_boxes: &'a [StateBox],
     geometry_per_stage: &'a [StageGeometry],
-    block_counts_per_stage: Vec<usize>,
-    n_hydros: usize,
     cost_scale_factor: f64,
-    n_ncs: usize,
     load_bus_indices: &'a [usize],
     ncs_stochastic_dense_col: &'a [usize],
     ncs_stochastic_windows: &'a [(Option<i32>, Option<i32>)],
@@ -672,16 +666,14 @@ pub struct StageContextFixture<'a> {
 }
 
 impl<'a> StageContextFixture<'a> {
-    /// Borrows `templates`/`state_boxes`/`geometry_per_stage` as given; derives
-    /// `n_hydros` from `state.hydro_count` and `block_counts_per_stage` from
-    /// each stage's `geometry_per_stage[t].n_blks`.
+    /// Borrows `templates`/`state_boxes`/`geometry_per_stage` as given.
     ///
     /// # Panics
     /// Panics if `geometry_per_stage.len() != templates.len()` — every stage
     /// must have one geometry.
     #[must_use]
     pub fn new(
-        state: &StateSpace,
+        _state: &StateSpace,
         templates: &'a [StageTemplate],
         state_boxes: &'a [StateBox],
         geometry_per_stage: &'a [StageGeometry],
@@ -694,11 +686,8 @@ impl<'a> StageContextFixture<'a> {
         Self {
             templates,
             state_boxes,
-            block_counts_per_stage: geometry_per_stage.iter().map(|g| g.n_blks).collect(),
             geometry_per_stage,
-            n_hydros: state.hydro_count,
             cost_scale_factor: 1_000_000.0,
-            n_ncs: 0,
             load_bus_indices: &[],
             ncs_stochastic_dense_col: &[],
             ncs_stochastic_windows: &[],
@@ -715,9 +704,8 @@ impl<'a> StageContextFixture<'a> {
     }
 
     /// [`Self::new`], reading `templates`, `geometry_per_stage`,
-    /// `load_bus_indices`, `n_ncs` and `cost_scale_factor` from
-    /// `stage_templates` — the same fields [`StudySetup::stage_ctx`] reads
-    /// from it.
+    /// `load_bus_indices` and `cost_scale_factor` from `stage_templates` — the
+    /// same fields [`StudySetup::stage_ctx`] reads from it.
     ///
     /// # Panics
     /// See [`Self::new`].
@@ -734,13 +722,11 @@ impl<'a> StageContextFixture<'a> {
             &stage_templates.geometry_per_stage,
         );
         fixture.load_bus_indices = &stage_templates.load_bus_indices;
-        fixture.n_ncs = stage_templates.n_ncs;
         fixture.cost_scale_factor = stage_templates.cost_scale_factor;
         fixture
     }
 
-    /// Sets [`StageContext::load_bus_indices`] (and, through it, the
-    /// `n_load_buses` [`Self::ctx`] derives).
+    /// Sets [`StageContext::load_bus_indices`].
     #[must_use]
     pub fn load_bus_indices(mut self, v: &'a [usize]) -> Self {
         self.load_bus_indices = v;
@@ -831,12 +817,8 @@ impl<'a> StageContextFixture<'a> {
             templates: self.templates,
             state_boxes: self.state_boxes,
             geometry_per_stage: self.geometry_per_stage,
-            n_hydros: self.n_hydros,
             cost_scale_factor: self.cost_scale_factor,
-            n_load_buses: self.load_bus_indices.len(),
             load_bus_indices: self.load_bus_indices,
-            block_counts_per_stage: &self.block_counts_per_stage,
-            n_ncs: self.n_ncs,
             ncs_stochastic_dense_col: self.ncs_stochastic_dense_col,
             ncs_stochastic_windows: self.ncs_stochastic_windows,
             anticipated_windows: self.anticipated_windows,
@@ -2747,7 +2729,7 @@ fn capture_patched_node_template_with_raw_noise(
     };
 
     let space = &setup.stage_data.state;
-    let n_load_buses = setup.stage_data.stage_templates.n_load_buses;
+    let n_load_buses = setup.stage_data.stage_templates.n_load_buses();
     let max_blocks = setup.loop_params.max_blocks;
     let mut patch_buf = PatchBuffer::new(
         space.hydro_count,
@@ -4526,8 +4508,7 @@ mod stage_context_fixture_tests {
             StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
                 .load_bus_indices(&load_bus_indices);
         let ctx = fixture.ctx();
-        assert_eq!(ctx.n_hydros, 2);
-        assert_eq!(ctx.n_load_buses, 1);
+        assert_eq!(ctx.load_bus_indices.len(), 1);
         assert_eq!(ctx.block_count(StageIdx(0)), 3);
         assert_eq!(ctx.block_count(StageIdx(1)), 3);
     }

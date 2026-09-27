@@ -17,9 +17,10 @@ use crate::hydro_models::{
 };
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
-    EvapLocal, EvaporationIndices, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys,
-    LineSys, RangeCursor, StateSpace, StorageBoundaryGrid, anticipated_resolution_for,
-    for_each_live_commitment_slot, is_anticipated_decision_active_for_delivery,
+    EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
+    HydroCell, HydroCellIndex, HydroSys, LineSys, RangeCursor, StateSpace, StorageBoundaryGrid,
+    anticipated_resolution_for, for_each_live_commitment_slot,
+    is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::time_value::TimeValue;
@@ -1574,7 +1575,18 @@ impl<'a> StageLayout<'a> {
     pub(crate) fn block_grid(&self) -> BlockGrid {
         BlockGrid::new(self.n_blks, self.equipment.max_deficit_segments)
     }
+}
 
+/// Entity `i`'s column in a one-per-entity family `family`.
+#[inline]
+#[must_use]
+pub(super) fn one_per_entity_col(family: &Range<usize>, i: usize) -> usize {
+    let col = family.start + i;
+    debug_assert!(col < family.end, "column {col} outside {family:?}");
+    col
+}
+
+impl StageLayout<'_> {
     /// Turbine-flow column for cell `c`, block `blk`.
     #[inline]
     pub(crate) fn turbine_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
@@ -1686,6 +1698,42 @@ impl<'a> StageLayout<'a> {
             c.get(),
             blk,
         )
+    }
+
+    /// Hydro `h`'s inflow-penalty slack column.
+    #[inline]
+    pub(crate) fn inflow_slack_col(&self, h: HydroSys) -> usize {
+        one_per_entity_col(&self.slack.inflow_slack, h.get())
+    }
+
+    /// Hydro `h`'s below-withdrawal-target slack column.
+    #[inline]
+    pub(crate) fn withdrawal_slack_neg_col(&self, h: HydroSys) -> usize {
+        one_per_entity_col(&self.slack.withdrawal_slack_neg, h.get())
+    }
+
+    /// Hydro `h`'s above-withdrawal-target slack column.
+    #[inline]
+    pub(crate) fn withdrawal_slack_pos_col(&self, h: HydroSys) -> usize {
+        one_per_entity_col(&self.slack.withdrawal_slack_pos, h.get())
+    }
+
+    /// Anticipated-local `local`'s ring decision column.
+    #[inline]
+    pub(crate) fn anticipated_decision_col(&self, local: AnticipatedLocal) -> usize {
+        one_per_entity_col(&self.anticipated_decision(), local.get())
+    }
+
+    /// Filling-target-local `local`'s `σ_fill` slack column.
+    #[inline]
+    pub(crate) fn filling_target_slack_col(&self, local: FillingTargetLocal) -> usize {
+        one_per_entity_col(&self.filling_target_col(), local.get())
+    }
+
+    /// Floor-local `local`'s `σ^{v-}` operating-floor slack column.
+    #[inline]
+    pub(crate) fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
+        one_per_entity_col(&self.filled_min_storage_floor_col(), local.get())
     }
 
     /// Base column of the `(evap hydro local_idx, slot)` triple, slot-major

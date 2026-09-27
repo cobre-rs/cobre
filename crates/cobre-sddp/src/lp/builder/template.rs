@@ -17,7 +17,7 @@ use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::resolved_parameters::ResolvedParameters;
 use crate::time_value::TimeValue;
 
-use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
+use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, one_per_entity_col};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
@@ -364,15 +364,6 @@ impl StageGeometry {
     pub fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
         one_per_entity_col(&self.filled_min_storage_floor_col, local.get())
     }
-}
-
-/// Entity `i`'s column in a one-per-entity family `family`.
-#[inline]
-#[must_use]
-fn one_per_entity_col(family: &Range<usize>, i: usize) -> usize {
-    let col = family.start + i;
-    debug_assert!(col < family.end, "column {col} outside {family:?}");
-    col
 }
 
 /// Per-stage outputs of [`build_single_stage_template`], transposed by

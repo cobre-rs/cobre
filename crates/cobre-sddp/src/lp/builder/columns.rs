@@ -594,11 +594,10 @@ pub(super) fn fill_anticipated_columns(
     let n_stages = ctx.resolved.bounds.n_stages();
     let n_delivery = layout.state.delivery_stage_count(n_stages);
     let n_ant = ctx.n_anticipated;
-    let decision_start = layout.anticipated.col_anticipated_decision_start;
     let ring = DeliveryRing::anticipated(layout.state);
 
     for local_idx in 0..n_ant {
-        let col = decision_start + local_idx;
+        let col = layout.anticipated_decision_col(AnticipatedLocal::new(local_idx));
         bufs.col_lower[col] = 0.0;
         bufs.col_upper[col] = 0.0;
     }
@@ -613,7 +612,7 @@ pub(super) fn fill_anticipated_columns(
         if delivery_stage != res.target {
             return;
         }
-        let decision_col = decision_start + res.plant;
+        let decision_col = layout.anticipated_decision_col(AnticipatedLocal::new(res.plant));
         debug_assert!(
             delivery_stage > stage_idx,
             "a genuine decision's delivery stage must be strictly after the decision \
@@ -760,7 +759,7 @@ fn fill_inflow_slack_columns(
 ) {
     if ctx.has_penalty {
         for h_idx in 0..layout.n_h {
-            let col = layout.slack.inflow_slack.start + h_idx;
+            let col = layout.inflow_slack_col(HydroSys::new(h_idx));
             let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
             bufs.objective[col] = hp.inflow_nonnegativity_cost * total_stage_hours;
         }
@@ -941,7 +940,7 @@ fn fill_withdrawal_slack_columns(
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let t = hb.water_withdrawal_m3s;
 
-        let neg_col = layout.slack.withdrawal_slack_neg.start + h_idx;
+        let neg_col = layout.withdrawal_slack_neg_col(HydroSys::new(h_idx));
         bufs.col_upper[neg_col] = if t > 0.0 {
             t
         } else if t < 0.0 {
@@ -951,7 +950,7 @@ fn fill_withdrawal_slack_columns(
         };
         bufs.objective[neg_col] = hp.water_withdrawal_violation_neg_cost * total_stage_hours;
 
-        let pos_col = layout.slack.withdrawal_slack_pos.start + h_idx;
+        let pos_col = layout.withdrawal_slack_pos_col(HydroSys::new(h_idx));
         bufs.col_upper[pos_col] = if t > 0.0 {
             f64::INFINITY
         } else if t < 0.0 {
@@ -1263,15 +1262,13 @@ fn fill_filling_target_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    let col_start = layout.filling.col_filling_target_start;
     for (local_idx, &h) in layout
         .filling
         .filling_target_hydro_indices
         .iter()
         .enumerate()
     {
-        let local_idx = FillingTargetLocal::new(local_idx);
-        let col = col_start + local_idx.get();
+        let col = layout.filling_target_slack_col(FillingTargetLocal::new(local_idx));
         let hp = ctx.resolved.penalties.hydro_penalties(h.get(), stage_idx);
         bufs.col_lower[col] = 0.0;
         bufs.col_upper[col] = f64::INFINITY;
@@ -1292,15 +1289,13 @@ fn fill_filled_min_storage_floor_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    let col_start = layout.filling.col_filled_min_storage_floor_start;
     for (local_idx, &h) in layout
         .filling
         .filled_min_storage_floor_hydro_indices
         .iter()
         .enumerate()
     {
-        let local_idx = FloorLocal::new(local_idx);
-        let col = col_start + local_idx.get();
+        let col = layout.filled_min_storage_floor_slack_col(FloorLocal::new(local_idx));
         let hp = ctx.resolved.penalties.hydro_penalties(h.get(), stage_idx);
         bufs.col_lower[col] = 0.0;
         bufs.col_upper[col] = f64::INFINITY;

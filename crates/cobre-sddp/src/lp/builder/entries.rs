@@ -5,8 +5,8 @@ use crate::block_clock::BlockClock;
 use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FphaCellLocal, HydroCell, HydroSys,
-    LineSys, StateSpace, for_each_ring_residue,
+    AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
+    FphaCellLocal, HydroCell, HydroSys, LineSys, StateSpace, for_each_ring_residue,
 };
 
 use super::delivery_ring::DeliveryRing;
@@ -114,7 +114,6 @@ pub(super) fn fill_anticipated_state_out_def_entries(
 ) {
     let n_stages = ctx.resolved.bounds.n_stages();
     let row_start = layout.anticipated.row_anticipated_state_out_def_start;
-    let decision_start = layout.anticipated.col_anticipated_decision_start;
     let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active: usize = 0;
     for_each_ring_residue(layout.state, n_stages, stage_idx, |res, point| {
@@ -143,7 +142,7 @@ pub(super) fn fill_anticipated_state_out_def_entries(
             "a genuine decision's delivery stage must be strictly after the decision \
              stage (K=0 self-delivery must already be excluded)"
         );
-        let col_decision = decision_start + res.plant;
+        let col_decision = layout.anticipated_decision_col(AnticipatedLocal::new(res.plant));
         ring.emit_deposit(res.slot, res.plant, row, col_decision, col_entries);
         n_active += 1;
     });
@@ -342,10 +341,10 @@ fn fill_parallel_water_entries(
         }
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
         if ctx.has_penalty {
-            col_entries[layout.slack.inflow_slack.start + h_idx].push((row, -zeta));
+            col_entries[layout.inflow_slack_col(HydroSys::new(h_idx))].push((row, -zeta));
         }
-        col_entries[layout.slack.withdrawal_slack_neg.start + h_idx].push((row, -zeta));
-        col_entries[layout.slack.withdrawal_slack_pos.start + h_idx].push((row, zeta));
+        col_entries[layout.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -zeta));
+        col_entries[layout.withdrawal_slack_pos_col(HydroSys::new(h_idx))].push((row, zeta));
     }
 
     for (local_idx, &h) in layout.evap_hydro_indices.iter().enumerate() {
@@ -628,10 +627,10 @@ fn fill_chronological_water_entries(
             }
 
             if ctx.has_penalty {
-                col_entries[layout.slack.inflow_slack.start + h_idx].push((row, -tau_k));
+                col_entries[layout.inflow_slack_col(HydroSys::new(h_idx))].push((row, -tau_k));
             }
-            col_entries[layout.slack.withdrawal_slack_neg.start + h_idx].push((row, -tau_k));
-            col_entries[layout.slack.withdrawal_slack_pos.start + h_idx].push((row, tau_k));
+            col_entries[layout.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -tau_k));
+            col_entries[layout.withdrawal_slack_pos_col(HydroSys::new(h_idx))].push((row, tau_k));
         }
     }
 
@@ -922,7 +921,6 @@ fn fill_prefilling_shortcircuit(
 /// references the dual-extraction entry point).
 fn fill_filling_target_entries(layout: &StageLayout, col_entries: &mut [Vec<(usize, f64)>]) {
     let row_start = layout.filling.row_filling_target_start;
-    let col_start = layout.filling.col_filling_target_start;
     for (local_idx, &h) in layout
         .filling
         .filling_target_hydro_indices
@@ -931,7 +929,8 @@ fn fill_filling_target_entries(layout: &StageLayout, col_entries: &mut [Vec<(usi
     {
         let row = row_start + local_idx;
         col_entries[h.get()].push((row, 1.0));
-        col_entries[col_start + local_idx].push((row, 1.0));
+        col_entries[layout.filling_target_slack_col(FillingTargetLocal::new(local_idx))]
+            .push((row, 1.0));
     }
 }
 
@@ -947,7 +946,6 @@ fn fill_filled_min_storage_floor_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let row_start = layout.filling.row_filled_min_storage_floor_start;
-    let col_start = layout.filling.col_filled_min_storage_floor_start;
     for (local_idx, &h) in layout
         .filling
         .filled_min_storage_floor_hydro_indices
@@ -956,7 +954,8 @@ fn fill_filled_min_storage_floor_entries(
     {
         let row = row_start + local_idx;
         col_entries[h.get()].push((row, 1.0));
-        col_entries[col_start + local_idx].push((row, 1.0));
+        col_entries[layout.filled_min_storage_floor_slack_col(FloorLocal::new(local_idx))]
+            .push((row, 1.0));
     }
 }
 

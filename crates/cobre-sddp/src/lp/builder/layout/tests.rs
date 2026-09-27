@@ -4331,7 +4331,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
     for h in 0..geom.inflow_slack.len() {
         assert_eq!(
             geom.inflow_slack_col(HydroSys::new(h)),
-            layout.slack.inflow_slack.start + h,
+            layout.inflow_slack_col(HydroSys::new(h)),
             "inflow_slack_col mismatch at h={h}"
         );
         counts.inflow_slack += 1;
@@ -4339,7 +4339,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
     for h in 0..geom.withdrawal_slack_neg.len() {
         assert_eq!(
             geom.withdrawal_slack_neg_col(HydroSys::new(h)),
-            layout.slack.withdrawal_slack_neg.start + h,
+            layout.withdrawal_slack_neg_col(HydroSys::new(h)),
             "withdrawal_slack_neg_col mismatch at h={h}"
         );
         counts.withdrawal_slack_neg += 1;
@@ -4347,7 +4347,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
     for h in 0..geom.withdrawal_slack_pos.len() {
         assert_eq!(
             geom.withdrawal_slack_pos_col(HydroSys::new(h)),
-            layout.slack.withdrawal_slack_pos.start + h,
+            layout.withdrawal_slack_pos_col(HydroSys::new(h)),
             "withdrawal_slack_pos_col mismatch at h={h}"
         );
         counts.withdrawal_slack_pos += 1;
@@ -4355,7 +4355,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
     for i in 0..geom.anticipated_decision.len() {
         assert_eq!(
             geom.anticipated_decision_col(AnticipatedLocal::new(i)),
-            layout.anticipated.col_anticipated_decision_start + i,
+            layout.anticipated_decision_col(AnticipatedLocal::new(i)),
             "anticipated_decision_col mismatch at i={i}"
         );
         counts.anticipated_decision += 1;
@@ -4363,7 +4363,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
     for i in 0..geom.filling_target_col.len() {
         assert_eq!(
             geom.filling_target_slack_col(FillingTargetLocal::new(i)),
-            layout.filling.col_filling_target_start + i,
+            layout.filling_target_slack_col(FillingTargetLocal::new(i)),
             "filling_target_slack_col mismatch at i={i}"
         );
         counts.filling_target_slack += 1;
@@ -4371,7 +4371,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
     for i in 0..geom.filled_min_storage_floor_col.len() {
         assert_eq!(
             geom.filled_min_storage_floor_slack_col(FloorLocal::new(i)),
-            layout.filling.col_filled_min_storage_floor_start + i,
+            layout.filled_min_storage_floor_slack_col(FloorLocal::new(i)),
             "filled_min_storage_floor_slack_col mismatch at i={i}"
         );
         counts.filled_min_storage_floor_slack += 1;

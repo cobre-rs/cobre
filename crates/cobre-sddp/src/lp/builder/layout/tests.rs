@@ -13,7 +13,7 @@ use cobre_core::{
     AffineBound, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, CascadeTopology,
     ConstraintExpression, ContractBlockBounds, EntityId, FillingConfig, GenericConstraint, Hydro,
     HydroBlockBounds, HydroGenerationModel, HydroStageBounds, LineBlockBounds, LinearTerm,
-    NoiseMethod, PumpingBlockBounds, PumpingStation, ResolvedBounds,
+    NoiseMethod, NonControllableSource, PumpingBlockBounds, PumpingStation, ResolvedBounds,
     ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
     ResolvedPenalties, ScenarioSourceConfig, SlackConfig, Stage, StageRiskConfig, StageStateConfig,
     ThermalBlockBounds, ThermalStageBounds, VariableRef,
@@ -23,8 +23,8 @@ use cobre_stochastic::par::precompute::PrecomputedPar;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, BusSys, CutStateProjection, EvapLocal,
-    FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, StateDim, StateRegion,
-    anticipated_resolution_for,
+    FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys,
+    LineSys, NcsSys, PumpingSys, StateDim, StateRegion, anticipated_resolution_for,
 };
 use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 use crate::resolved_parameters::ResolvedParameters;
@@ -33,7 +33,9 @@ use crate::test_support::{
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 
-use super::super::entries::build_stage_matrix_entries;
+use super::super::entries::{
+    build_stage_matrix_entries, transit_bucket_plant_ranges, transit_bucket_ring,
+};
 use super::super::test_support::{state_layout_for, zero_hydro_penalties};
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET, RangeCursor,
@@ -4267,4 +4269,237 @@ fn test_generation_family_is_sized_by_fpha_cell() {
             "block {blk}: plant 2's two FPHA cells must be distinct columns"
         );
     }
+}
+
+// ── Column address pins (builder raw arithmetic vs. layout accessors) ────
+
+/// Minimal non-controllable source for the equipment column pins.
+fn make_ncs(id: i32) -> NonControllableSource {
+    NonControllableSource {
+        id: EntityId(id),
+        name: format!("W{id}"),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        bus_id: EntityId(1),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        max_generation_mw: 100.0,
+        allow_curtailment: true,
+        curtailment_cost: 0.0,
+    }
+}
+
+/// Minimal pumping station for the equipment column pins.
+fn make_pumping_station(id: i32) -> PumpingStation {
+    PumpingStation {
+        id: EntityId(id),
+        name: format!("P{id}"),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        bus_id: EntityId(1),
+        source_hydro_id: EntityId(1),
+        destination_hydro_id: EntityId(2),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        consumption_mw_per_m3s: 0.0,
+        min_flow_m3s: 0.0,
+        max_flow_m3s: 0.0,
+    }
+}
+
+/// Per-family count of addresses [`compare_column_addresses`] compared, so a
+/// caller combining several fixtures can confirm every family was exercised.
+#[derive(Default)]
+struct ColumnAddressCounts {
+    inflow_slack: usize,
+    withdrawal_slack_neg: usize,
+    withdrawal_slack_pos: usize,
+    anticipated_decision: usize,
+    filling_target_slack: usize,
+    filled_min_storage_floor_slack: usize,
+    ncs_generation: usize,
+    pumping_flow: usize,
+}
+
+/// Compares every index of the builder's eight one-per-entity/NCS/pumping
+/// column families on `layout` against `layout.geometry(block_mode)`'s own
+/// accessor (job 3, `docs/design/lp-builder-contract.md`: one address formula
+/// per family). Returns how many addresses each family compared; a family
+/// empty on this particular `layout` compares zero.
+fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> ColumnAddressCounts {
+    let geom = layout.geometry(block_mode);
+    let mut counts = ColumnAddressCounts::default();
+
+    for h in 0..geom.inflow_slack.len() {
+        assert_eq!(
+            geom.inflow_slack_col(HydroSys::new(h)),
+            layout.slack.inflow_slack.start + h,
+            "inflow_slack_col mismatch at h={h}"
+        );
+        counts.inflow_slack += 1;
+    }
+    for h in 0..geom.withdrawal_slack_neg.len() {
+        assert_eq!(
+            geom.withdrawal_slack_neg_col(HydroSys::new(h)),
+            layout.slack.withdrawal_slack_neg.start + h,
+            "withdrawal_slack_neg_col mismatch at h={h}"
+        );
+        counts.withdrawal_slack_neg += 1;
+    }
+    for h in 0..geom.withdrawal_slack_pos.len() {
+        assert_eq!(
+            geom.withdrawal_slack_pos_col(HydroSys::new(h)),
+            layout.slack.withdrawal_slack_pos.start + h,
+            "withdrawal_slack_pos_col mismatch at h={h}"
+        );
+        counts.withdrawal_slack_pos += 1;
+    }
+    for i in 0..geom.anticipated_decision.len() {
+        assert_eq!(
+            geom.anticipated_decision_col(AnticipatedLocal::new(i)),
+            layout.anticipated.col_anticipated_decision_start + i,
+            "anticipated_decision_col mismatch at i={i}"
+        );
+        counts.anticipated_decision += 1;
+    }
+    for i in 0..geom.filling_target_col.len() {
+        assert_eq!(
+            geom.filling_target_slack_col(FillingTargetLocal::new(i)),
+            layout.filling.col_filling_target_start + i,
+            "filling_target_slack_col mismatch at i={i}"
+        );
+        counts.filling_target_slack += 1;
+    }
+    for i in 0..geom.filled_min_storage_floor_col.len() {
+        assert_eq!(
+            geom.filled_min_storage_floor_slack_col(FloorLocal::new(i)),
+            layout.filling.col_filled_min_storage_floor_start + i,
+            "filled_min_storage_floor_slack_col mismatch at i={i}"
+        );
+        counts.filled_min_storage_floor_slack += 1;
+    }
+    let grid = layout.block_grid();
+    for i in 0..layout.equipment.n_ncs {
+        for blk in 0..layout.n_blks {
+            let blk = BlockIdx::new(blk);
+            assert_eq!(
+                geom.ncs_generation_col(NcsSys::new(i), blk),
+                grid.flat(layout.equipment.col_ncs_start, i, blk),
+                "ncs_generation_col mismatch at i={i}"
+            );
+            counts.ncs_generation += 1;
+        }
+    }
+    for i in 0..layout.equipment.n_pumping {
+        for blk in 0..layout.n_blks {
+            let blk = BlockIdx::new(blk);
+            assert_eq!(
+                geom.pumping_flow_col(PumpingSys::new(i), blk),
+                grid.flat(layout.equipment.col_pumping_start, i, blk),
+                "pumping_flow_col mismatch at i={i}"
+            );
+            counts.pumping_flow += 1;
+        }
+    }
+
+    counts
+}
+
+/// Pins every one-per-entity/NCS/pumping column family's raw builder address
+/// against `StageGeometry`'s own accessor. No single fixture in this file
+/// populates every family at once, so this runs [`compare_column_addresses`]
+/// over several and sums the per-family counts.
+#[test]
+fn column_address_pins_cover_every_family() {
+    let mut totals = ColumnAddressCounts::default();
+
+    let filling_fixtures = FillingMembershipFixtures::new();
+    let mut ctx = filling_fixtures.make_ctx();
+    ctx.has_penalty = true;
+    let state = state_layout_for(&ctx);
+
+    let filling_stage = stage_with_id(1);
+    let filling_layout = StageLayout::new(&ctx, &state, &filling_stage, 0);
+    let filling_counts = compare_column_addresses(&filling_layout, BlockMode::Parallel);
+    totals.inflow_slack += filling_counts.inflow_slack;
+    totals.withdrawal_slack_neg += filling_counts.withdrawal_slack_neg;
+    totals.withdrawal_slack_pos += filling_counts.withdrawal_slack_pos;
+    totals.filling_target_slack += filling_counts.filling_target_slack;
+
+    let operating_stage = stage_with_id(3);
+    let operating_layout = StageLayout::new(&ctx, &state, &operating_stage, 0);
+    let operating_counts = compare_column_addresses(&operating_layout, BlockMode::Parallel);
+    totals.filled_min_storage_floor_slack += operating_counts.filled_min_storage_floor_slack;
+
+    let mut anticipated_fixtures = ZeroEntityFixtures::new();
+    let anticipated_ctx = anticipated_fixtures.make_ctx(2, vec![1, 1], &[0, 1]);
+    let anticipated_state = state_layout_for(&anticipated_ctx);
+    let anticipated_stage = minimal_stage();
+    let anticipated_layout =
+        StageLayout::new(&anticipated_ctx, &anticipated_state, &anticipated_stage, 0);
+    let anticipated_counts = compare_column_addresses(&anticipated_layout, BlockMode::Parallel);
+    totals.anticipated_decision += anticipated_counts.anticipated_decision;
+
+    let mut equipment_fixtures = ZeroEntityFixtures::new();
+    let ncs = vec![make_ncs(1), make_ncs(2)];
+    let pumping = vec![make_pumping_station(1)];
+    let mut equipment_ctx = equipment_fixtures.make_ctx(0, vec![], &[]);
+    equipment_ctx.non_controllable_sources = &ncs;
+    equipment_ctx.pumping_stations = &pumping;
+    equipment_ctx.n_pumping = pumping.len();
+    let equipment_state = state_layout_for(&equipment_ctx);
+    let equipment_stage = stage_with_blocks(BlockMode::Parallel, 2);
+    let equipment_layout = StageLayout::new(&equipment_ctx, &equipment_state, &equipment_stage, 0);
+    let equipment_counts = compare_column_addresses(&equipment_layout, BlockMode::Parallel);
+    totals.ncs_generation += equipment_counts.ncs_generation;
+    totals.pumping_flow += equipment_counts.pumping_flow;
+
+    assert!(totals.inflow_slack > 0, "inflow_slack never compared");
+    assert!(
+        totals.withdrawal_slack_neg > 0,
+        "withdrawal_slack_neg never compared"
+    );
+    assert!(
+        totals.withdrawal_slack_pos > 0,
+        "withdrawal_slack_pos never compared"
+    );
+    assert!(
+        totals.anticipated_decision > 0,
+        "anticipated_decision never compared"
+    );
+    assert!(
+        totals.filling_target_slack > 0,
+        "filling_target_slack never compared"
+    );
+    assert!(
+        totals.filled_min_storage_floor_slack > 0,
+        "filled_min_storage_floor_slack never compared"
+    );
+    assert!(totals.ncs_generation > 0, "ncs_generation never compared");
+    assert!(totals.pumping_flow > 0, "pumping_flow never compared");
+}
+
+/// Pins the travel-time bucket ring's own addressing against `StateSpace`'s
+/// element accessors: a plant's bucket sub-range is addressed through a ring
+/// built at its own local offset, and that offset must equal the family's own
+/// outgoing/incoming column. This test's left side never changes.
+#[test]
+fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
+    let state = StateSpace::new(0, 0, 3, vec![(0, 0), (0, 1), (1, 0)], 0, 0, vec![], &[]);
+    let mut compared = 0usize;
+    for range in transit_bucket_plant_ranges(&state) {
+        let ring = transit_bucket_ring(&state, range.clone());
+        for slot in 0..range.len() {
+            assert_eq!(
+                ring.out_col(slot, 0),
+                state.bucket_outgoing_col(range.start + slot).get(),
+                "out_col mismatch at slot={slot} range={range:?}"
+            );
+            assert_eq!(
+                ring.in_col(slot, 0),
+                state.bucket_incoming_col(range.start + slot).get(),
+                "in_col mismatch at slot={slot} range={range:?}"
+            );
+            compared += 1;
+        }
+    }
+    assert!(compared > 0, "must compare at least one bucket");
 }

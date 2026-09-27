@@ -1767,7 +1767,7 @@ mod dcs_simulation {
     use crate::test_support::StageContextFixture;
 
     use crate::inflow_method::InflowNonNegativityMethod;
-    use crate::lp::builder::{PatchBuffer, StageGeometry, StateBox};
+    use crate::lp::builder::{PatchBuffer, StateBox};
     use crate::setup::NodeId;
     use crate::setup::node_graph::StageIdx;
     use crate::simulation::types::{SimulationCostResult, SimulationStageResult};
@@ -1927,7 +1927,7 @@ mod dcs_simulation {
     ) -> (f64, SimulationStageResult) {
         let state = test_support::state_layout(1, 0);
         let core = sim_core_template();
-        let geometry_per_stage = [StageGeometry::default()];
+        let geometry_per_stage = test_support::equipment_free_geometry(&[1]);
         let templates = vec![core];
         let stochastic = super::make_stochastic_context(1);
         let horizon = HorizonMode::Finite { num_stages: 1 };
@@ -1955,8 +1955,7 @@ mod dcs_simulation {
             upper: vec![f64::INFINITY; state.n_state],
         }];
         let fixture =
-            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-                .block_counts_override(&[1usize]);
+            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage);
         let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {

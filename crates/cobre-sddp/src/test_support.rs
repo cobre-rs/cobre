@@ -747,14 +747,6 @@ impl<'a> StageContextFixture<'a> {
         self
     }
 
-    /// Replaces the per-stage block counts derived from `geometry_per_stage`,
-    /// for a fixture whose hand-built geometry disagrees with its own `n_blks`.
-    #[must_use]
-    pub fn block_counts_override(mut self, v: &[usize]) -> Self {
-        self.block_counts_per_stage = v.to_vec();
-        self
-    }
-
     /// Sets [`StageContext::load_bus_indices`] (and, through it, the
     /// `n_load_buses` [`Self::ctx`] derives).
     #[must_use]

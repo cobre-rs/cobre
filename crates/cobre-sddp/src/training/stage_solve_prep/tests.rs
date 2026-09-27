@@ -316,7 +316,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     let templates = vec![template.clone()];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
     let geometry = equipment_free_geometry(&[1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let study_dims = study_dims();
@@ -558,7 +558,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
         n_blks: 1,
         ..StageGeometry::default()
     }];
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry)
         .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)
         .ncs_stochastic_windows(&ncs_stochastic_windows)
         .ncs_max_gen(&ncs_max_gen)
@@ -697,7 +697,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     let state_boxes = vec![unbounded_state_box(state.n_state)];
     let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1)];
     let load_bus_indices = [0_usize];
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
         .load_bus_indices(&load_bus_indices);
     let ctx = fixture.ctx();
     let horizon = HorizonMode::Finite { num_stages: 1 };

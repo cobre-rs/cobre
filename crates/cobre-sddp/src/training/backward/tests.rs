@@ -987,7 +987,6 @@ fn single_stage_system_produces_no_cuts() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1071,7 +1070,6 @@ fn two_stage_system_two_trial_states_generates_two_cuts_at_stage_0() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1162,7 +1160,6 @@ fn cut_inserted_with_correct_stage_iteration_and_forward_pass_index() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1247,7 +1244,6 @@ fn no_cuts_generated_at_last_stage() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1333,7 +1329,6 @@ fn elapsed_ms_is_non_negative() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1414,7 +1409,6 @@ fn infeasible_solver_returns_sddp_infeasible_error() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1530,7 +1524,6 @@ fn cut_coefficients_and_intercept_match_dual_extraction_formula() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1627,7 +1620,6 @@ fn cut_gradient_sign_physically_correct() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1735,7 +1727,6 @@ fn cut_is_tight_at_trial_state() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1833,7 +1824,6 @@ fn single_rank_backward_pass_with_local_backend_produces_correct_fcf() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -1942,7 +1932,6 @@ fn forward_pass_index_matches_global_scenario_index() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -2037,7 +2026,6 @@ fn warm_start_uses_prepopulated_forward_basis() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -2125,7 +2113,6 @@ fn multi_opening_subsequent_openings_use_internal_hotstart() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -2219,7 +2206,6 @@ fn backward_solver_error_propagates() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -2361,7 +2347,7 @@ fn test_backward_pass_parallel_cut_determinism() {
     let mut basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
     let state_boxes = permissive_state_boxes(n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let _ = run_backward_pass(&mut BackwardPassInputs {
@@ -2831,7 +2817,7 @@ fn backward_pass_load_patches_applied() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        ctx: &StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         frozen: &mut templates.clone(),
@@ -2989,7 +2975,6 @@ fn backward_pass_no_load_buses_unchanged() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&[1_usize; 2]),
@@ -3153,7 +3138,7 @@ fn backward_pass_cut_coefficients_unaffected() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        ctx: &StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         frozen: &mut templates.clone(),
@@ -3265,7 +3250,6 @@ fn per_stage_cut_sync_invariant_after_bug1_fix() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -3389,7 +3373,6 @@ fn metadata_sync_updates_active_count_and_last_active_iter() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -3567,7 +3550,6 @@ fn run_backward_pass_with_n_workers(n_workers: usize) -> FutureCostFunction {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -3918,7 +3900,6 @@ fn allgatherv_single_rank_two_workers_stage_stats_has_per_worker_entries() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -4132,7 +4113,6 @@ fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -4239,7 +4219,7 @@ fn run_one_trial_state_with_stores(
     let templates = vec![minimal_template_1_0(), minimal_template_1_0()];
     let state_boxes = permissive_state_boxes(n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite {
@@ -4364,7 +4344,7 @@ fn patch_opening_bounds_pins_transit_bucket_incoming_columns_per_stage_visit() {
     let templates = vec![template];
     let state_boxes = permissive_state_boxes(state.n_state, 1);
     let geometry = equipment_free_geometry(&[0]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite { num_stages: 1 };
@@ -4445,7 +4425,7 @@ fn per_child_backward_isolates_column_basis_and_pool_metadata() {
     let templates = vec![minimal_template_1_0(); n_stages];
     let state_boxes = permissive_state_boxes(n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite {
@@ -4823,7 +4803,6 @@ fn handshake_passes_with_local_backend() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -4973,7 +4952,6 @@ fn handshake_rejects_nonuniform_workers() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
@@ -5240,7 +5218,7 @@ fn run_dcs_backward_trial_state_at(
     let state_boxes = permissive_state_boxes(n_state, n_stages);
 
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let study_dims = test_support::study_dims();
     let training_ctx = TrainingContext {
@@ -5740,7 +5718,7 @@ fn backward_dcs_frozen_cuts_present_no_duplicate_rows() {
     let state_boxes = permissive_state_boxes(n_state, n_stages);
 
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let study_dims = test_support::study_dims();
     let training_ctx = TrainingContext {

@@ -194,7 +194,7 @@ mod tests {
     use super::IterationScratch;
     use crate::lp::builder::StageGeometry;
     use crate::setup::node_graph::StageIdx;
-    use crate::test_support::{StageContextFixture, equipment_free_geometry, state_layout};
+    use crate::test_support::{StageContextFixture, equipment_free_geometry};
 
     fn minimal_template() -> StageTemplate {
         StageTemplate {
@@ -223,8 +223,7 @@ mod tests {
         templates: &'a [StageTemplate],
         geometry_per_stage: &'a [StageGeometry],
     ) -> StageContextFixture<'a> {
-        let state = state_layout(0, 0);
-        StageContextFixture::new(&state, templates, &[], geometry_per_stage)
+        StageContextFixture::new(templates, &[], geometry_per_stage)
     }
 
     #[test]

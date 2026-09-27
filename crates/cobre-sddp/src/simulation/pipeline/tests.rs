@@ -812,7 +812,7 @@ fn simulation_load_patches_applied() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        &StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         &fcf,
@@ -962,13 +962,7 @@ fn simulation_no_load_buses_unchanged() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(
-            &state,
-            &templates,
-            &state_boxes,
-            &equipment_free_geometry(&[1]),
-        )
-        .ctx(),
+        &StageContextFixture::new(&templates, &state_boxes, &equipment_free_geometry(&[1])).ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1085,13 +1079,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate_with_profile(
         &mut workspaces,
-        &StageContextFixture::new(
-            &state,
-            &templates,
-            &state_boxes,
-            &equipment_free_geometry(&[1]),
-        )
-        .ctx(),
+        &StageContextFixture::new(&templates, &state_boxes, &equipment_free_geometry(&[1])).ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1219,7 +1207,7 @@ fn simulation_inflow_extraction_unaffected() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        &StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         &fcf,
@@ -1546,7 +1534,6 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     run_simulate(
         &mut workspaces,
         &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&[n_stages]),
@@ -1661,7 +1648,6 @@ fn simulation_none_method_produces_raw_negative_noise() {
     run_simulate(
         &mut workspaces,
         &StageContextFixture::new(
-            &state,
             &templates,
             &state_boxes,
             &equipment_free_geometry(&[n_stages]),
@@ -1954,8 +1940,7 @@ mod dcs_simulation {
             lower: vec![f64::NEG_INFINITY; state.n_state],
             upper: vec![f64::INFINITY; state.n_state],
         }];
-        let fixture =
-            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage);
         let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
@@ -2508,7 +2493,7 @@ mod anticipated_ring_matches_forward_propagation {
             N_STAGES
         ];
         let geometry = equipment_free_geometry(&[1, 1, 1]);
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),

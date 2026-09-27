@@ -357,8 +357,7 @@ mod tests {
         noise::{DownstreamAccumState, LagAccumState, accumulate_and_shift_lag_state},
         setup::{NodeId, StageIdx},
         test_support::{
-            StageContextFixture, equipment_free_geometry, state_layout,
-            state_layout_with_transit_buckets,
+            StageContextFixture, equipment_free_geometry, state_layout_with_transit_buckets,
         },
         workspace::{CapturedBasis, SolverWorkspace, WorkspaceSizing},
     };
@@ -439,8 +438,7 @@ mod tests {
         templates: &'a [StageTemplate],
         geometry_per_stage: &'a [StageGeometry],
     ) -> StageContextFixture<'a> {
-        let state = state_layout(0, 0);
-        StageContextFixture::new(&state, templates, &[], geometry_per_stage)
+        StageContextFixture::new(templates, &[], geometry_per_stage)
     }
 
     /// Build an empty `CutPool` (no active cuts, `populated_count = 0`).

@@ -544,7 +544,7 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -657,7 +657,7 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -761,7 +761,7 @@ fn simulate_infeasible_at_scenario2_stage3() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -864,7 +864,7 @@ fn simulate_channel_closed_returns_error() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -967,7 +967,7 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let run_result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1068,7 +1068,7 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let run_result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1170,7 +1170,7 @@ fn simulate_channel_receives_results_in_scenario_order() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1268,7 +1268,7 @@ fn test_simulation_parallel_cost_determinism() {
     let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result_1 = cobre_sddp::simulate(
         &mut workspaces_1,
         &stage_ctx_fixture.ctx(),
@@ -1344,7 +1344,7 @@ fn test_simulation_parallel_cost_determinism() {
         .collect();
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result_4 = cobre_sddp::simulate(
         &mut workspaces_4,
         &stage_ctx_fixture.ctx(),
@@ -1471,7 +1471,7 @@ fn simulate_emits_progress_events() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1594,7 +1594,7 @@ fn simulate_no_events_when_sender_is_none() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1702,7 +1702,7 @@ fn simulate_progress_events_received_before_return() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1821,7 +1821,7 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -1938,7 +1938,7 @@ fn simulate_emits_simulation_finished_as_last_event() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2066,7 +2066,7 @@ fn simulate_progress_scenario_cost_is_finite() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2178,7 +2178,7 @@ fn simulate_frozen_path_issues_zero_add_rows() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2283,7 +2283,7 @@ fn simulate_fallback_path_issues_expected_add_rows() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2390,7 +2390,7 @@ fn simulate_frozen_length_mismatch_returns_error() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2537,7 +2537,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2683,7 +2683,7 @@ fn simulate_with_empty_stage_bases_cold_starts() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),
@@ -2893,7 +2893,7 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
         &stage_ctx_fixture.ctx(),

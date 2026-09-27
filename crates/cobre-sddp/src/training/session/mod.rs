@@ -1925,8 +1925,7 @@ mod tests {
         geometry_per_stage: &'a [StageGeometry],
         state_boxes: &'a [StateBox],
     ) -> StageContextFixture<'a> {
-        let state = test_support::state_layout(0, 0);
-        StageContextFixture::new(&state, templates, state_boxes, geometry_per_stage)
+        StageContextFixture::new(templates, state_boxes, geometry_per_stage)
     }
 
     fn make_training_ctx<'a>(

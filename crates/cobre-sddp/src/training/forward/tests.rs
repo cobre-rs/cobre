@@ -665,7 +665,7 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -775,7 +775,7 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -889,7 +889,7 @@ fn cost_statistics_accumulated_correctly() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -1475,7 +1475,7 @@ fn run_one_iteration(
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     run_forward_pass(
         std::slice::from_mut(ws),
@@ -1613,7 +1613,7 @@ fn test_forward_pass_parallel_cost_agreement() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
 
     let mut ws1 = single_workspace(MockSolver::always_ok(solution.clone()), &state);
@@ -1755,7 +1755,7 @@ fn test_forward_pass_work_distribution() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let _result = run_forward_pass(
         &mut workspaces,
@@ -1993,7 +1993,7 @@ fn run_single_stage_forward(
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let stages = vec![Stage {
         index: 0,
@@ -2162,7 +2162,7 @@ fn none_method_unchanged_with_truncation_code_present() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -2394,7 +2394,7 @@ fn test_forward_pass_parallel_infeasibility() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         &mut workspaces,
@@ -2535,7 +2535,7 @@ fn forward_pass_load_noise_positive_realization() {
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
         .load_bus_indices(&load_bus_indices);
     let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
@@ -2674,7 +2674,7 @@ fn forward_pass_load_noise_clamped_to_zero() {
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
         .load_bus_indices(&load_bus_indices);
     let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
@@ -2761,7 +2761,7 @@ fn forward_pass_no_load_buses_unchanged() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1, 1, 1]);
-    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -3531,7 +3531,7 @@ mod dcs_forward {
             2
         ];
         let geometry = equipment_free_geometry(&[1usize, 1]);
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry)
             .discount_factors(&discount_factors);
         let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
@@ -4000,8 +4000,7 @@ mod transit_bucket_copy_gap {
             upper: vec![f64::INFINITY; state.n_state],
         }];
 
-        let fixture =
-            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage);
         let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {

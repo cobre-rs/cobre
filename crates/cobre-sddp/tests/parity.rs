@@ -1280,8 +1280,7 @@ mod determinism {
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
         let geometry = equipment_free_geometry(&[1usize; 5]);
-        let stage_ctx_fixture =
-            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
+        let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let stage_ctx = stage_ctx_fixture.ctx();
         let result = pool
             .install(|| {
@@ -1396,8 +1395,7 @@ mod determinism {
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
         let geometry = equipment_free_geometry(&[0usize; 5]);
-        let stage_ctx_fixture =
-            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
+        let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let cost_buffer = pool
             .install(|| {
                 simulate(

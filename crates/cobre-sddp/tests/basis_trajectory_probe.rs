@@ -338,7 +338,6 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
     };
 
     let fixture = StageContextFixture::new(
-        &state,
         std::slice::from_ref(&template),
         &[],
         std::slice::from_ref(&geom),

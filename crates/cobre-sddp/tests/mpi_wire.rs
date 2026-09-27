@@ -1697,8 +1697,7 @@ mod by_node_scratch {
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&[0, 0]);
-        let fixture =
-            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {
@@ -1817,8 +1816,7 @@ mod by_node_scratch {
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&[0, 0]);
-        let fixture =
-            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {

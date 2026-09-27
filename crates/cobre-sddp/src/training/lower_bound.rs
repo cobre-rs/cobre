@@ -1021,12 +1021,7 @@ mod tests {
         }
 
         fn ctx(&self) -> StageContextFixture<'_> {
-            StageContextFixture::new(
-                &self.state,
-                &self.templates,
-                &self.state_boxes,
-                &self.geometry_per_stage,
-            )
+            StageContextFixture::new(&self.templates, &self.state_boxes, &self.geometry_per_stage)
         }
 
         fn training_ctx(&self) -> TrainingContext<'_> {
@@ -1971,7 +1966,7 @@ mod tests {
             n_blks: block_count,
             ..StageGeometry::default()
         }];
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry)
             .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)
             .ncs_stochastic_windows(&ncs_stochastic_windows)
             .ncs_max_gen(&ncs_max_gen)
@@ -2768,7 +2763,6 @@ mod tests {
         let state_boxes = permissive_state_boxes(state.n_state, templates.templates.len());
 
         let fixture = StageContextFixture::new(
-            &state,
             &templates.templates,
             &state_boxes,
             &templates.geometry_per_stage,
@@ -2859,7 +2853,7 @@ mod tests {
         let state_boxes = permissive_state_boxes(state.n_state, 1);
 
         let geometry = equipment_free_geometry(&[0]);
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let study_dims = test_support::study_dims();

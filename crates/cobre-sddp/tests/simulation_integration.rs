@@ -639,8 +639,7 @@ fn train_simulate_write_cycle() {
 
     let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx_fixture =
-        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
     let study_dims = study_dims_for(0, 0, 0, 0, false);
@@ -806,7 +805,7 @@ fn train_simulate_write_cycle() {
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let geometry_sim = equipment_free_geometry(&vec![0usize; fx.n_stages]);
     let stage_ctx_fixture_sim =
-        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry_sim);
+        StageContextFixture::new(&fx.templates, &state_boxes, &geometry_sim);
     simulate(
         &mut sim_workspaces,
         &stage_ctx_fixture_sim.ctx(),
@@ -1307,7 +1306,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
 
     let training_config = TrainingConfig {
@@ -1503,8 +1502,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
 
     let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx_fixture =
-        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
     let study_dims = study_dims_for(0, 0, 0, 0, false);

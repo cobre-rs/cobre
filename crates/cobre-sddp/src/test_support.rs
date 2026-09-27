@@ -673,7 +673,6 @@ impl<'a> StageContextFixture<'a> {
     /// must have one geometry.
     #[must_use]
     pub fn new(
-        _state: &StateSpace,
         templates: &'a [StageTemplate],
         state_boxes: &'a [StateBox],
         geometry_per_stage: &'a [StageGeometry],
@@ -711,12 +710,10 @@ impl<'a> StageContextFixture<'a> {
     /// See [`Self::new`].
     #[must_use]
     pub fn from_stage_templates(
-        state: &StateSpace,
         stage_templates: &'a StageTemplates,
         state_boxes: &'a [StateBox],
     ) -> Self {
         let mut fixture = Self::new(
-            state,
             &stage_templates.templates,
             state_boxes,
             &stage_templates.geometry_per_stage,
@@ -4504,9 +4501,8 @@ mod stage_context_fixture_tests {
         let state_boxes = permissive_state_boxes(state.n_state, 2);
         let geometry_per_stage = vec![geometry_with_load_balance(0, 1, 3); 2];
         let load_bus_indices = vec![0_usize];
-        let fixture =
-            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-                .load_bus_indices(&load_bus_indices);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
+            .load_bus_indices(&load_bus_indices);
         let ctx = fixture.ctx();
         assert_eq!(ctx.load_bus_indices.len(), 1);
         assert_eq!(ctx.block_count(StageIdx(0)), 3);
@@ -4520,7 +4516,7 @@ mod stage_context_fixture_tests {
         let templates = vec![transit_bucket_only_template(1, state.n_state); 2];
         let state_boxes = permissive_state_boxes(state.n_state, 2);
         let geometry_per_stage = vec![StageGeometry::default()];
-        let _ = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage);
+        let _ = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage);
     }
 
     #[test]

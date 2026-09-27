@@ -486,7 +486,6 @@ fn base_stage_context<'a>(
     state_boxes: &'a [StateBox],
 ) -> cobre_sddp::test_support::StageContextFixture<'a> {
     cobre_sddp::test_support::StageContextFixture::from_stage_templates(
-        &fx.state,
         &fx.stage_templates,
         state_boxes,
     )

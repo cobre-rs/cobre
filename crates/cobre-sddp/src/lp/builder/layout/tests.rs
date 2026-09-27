@@ -30,6 +30,7 @@ use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResol
 use crate::resolved_parameters::ResolvedParameters;
 use crate::test_support::{
     anticipated_plants_at, make_unit_group, state_layout, state_layout_full,
+    state_layout_with_transit_buckets,
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 
@@ -4532,4 +4533,292 @@ fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
         }
     }
     assert!(compared > 0, "must compare at least one bucket");
+}
+
+/// Compares every index of the builder's eight hand-built row families on
+/// `layout` against a frozen reference formula (job 3,
+/// `docs/design/lp-builder-contract.md`): the left side below is written
+/// once and never changes across this migration's commits; the right side
+/// tracks each site's own production expression, so this test pins the new
+/// accessor or primitive against the old derivation as production moves onto
+/// it. Returns how many addresses each family compared, in family order
+/// (fishing, state-out-def, slot definition, transit definition, filling
+/// target, floor, evaporation, generic); a family empty on this particular
+/// `layout` compares zero.
+fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 8] {
+    let geom = layout.geometry(block_mode);
+    let anticipated = &layout.anticipated;
+    let mut counts = [0usize; 8];
+
+    let mut fishing_rows = Vec::new();
+    for i in 0..layout.n_anticipated {
+        let expected = anticipated
+            .anticipated_fishing_row_pos
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|pos| anticipated.row_anticipated_fishing_start + pos);
+        let actual = anticipated
+            .anticipated_fishing_row_pos
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|pos| anticipated.row_anticipated_fishing_start + pos);
+        assert_eq!(actual, expected, "fishing row disagreement at local {i}");
+        if let Some(row) = actual {
+            fishing_rows.push(row);
+        }
+    }
+    fishing_rows.sort_unstable();
+    assert_eq!(
+        fishing_rows,
+        (anticipated.row_anticipated_fishing_start
+            ..anticipated.row_anticipated_fishing_start + anticipated.n_anticipated_fishing_rows)
+            .collect::<Vec<_>>(),
+        "fishing rows must exactly cover their allocated range"
+    );
+    counts[0] = fishing_rows.len();
+
+    let mut state_out_def_rows = Vec::new();
+    for i in 0..layout.n_anticipated {
+        let expected = anticipated
+            .anticipated_decision_row_pos
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|pos| anticipated.row_anticipated_state_out_def_start + pos);
+        let actual = anticipated
+            .anticipated_decision_row_pos
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|pos| anticipated.row_anticipated_state_out_def_start + pos);
+        assert_eq!(
+            actual, expected,
+            "state-out-def row disagreement at local {i}"
+        );
+        if let Some(row) = actual {
+            state_out_def_rows.push(row);
+        }
+    }
+    state_out_def_rows.sort_unstable();
+    assert_eq!(
+        state_out_def_rows,
+        (anticipated.row_anticipated_state_out_def_start
+            ..anticipated.row_anticipated_state_out_def_start
+                + anticipated.n_anticipated_state_out_def_rows)
+            .collect::<Vec<_>>(),
+        "state-out-def rows must exactly cover their allocated range"
+    );
+    counts[1] = state_out_def_rows.len();
+
+    let mut slot_definition_rows = Vec::new();
+    for i in 0..anticipated.anticipated_slot_row_pos.len() {
+        let expected = anticipated
+            .anticipated_slot_row_pos
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|pos| anticipated.row_anticipated_slot_definition_start + pos);
+        let actual = anticipated
+            .anticipated_slot_row_pos
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|pos| anticipated.row_anticipated_slot_definition_start + pos);
+        assert_eq!(
+            actual, expected,
+            "slot definition row disagreement at flat {i}"
+        );
+        if let Some(row) = actual {
+            slot_definition_rows.push(row);
+        }
+    }
+    slot_definition_rows.sort_unstable();
+    assert_eq!(
+        slot_definition_rows,
+        (anticipated.row_anticipated_slot_definition_start
+            ..anticipated.row_anticipated_slot_definition_start
+                + anticipated.n_anticipated_slot_definition_rows)
+            .collect::<Vec<_>>(),
+        "slot definition rows must exactly cover their allocated range"
+    );
+    counts[2] = slot_definition_rows.len();
+
+    let mut transit_rows = Vec::new();
+    for range in transit_bucket_plant_ranges(layout.state) {
+        let row_pos = &layout.rows.transit_bucket_row_pos[range.clone()];
+        for slot in 0..range.len() {
+            let expected = row_pos
+                .get(slot)
+                .copied()
+                .flatten()
+                .map(|pos| layout.rows.transit_bucket_definition.start + pos);
+            let actual = row_pos
+                .get(slot)
+                .copied()
+                .flatten()
+                .map(|pos| layout.rows.transit_bucket_definition.start + pos);
+            assert_eq!(
+                actual, expected,
+                "transit definition row disagreement at range={range:?} slot={slot}"
+            );
+            if let Some(row) = actual {
+                transit_rows.push(row);
+            }
+        }
+    }
+    transit_rows.sort_unstable();
+    assert_eq!(
+        transit_rows,
+        layout
+            .rows
+            .transit_bucket_definition
+            .clone()
+            .collect::<Vec<_>>(),
+        "transit definition rows must exactly cover their allocated range"
+    );
+    counts[3] = transit_rows.len();
+
+    for local_idx in 0..layout.filling.filling_target_hydro_indices.len() {
+        let expected = geom
+            .filling_target
+            .clone()
+            .nth(local_idx)
+            .expect("local_idx within filling_target range");
+        let actual = layout.filling.row_filling_target_start + local_idx;
+        assert_eq!(
+            actual, expected,
+            "filling target row disagreement at local {local_idx}"
+        );
+        counts[4] += 1;
+    }
+
+    for local_idx in 0..layout.filling.filled_min_storage_floor_hydro_indices.len() {
+        let expected = geom
+            .filled_min_storage_floor
+            .clone()
+            .nth(local_idx)
+            .expect("local_idx within filled_min_storage_floor range");
+        let actual = layout.filling.row_filled_min_storage_floor_start + local_idx;
+        assert_eq!(
+            actual, expected,
+            "floor row disagreement at local {local_idx}"
+        );
+        counts[5] += 1;
+    }
+
+    for k in 0..geom.evap_indices.len() {
+        let expected = geom.evap_indices[k].evap_row;
+        let l = k / layout.n_evap_slots;
+        let s = k % layout.n_evap_slots;
+        let actual = layout.row_evap_start() + l * layout.n_evap_slots + s;
+        assert_eq!(actual, expected, "evap row disagreement at k={k}");
+        counts[6] += 1;
+    }
+
+    assert_eq!(
+        layout.rows.n_generic_rows,
+        layout.generic_constraint_rows.len(),
+        "n_generic_rows must equal generic_constraint_rows.len()"
+    );
+    for i in 0..layout.generic_constraint_rows.len() {
+        let expected = layout.rows.row_generic_start + i;
+        let actual = layout.rows.row_generic_start + i;
+        assert_eq!(actual, expected, "generic row disagreement at i={i}");
+        counts[7] += 1;
+    }
+
+    counts
+}
+
+/// Pins every hand-built row family's address against a frozen reference
+/// formula. No single fixture in this file populates every family at once,
+/// so this runs [`assert_row_addresses`] over several, in both block modes,
+/// and sums the per-family counts.
+#[test]
+fn row_address_pins_cover_every_family() {
+    let mut totals = [0usize; 8];
+
+    // Fishing + state-out-def + slot-definition (carry): two anticipated
+    // plants with heterogeneous leads (2, 3) sharing a depth-3 ring — the
+    // short-lead plant's deposit sits in flight (a carry row) the stage after
+    // its own deposit, before the long-lead plant's own next deposit reaches
+    // that residue.
+    let mut ant_fixtures = AntFixturesWithNStages::new(6);
+    let ant_ctx = ant_fixtures.make_ctx(2, vec![2, 3], &[0, 1]);
+    let ant_state = state_layout_for(&ant_ctx);
+    let ant_stage = minimal_stage();
+    for stage_idx in [0, 1] {
+        let layout = StageLayout::new(&ant_ctx, &ant_state, &ant_stage, stage_idx);
+        let counts = assert_row_addresses(&layout, BlockMode::Parallel);
+        for (total, count) in totals.iter_mut().zip(counts) {
+            *total += count;
+        }
+    }
+
+    // Filling target + evaporation (Parallel).
+    let filling_fixtures = FillingMembershipFixtures::new();
+    let filling_ctx = filling_fixtures.make_ctx();
+    let filling_state = state_layout_for(&filling_ctx);
+    let filling_stage = stage_with_id(1);
+    let filling_layout = StageLayout::new(&filling_ctx, &filling_state, &filling_stage, 0);
+    let filling_counts = assert_row_addresses(&filling_layout, BlockMode::Parallel);
+    for (total, count) in totals.iter_mut().zip(filling_counts) {
+        *total += count;
+    }
+
+    // Floor + evaporation (Chronological — exercises the other block mode).
+    let mut operating_stage = stage_with_id(3);
+    operating_stage.block_mode = BlockMode::Chronological;
+    operating_stage.blocks = (0..2)
+        .map(|index| Block {
+            index,
+            name: format!("BLK{index}"),
+            duration_hours: 372.0,
+        })
+        .collect();
+    let operating_layout = StageLayout::new(&filling_ctx, &filling_state, &operating_stage, 0);
+    let operating_counts = assert_row_addresses(&operating_layout, BlockMode::Chronological);
+    for (total, count) in totals.iter_mut().zip(operating_counts) {
+        *total += count;
+    }
+
+    // Generic: one block-varying symbolic-upper-bound constraint, two blocks.
+    let mut generic_fixtures = ZeroEntityFixtures::new();
+    generic_fixtures.install_symbolic_upper_bound();
+    let generic_ctx = generic_fixtures.make_ctx_generic();
+    let generic_state = state_layout_for(&generic_ctx);
+    let generic_stage = stage_with_blocks(BlockMode::Parallel, 2);
+    let generic_layout = StageLayout::new(&generic_ctx, &generic_state, &generic_stage, 0);
+    let generic_counts = assert_row_addresses(&generic_layout, BlockMode::Parallel);
+    for (total, count) in totals.iter_mut().zip(generic_counts) {
+        *total += count;
+    }
+
+    // Transit-bucket definition: one downstream plant, one reachable lag.
+    let mut transit_fixtures = ZeroEntityFixtures::new();
+    let mut transit_ctx = transit_fixtures.make_ctx(0, vec![], &[]);
+    transit_ctx.per_stage_mask = vec![vec![1]];
+    let transit_state = state_layout_with_transit_buckets(0, 0, 1, vec![(0, 1)], 0, vec![]);
+    let transit_stage = minimal_stage();
+    let transit_layout = StageLayout::new(&transit_ctx, &transit_state, &transit_stage, 0);
+    let transit_counts = assert_row_addresses(&transit_layout, BlockMode::Parallel);
+    for (total, count) in totals.iter_mut().zip(transit_counts) {
+        *total += count;
+    }
+
+    let family_names = [
+        "fishing",
+        "state-out-def",
+        "slot definition",
+        "transit definition",
+        "filling target",
+        "floor",
+        "evaporation",
+        "generic",
+    ];
+    for (name, total) in family_names.iter().zip(totals) {
+        assert!(total > 0, "{name} never compared");
+    }
 }

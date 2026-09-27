@@ -669,6 +669,13 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
             templates.n_pumping, layout.equipment.n_pumping,
             "stage {t}: scalar n_pumping must equal layout.n_pumping",
         );
+        let geom = &templates.geometry_per_stage[t];
+        assert_eq!(
+            geom.pumping_flow,
+            layout.equipment.col_pumping_start
+                ..layout.equipment.col_pumping_start + layout.equipment.n_pumping * geom.n_blks,
+            "stage {t}: geometry.pumping_flow must equal the layout's own pumping range"
+        );
     }
 }
 
@@ -878,11 +885,45 @@ fn geometry_ncs_family_matches_the_ncs_column_start() {
     )
     .expect("build_stage_templates: valid system");
 
+    let (
+        anticipated_resolution,
+        anticipated_lead_stages,
+        per_stage_mask,
+        arc_stage_weights,
+        arc_spread_chrono,
+        arc_arrival_density,
+        max_par_order,
+    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
+    let (ctx, _, _) = super::build_template_build_ctx(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        system.load_models(),
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+        anticipated_resolution,
+        anticipated_lead_stages,
+        &anticipated_plants,
+        per_stage_mask,
+        arc_stage_weights,
+        arc_spread_chrono,
+        arc_arrival_density,
+        max_par_order,
+        &hydro_cell_index,
+        SamplingScheme::InSample,
+        &time_value,
+    );
+    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+
     assert_eq!(
         templates.n_ncs, 2,
         "two NCS sources were declared; the dense count is a scalar"
     );
-    for t in 0..templates.ncs_col_starts.len() {
+    for (t, stage) in study_stages.iter().enumerate() {
         let geom = &templates.geometry_per_stage[t];
         let start = templates.ncs_col_starts[t];
         let n_ncs = templates.n_ncs;
@@ -890,6 +931,14 @@ fn geometry_ncs_family_matches_the_ncs_column_start() {
             geom.ncs_generation,
             start..start + n_ncs * geom.n_blks,
             "stage {t}: ncs_generation must equal ncs_col_starts[t]..+n_ncs*n_blks"
+        );
+        let state = state_layout_for(&ctx);
+        let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, t);
+        assert_eq!(
+            geom.ncs_generation,
+            layout.equipment.col_ncs_start
+                ..layout.equipment.col_ncs_start + layout.equipment.n_ncs * geom.n_blks,
+            "stage {t}: geometry.ncs_generation must equal the layout's own NCS range"
         );
         for sys_idx in 0..n_ncs {
             for blk in 0..geom.n_blks {

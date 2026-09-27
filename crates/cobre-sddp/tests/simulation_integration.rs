@@ -347,15 +347,15 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
 
 fn minimal_template() -> StageTemplate {
     // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3)
-    //             rows: storage_fixing(0), z_inflow(1)
+    //             rows: z_inflow(0), storage_fixing(1)
     StageTemplate {
         num_cols: 4,
         num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0, 0, 0, 1, 1],
-        row_indices: vec![0],
-        values: vec![1.0],
-        col_lower: vec![0.0; 4],
+        num_nz: 2,
+        col_starts: vec![0, 0, 1, 2, 2],
+        row_indices: vec![0, 1],
+        values: vec![1.0, 1.0],
+        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
         col_upper: vec![f64::INFINITY; 4],
         objective: vec![0.0, 0.0, 0.0, 1.0],
         row_lower: vec![0.0; 2],

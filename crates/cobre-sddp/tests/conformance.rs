@@ -143,19 +143,22 @@ impl SolverInterface for MockSolver {
 }
 
 /// Minimal stage template for a single hydro, zero PAR lags.
+///
+/// Column layout (N=1, L=0): `storage_out`(0), `z_inflow`(1), `storage_in`(2), `theta`(3).
+/// Row layout: `z_inflow`(0), storage-fixing(1).
 fn minimal_template() -> StageTemplate {
     StageTemplate {
-        num_cols: 3,
-        num_rows: 1,
-        num_nz: 1,
-        col_starts: vec![0, 0, 1, 1],
-        row_indices: vec![0],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0],
-        row_upper: vec![0.0],
+        num_cols: 4,
+        num_rows: 2,
+        num_nz: 2,
+        col_starts: vec![0, 0, 1, 2, 2],
+        row_indices: vec![0, 1],
+        values: vec![1.0, 1.0],
+        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+        col_upper: vec![f64::INFINITY; 4],
+        objective: vec![0.0, 0.0, 0.0, 1.0],
+        row_lower: vec![0.0, 0.0],
+        row_upper: vec![0.0, 0.0],
         n_state: 1,
         n_transfer: 0,
         n_dual_relevant: 1,

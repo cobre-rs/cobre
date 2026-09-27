@@ -239,23 +239,22 @@ impl SolverInterface for MockSolver {
 /// Minimal valid stage template for N=1 hydro, L=0 PAR order.
 ///
 /// Column layout (N=1, L=0):
-/// - col 0: `storage_out` (no NZ in structural rows)
-/// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
-/// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
+/// - col 0: `storage_out` (no NZ)
+/// - col 1: `z_inflow` (1 NZ: row 0, z-inflow definition row)
+/// - col 2: `storage_in` (1 NZ: row 1, storage-fixing row)
 /// - col 3: `theta` (no NZ)
 ///
 /// Row layout:
-/// - row 0: storage-fixing (`storage_out` fixed to incoming state)
-/// - row 1: `z_inflow` definition row
+/// - row 0: `z_inflow` definition row
+/// - row 1: storage-fixing (`storage_out` fixed to incoming state)
 fn minimal_template_1_0() -> StageTemplate {
     StageTemplate {
         num_cols: 4,
         num_rows: 2,
-        num_nz: 1,
-        // CSC col_starts: 4 cols + sentinel; the single NZ sits on storage_in (col 2).
-        col_starts: vec![0_i32, 0, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
+        num_nz: 2,
+        col_starts: vec![0_i32, 0, 1, 2, 2],
+        row_indices: vec![0_i32, 1],
+        values: vec![1.0, 1.0],
         col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
         col_upper: vec![f64::INFINITY; 4],
         objective: vec![0.0, 0.0, 0.0, 1.0],

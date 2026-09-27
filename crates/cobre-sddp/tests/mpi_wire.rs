@@ -1436,22 +1436,23 @@ mod by_node_scratch {
         }
     }
 
-    /// Single-state-column template: one storage-like state column, one aux
-    /// column pinned `[0, 0]` by an equality row, one zero-cost objective column
-    /// — a trivially solvable LP any `SolverInterface` accepts unconditionally.
+    /// N=1, L=0 template: `storage_out`(0), `z_inflow`(1, free), `storage_in`(2,
+    /// pinned by the storage-fixing row), `theta`(3, zero-cost) — a trivially
+    /// solvable LP any `SolverInterface` accepts unconditionally.
+    /// Row layout: `z_inflow`(0), storage-fixing(1).
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
-            num_cols: 3,
-            num_rows: 1,
-            num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1],
-            row_indices: vec![0_i32],
-            values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
-            col_upper: vec![f64::INFINITY; 3],
-            objective: vec![0.0, 0.0, 1.0],
-            row_lower: vec![0.0],
-            row_upper: vec![0.0],
+            num_cols: 4,
+            num_rows: 2,
+            num_nz: 2,
+            col_starts: vec![0_i32, 0, 1, 2, 2],
+            row_indices: vec![0_i32, 1],
+            values: vec![1.0, 1.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY; 4],
+            objective: vec![0.0, 0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 0.0],
+            row_upper: vec![0.0, 0.0],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,

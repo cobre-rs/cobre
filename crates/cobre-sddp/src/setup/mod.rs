@@ -2674,7 +2674,7 @@ fn build_initial_state(
 
     for hs in &ic.storage {
         if let Some(&idx) = hydro_positions.get(&hs.hydro_id.0) {
-            state[layout.storage_state_dim(idx).get()] = hs.value_hm3;
+            state[layout.storage_state_dim(HydroSys::new(idx)).get()] = hs.value_hm3;
         }
     }
 
@@ -2684,7 +2684,7 @@ fn build_initial_state(
         // the two collections or re-index the column — a separate index would
         // silently desync from that pin.
         if let Some(&idx) = hydro_positions.get(&hs.hydro_id.0) {
-            state[layout.storage_state_dim(idx).get()] = hs.value_hm3;
+            state[layout.storage_state_dim(HydroSys::new(idx)).get()] = hs.value_hm3;
         }
     }
 

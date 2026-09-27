@@ -1417,7 +1417,10 @@ pub(super) fn fill_z_inflow_entries(
             let psi = ctx.par_lp.psi_slice(stage_idx, h_idx);
             for (lag, &psi_val) in psi.iter().enumerate() {
                 if psi_val != 0.0 && lag < lag_order {
-                    let col = layout.state.lag_incoming_col(lag, h_idx).get();
+                    let col = layout
+                        .state
+                        .lag_incoming_col(lag, HydroSys::new(h_idx))
+                        .get();
                     col_entries[col].push((row, -psi_val));
                 }
             }

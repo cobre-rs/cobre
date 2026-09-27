@@ -1342,8 +1342,8 @@ fn storage_boundary_endpoints_match_state_space_accessors() {
     assert!(state.hydro_count >= 2);
     let mut compared = 0;
     for h in 0..state.hydro_count {
-        let incoming = state.storage_incoming_col(h).get();
-        let outgoing = state.storage_outgoing_col(h).get();
+        let incoming = state.storage_incoming_col(HydroSys::new(h)).get();
+        let outgoing = state.storage_outgoing_col(HydroSys::new(h)).get();
         assert_eq!(
             layout.block_storage_col(HydroSys::new(h), Boundary::Incoming),
             incoming

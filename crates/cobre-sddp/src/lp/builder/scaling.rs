@@ -6,7 +6,7 @@ use cobre_core::Stage;
 use cobre_solver::StageTemplate;
 
 use crate::block_clock::BlockClock;
-use crate::indexer::StateSpace;
+use crate::indexer::{HydroSys, StateSpace};
 
 /// Per-column geometric-mean scaling factors from a CSC matrix:
 /// `1 / sqrt(max|A_ij| * min|A_ij|)` over nonzeros, `1.0` for an empty column.
@@ -96,7 +96,9 @@ pub(crate) fn apply_bucket_col_scale(col_scale: &mut [f64], state_layout: &State
         col_scale.len()
     );
     for (b, &(plant_idx, _lag)) in state_layout.transit_bucket_column_order.iter().enumerate() {
-        let d = col_scale[state_layout.storage_outgoing_col(plant_idx).get()];
+        let d = col_scale[state_layout
+            .storage_outgoing_col(HydroSys::new(plant_idx))
+            .get()];
         col_scale[state_layout.bucket_outgoing_col(b).get()] = d;
         col_scale[state_layout.bucket_incoming_col(b).get()] = d;
     }

@@ -620,20 +620,22 @@ impl StateSpace {
     /// The storage state dimension for hydro `h` (`state_dim_storage_range().start + h`).
     #[inline]
     #[must_use]
-    pub(crate) fn storage_state_dim(&self, h: usize) -> StateDim {
-        debug_assert!(h < self.hydro_count);
-        StateDim::new(self.state_dim_storage_range().start + h)
+    pub(crate) fn storage_state_dim(&self, h: HydroSys) -> StateDim {
+        debug_assert!(h.get() < self.hydro_count);
+        StateDim::new(self.state_dim_storage_range().start + h.get())
     }
 
     /// Incoming (stage-initial) storage column of hydro `h`.
+    #[inline]
     #[must_use]
-    pub(crate) fn storage_incoming_col(&self, h: usize) -> InCol {
+    pub(crate) fn storage_incoming_col(&self, h: HydroSys) -> InCol {
         self.state_to_lp_incoming_column(self.storage_state_dim(h))
     }
 
     /// Outgoing (stage-final) storage column of hydro `h`.
+    #[inline]
     #[must_use]
-    pub(crate) fn storage_outgoing_col(&self, h: usize) -> OutCol {
+    pub(crate) fn storage_outgoing_col(&self, h: HydroSys) -> OutCol {
         self.state_to_lp_column(self.storage_state_dim(h))
     }
 
@@ -647,10 +649,11 @@ impl StateSpace {
     }
 
     /// Incoming pinned lag column of hydro `h` at `lag` (lag-major block).
+    #[inline]
     #[must_use]
-    pub(crate) fn lag_incoming_col(&self, lag: usize, h: usize) -> InCol {
-        debug_assert!(lag < self.max_par_order && h < self.hydro_count);
-        self.state_to_lp_incoming_column(self.lag_state_dim(lag, HydroSys::new(h)))
+    pub(crate) fn lag_incoming_col(&self, lag: usize, h: HydroSys) -> InCol {
+        debug_assert!(lag < self.max_par_order && h.get() < self.hydro_count);
+        self.state_to_lp_incoming_column(self.lag_state_dim(lag, h))
     }
 
     /// Incoming pinned bucket column of bucket `b`
@@ -1872,11 +1875,17 @@ mod tests {
     fn typed_state_col_accessors_match_block_layout() {
         let idx = finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 2, vec![1, 2]);
         for h in 0..idx.hydro_count {
-            assert_eq!(idx.storage_incoming_col(h).get(), idx.storage_in.start + h);
-            assert_eq!(idx.storage_outgoing_col(h).get(), idx.storage.start + h);
+            assert_eq!(
+                idx.storage_incoming_col(HydroSys::new(h)).get(),
+                idx.storage_in.start + h
+            );
+            assert_eq!(
+                idx.storage_outgoing_col(HydroSys::new(h)).get(),
+                idx.storage.start + h
+            );
             for lag in 0..idx.max_par_order {
                 assert_eq!(
-                    idx.lag_incoming_col(lag, h).get(),
+                    idx.lag_incoming_col(lag, HydroSys::new(h)).get(),
                     idx.inflow_lags.start + lag * idx.hydro_count + h
                 );
             }

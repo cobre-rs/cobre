@@ -954,12 +954,12 @@ impl HydroStageContext {
     ) -> Self {
         let study_dims = spec.study_dims;
         let state = spec.state;
-        let storage_final = view.primal[state.storage_outgoing_col(h).get()];
-        let storage_initial = view.primal[state.storage_incoming_col(h).get()];
+        let storage_final = view.primal[state.storage_outgoing_col(HydroSys::new(h)).get()];
+        let storage_initial = view.primal[state.storage_incoming_col(HydroSys::new(h)).get()];
         let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
             spec.inflow_m3s_per_hydro[h]
         } else if state.max_par_order > 0 {
-            view.primal[state.lag_incoming_col(0, h).get()]
+            view.primal[state.lag_incoming_col(0, HydroSys::new(h)).get()]
         } else {
             0.0
         };
@@ -2103,7 +2103,7 @@ fn extract_stub_collections(
                     stage_id,
                     hydro_id,
                     lag_index: l as u32,
-                    inflow_m3s: view.primal[state.lag_incoming_col(l, h).get()],
+                    inflow_m3s: view.primal[state.lag_incoming_col(l, HydroSys::new(h)).get()],
                 }
             })
         },

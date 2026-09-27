@@ -31,8 +31,9 @@ use cobre_stochastic::season_cast::post_study_calendar_stages;
 use crate::block_clock::{BlockClock, M3S_TO_HM3};
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys, HydroCell,
-    HydroCellIndex, HydroSys, StateSpace, ThermalSys, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
+    FillingTargetLocal, FloorLocal, HydroCell, HydroCellIndex, HydroSys, StateSpace, ThermalSys,
+    anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -4445,6 +4446,52 @@ fn load_balance_row_strides_buses_by_the_block_count() {
             );
         }
     }
+}
+
+/// Each `StageGeometry` one-per-entity column accessor resolves to
+/// `family.start + local`.
+#[test]
+fn stage_geometry_entity_col_accessors_match_hand_offsets() {
+    use super::StageGeometry;
+
+    let geometry = StageGeometry {
+        anticipated_decision: 40..43,
+        inflow_slack: 10..13,
+        withdrawal_slack_neg: 13..16,
+        withdrawal_slack_pos: 16..19,
+        filling_target_col: 30..32,
+        filled_min_storage_floor_col: 32..33,
+        ..StageGeometry::default()
+    };
+    assert_eq!(
+        geometry.anticipated_decision_col(AnticipatedLocal::new(2)),
+        42
+    );
+    assert_eq!(geometry.inflow_slack_col(HydroSys::new(1)), 11);
+    assert_eq!(geometry.withdrawal_slack_neg_col(HydroSys::new(2)), 15);
+    assert_eq!(geometry.withdrawal_slack_pos_col(HydroSys::new(0)), 16);
+    assert_eq!(
+        geometry.filling_target_slack_col(FillingTargetLocal::new(1)),
+        31
+    );
+    assert_eq!(
+        geometry.filled_min_storage_floor_slack_col(FloorLocal::new(0)),
+        32
+    );
+}
+
+/// `inflow_slack_col` debug-asserts the hydro is inside the family.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "outside")]
+fn inflow_slack_col_rejects_a_hydro_past_the_family() {
+    use super::StageGeometry;
+
+    let geometry = StageGeometry {
+        inflow_slack: 10..13,
+        ..StageGeometry::default()
+    };
+    let _ = geometry.inflow_slack_col(HydroSys::new(3));
 }
 
 /// `StageLayout::geometry` field-equals every range/scalar its `StageLayout`

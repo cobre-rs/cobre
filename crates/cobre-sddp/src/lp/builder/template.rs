@@ -20,8 +20,9 @@ use crate::time_value::TimeValue;
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
-    AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
-    HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
+    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
+    EvaporationIndices, FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, StateSpace,
+    StorageBoundaryGrid,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::bucket_topology::build_transit_bucket_topology;
@@ -352,6 +353,57 @@ impl StageGeometry {
         );
         col
     }
+
+    /// Anticipated-local `local`'s ring decision column.
+    #[inline]
+    #[must_use]
+    pub fn anticipated_decision_col(&self, local: AnticipatedLocal) -> usize {
+        one_per_entity_col(&self.anticipated_decision, local.get())
+    }
+
+    /// Hydro `h`'s inflow-penalty slack column.
+    #[inline]
+    #[must_use]
+    pub fn inflow_slack_col(&self, h: HydroSys) -> usize {
+        one_per_entity_col(&self.inflow_slack, h.get())
+    }
+
+    /// Hydro `h`'s below-withdrawal-target slack column.
+    #[inline]
+    #[must_use]
+    pub fn withdrawal_slack_neg_col(&self, h: HydroSys) -> usize {
+        one_per_entity_col(&self.withdrawal_slack_neg, h.get())
+    }
+
+    /// Hydro `h`'s above-withdrawal-target slack column.
+    #[inline]
+    #[must_use]
+    pub fn withdrawal_slack_pos_col(&self, h: HydroSys) -> usize {
+        one_per_entity_col(&self.withdrawal_slack_pos, h.get())
+    }
+
+    /// Filling-target-local `local`'s `σ_fill` slack column.
+    #[inline]
+    #[must_use]
+    pub fn filling_target_slack_col(&self, local: FillingTargetLocal) -> usize {
+        one_per_entity_col(&self.filling_target_col, local.get())
+    }
+
+    /// Floor-local `local`'s `σ^{v-}` operating-floor slack column.
+    #[inline]
+    #[must_use]
+    pub fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
+        one_per_entity_col(&self.filled_min_storage_floor_col, local.get())
+    }
+}
+
+/// Entity `i`'s column in a one-per-entity family `family`.
+#[inline]
+#[must_use]
+fn one_per_entity_col(family: &Range<usize>, i: usize) -> usize {
+    let col = family.start + i;
+    debug_assert!(col < family.end, "column {col} outside {family:?}");
+    col
 }
 
 /// Per-stage outputs of [`build_single_stage_template`], transposed by

@@ -140,31 +140,46 @@ fn filling_reverse_lookup_resolves_sparse_membership() {
 #[test]
 fn filling_target_and_floor_slack_primal_present_and_absent() {
     let primal = vec![0.0, 0.0, 7.5, 11.0];
-    let range = 2..4;
+    let geometry = StageGeometry {
+        filling_target_col: 2..4,
+        filled_min_storage_floor_col: 2..4,
+        ..StageGeometry::default()
+    };
     // Slot 0 ⇒ column 2 ⇒ 7.5; slot 1 ⇒ column 3 ⇒ 11.0.
     assert_eq!(
-        super::read_filling_target_slack_primal(&primal, &range, Some(FillingTargetLocal::new(0))),
+        super::read_filling_target_slack_primal(
+            &primal,
+            &geometry,
+            Some(FillingTargetLocal::new(0))
+        ),
         7.5
     );
     assert_eq!(
-        super::read_filling_target_slack_primal(&primal, &range, Some(FillingTargetLocal::new(1))),
+        super::read_filling_target_slack_primal(
+            &primal,
+            &geometry,
+            Some(FillingTargetLocal::new(1))
+        ),
         11.0
     );
     // Absent ⇒ 0.0 regardless of what the primal vector holds.
     assert_eq!(
-        super::read_filling_target_slack_primal(&primal, &range, None),
+        super::read_filling_target_slack_primal(&primal, &geometry, None),
         0.0
     );
 
     assert_eq!(
-        super::read_floor_slack_primal(&primal, &range, Some(FloorLocal::new(0))),
+        super::read_floor_slack_primal(&primal, &geometry, Some(FloorLocal::new(0))),
         7.5
     );
     assert_eq!(
-        super::read_floor_slack_primal(&primal, &range, Some(FloorLocal::new(1))),
+        super::read_floor_slack_primal(&primal, &geometry, Some(FloorLocal::new(1))),
         11.0
     );
-    assert_eq!(super::read_floor_slack_primal(&primal, &range, None), 0.0);
+    assert_eq!(
+        super::read_floor_slack_primal(&primal, &geometry, None),
+        0.0
+    );
 }
 
 /// End-to-end (no-turbine / stage-aggregate branch): a filling hydro whose

@@ -50,7 +50,7 @@ use crate::simulation::types::{
 /// another, `σ_fill` exists only at a filling hydro's terminal Filling stage, and
 /// `σ^{v-}` only at its Operating stages. A single global stage-0 list would
 /// misclassify any stage whose membership differs. Each entry is `Some(slot)` /
-/// `None`; the column is `geometry.<family>_col.start + slot`.
+/// `None`.
 pub(crate) struct HydroReverseLookup {
     /// FPHA-local slot per hydro, `None` if not FPHA at this stage.
     pub(crate) fpha: Vec<Option<FphaLocal>>,
@@ -129,14 +129,14 @@ impl HydroReverseLookup {
 #[inline]
 fn read_filling_target_slack_primal(
     primal: &[f64],
-    col_range: &Range<usize>,
+    geometry: &StageGeometry,
     local: Option<FillingTargetLocal>,
 ) -> f64 {
     let Some(local) = local else { return 0.0 };
-    let col = col_range.start + local.get();
+    let col = geometry.filling_target_slack_col(local);
     debug_assert!(
-        col < col_range.end && col < primal.len(),
-        "filling-slack col {col} out of range {col_range:?} / primal len {}",
+        col < primal.len(),
+        "filling-slack col {col} out of primal len {}",
         primal.len(),
     );
     primal.get(col).copied().unwrap_or(0.0)
@@ -147,14 +147,14 @@ fn read_filling_target_slack_primal(
 #[inline]
 fn read_floor_slack_primal(
     primal: &[f64],
-    col_range: &Range<usize>,
+    geometry: &StageGeometry,
     local: Option<FloorLocal>,
 ) -> f64 {
     let Some(local) = local else { return 0.0 };
-    let col = col_range.start + local.get();
+    let col = geometry.filled_min_storage_floor_slack_col(local);
     debug_assert!(
-        col < col_range.end && col < primal.len(),
-        "floor-slack col {col} out of range {col_range:?} / primal len {}",
+        col < primal.len(),
+        "floor-slack col {col} out of primal len {}",
         primal.len(),
     );
     primal.get(col).copied().unwrap_or(0.0)
@@ -232,7 +232,7 @@ fn compute_anticipated_decision_mw(
     }
     // Base is the per-stage `thermal.end` (n_blks-dependent), so use `spec.geometry`,
     // never the global stage-0 indexer — that addresses the wrong column off stage 0.
-    let col = spec.geometry.anticipated_decision.start + local_idx.get();
+    let col = spec.geometry.anticipated_decision_col(local_idx);
     debug_assert!(
         col < view.primal.len(),
         "anticipated_decision col {col} out of primal bounds {}",
@@ -278,7 +278,7 @@ fn compute_anticipated_committed_mw(
 /// Sparse by construction: a plant with no genuine decision this stage, or one
 /// targeting an in-study delivery, contributes nothing, so the partition is
 /// empty at every non-decider stage. `deposited_decision_mw` reads the plant's
-/// ring decision column (`geometry.anticipated_decision.start + local`);
+/// ring decision column ([`StageGeometry::anticipated_decision_col`]);
 /// `carried_committed_mw` reads the ring slot the target lands in
 /// ([`StateSpace::commitment_hold_outgoing_col`]) — the SAME
 /// slot the deposit latches (`fill_anticipated_state_out_def_entries`), so the
@@ -309,7 +309,9 @@ pub(crate) fn extract_anticipated_lanes(
             if m < spec.n_stages {
                 continue;
             }
-            let decision_col = spec.geometry.anticipated_decision.start + local;
+            let decision_col = spec
+                .geometry
+                .anticipated_decision_col(AnticipatedLocal::new(local));
             let carried_col = state.commitment_hold_outgoing_col(local, m).get();
             debug_assert!(
                 decision_col < view.primal.len() && carried_col < view.primal.len(),
@@ -962,17 +964,17 @@ impl HydroStageContext {
             0.0
         };
         let inflow_slack = if study_dims.has_inflow_penalty {
-            view.primal[spec.geometry.inflow_slack.start + h]
+            view.primal[spec.geometry.inflow_slack_col(HydroSys::new(h))]
         } else {
             0.0
         };
         let withdrawal_neg = if study_dims.has_withdrawal {
-            view.primal[spec.geometry.withdrawal_slack_neg.start + h]
+            view.primal[spec.geometry.withdrawal_slack_neg_col(HydroSys::new(h))]
         } else {
             0.0
         };
         let withdrawal_pos = if study_dims.has_withdrawal {
-            view.primal[spec.geometry.withdrawal_slack_pos.start + h]
+            view.primal[spec.geometry.withdrawal_slack_pos_col(HydroSys::new(h))]
         } else {
             0.0
         };
@@ -993,14 +995,11 @@ impl HydroStageContext {
             } else {
                 (Some(0.0), 0.0, 0.0)
             };
-        let filling_target_violation = read_filling_target_slack_primal(
-            view.primal,
-            &spec.geometry.filling_target_col,
-            lookup.filling_target[h],
-        );
+        let filling_target_violation =
+            read_filling_target_slack_primal(view.primal, spec.geometry, lookup.filling_target[h]);
         let storage_violation_below = read_floor_slack_primal(
             view.primal,
-            &spec.geometry.filled_min_storage_floor_col,
+            spec.geometry,
             lookup.filled_min_storage_floor[h],
         );
         let conv = spec.energy_conversion.conversion(h, spec.stage_index);

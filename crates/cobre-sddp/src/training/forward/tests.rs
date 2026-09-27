@@ -3160,8 +3160,22 @@ fn build_delta_cut_row_batch_into_skips_warm_start_slots() {
 // col2, and cuts constrain theta against col0), so the primal/objective are
 // determinate at the pinned state.
 mod dcs_forward {
-    use cobre_core::scenario::SamplingScheme;
+    use std::collections::BTreeMap;
+
+    use chrono::NaiveDate;
+    use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+    use cobre_core::scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        SamplingScheme,
+    };
+    use cobre_core::temporal::{
+        Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+        StageStateConfig,
+    };
+    use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::{ActiveSolver, SolverInterface, StageTemplate};
+    use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use super::super::{StageKey, run_forward_stage};
     use crate::context::TrainingContext;
@@ -3182,23 +3196,24 @@ mod dcs_forward {
     const X_HAT: f64 = 2.0;
 
     /// Cut-free base template for the N=1, L=0 state layout:
-    /// cols `[storage_out=0, z_inflow=1, storage_in=2, theta=3]`, one coupling
+    /// cols `[storage_out=0, z_inflow=1, storage_in=2, theta=3]`. Row 0 is the
+    /// z-inflow definition row (`z_inflow[0]` = rhs); row 1 is the coupling
     /// row `storage_out - storage_in = 0`. Minimise theta. The incoming
     /// state (col 2) is pinned to `x_hat` by the patch; the coupling row ties
     /// col0 to it; cuts constrain theta against col0.
     fn fwd_core_template() -> StageTemplate {
         StageTemplate {
             num_cols: 4,
-            num_rows: 1,
-            num_nz: 2,
-            col_starts: vec![0_i32, 1, 1, 2, 2],
-            row_indices: vec![0_i32, 0],
-            values: vec![1.0, -1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
+            num_rows: 2,
+            num_nz: 3,
+            col_starts: vec![0_i32, 1, 2, 3, 3],
+            row_indices: vec![1_i32, 0, 1],
+            values: vec![1.0, 1.0, -1.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, -1.0e6],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
             objective: vec![0.0, 0.0, 0.0, 1.0],
-            row_lower: vec![0.0],
-            row_upper: vec![0.0],
+            row_lower: vec![0.0, 0.0],
+            row_upper: vec![0.0, 0.0],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -3210,28 +3225,30 @@ mod dcs_forward {
     }
 
     /// All-cuts frozen template: the cut-free base plus the three pool cuts
-    /// frozen as structural rows (rows 1..4), in pool slot order:
+    /// frozen as structural rows (rows 2..5), in pool slot order:
     ///   slot 0: -0*col0 + theta >= 1 ; slot 1: -2*col0 + theta >= 0 ;
     ///   slot 2: -0*col0 + theta >= 3.
-    /// `num_rows = 4 = template_num_rows(1) + 3 cuts`.
+    /// Row 0 is the z-inflow definition row; row 1 is the coupling row.
+    /// `num_rows = 5 = 1 (z) + template_num_rows(1) + 3 cuts`.
     fn fwd_all_cuts_frozen() -> StageTemplate {
-        // CSC by column. col0 entries: coupling (row0,+1), slot1 cut (row2,-2).
-        // col3 (theta): rows 1,2,3 each +1. col2: coupling (row0,-1).
+        // CSC by column. col0 entries: coupling (row1,+1), slot1 cut (row3,-2).
+        // col1 (z_inflow): row0,+1. col2: coupling (row1,-1).
+        // col3 (theta): rows 2,3,4 each +1.
         StageTemplate {
             num_cols: 4,
-            num_rows: 4,
-            num_nz: 6,
-            // col0: rows [0,2] vals [1,-2]; col1: none; col2: row[0] val[-1];
-            // col3: rows [1,2,3] vals [1,1,1].
-            col_starts: vec![0_i32, 2, 2, 3, 6],
-            row_indices: vec![0_i32, 2, 0, 1, 2, 3],
-            values: vec![1.0, -2.0, -1.0, 1.0, 1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
+            num_rows: 5,
+            num_nz: 7,
+            // col0: rows [1,3] vals [1,-2]; col1: row[0] val[1];
+            // col2: row[1] val[-1]; col3: rows [2,3,4] vals [1,1,1].
+            col_starts: vec![0_i32, 2, 3, 4, 7],
+            row_indices: vec![1_i32, 3, 0, 1, 2, 3, 4],
+            values: vec![1.0, -2.0, 1.0, -1.0, 1.0, 1.0, 1.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, -1.0e6],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
             objective: vec![0.0, 0.0, 0.0, 1.0],
-            // row0 coupling (=0); rows1..3 cuts (>= intercept).
-            row_lower: vec![0.0, 1.0, 0.0, 3.0],
-            row_upper: vec![0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY],
+            // row0 z-inflow (=rhs); row1 coupling (=0); rows2..4 cuts (>= intercept).
+            row_lower: vec![0.0, 0.0, 1.0, 0.0, 3.0],
+            row_upper: vec![0.0, 0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -3245,20 +3262,20 @@ mod dcs_forward {
     /// Frozen template carrying a single DOMINATING spurious cut
     /// (`-5*col0 + theta >= 0`, floor 10 at `x_hat = 2`, NOT in the pool),
     /// used to prove the DCS path loads the cut-free base and ignores this
-    /// row.
+    /// row. Row 0 is the z-inflow definition row; row 1 is the coupling row.
     fn fwd_frozen_dominating_cut() -> StageTemplate {
         StageTemplate {
             num_cols: 4,
-            num_rows: 2,
-            num_nz: 4,
-            col_starts: vec![0_i32, 2, 2, 3, 4],
-            row_indices: vec![0_i32, 1, 0, 1],
-            values: vec![1.0, -5.0, -1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
+            num_rows: 3,
+            num_nz: 5,
+            col_starts: vec![0_i32, 2, 3, 4, 5],
+            row_indices: vec![1_i32, 2, 0, 1, 2],
+            values: vec![1.0, -5.0, 1.0, -1.0, 1.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, -1.0e6],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
             objective: vec![0.0, 0.0, 0.0, 1.0],
-            row_lower: vec![0.0, 0.0],
-            row_upper: vec![0.0, f64::INFINITY],
+            row_lower: vec![0.0, 0.0, 0.0],
+            row_upper: vec![0.0, 0.0, f64::INFINITY],
             n_state: 1,
             n_transfer: 0,
             n_dual_relevant: 1,
@@ -3327,6 +3344,142 @@ mod dcs_forward {
         }
     }
 
+    /// A minimal `StochasticContext` for a single-hydro, 2-stage system with
+    /// branching factor 3 — `make_stochastic_context_1_hydro_3_stages`'s shape
+    /// at the 2-stage count `run_one_forward_stage` needs.
+    #[allow(clippy::too_many_lines)]
+    fn dcs_forward_stochastic_context() -> StochasticContext {
+        let bus = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let mut hydro = Hydro {
+            unit_groups: Vec::new(),
+            id: EntityId(1),
+            name: "H1".to_string(),
+            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            downstream_id: None,
+            travel_time_hours: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            specific_productivity_mw_per_m3s_per_m: None,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+        hydro.declare_mirror_unit_group(EntityId(0));
+        let make_stage = |idx: usize, id: i32| Stage {
+            index: idx,
+            id,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 3,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        let stages = vec![make_stage(0, 0), make_stage(1, 1)];
+        let inflow = |stage_id: i32| InflowModel {
+            hydro_id: EntityId(1),
+            stage_id,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        };
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "g1".to_string(),
+                    entities: vec![CorrelationEntity {
+                        entity_type: "inflow".to_string(),
+                        id: EntityId(1),
+                    }],
+                    matrix: vec![vec![1.0]],
+                }],
+            },
+        );
+        let correlation = CorrelationModel {
+            method: "spectral".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(vec![inflow(0), inflow(1)])
+            .correlation(correlation)
+            .build()
+            .unwrap();
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            OpeningTreeInputs::default(),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
+    }
+
     /// Run one forward stage (stage 0 of a 2-stage horizon, so theta is not
     /// terminal-zeroed) with the given `dcs` option and `frozen` template,
     /// returning `(stage_cost, advanced_state, scoring_time_seconds)`. The
@@ -3355,8 +3508,7 @@ mod dcs_forward {
         let state = test_support::state_layout(1, 0);
         let core = fwd_core_template();
         let templates = vec![core.clone(), core.clone()];
-        // fwd_core_template's row 0 is the state coupling row, not the z-inflow row a 1-hydro state implies.
-        let stochastic = test_support::hydro_free_stochastic_context(2, 3);
+        let stochastic = dcs_forward_stochastic_context();
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let fcf = fwd_pool();
 
@@ -3379,9 +3531,7 @@ mod dcs_forward {
             2
         ];
         let geometry = equipment_free_geometry(&[1usize, 1]);
-        // Paired with the hydro-free stochastic context above.
         let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
-            .n_hydros_override(0)
             .discount_factors(&discount_factors);
         let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
@@ -3423,13 +3573,14 @@ mod dcs_forward {
             node_id: NodeId(0),
             state: Vec::new(),
         }];
+        let raw_noise = vec![0.0; stochastic.dim()];
         let key = StageKey {
             t: StageIdx(0),
             m: 0,
             local_m: 0,
             num_stages: 2,
             iteration,
-            raw_noise: &[],
+            raw_noise: &raw_noise,
             basis_row_capacity: frozen.num_rows,
             terminal_has_boundary_cuts: false,
             pool: &fcf.pools[0],

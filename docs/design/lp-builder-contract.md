@@ -70,8 +70,22 @@ computes no address. An element accessor is added on the owner when a consumer
 first needs individual elements, and every element read of that family then goes
 through it. A family no consumer indexes element by element gets no accessor.
 
-- **Must not:** derive the same address fact in two places, or let a consumer compute
-  an entity's row or column by hand.
+Every count that describes the study or the LP layout has one owner. That includes
+entity counts, blocks per stage, stages, state dimensions, PAR order, ring depth and
+buckets. Another struct may hold a copy only in one of three forms, and only when the
+copy is built from the owner, so that it cannot disagree with it:
+
+- an output record that reports the count;
+- the shape of storage the struct itself owns;
+- a copy on the per-solve path that serves a named access pattern.
+
+The constructor of such a struct takes the owner, never a loose count, and no struct
+literal sets the copy independently. Any other copy is a second home for the fact and
+is deleted.
+
+- **Must not:** derive the same address fact in two places, keep a copy of a count
+  outside the three permitted forms, or let a consumer compute an entity's row or
+  column by hand.
 
 ### 4. Keep the invariants the algorithm relies on
 

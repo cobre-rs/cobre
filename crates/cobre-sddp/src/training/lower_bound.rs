@@ -659,7 +659,6 @@ mod tests {
         generate_opening_tree(
             42,
             &[stage],
-            1, // dim = 1 hydro
             &decomposed,
             &entity_order,
             cobre_stochastic::ClassDimensions {
@@ -2515,7 +2514,6 @@ mod tests {
         generate_opening_tree(
             42,
             &[stage],
-            2, // dim = 2 hydros
             &decomposed,
             &entity_order,
             cobre_stochastic::ClassDimensions {

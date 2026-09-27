@@ -237,7 +237,6 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
     generate_opening_tree(
         42,
         &[stage],
-        1,
         &decomposed,
         &entity_order,
         dims,

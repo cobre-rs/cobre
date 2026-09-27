@@ -238,7 +238,6 @@ fn wide_correlation_group_opening_tree_golden() {
     let tree = generate_opening_tree(
         42,
         &stages,
-        70,
         &corr,
         &entity_order,
         dims,

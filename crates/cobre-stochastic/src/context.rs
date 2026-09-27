@@ -705,7 +705,6 @@ pub fn build_stochastic_context(
         generate_opening_tree(
             base_seed,
             &study_stages,
-            dim,
             &correlation,
             &entity_order,
             class_dimensions,

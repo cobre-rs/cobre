@@ -131,7 +131,6 @@ fn sobol_2d_star_discrepancy() {
     let tree = generate_opening_tree(
         42,
         &stages,
-        2,
         &corr,
         &entity_order,
         dims,
@@ -187,7 +186,6 @@ fn sobol_normal_statistics() {
     let tree = generate_opening_tree(
         12345,
         &stages,
-        dim,
         &corr,
         &entity_order,
         dims,
@@ -230,7 +228,6 @@ fn sobol_correlation_applied() {
     let tree = generate_opening_tree(
         54321,
         &stages,
-        2,
         &corr,
         &entity_order,
         dims,

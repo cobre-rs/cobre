@@ -58,7 +58,6 @@ fn saa_golden_value_regression() {
     let tree = generate_opening_tree(
         42,
         &stages,
-        2,
         &corr,
         &entity_order,
         dims,

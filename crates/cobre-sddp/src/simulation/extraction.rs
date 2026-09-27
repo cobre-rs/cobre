@@ -1118,11 +1118,11 @@ fn extract_hydro_per_block<'a>(
         let (storage_initial, storage_final) = match spec.geometry.block_mode {
             BlockMode::Chronological => {
                 let n_blks = spec.geometry.n_blks;
-                let g = spec.geometry;
-                let st = spec.state;
-                let h_sys = HydroSys::new(h);
-                let in_col = g.block_storage_col(st, h_sys, Boundary::from_index(b, n_blks));
-                let out_col = g.block_storage_col(st, h_sys, Boundary::from_index(b + 1, n_blks));
+                let hydro = HydroSys::new(h);
+                let storage_col =
+                    |boundary| spec.geometry.block_storage_col(spec.state, hydro, boundary);
+                let in_col = storage_col(Boundary::from_index(b, n_blks));
+                let out_col = storage_col(Boundary::from_index(b + 1, n_blks));
                 debug_assert!(
                     in_col < view.primal.len() && out_col < view.primal.len(),
                     "per-block storage cols {in_col}/{out_col} out of primal bounds {}",

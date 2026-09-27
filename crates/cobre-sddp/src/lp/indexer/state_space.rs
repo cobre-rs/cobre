@@ -464,8 +464,8 @@ impl StateSpace {
     /// lag arithmetic runs, then resolves through an exhaustive match:
     /// storage, `transit_buckets_out`, and `commit_out` map by identity. Lag
     /// indices remap to the outgoing state after `shift_lag_state`: lag 0 is
-    /// realised inflow → `z_inflow.start + h`; lag `l ≥ 1` is the previous
-    /// stage's lag `l − 1` → `inflow_lags.start + (l − 1)·N + h`. Classifying
+    /// realised inflow → [`Self::z_inflow_col`]; lag `l ≥ 1` is the previous
+    /// stage's lag `l − 1` → [`Self::lag_incoming_col`]. Classifying
     /// first — rather than falling through an `if`/`else` chain — is what
     /// keeps buckets/commitment-hold from ever reaching the lag decode.
     ///

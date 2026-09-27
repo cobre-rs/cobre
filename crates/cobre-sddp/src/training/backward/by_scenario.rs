@@ -444,7 +444,6 @@ pub(crate) fn process_by_scenario_backward<S: SolverInterface + Send>(
             let mut buf = std::mem::take(&mut ws.backward_accum.external_noise_buf);
             fill_external_opening_noise(
                 training_ctx,
-                ctx,
                 s,
                 child.openings.offset,
                 child.successor_node_id,

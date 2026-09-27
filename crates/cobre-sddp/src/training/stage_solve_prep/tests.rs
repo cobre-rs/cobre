@@ -28,8 +28,8 @@ use crate::{
     lp::builder::{PatchBuffer, StageGeometry, StateBox},
     lp::indexer::{BlockGrid, BlockRowFamily, StudyDimensions},
     noise::{
-        NcsNoiseOffsets, build_dense_ncs_col_indices, gather_dense_ncs_bounds,
-        transform_inflow_noise, transform_load_noise, transform_ncs_noise,
+        build_dense_ncs_col_indices, gather_dense_ncs_bounds, transform_inflow_noise,
+        transform_load_noise, transform_ncs_noise,
     },
     setup::node_graph::StageIdx,
     test_support::{
@@ -356,7 +356,6 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
         &raw_noise,
         StageIdx(0),
         &current_state,
-        &ctx,
         &training_ctx,
         &mut reference_scratch,
     );
@@ -622,10 +621,6 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     let mut reference_solver = RecordingSolver::default();
     transform_ncs_noise(
         &raw_noise,
-        &NcsNoiseOffsets {
-            n_hydros: 0,
-            n_load_buses: 0,
-        },
         &stoch,
         StageIdx(0),
         1,
@@ -786,8 +781,6 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     let mut reference_scratch = ScratchBuffers::new(sizing);
     transform_load_noise(
         &raw_noise,
-        1,
-        1,
         &stochastic,
         StageIdx(0),
         1,

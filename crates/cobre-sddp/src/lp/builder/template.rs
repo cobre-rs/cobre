@@ -707,11 +707,10 @@ pub fn build_stage_templates(
         time_value,
     );
     let n_load_buses = load_bus_indices.len();
-    debug_assert!(
-        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
-        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
+    debug_assert_eq!(
         normal_lp.n_entities(),
-        n_load_buses
+        n_load_buses,
+        "load noise model and LP disagree on the stochastic load buses"
     );
     debug_assert_eq!(
         ctx.anticipated_resolution, state_layout.anticipated_resolution,

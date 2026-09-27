@@ -65,9 +65,8 @@ pub(crate) fn patch_opening_bounds<S: SolverInterface + Send>(
 /// This reproduces the multi-class vector a generated `OpeningTreeView::opening`
 /// yields and the forward `ClassSampler::fill` assembles, reading `eta_slice(stage,
 /// k)` from each present external library into that class's segment. The segment
-/// lengths and offsets are the same the noise transforms consume
-/// (`ctx.n_hydros`, `ctx.n_load_buses`, `stochastic.n_stochastic_ncs()`), so
-/// forward and backward read identical bytes for the pinned column.
+/// lengths and offsets are the same `stochastic`'s counts the noise transforms
+/// consume, so forward and backward read identical bytes for the pinned column.
 ///
 /// # Errors
 ///
@@ -76,17 +75,17 @@ pub(crate) fn patch_opening_bounds<S: SolverInterface + Send>(
 /// generated opening tree (which is exactly the inert-hash bug this removes).
 pub(crate) fn fill_external_opening_noise(
     training_ctx: &TrainingContext<'_>,
-    ctx: &StageContext<'_>,
     stage: StageIdx,
     k: usize,
     node_id: NodeId,
     buf: &mut Vec<f64>,
 ) -> Result<(), SddpError> {
+    let stochastic = training_ctx.stochastic;
     assemble_external_opening_noise(
         [
-            ctx.n_hydros,
-            ctx.n_load_buses,
-            training_ctx.stochastic.n_stochastic_ncs(),
+            stochastic.n_hydros(),
+            stochastic.n_load_buses(),
+            stochastic.n_stochastic_ncs(),
         ],
         [
             training_ctx.external_inflow_library,

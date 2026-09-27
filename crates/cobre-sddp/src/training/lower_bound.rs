@@ -251,7 +251,6 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
     if root_openings.source == OpeningSource::External {
         fill_external_opening_noise(
             training_ctx,
-            ctx,
             StageIdx(0),
             root_openings.offset,
             root_node_id,

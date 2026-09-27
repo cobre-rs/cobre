@@ -12,9 +12,7 @@ use cobre_stochastic::{StochasticContext, evaluate_par_batch, solve_par_noise_ba
 use crate::indexer::{BlockIdx, NcsSys, StateSpace};
 use crate::lp::builder::StageGeometry;
 use crate::{
-    InflowNonNegativityMethod,
-    context::{StageContext, TrainingContext},
-    setup::node_graph::StageIdx,
+    InflowNonNegativityMethod, context::TrainingContext, setup::node_graph::StageIdx,
     workspace::ScratchBuffers,
 };
 
@@ -72,13 +70,12 @@ pub(crate) fn transform_inflow_noise(
     raw_noise: &[f64],
     stage: StageIdx,
     current_state: &[f64],
-    ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
     scratch: &mut ScratchBuffers,
 ) {
-    let n_hydros = ctx.n_hydros;
     let inflow_method = training_ctx.inflow_method;
     let stochastic = training_ctx.stochastic;
+    let n_hydros = stochastic.n_hydros();
     let state = training_ctx.state;
 
     scratch.z_inflow_rhs_buf.clear();
@@ -306,13 +303,13 @@ impl AccumSnapshot {
 /// load bus and block, clamped at zero so load demand is never negative.
 pub(crate) fn transform_load_noise(
     raw_noise: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
     stochastic: &StochasticContext,
     stage: StageIdx,
     block_count: usize,
     load_rhs_buf: &mut Vec<f64>,
 ) {
+    let n_hydros = stochastic.n_hydros();
+    let n_load_buses = stochastic.n_load_buses();
     load_rhs_buf.clear();
     if n_load_buses == 0 {
         return;
@@ -330,15 +327,6 @@ pub(crate) fn transform_load_noise(
     }
 }
 
-/// Offsets locating the NCS slice in the raw noise vector, laid out as
-/// `[hydro noise | load noise | NCS noise]`.
-pub(crate) struct NcsNoiseOffsets {
-    /// Number of hydro entries that precede the load slice.
-    pub n_hydros: usize,
-    /// Number of load-bus entries that precede the NCS slice.
-    pub n_load_buses: usize,
-}
-
 /// Transform raw NCS noise into per-block column lower/upper bounds.
 ///
 /// Availability `α = clamp(mean + std · η, 0, 1)` is a **dimensionless factor**;
@@ -349,8 +337,7 @@ pub(crate) struct NcsNoiseOffsets {
 /// With `allow_curtailment == false` the lower bound equals the upper bound, so
 /// the source must run at exactly the realized availability (aggregate
 /// generation pre-netted from load); with `true` the lower bound is zero and the
-/// LP may curtail. The NCS slice within the raw-noise vector is located via
-/// [`NcsNoiseOffsets`].
+/// LP may curtail.
 ///
 /// # Panics
 ///
@@ -359,7 +346,6 @@ pub(crate) struct NcsNoiseOffsets {
 /// `stochastic.n_stochastic_ncs()`.
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],
-    offsets: &NcsNoiseOffsets,
     stochastic: &StochasticContext,
     stage: StageIdx,
     block_count: usize,
@@ -380,7 +366,7 @@ pub(crate) fn transform_ncs_noise(
         "ncs_allow_curtailment and ncs_max_gen must have matching length",
     );
     let ncs_lp = stochastic.ncs_normal();
-    let ncs_noise_start = offsets.n_hydros + offsets.n_load_buses;
+    let ncs_noise_start = stochastic.n_hydros() + stochastic.n_load_buses();
     for ncs_idx in 0..n_stochastic_ncs {
         let eta = raw_noise[ncs_noise_start + ncs_idx];
         let mean = ncs_lp.mean(stage.0, ncs_idx);
@@ -563,13 +549,12 @@ mod tests {
         inflow_method::InflowNonNegativityMethod,
         lp::builder::StageGeometry,
         noise::{
-            NcsNoiseOffsets, apply_ncs_col_bounds, build_dense_ncs_col_indices,
-            compute_effective_eta, gather_dense_ncs_bounds, shift_lag_state,
-            transform_inflow_noise, transform_load_noise, transform_ncs_noise,
+            apply_ncs_col_bounds, build_dense_ncs_col_indices, compute_effective_eta,
+            gather_dense_ncs_bounds, shift_lag_state, transform_inflow_noise, transform_load_noise,
+            transform_ncs_noise,
         },
         setup::node_graph::StageIdx,
         test_support,
-        test_support::{StageContextFixture, equipment_free_geometry},
         workspace::ScratchBuffers,
     };
 
@@ -622,32 +607,6 @@ mod tests {
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
-
-    /// Build a minimal placeholder `StageTemplate` for the `templates` field
-    /// `StageContext` requires; `transform_inflow_noise` does not read it.
-    fn make_minimal_template(row_lower: Vec<f64>) -> StageTemplate {
-        let n = row_lower.len();
-        StageTemplate {
-            num_cols: 0,
-            num_rows: n,
-            num_nz: 0,
-            col_starts: vec![0_i32],
-            row_indices: vec![],
-            values: vec![],
-            col_lower: vec![],
-            col_upper: vec![],
-            objective: vec![],
-            row_lower,
-            row_upper: vec![0.0; n],
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
-            col_scale: Vec::new(),
-            row_scale: Vec::new(),
-            n_state: 0,
-        }
-    }
 
     /// Build a `ScratchBuffers` with the given pre-filled `zero_targets_buf`.
     fn make_scratch(n_hydros: usize) -> ScratchBuffers {
@@ -998,13 +957,8 @@ mod tests {
         // sigma = 1.0, base = 0.0 (the fixture's AR(0) white-noise model), eta = -3.0
         // expected z_inflow_rhs: 0.0 + 1.0 * (-3.0) = -3.0
         let raw_noise = vec![-3.0_f64];
-        let template = make_minimal_template(vec![0.0]);
-        let templates = vec![template];
         let inflow_method = InflowNonNegativityMethod::None;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let geometry = equipment_free_geometry(&[1]);
-        let fixture = StageContextFixture::new(&state, &templates, &[], &geometry);
-        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1033,7 +987,6 @@ mod tests {
             &raw_noise,
             StageIdx(0),
             &current_state,
-            &ctx,
             &training_ctx,
             &mut scratch,
         );
@@ -1058,13 +1011,8 @@ mod tests {
 
         // Very negative eta guarantees negative inflow (AR(0) with sigma=1).
         let raw_noise = vec![-5.0_f64];
-        let template = make_minimal_template(vec![0.0]);
-        let templates = vec![template];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let geometry = equipment_free_geometry(&[1]);
-        let fixture = StageContextFixture::new(&state, &templates, &[], &geometry);
-        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1093,7 +1041,6 @@ mod tests {
             &raw_noise,
             StageIdx(0),
             &current_state,
-            &ctx,
             &training_ctx,
             &mut scratch,
         );
@@ -1118,13 +1065,8 @@ mod tests {
 
         // eta = 3.0 → inflow = 1.0 * 3.0 = 3.0 > 0 → no clamping.
         let raw_noise = vec![3.0_f64];
-        let template = make_minimal_template(vec![0.0]);
-        let templates = vec![template];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let geometry = equipment_free_geometry(&[1]);
-        let fixture = StageContextFixture::new(&state, &templates, &[], &geometry);
-        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1153,7 +1095,6 @@ mod tests {
             &raw_noise,
             StageIdx(0),
             &current_state,
-            &ctx,
             &training_ctx,
             &mut scratch,
         );
@@ -1184,15 +1125,7 @@ mod tests {
         let raw_noise = vec![0.0_f64, 0.0_f64]; // [hydro_eta, load_eta]
         let mut load_rhs_buf = Vec::new();
 
-        transform_load_noise(
-            &raw_noise,
-            1,
-            1,
-            &stochastic,
-            StageIdx(0),
-            1,
-            &mut load_rhs_buf,
-        );
+        transform_load_noise(&raw_noise, &stochastic, StageIdx(0), 1, &mut load_rhs_buf);
 
         assert_eq!(load_rhs_buf.len(), 1);
         // The block_factor for a single Parallel block is the block duration
@@ -1218,15 +1151,7 @@ mod tests {
         let raw_noise = vec![0.0_f64, -10.0_f64];
         let mut load_rhs_buf = Vec::new();
 
-        transform_load_noise(
-            &raw_noise,
-            1,
-            1,
-            &stochastic,
-            StageIdx(0),
-            1,
-            &mut load_rhs_buf,
-        );
+        transform_load_noise(&raw_noise, &stochastic, StageIdx(0), 1, &mut load_rhs_buf);
 
         assert_eq!(load_rhs_buf.len(), 1);
         assert!(
@@ -2559,17 +2484,12 @@ mod tests {
             n_blks,
             ..StageGeometry::default()
         };
-        let offsets = NcsNoiseOffsets {
-            n_hydros: 0,
-            n_load_buses: 0,
-        };
 
         // ---- reference: transform, then the pre-collapse gather+set called
         // directly (independent of `apply_ncs_col_bounds`) ----
         let mut reference_scratch = make_scratch(0);
         transform_ncs_noise(
             &raw_noise,
-            &offsets,
             &stoch,
             StageIdx(0),
             n_blks,
@@ -2604,7 +2524,6 @@ mod tests {
         let mut owner_scratch = make_scratch(0);
         transform_ncs_noise(
             &raw_noise,
-            &offsets,
             &stoch,
             StageIdx(0),
             n_blks,

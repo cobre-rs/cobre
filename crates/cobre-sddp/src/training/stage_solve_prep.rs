@@ -15,8 +15,7 @@ use crate::{
     lp::builder::{PatchBuffer, StateBox},
     lp::indexer::BlockGrid,
     noise::{
-        NcsNoiseOffsets, apply_ncs_col_bounds, transform_inflow_noise, transform_load_noise,
-        transform_ncs_noise,
+        apply_ncs_col_bounds, transform_inflow_noise, transform_load_noise, transform_ncs_noise,
     },
     setup::node_graph::StageIdx,
     workspace::ScratchBuffers,
@@ -136,14 +135,7 @@ impl StageSolvePrep {
         let pinned_state = params.state_source.0;
 
         if params.inflow_noise == InflowNoise::Transform {
-            transform_inflow_noise(
-                params.raw_noise,
-                stage,
-                pinned_state,
-                ctx,
-                training_ctx,
-                scratch,
-            );
+            transform_inflow_noise(params.raw_noise, stage, pinned_state, training_ctx, scratch);
         }
 
         let load_blocks = if ctx.n_load_buses > 0 {
@@ -153,8 +145,6 @@ impl StageSolvePrep {
         };
         transform_load_noise(
             params.raw_noise,
-            ctx.n_hydros,
-            ctx.n_load_buses,
             training_ctx.stochastic,
             stage,
             load_blocks,
@@ -200,10 +190,6 @@ impl StageSolvePrep {
         if training_ctx.stochastic.n_stochastic_ncs() > 0 {
             transform_ncs_noise(
                 params.raw_noise,
-                &NcsNoiseOffsets {
-                    n_hydros: ctx.n_hydros,
-                    n_load_buses: ctx.n_load_buses,
-                },
                 training_ctx.stochastic,
                 stage,
                 ctx.block_count(stage),

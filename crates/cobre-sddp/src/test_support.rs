@@ -2674,11 +2674,9 @@ pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize)
         OpeningSource::External => {
             assert_eq!(opening, 0, "an External node has exactly one opening");
             let training_ctx = setup.training_ctx();
-            let ctx = setup.stage_ctx();
             let mut buf = Vec::new();
             fill_external_opening_noise(
                 &training_ctx,
-                &ctx,
                 stage,
                 openings.offset,
                 setup.node_graph.node_ids[node_pos],

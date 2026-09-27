@@ -338,6 +338,7 @@ impl StochasticContext {
 
     /// Returns the number of stochastic load buses in the noise dimension.
     #[must_use]
+    #[inline]
     pub fn n_load_buses(&self) -> usize {
         self.n_load_buses
     }
@@ -367,12 +368,14 @@ impl StochasticContext {
 
     /// Returns the number of stochastic NCS entities in the noise dimension.
     #[must_use]
+    #[inline]
     pub fn n_stochastic_ncs(&self) -> usize {
         self.n_stochastic_ncs
     }
 
     /// Returns the number of hydro entities in the noise dimension.
     #[must_use]
+    #[inline]
     pub fn n_hydros(&self) -> usize {
         self.dim - self.n_load_buses - self.n_stochastic_ncs
     }

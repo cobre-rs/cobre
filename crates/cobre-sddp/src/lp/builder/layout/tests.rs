@@ -1326,6 +1326,45 @@ fn block_storage_col_resolves_all_boundaries() {
     }
 }
 
+/// `StageLayout::block_storage_col` and `StageGeometry::block_storage_col` both
+/// resolve their endpoint arms to the exact same columns `StateSpace`'s own
+/// `storage_incoming_col`/`storage_outgoing_col` accessors return, for every
+/// hydro — the migration-proof pin for routing `StorageBoundaryGrid`'s endpoint
+/// arms through those accessors instead of its own copied state bases.
+#[test]
+fn storage_boundary_endpoints_match_state_space_accessors() {
+    let fixtures = TwoHydroFixtures::new();
+    let ctx = fixtures.make_ctx();
+    let state = state_layout_for(&ctx);
+    let stage = stage_with_blocks(BlockMode::Chronological, 3);
+    let layout = StageLayout::new(&ctx, &state, &stage, 0);
+    let geometry = layout.geometry(BlockMode::Chronological);
+    assert!(state.hydro_count >= 2);
+    let mut compared = 0;
+    for h in 0..state.hydro_count {
+        let incoming = state.storage_incoming_col(h).get();
+        let outgoing = state.storage_outgoing_col(h).get();
+        assert_eq!(
+            layout.block_storage_col(HydroSys::new(h), Boundary::Incoming),
+            incoming
+        );
+        assert_eq!(
+            layout.block_storage_col(HydroSys::new(h), Boundary::Outgoing),
+            outgoing
+        );
+        assert_eq!(
+            geometry.block_storage_col(HydroSys::new(h), Boundary::Incoming),
+            incoming
+        );
+        assert_eq!(
+            geometry.block_storage_col(HydroSys::new(h), Boundary::Outgoing),
+            outgoing
+        );
+        compared += 4;
+    }
+    assert_eq!(compared, 4 * state.hydro_count);
+}
+
 /// The water-balance block spans `n_h` rows in parallel mode and `n_h * n_blks`
 /// in chronological mode (the `K` chained per-hydro rows), with `K = 1`
 /// chronological collapsing to the parallel count. `load_balance.start()` chains off

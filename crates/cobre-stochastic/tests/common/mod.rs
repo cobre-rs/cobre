@@ -160,7 +160,6 @@ pub fn make_sampler_config<'a>(
     ctx: &'a StochasticContext,
     stages: &'a [Stage],
 ) -> ForwardSamplerConfig<'a> {
-    let dim = ctx.dim();
     ForwardSamplerConfig {
         class_schemes: ClassSchemes {
             inflow: Some(scheme),
@@ -169,11 +168,6 @@ pub fn make_sampler_config<'a>(
         },
         ctx,
         stages,
-        dims: ClassDimensions {
-            n_hydros: dim,
-            n_load_buses: 0,
-            n_ncs: 0,
-        },
         historical_library: None,
         external_inflow_library: None,
         external_load_library: None,

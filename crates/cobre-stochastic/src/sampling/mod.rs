@@ -334,8 +334,6 @@ pub struct ForwardSamplerConfig<'a> {
     /// Study stages in index order; required by `OutOfSample` to read per-stage
     /// noise methods.
     pub stages: &'a [Stage],
-    /// Per-class entity counts for noise buffer splitting.
-    pub dims: ClassDimensions,
     /// Pre-standardized historical inflow windows library, required when
     /// `class_schemes.inflow == Some(Historical)`.
     pub historical_library: Option<&'a HistoricalScenarioLibrary>,
@@ -583,12 +581,12 @@ pub fn build_forward_sampler(
         class_schemes,
         ctx,
         stages,
-        dims,
         historical_library,
         external_inflow_library,
         external_load_library,
         external_ncs_library,
     } = config;
+    let dims = ctx.class_dimensions();
 
     let inflow_scheme = class_schemes.inflow.unwrap_or(SamplingScheme::InSample);
     let load_scheme = class_schemes.load.unwrap_or(SamplingScheme::InSample);
@@ -977,20 +975,11 @@ mod tests {
     // Factory helper
     // -----------------------------------------------------------------------
 
-    fn dims_from_ctx(ctx: &StochasticContext) -> ClassDimensions {
-        ClassDimensions {
-            n_hydros: ctx.dim() - ctx.n_load_buses() - ctx.n_stochastic_ncs(),
-            n_load_buses: ctx.n_load_buses(),
-            n_ncs: ctx.n_stochastic_ncs(),
-        }
-    }
-
     fn all_classes_config<'a>(
         scheme: SamplingScheme,
         ctx: &'a StochasticContext,
         stages: &'a [Stage],
     ) -> super::ForwardSamplerConfig<'a> {
-        let dims = dims_from_ctx(ctx);
         super::ForwardSamplerConfig {
             class_schemes: ClassSchemes {
                 inflow: Some(scheme),
@@ -999,7 +988,6 @@ mod tests {
             },
             ctx,
             stages,
-            dims,
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -1067,7 +1055,7 @@ mod tests {
     fn test_build_historical_with_library() {
         use super::HistoricalScenarioLibrary;
         let (ctx, stages) = build_test_ctx(None);
-        let dims = dims_from_ctx(&ctx);
+        let dims = ctx.class_dimensions();
         // 3 windows, 2 stages, 1 hydro, max_order=1.
         let lib = HistoricalScenarioLibrary::new(
             3,
@@ -1084,7 +1072,6 @@ mod tests {
             },
             ctx: &ctx,
             stages: &stages,
-            dims,
             historical_library: Some(&lib),
             external_inflow_library: None,
             external_load_library: None,
@@ -1104,7 +1091,7 @@ mod tests {
     fn test_build_historical_with_library_ignores_external_library() {
         use super::{ExternalScenarioLibrary, HistoricalScenarioLibrary};
         let (ctx, stages) = build_test_ctx(None);
-        let dims = dims_from_ctx(&ctx);
+        let dims = ctx.class_dimensions();
         // A single window makes historical window selection deterministic
         // (hash % 1 == 0) without reaching into ClassSampler's private
         // window-selection helper.
@@ -1128,7 +1115,6 @@ mod tests {
             },
             ctx: &ctx,
             stages: &stages,
-            dims,
             historical_library: Some(&historical_lib),
             external_inflow_library: Some(&external_lib),
             external_load_library: None,
@@ -1168,7 +1154,6 @@ mod tests {
     #[test]
     fn test_build_historical_missing_library() {
         let (ctx, stages) = build_test_ctx(None);
-        let dims = dims_from_ctx(&ctx);
         let config = super::ForwardSamplerConfig {
             class_schemes: ClassSchemes {
                 inflow: Some(SamplingScheme::Historical),
@@ -1177,7 +1162,6 @@ mod tests {
             },
             ctx: &ctx,
             stages: &stages,
-            dims,
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -1199,7 +1183,7 @@ mod tests {
     fn test_build_external_with_library() {
         use super::ExternalScenarioLibrary;
         let (ctx, stages) = build_test_ctx(None);
-        let dims = dims_from_ctx(&ctx);
+        let dims = ctx.class_dimensions();
         let lib = ExternalScenarioLibrary::new(
             stages.len(),
             10,
@@ -1215,7 +1199,6 @@ mod tests {
             },
             ctx: &ctx,
             stages: &stages,
-            dims,
             historical_library: None,
             external_inflow_library: Some(&lib),
             external_load_library: None,
@@ -1231,7 +1214,6 @@ mod tests {
     #[test]
     fn test_build_historical_load_unsupported() {
         let (ctx, stages) = build_test_ctx(None);
-        let dims = dims_from_ctx(&ctx);
         let config = super::ForwardSamplerConfig {
             class_schemes: ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
@@ -1240,7 +1222,6 @@ mod tests {
             },
             ctx: &ctx,
             stages: &stages,
-            dims,
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -1669,11 +1650,6 @@ mod tests {
             },
             ctx: &ctx,
             stages: &stages,
-            dims: ClassDimensions {
-                n_hydros: 2,
-                n_load_buses: 1,
-                n_ncs: 1,
-            },
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -1775,7 +1751,6 @@ mod tests {
             },
             ctx,
             stages,
-            dims: dims_from_ctx(ctx),
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,

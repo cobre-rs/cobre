@@ -14,8 +14,8 @@ use cobre_stochastic::context::ClassSchemes;
 #[cfg(test)]
 use cobre_stochastic::select_transition_child;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardNoiseTables, ForwardSampler, ForwardSamplerConfig,
-    SampleRequest, build_forward_sampler,
+    ClassSampleRequest, ForwardNoiseTables, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
@@ -382,11 +382,6 @@ impl ForwardPassState {
             },
             ctx: stochastic,
             stages: training_ctx.stages,
-            dims: ClassDimensions {
-                n_hydros: stochastic.n_hydros(),
-                n_load_buses: stochastic.n_load_buses(),
-                n_ncs: stochastic.n_stochastic_ncs(),
-            },
             historical_library: training_ctx.historical_library,
             external_inflow_library: training_ctx.external_inflow_library,
             external_load_library: training_ctx.external_load_library,
@@ -1642,11 +1637,6 @@ mod tests {
             },
             ctx: &fx.stochastic,
             stages: &fx.stages,
-            dims: ClassDimensions {
-                n_hydros: fx.stochastic.n_hydros(),
-                n_load_buses: fx.stochastic.n_load_buses(),
-                n_ncs: fx.stochastic.n_stochastic_ncs(),
-            },
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -2160,11 +2150,6 @@ mod tests {
             },
             ctx: &stochastic,
             stages: &stages,
-            dims: ClassDimensions {
-                n_hydros: stochastic.n_hydros(),
-                n_load_buses: stochastic.n_load_buses(),
-                n_ncs: stochastic.n_stochastic_ncs(),
-            },
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -2446,11 +2431,6 @@ mod tests {
             },
             ctx: &stochastic,
             stages: &stages,
-            dims: ClassDimensions {
-                n_hydros: stochastic.n_hydros(),
-                n_load_buses: stochastic.n_load_buses(),
-                n_ncs: stochastic.n_stochastic_ncs(),
-            },
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,

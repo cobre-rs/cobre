@@ -24,8 +24,7 @@ use cobre_solver::freeze_rows_into_template;
 use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ForwardNoiseTables, ForwardSampler, ForwardSamplerConfig,
-    build_forward_sampler,
+    ForwardNoiseTables, ForwardSampler, ForwardSamplerConfig, build_forward_sampler,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
@@ -541,11 +540,6 @@ pub(crate) fn build_sim_sampler<'a>(
         },
         ctx: training_ctx.stochastic,
         stages: training_ctx.stages,
-        dims: ClassDimensions {
-            n_hydros: training_ctx.stochastic.n_hydros(),
-            n_load_buses: training_ctx.stochastic.n_load_buses(),
-            n_ncs: training_ctx.stochastic.n_stochastic_ncs(),
-        },
         historical_library: training_ctx.historical_library,
         external_inflow_library: training_ctx.external_inflow_library,
         external_load_library: training_ctx.external_load_library,

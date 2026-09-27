@@ -1,9 +1,7 @@
 //! Forward-pass scenario sampler construction.
 
 use cobre_stochastic::context::ClassSchemes;
-use cobre_stochastic::{
-    ClassDimensions, ForwardSampler, ForwardSamplerConfig, build_forward_sampler,
-};
+use cobre_stochastic::{ForwardSampler, ForwardSamplerConfig, build_forward_sampler};
 
 use crate::context::TrainingContext;
 use crate::error::SddpError;
@@ -28,11 +26,6 @@ pub fn build_sampler_from_ctx<'a>(
         },
         ctx: stochastic,
         stages: ctx.stages,
-        dims: ClassDimensions {
-            n_hydros: stochastic.n_hydros(),
-            n_load_buses: stochastic.n_load_buses(),
-            n_ncs: stochastic.n_stochastic_ncs(),
-        },
         historical_library: ctx.historical_library,
         external_inflow_library: ctx.external_inflow_library,
         external_load_library: ctx.external_load_library,

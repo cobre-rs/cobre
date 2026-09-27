@@ -1102,48 +1102,53 @@ mod determinism {
     /// Column layout (N=3, L=0):
     /// ```text
     /// 0..3  storage_out  (outgoing storage, N=3)
-    /// 3..6  z_inflow     (realized inflow variables, N=3)
+    /// 3..6  z_inflow     (realized inflow variables, N=3, free)
     /// 6..9  storage_in   (incoming storage, N=3, L=0 → no lag cols)
     /// 9     theta
     /// ```
     ///
     /// Row layout (N=3, L=0):
     /// ```text
-    /// 0..3  storage-fixing rows  (one per hydro)
-    /// 3..6  z_inflow rows        (one per hydro, at N*(1+L)=3)
+    /// 0..3  z_inflow rows        (one per hydro, at StateSpace::z_inflow_rows())
+    /// 3..6  storage-fixing rows  (one per hydro)
     /// ```
     ///
-    /// The matrix has one nonzero per storage-fixing row (column = `storage_in[h]`,
-    /// coefficient = 1.0) so the patch buffer has something to patch.
+    /// The matrix has one nonzero per z_inflow row (column = `z_inflow[h]`) and one
+    /// per storage-fixing row (column = `storage_in[h]`), each coefficient 1.0, so
+    /// the patch buffer has something to patch.
     fn template_3h() -> StageTemplate {
-        // CSC col_starts: 10 columns + 1 sentinel; only storage_in cols carry an NZ.
+        // CSC col_starts: 10 columns + 1 sentinel; z_inflow and storage_in cols
+        // each carry one NZ.
         let col_starts = vec![
             0_i32, // col 0 (storage_out[0])
             0,     // col 1 (storage_out[1])
             0,     // col 2 (storage_out[2])
-            0,     // col 3 (z_inflow[0])
-            0,     // col 4 (z_inflow[1])
-            0,     // col 5 (z_inflow[2])
-            0,     // col 6 (storage_in[0]) — NZ starts here
-            1,     // col 7 (storage_in[1])
-            2,     // col 8 (storage_in[2])
-            3,     // col 9 (theta)
-            3,     // sentinel
+            0,     // col 3 (z_inflow[0]) — NZ starts here
+            1,     // col 4 (z_inflow[1])
+            2,     // col 5 (z_inflow[2])
+            3,     // col 6 (storage_in[0])
+            4,     // col 7 (storage_in[1])
+            5,     // col 8 (storage_in[2])
+            6,     // col 9 (theta)
+            6,     // sentinel
         ];
-        let row_indices = vec![0_i32, 1, 2]; // row 0, 1, 2 for storage_in cols
-        let values = vec![1.0_f64, 1.0, 1.0];
+        let row_indices = vec![0_i32, 1, 2, 3, 4, 5];
+        let values = vec![1.0_f64, 1.0, 1.0, 1.0, 1.0, 1.0];
 
         let mut objective = vec![0.0_f64; 10];
         objective[9] = 1.0; // theta at col 9
 
+        let mut col_lower = vec![0.0_f64; 10];
+        col_lower[3..6].fill(f64::NEG_INFINITY); // z_inflow cols are free
+
         StageTemplate {
             num_cols: 10,
             num_rows: 6,
-            num_nz: 3,
+            num_nz: 6,
             col_starts,
             row_indices,
             values,
-            col_lower: vec![0.0; 10],
+            col_lower,
             col_upper: vec![f64::INFINITY; 10],
             objective,
             row_lower: vec![0.0; 6],
@@ -1276,8 +1281,7 @@ mod determinism {
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
         let geometry = equipment_free_geometry(&[1usize; 5]);
         let stage_ctx_fixture =
-            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
-                .n_hydros_override(0);
+            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
         let stage_ctx = stage_ctx_fixture.ctx();
         let result = pool
             .install(|| {
@@ -1393,8 +1397,7 @@ mod determinism {
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
         let geometry = equipment_free_geometry(&[0usize; 5]);
         let stage_ctx_fixture =
-            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
-                .n_hydros_override(0);
+            StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
         let cost_buffer = pool
             .install(|| {
                 simulate(

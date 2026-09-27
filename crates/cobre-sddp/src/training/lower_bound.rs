@@ -2542,7 +2542,10 @@ mod tests {
     #[test]
     fn lower_bound_template_matches_forward_for_filling_stage() {
         let (templates, h_a, h_b) = filling_study_templates();
-        let n_hydros = 2;
+        let water_balance = templates.geometry_per_stage[0].water_balance;
+        let n_hydros = water_balance.range().len()
+            / water_balance.rows_per_entity(templates.geometry_per_stage[0].n_blks);
+        assert_eq!(n_hydros, 2, "fixture has two filling hydros");
 
         // Stage 0 is H_A's terminal Filling stage: the per-stage geometry the
         // template was frozen with must carry the filling_target (σ_fill) row family

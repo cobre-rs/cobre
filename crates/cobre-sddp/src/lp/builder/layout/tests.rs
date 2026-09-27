@@ -4376,13 +4376,12 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
         );
         counts.filled_min_storage_floor_slack += 1;
     }
-    let grid = layout.block_grid();
     for i in 0..layout.equipment.n_ncs {
         for blk in 0..layout.n_blks {
             let blk = BlockIdx::new(blk);
             assert_eq!(
                 geom.ncs_generation_col(NcsSys::new(i), blk),
-                grid.flat(layout.equipment.col_ncs_start, i, blk),
+                layout.ncs_generation_col(NcsSys::new(i), blk),
                 "ncs_generation_col mismatch at i={i}"
             );
             counts.ncs_generation += 1;
@@ -4393,7 +4392,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
             let blk = BlockIdx::new(blk);
             assert_eq!(
                 geom.pumping_flow_col(PumpingSys::new(i), blk),
-                grid.flat(layout.equipment.col_pumping_start, i, blk),
+                layout.pumping_flow_col(PumpingSys::new(i), blk),
                 "pumping_flow_col mismatch at i={i}"
             );
             counts.pumping_flow += 1;

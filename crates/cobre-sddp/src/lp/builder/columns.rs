@@ -6,7 +6,7 @@ use cobre_core::{
 use crate::hydro_models::{EvaporationModel, ResolvedProductionModel};
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal,
-    FphaLocal, HydroCell, HydroSys, LineSys, for_each_ring_residue,
+    FphaLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, for_each_ring_residue,
     is_anticipated_decision_active_for_delivery,
 };
 
@@ -1130,11 +1130,7 @@ fn fill_ncs_columns(
             .available_generation(ncs_sys_idx, stage_idx);
         let np = ctx.resolved.penalties.ncs_penalties(ncs_sys_idx, stage_idx);
         for blk in 0..layout.n_blks {
-            let col = layout.block_grid().flat(
-                layout.equipment.col_ncs_start,
-                ncs_sys_idx,
-                BlockIdx::new(blk),
-            );
+            let col = layout.ncs_generation_col(NcsSys::new(ncs_sys_idx), BlockIdx::new(blk));
             if active {
                 let factor = ctx
                     .resolved
@@ -1173,9 +1169,7 @@ pub(super) fn fill_pumping_columns(
                 .resolved
                 .bounds
                 .pumping_bounds_at_block(p_sys, stage_idx, blk.get());
-            let col = layout
-                .block_grid()
-                .flat(layout.equipment.col_pumping_start, p_sys, blk);
+            let col = layout.pumping_flow_col(PumpingSys::new(p_sys), blk);
             if active {
                 bufs.col_lower[col] = pb.min_flow_m3s;
                 bufs.col_upper[col] = pb.max_flow_m3s;

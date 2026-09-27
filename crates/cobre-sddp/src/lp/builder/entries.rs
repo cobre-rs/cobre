@@ -6,7 +6,8 @@ use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
-    FphaCellLocal, HydroCell, HydroSys, LineSys, StateSpace, for_each_ring_residue,
+    FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace,
+    for_each_ring_residue,
 };
 
 use super::delivery_ring::DeliveryRing;
@@ -970,7 +971,6 @@ pub(super) fn fill_pumping_water_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_blks = layout.n_blks;
-    let grid = layout.block_grid();
     for (p_sys, station) in ctx.pumping_stations.iter().enumerate() {
         // Per-side guards are defense-in-depth (`validate_pumping_station_refs` guarantees
         // resolution on a production `System`). Do NOT promote to an unconditional
@@ -980,7 +980,7 @@ pub(super) fn fill_pumping_water_entries(
         for blk in 0..n_blks {
             let blk_idx = BlockIdx::new(blk);
             let tau_h = layout.clock.tau(blk_idx);
-            let col = grid.flat(layout.equipment.col_pumping_start, p_sys, blk_idx);
+            let col = layout.pumping_flow_col(PumpingSys::new(p_sys), blk_idx);
             if let Some(s_idx) = source {
                 col_entries[col].push((
                     layout.water_balance_row(HydroSys::new(s_idx), blk_idx),
@@ -1084,7 +1084,7 @@ pub(super) fn fill_load_balance_entries(
         if let Some(&b_idx) = ctx.bus_pos.get(&station.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.load_balance_row(BusSys::new(b_idx), blk);
-                let col = grid.flat(layout.equipment.col_pumping_start, p_sys, blk);
+                let col = layout.pumping_flow_col(PumpingSys::new(p_sys), blk);
                 col_entries[col].push((row, -station.consumption_mw_per_m3s));
             }
         }
@@ -1383,13 +1383,12 @@ pub(super) fn fill_ncs_load_balance_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let grid = layout.block_grid();
     for (ncs_sys_idx, ncs) in ctx.non_controllable_sources.iter().enumerate() {
         let Some(&bus_idx) = ctx.bus_pos.get(&ncs.bus_id) else {
             continue;
         };
         for blk in (0..layout.n_blks).map(BlockIdx::new) {
-            let col = grid.flat(layout.equipment.col_ncs_start, ncs_sys_idx, blk);
+            let col = layout.ncs_generation_col(NcsSys::new(ncs_sys_idx), blk);
             let row = layout.load_balance_row(BusSys::new(bus_idx), blk);
             col_entries[col].push((row, 1.0));
         }

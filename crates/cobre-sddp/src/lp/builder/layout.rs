@@ -18,8 +18,8 @@ use crate::hydro_models::{
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
     EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
-    HydroCell, HydroCellIndex, HydroSys, LineSys, RangeCursor, StateSpace, StorageBoundaryGrid,
-    anticipated_resolution_for, for_each_live_commitment_slot,
+    HydroCell, HydroCellIndex, HydroSys, LineSys, NcsSys, PumpingSys, RangeCursor, StateSpace,
+    StorageBoundaryGrid, anticipated_resolution_for, for_each_live_commitment_slot,
     is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
@@ -1734,6 +1734,18 @@ impl StageLayout<'_> {
     #[inline]
     pub(crate) fn filled_min_storage_floor_slack_col(&self, local: FloorLocal) -> usize {
         one_per_entity_col(&self.filled_min_storage_floor_col(), local.get())
+    }
+
+    /// NCS entity `ncs_sys`'s generation column for block `blk`.
+    #[inline]
+    pub(crate) fn ncs_generation_col(&self, ncs_sys: NcsSys, blk: BlockIdx) -> usize {
+        self.block_col(self.equipment.col_ncs_start, ncs_sys.get(), blk)
+    }
+
+    /// Pumping station `pumping_sys`'s flow column for block `blk`.
+    #[inline]
+    pub(crate) fn pumping_flow_col(&self, pumping_sys: PumpingSys, blk: BlockIdx) -> usize {
+        self.block_col(self.equipment.col_pumping_start, pumping_sys.get(), blk)
     }
 
     /// Base column of the `(evap hydro local_idx, slot)` triple, slot-major

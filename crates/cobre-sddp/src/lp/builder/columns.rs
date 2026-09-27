@@ -1302,8 +1302,7 @@ fn fill_filled_min_storage_floor_columns(
 
 /// Z-inflow columns: free variables for realized total inflow per hydro.
 fn fill_z_inflow_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
-    for h_idx in 0..layout.n_h {
-        let col = layout.col_z_inflow_start() + h_idx;
+    for col in layout.state.z_inflow.clone() {
         bufs.col_lower[col] = f64::NEG_INFINITY;
         bufs.col_upper[col] = f64::INFINITY;
     }

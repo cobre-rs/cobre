@@ -501,7 +501,7 @@ impl StateSpace {
                 let h = offset % n;
                 let lag = offset / n;
                 if lag == 0 {
-                    self.z_inflow.start + h
+                    self.z_inflow_col(HydroSys::new(h)).get()
                 } else {
                     n + (lag - 1) * n + h
                 }
@@ -801,6 +801,14 @@ impl StateSpace {
     pub fn z_inflow_row(&self, h: HydroSys) -> usize {
         debug_assert!(h.get() < self.hydro_count);
         self.z_inflow_rows().start + h.get()
+    }
+
+    /// Hydro `h`'s z-inflow column — the outgoing lag-0 state column.
+    #[inline]
+    #[must_use]
+    pub(crate) fn z_inflow_col(&self, h: HydroSys) -> OutCol {
+        debug_assert!(h.get() < self.hydro_count);
+        OutCol::new(self.z_inflow.start + h.get())
     }
 }
 
@@ -1919,6 +1927,10 @@ mod tests {
             assert_eq!(
                 idx.state_to_lp_column(idx.lag_state_dim(0, HydroSys::new(h)))
                     .get(),
+                idx.z_inflow.start + h
+            );
+            assert_eq!(
+                idx.z_inflow_col(HydroSys::new(h)).get(),
                 idx.z_inflow.start + h
             );
             storage += 1;

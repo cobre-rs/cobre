@@ -854,7 +854,7 @@ fn push_z_inflow_coupling(
     target_idx: usize,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let z_h = layout.col_z_inflow_start() + h_idx;
+    let z_h = layout.state.z_inflow_col(HydroSys::new(h_idx)).get();
     let target = HydroSys::new(target_idx);
     for blk in 0..layout.rows.water_balance.rows_per_entity(layout.n_blks) {
         let coeff = match stage.block_mode {
@@ -1417,7 +1417,7 @@ pub(super) fn fill_z_inflow_entries(
     for h_idx in 0..n_h {
         let row = layout.z_inflow_row(HydroSys::new(h_idx));
 
-        let col_z = layout.col_z_inflow_start() + h_idx;
+        let col_z = layout.state.z_inflow_col(HydroSys::new(h_idx)).get();
         col_entries[col_z].push((row, 1.0));
 
         if ctx.par_lp.n_stages() > 0 {
@@ -5384,7 +5384,7 @@ mod pumping_water_tests {
             0.0,
             "downstream inflow-lag column must carry no entry on its water row"
         );
-        let z_col = ar_layout.col_z_inflow_start() + down_idx;
+        let z_col = ar_layout.state.z_inflow.start + down_idx;
         assert_eq!(
             ar_coeff_at(z_col, ar_row),
             -ar_layout.clock.zeta(),
@@ -8170,7 +8170,7 @@ mod pumping_water_tests {
             .expect("D is Filling, so it carries a σ_fill target row");
         let offsets = PfuOffsets {
             zeta: layout.clock.zeta(),
-            z_u: layout.col_z_inflow_start() + u_idx,
+            z_u: layout.state.z_inflow.start + u_idx,
             water_row_u: layout.rows.water_balance.start() + u_idx,
             water_row_d: layout.rows.water_balance.start() + d_idx,
             z_inflow_row_u: layout.z_inflow_row(HydroSys::new(u_idx)),
@@ -8819,7 +8819,7 @@ mod pumping_water_tests {
             water_row_h2: layout.rows.water_balance.start() + h2_idx,
             water_row_h3: layout.rows.water_balance.start() + h3_idx,
             col_storage_in_h2: layout.state.storage_in.start + h2_idx,
-            z_h2: layout.col_z_inflow_start() + h2_idx,
+            z_h2: layout.state.z_inflow.start + h2_idx,
             h1_turbine: (0..layout.n_blks)
                 .map(|blk| layout.turbine_col(HydroCell::new(h1_idx), BlockIdx::new(blk)))
                 .collect(),
@@ -8983,7 +8983,7 @@ mod pumping_water_tests {
         };
         let h1_idx = fixtures.hydro_pos[&EntityId(1)];
         let row_h = layout.rows.water_balance.start() + h2_idx;
-        let z_h2 = layout.col_z_inflow_start() + h2_idx;
+        let z_h2 = layout.state.z_inflow.start + h2_idx;
 
         // Frozen identity intact on H2's own row.
         assert_eq!(csc_at(&csc, h2_idx, row_h), 1.0, "v_{{H2}} +1.0");
@@ -9227,7 +9227,7 @@ mod pumping_water_tests {
             water_row_h2: layout.rows.water_balance.start() + h2_idx,
             water_row_h3: layout.rows.water_balance.start() + h3_idx,
             col_storage_in_h2: layout.state.storage_in.start + h2_idx,
-            z_h2: layout.col_z_inflow_start() + h2_idx,
+            z_h2: layout.state.z_inflow.start + h2_idx,
             h1_turbine: (0..layout.n_blks)
                 .map(|blk| layout.turbine_col(HydroCell::new(h1_idx), BlockIdx::new(blk)))
                 .collect(),
@@ -9313,7 +9313,7 @@ mod pumping_water_tests {
             assemble_csc(&entries)
         };
         let row_h = layout.rows.water_balance.start() + h2_idx;
-        let z_h2 = layout.col_z_inflow_start() + h2_idx;
+        let z_h2 = layout.state.z_inflow.start + h2_idx;
 
         assert_eq!(csc_at(&csc, h2_idx, row_h), 1.0, "v_{{H2}} +1.0");
         assert_eq!(
@@ -9433,8 +9433,8 @@ mod pumping_water_tests {
             water_row_h3: layout.rows.water_balance.start() + h3_idx,
             col_storage_in_h1: layout.state.storage_in.start + h1_idx,
             col_storage_in_h2: layout.state.storage_in.start + h2_idx,
-            z_h1: layout.col_z_inflow_start() + h1_idx,
-            z_h2: layout.col_z_inflow_start() + h2_idx,
+            z_h1: layout.state.z_inflow.start + h1_idx,
+            z_h2: layout.state.z_inflow.start + h2_idx,
         };
         (csc, row_lower, row_upper, offsets)
     }
@@ -9581,8 +9581,8 @@ mod pumping_water_tests {
             }
             assemble_csc(&entries)
         };
-        let z_h1 = layout.col_z_inflow_start() + h1_idx;
-        let z_h2 = layout.col_z_inflow_start() + h2_idx;
+        let z_h1 = layout.state.z_inflow.start + h1_idx;
+        let z_h2 = layout.state.z_inflow.start + h2_idx;
 
         // Both links' inflow exits the system: neither z column lands on ANY water
         // row (no non-PreFilling downstream exists to receive it).
@@ -9681,7 +9681,7 @@ mod pumping_water_tests {
             n_blks: layout.n_blks,
             h2_idx,
             d_idx,
-            z_h2: layout.col_z_inflow_start() + h2_idx,
+            z_h2: layout.state.z_inflow.start + h2_idx,
             col_storage_in_h2: layout.state.storage_in.start + h2_idx,
             h1_turbine: (0..layout.n_blks)
                 .map(|blk| layout.turbine_col(HydroCell::new(h1_idx), BlockIdx::new(blk)))

@@ -1801,13 +1801,6 @@ impl StageLayout<'_> {
         self.state.inflow_lags.start
     }
 
-    /// First z-inflow column; reads `self.state.z_inflow.start`.
-    #[inline]
-    #[must_use]
-    pub(crate) fn col_z_inflow_start(&self) -> usize {
-        self.state.z_inflow.start
-    }
-
     /// First commitment-hold incoming column (in-study + post-horizon);
     /// reads `self.state.commit_in.start`.
     // Rationale: mirrors the sibling col_*_start accessors above for

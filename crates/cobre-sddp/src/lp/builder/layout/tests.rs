@@ -1472,7 +1472,7 @@ fn parallel_z_inflow_column_enters_each_target_water_row_once() {
     let water_rows = layout.rows.water_balance.range();
 
     for h in 0..ctx.n_hydros {
-        let z_h = layout.col_z_inflow_start() + h;
+        let z_h = layout.state.z_inflow.start + h;
         let water_row_entries = col_entries[z_h]
             .iter()
             .filter(|&&(row, _)| water_rows.contains(&row))

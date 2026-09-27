@@ -151,9 +151,10 @@ pub struct StudySetup {
     /// Stage-invariant stochastic-slot → dense NCS column index map (slot in
     /// `StochasticContext::ncs_entity_ids` id-sorted order).
     ///
-    /// The NCS bound patch sites stride the per-opening cap onto
-    /// `ncs_col_starts[s] + ncs_stochastic_dense_col[slot] * n_blks_s + blk`.
-    /// Length equals `n_stochastic_ncs`; empty when the study has no stochastic NCS.
+    /// The NCS bound patch sites stride the per-opening cap through
+    /// [`StageGeometry::ncs_generation_col`](crate::lp::builder::StageGeometry::ncs_generation_col)
+    /// at `ncs_stochastic_dense_col[slot]`. Length equals `n_stochastic_ncs`;
+    /// empty when the study has no stochastic NCS.
     pub(crate) ncs_stochastic_dense_col: Vec<usize>,
     /// Stage-invariant `(entry_stage_id, exit_stage_id)` per stochastic NCS slot
     /// (id-sorted to match `ncs_stochastic_dense_col` and the `transform_ncs_noise`
@@ -1477,7 +1478,7 @@ fn build_transit_seed_arcs(system: &System) -> Vec<TransitSeedArc> {
 /// `hydro_count` and `anticipated_plants` are threaded from
 /// [`resolve_state_layout`] — the same values its [`StateSpace`] was built
 /// from — so the only per-stage template field this reads is
-/// `ncs_col_starts`, the one dimension genuinely derived from the built LP.
+/// `geometry_per_stage`, the one dimension genuinely derived from the built LP.
 fn build_study_dimensions(
     system: &System,
     stage_templates: &StageTemplates,
@@ -1495,15 +1496,16 @@ fn build_study_dimensions(
         .unwrap_or(0);
 
     // Single owner of the study-invariant, non-state LP shape. `has_ncs` only flags
-    // presence; the per-(ncs, block) column base is read per stage from
-    // `StageContext::ncs_col_starts`, never a global handle. `n_blks` is deliberately
-    // absent — it is per-stage, owned by the per-stage geometry, never study-global.
+    // presence; the per-(ncs, block) column base is read per stage through
+    // `StageGeometry::ncs_generation_col`, never a global handle. `n_blks` is
+    // deliberately absent — it is per-stage, owned by the per-stage geometry, never
+    // study-global.
     StudyDimensions {
         n_thermals: system.thermals().len(),
         n_lines: system.lines().len(),
         n_buses: system.buses().len(),
         max_deficit_segments,
-        has_ncs: !stage_templates.ncs_col_starts.is_empty(),
+        has_ncs: !stage_templates.geometry_per_stage.is_empty(),
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,

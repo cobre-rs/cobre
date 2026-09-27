@@ -336,13 +336,10 @@ pub(crate) fn encode_stage_templates_facts(
         block_hours_per_stage,
         n_hydros,
         cost_scale_factor,
-        load_balance_row_starts,
         n_load_buses,
         load_bus_indices,
         generic_constraint_row_entries,
-        ncs_col_starts,
         n_ncs,
-        pumping_col_starts,
         n_pumping,
         geometry_per_stage,
         diversion_upstream,
@@ -359,17 +356,18 @@ pub(crate) fn encode_stage_templates_facts(
         put_f64_slice(state_boxes_buf, upper);
     }
 
-    put_usize_slice(
-        group(groups, "layout.load_balance_row_starts"),
-        load_balance_row_starts,
-    );
-
     let buf = group(groups, "layout.ncs_cols");
-    put_usize_slice(buf, ncs_col_starts);
+    put_u64(buf, geometry_per_stage.len() as u64);
+    for g in geometry_per_stage {
+        put_usize(buf, g.ncs_generation.start);
+    }
     put_usize(buf, *n_ncs);
 
     let buf = group(groups, "layout.pumping_cols");
-    put_usize_slice(buf, pumping_col_starts);
+    put_u64(buf, geometry_per_stage.len() as u64);
+    for g in geometry_per_stage {
+        put_usize(buf, g.pumping_flow.start);
+    }
     put_usize(buf, *n_pumping);
 
     let geometry_buf = group(groups, "layout.geometry");
@@ -591,7 +589,6 @@ mod tests {
             keys,
             vec![
                 "layout.geometry",
-                "layout.load_balance_row_starts",
                 "layout.ncs_cols",
                 "layout.pumping_cols",
                 "lp.col_bounds",

@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn stage_templates_load_balance_row_starts_correct() {
+fn stage_templates_load_balance_family_starts_after_the_water_rows() {
     let system = two_bus_system_with_stochastic_load(2, 2, 3);
     let result = build_stage_templates_resolving_layout(
         &system,
@@ -17,20 +17,22 @@ fn stage_templates_load_balance_row_starts_correct() {
     .expect("constant productivity ok");
 
     assert_eq!(
-        result.load_balance_row_starts.len(),
+        result.geometry_per_stage.len(),
         result.templates.len(),
-        "load_balance_row_starts length must match templates length"
+        "geometry_per_stage length must match templates length"
     );
 
     // N=2 hydros, L=0: row_water_balance_start = n_hydros (z_inflow occupies rows
     // [0, n_hydros)); row_load_balance_start = row_water_balance_start + n_hydros.
     let expected_row_start = result.n_hydros + result.n_hydros;
     assert_eq!(
-        result.load_balance_row_starts[0], expected_row_start,
-        "load_balance_row_starts[0] must equal row_water_balance_start + n_hydros"
+        result.geometry_per_stage[0].load_balance.start(),
+        expected_row_start,
+        "geometry_per_stage[0].load_balance must start at row_water_balance_start + n_hydros"
     );
     assert_eq!(
-        result.load_balance_row_starts[0], result.load_balance_row_starts[1],
+        result.geometry_per_stage[0].load_balance.start(),
+        result.geometry_per_stage[1].load_balance.start(),
         "identical stages share the same load balance row start"
     );
 }
@@ -87,8 +89,8 @@ fn stage_templates_no_load_buses_gives_zero() {
         "load_bus_indices must be empty when n_load_buses = 0"
     );
     assert_eq!(
-        result.load_balance_row_starts.len(),
+        result.geometry_per_stage.len(),
         result.templates.len(),
-        "load_balance_row_starts length must always match templates length"
+        "geometry_per_stage length must always match templates length"
     );
 }

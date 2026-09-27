@@ -2538,13 +2538,11 @@ fn forward_pass_load_noise_positive_realization() {
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let mut basis_store = BasisStore::new(1, 1);
-    let load_balance_row_starts = vec![10usize];
     let load_bus_indices = vec![0usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-        .load_balance_row_starts(&load_balance_row_starts)
         .load_bus_indices(&load_bus_indices);
     let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
@@ -2610,7 +2608,7 @@ fn forward_pass_load_noise_positive_realization() {
     );
     assert_eq!(
         ws.patch_buf.indices[load_start], 10,
-        "patch index must be load_balance_row_starts[0] + 0 * n_blks"
+        "patch index must be geometry_per_stage[0].load_balance.start() + 0 * n_blks"
     );
 }
 
@@ -2679,13 +2677,11 @@ fn forward_pass_load_noise_clamped_to_zero() {
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let mut basis_store = BasisStore::new(1, 1);
-    let load_balance_row_starts = vec![10usize];
     let load_bus_indices = vec![0usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-        .load_balance_row_starts(&load_balance_row_starts)
         .load_bus_indices(&load_bus_indices);
     let ctx = fixture.ctx();
     let _fwd = run_forward_pass(

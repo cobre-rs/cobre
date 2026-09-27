@@ -804,7 +804,6 @@ fn simulation_load_patches_applied() {
     let mut workspaces = single_workspace_with_load_buses(solver, n_load_buses);
 
     // load_bus_indices=[0] (bus position 0 in the block layout).
-    let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
 
@@ -814,7 +813,6 @@ fn simulation_load_patches_applied() {
     run_simulate(
         &mut workspaces,
         &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-            .load_balance_row_starts(&load_balance_row_starts)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         &fcf,
@@ -847,9 +845,7 @@ fn simulation_load_patches_applied() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -1003,9 +999,7 @@ fn simulation_no_load_buses_unchanged() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -1128,9 +1122,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -1219,7 +1211,6 @@ fn simulation_inflow_extraction_unaffected() {
 
     let mut workspaces = single_workspace_with_load_buses(solver, n_load_buses);
 
-    let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
 
@@ -1229,7 +1220,6 @@ fn simulation_inflow_extraction_unaffected() {
     run_simulate(
         &mut workspaces,
         &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-            .load_balance_row_starts(&load_balance_row_starts)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         &fcf,
@@ -1262,9 +1252,7 @@ fn simulation_inflow_extraction_unaffected() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -1594,9 +1582,7 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -1711,9 +1697,7 @@ fn simulation_none_method_produces_raw_negative_noise() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -2006,9 +1990,7 @@ mod dcs_simulation {
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &geometry_per_stage,
             pumping_consumption_mw_per_m3s: &[],
@@ -2446,9 +2428,7 @@ mod anticipated_ring_matches_forward_propagation {
             block_hours_per_stage: &[vec![1.0], vec![1.0], vec![1.0]],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],

@@ -40,18 +40,10 @@ pub struct StageContext<'a> {
     pub cost_scale_factor: f64,
     /// Buses with stochastic load noise.
     pub n_load_buses: usize,
-    /// Row index of the first load-balance row in each stage template.
-    pub load_balance_row_starts: &'a [usize],
     /// Bus indices for stochastic load mapping.
     pub load_bus_indices: &'a [usize],
     /// Blocks per stage.
     pub block_counts_per_stage: &'a [usize],
-    /// `ncs_col_starts[stage]` is the first NCS generation column at that stage.
-    /// The base shifts per stage under mid-horizon commissioning or varying block
-    /// counts, so the bound patch strides from this per-stage base, never a single
-    /// global stage-0 NCS base (which addresses the wrong columns for non-uniform
-    /// geometries).
-    pub ncs_col_starts: &'a [usize],
     /// Full-system NCS column count, identical at every stage (the dense layout
     /// keeps a dormant NCS's column).
     pub n_ncs: usize,
@@ -135,33 +127,11 @@ impl StageContext<'_> {
         &self.state_boxes[t.0]
     }
 
-    /// Stage `t`'s equipment geometry, or `None` in a test fixture built
-    /// without a stage table (the reader falls back to `StageGeometry::default`).
-    #[inline]
-    #[must_use]
-    pub fn geometry(&self, t: StageIdx) -> Option<&StageGeometry> {
-        self.geometry_per_stage.get(t.0)
-    }
-
     /// Blocks at stage `t`, or `0` when `block_counts_per_stage` is unpopulated.
     #[inline]
     #[must_use]
     pub fn block_count(&self, t: StageIdx) -> usize {
         self.block_counts_per_stage.get(t.0).copied().unwrap_or(0)
-    }
-
-    /// Row index of the first load-balance row at stage `t`.
-    #[inline]
-    #[must_use]
-    pub fn load_balance_row_start(&self, t: StageIdx) -> usize {
-        self.load_balance_row_starts[t.0]
-    }
-
-    /// First NCS generation column at stage `t`.
-    #[inline]
-    #[must_use]
-    pub fn ncs_col_start(&self, t: StageIdx) -> usize {
-        self.ncs_col_starts[t.0]
     }
 
     /// One-step discount factor for the transition departing stage `t`, or

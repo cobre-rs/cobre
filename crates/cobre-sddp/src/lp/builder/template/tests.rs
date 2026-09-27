@@ -590,17 +590,17 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     );
 }
 
-/// `build_stage_templates` records the layout-owned pumping column base for
-/// every stage: `pumping_col_starts[t]` equals
-/// `StageLayout::new(..).col_pumping_start`, and the scalar `n_pumping`
-/// equals `StageLayout::new(..).n_pumping` (constant across stages under the
-/// dense layout).
+/// `build_stage_templates` records the layout-owned pumping-flow range for
+/// every stage: `geometry_per_stage[t].pumping_flow` equals
+/// `StageLayout::new(..).col_pumping_start..+n_pumping*n_blks`, and the
+/// scalar `n_pumping` equals `StageLayout::new(..).n_pumping` (constant
+/// across stages under the dense layout).
 ///
 /// This pins the threading contract the simulation extraction pipeline reads
 /// from: the column base is sourced from the layout, the sole owner of the
 /// pumping-flow column base.
 #[test]
-fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
+fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
     let stations = vec![fixture_pumping_station(5), fixture_pumping_station(2)];
     let system = system_with_pumping_stations(stations);
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
@@ -653,7 +653,7 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
-    assert_eq!(templates.pumping_col_starts.len(), study_stages.len());
+    assert_eq!(templates.geometry_per_stage.len(), study_stages.len());
     assert_eq!(
         templates.n_pumping, 2,
         "two stations were declared; the dense count is a scalar"
@@ -661,10 +661,6 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
     for (t, stage) in study_stages.iter().enumerate() {
         let state = state_layout_for(&ctx);
         let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, t);
-        assert_eq!(
-            templates.pumping_col_starts[t], layout.equipment.col_pumping_start,
-            "stage {t}: pumping_col_starts must equal layout.col_pumping_start"
-        );
         assert_eq!(
             templates.n_pumping, layout.equipment.n_pumping,
             "stage {t}: scalar n_pumping must equal layout.n_pumping",
@@ -679,13 +675,13 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
     }
 }
 
-/// `StageGeometry::pumping_flow` carries exactly the range the legacy
-/// `pumping_col_starts[t]`/`n_pumping` pair encodes at every stage, and
-/// `StageGeometry::pumping_flow_col` addresses it by the same formula
-/// (`pumping_col_starts[t] + p * n_blks + blk`), on the pumping-station
-/// fixture study.
+/// `StageGeometry::pumping_flow` spans exactly `n_pumping * n_blks` columns at
+/// every stage, block-major over the station count, and
+/// `StageGeometry::pumping_flow_col` addresses it by
+/// `pumping_flow.start + p * n_blks + blk`, on the pumping-station fixture
+/// study.
 #[test]
-fn geometry_pumping_family_matches_the_pumping_column_start() {
+fn geometry_pumping_family_is_block_major_over_the_station_count() {
     let stations = vec![fixture_pumping_station(5), fixture_pumping_station(2)];
     let system = system_with_pumping_stations(stations);
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
@@ -704,22 +700,21 @@ fn geometry_pumping_family_matches_the_pumping_column_start() {
     )
     .expect("build_stage_templates: valid system");
 
-    for t in 0..templates.pumping_col_starts.len() {
+    for t in 0..templates.geometry_per_stage.len() {
         let geom = &templates.geometry_per_stage[t];
-        let start = templates.pumping_col_starts[t];
         let n_pumping = templates.n_pumping;
         assert_eq!(
-            geom.pumping_flow,
-            start..start + n_pumping * geom.n_blks,
-            "stage {t}: pumping_flow must equal pumping_col_starts[t]..+n_pumping*n_blks"
+            geom.pumping_flow.len(),
+            n_pumping * geom.n_blks,
+            "stage {t}: pumping_flow must span n_pumping*n_blks columns"
         );
         for p in 0..n_pumping {
             for blk in 0..geom.n_blks {
                 assert_eq!(
                     geom.pumping_flow_col(PumpingSys::new(p), BlockIdx::new(blk)),
-                    start + p * geom.n_blks + blk,
+                    geom.pumping_flow.start + p * geom.n_blks + blk,
                     "stage {t}: pumping_flow_col({p}, {blk}) must equal \
-                     pumping_col_starts[t] + p*n_blks+blk"
+                     pumping_flow.start + p*n_blks+blk"
                 );
             }
         }
@@ -858,12 +853,12 @@ fn system_with_non_controllable_sources(
         .expect("system_with_non_controllable_sources: valid system")
 }
 
-/// `StageGeometry::ncs_generation` carries exactly the range the legacy
-/// `ncs_col_starts[t]`/`n_ncs` pair encodes at every stage, and
-/// `StageGeometry::ncs_generation_col` addresses it by the same formula
-/// (`ncs_col_starts[t] + sys_idx * n_blks + blk`), on a deck that models NCS.
+/// `StageGeometry::ncs_generation` spans exactly `n_ncs * n_blks` columns at
+/// every stage, matches the stage's own `StageLayout`, and
+/// `StageGeometry::ncs_generation_col` addresses it by
+/// `ncs_generation.start + sys_idx * n_blks + blk`, on a deck that models NCS.
 #[test]
-fn geometry_ncs_family_matches_the_ncs_column_start() {
+fn geometry_ncs_family_matches_the_stage_layout() {
     let sources = vec![
         fixture_non_controllable_source(5),
         fixture_non_controllable_source(2),
@@ -925,12 +920,11 @@ fn geometry_ncs_family_matches_the_ncs_column_start() {
     );
     for (t, stage) in study_stages.iter().enumerate() {
         let geom = &templates.geometry_per_stage[t];
-        let start = templates.ncs_col_starts[t];
         let n_ncs = templates.n_ncs;
         assert_eq!(
-            geom.ncs_generation,
-            start..start + n_ncs * geom.n_blks,
-            "stage {t}: ncs_generation must equal ncs_col_starts[t]..+n_ncs*n_blks"
+            geom.ncs_generation.len(),
+            n_ncs * geom.n_blks,
+            "stage {t}: ncs_generation must span n_ncs*n_blks columns"
         );
         let state = state_layout_for(&ctx);
         let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, t);
@@ -944,9 +938,9 @@ fn geometry_ncs_family_matches_the_ncs_column_start() {
             for blk in 0..geom.n_blks {
                 assert_eq!(
                     geom.ncs_generation_col(NcsSys::new(sys_idx), BlockIdx::new(blk)),
-                    start + sys_idx * geom.n_blks + blk,
+                    geom.ncs_generation.start + sys_idx * geom.n_blks + blk,
                     "stage {t}: ncs_generation_col({sys_idx}, {blk}) must equal \
-                     ncs_col_starts[t] + sys_idx*n_blks+blk"
+                     ncs_generation.start + sys_idx*n_blks+blk"
                 );
             }
         }
@@ -2201,18 +2195,12 @@ fn stage_templates_empty_is_all_empty_with_n_hydros() {
         empty.block_hours_per_stage.is_empty(),
         "block_hours_per_stage"
     );
-    assert!(
-        empty.load_balance_row_starts.is_empty(),
-        "load_balance_row_starts"
-    );
     assert!(empty.load_bus_indices.is_empty(), "load_bus_indices");
     assert!(
         empty.generic_constraint_row_entries.is_empty(),
         "generic_constraint_row_entries"
     );
-    assert!(empty.ncs_col_starts.is_empty(), "ncs_col_starts");
     assert_eq!(empty.n_ncs, 0, "n_ncs");
-    assert!(empty.pumping_col_starts.is_empty(), "pumping_col_starts");
     assert_eq!(empty.n_pumping, 0, "n_pumping");
     assert!(empty.diversion_upstream.is_empty(), "diversion_upstream");
     assert!(

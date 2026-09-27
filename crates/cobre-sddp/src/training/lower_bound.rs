@@ -1959,12 +1959,14 @@ mod tests {
         // so none is commissioning-dormant at stage 0.
         let ncs_stochastic_dense_col: Vec<usize> = (0..n_ncs).collect();
         let ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)> = vec![(None, None); n_ncs];
-        let ncs_col_starts = vec![0_usize];
         let state_boxes = permissive_state_boxes(state.n_state, 1);
 
-        let geometry = equipment_free_geometry(&[block_count]);
+        let geometry = vec![StageGeometry {
+            ncs_generation: 0..n_ncs * block_count,
+            n_blks: block_count,
+            ..StageGeometry::default()
+        }];
         let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
-            .ncs_col_starts(&ncs_col_starts)
             .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)
             .ncs_stochastic_windows(&ncs_stochastic_windows)
             .ncs_max_gen(&ncs_max_gen)
@@ -1973,7 +1975,7 @@ mod tests {
 
         let horizon = HorizonMode::Finite { num_stages: 1 };
         // `has_ncs = true`: the same production wiring gate
-        // (`!ncs_col_starts.is_empty()`) that makes `apply_ncs_col_bounds` fire.
+        // (`!geometry_per_stage.is_empty()`) that makes `apply_ncs_col_bounds` fire.
         let study_dims = StudyDimensions {
             has_ncs: true,
             ..StudyDimensions::default()

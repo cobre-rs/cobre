@@ -105,16 +105,9 @@ pub struct SimulationOutputSpec<'a> {
     /// Per-stage active generic-constraint row metadata for extraction.
     pub generic_constraint_row_entries: &'a [Vec<GenericConstraintRowEntry>],
 
-    /// Per-stage column index of the first NCS generation variable.
-    pub ncs_col_starts: &'a [usize],
-
     /// NCS column count — a single scalar, identical at every stage: under the
     /// dense layout a dormant NCS keeps its column.
     pub n_ncs: usize,
-
-    /// Per-stage column index of the first pumping-flow variable. The per-stage
-    /// `StageLayout` is the sole owner of this base.
-    pub pumping_col_starts: &'a [usize],
 
     /// Pumping-station column count — a single scalar, identical at every stage:
     /// a commissioning-dormant station keeps its column (pinned to `[0, 0]`).
@@ -669,7 +662,6 @@ pub(crate) fn extract_sim_stage_result(
     // NCS upper bounds for extraction, in dense system-column order
     // (`ncs_sys * stage_n_blks + blk`).
     let ncs_n = output.n_ncs;
-    let ncs_col_start = output.ncs_col_starts.get(t.0).copied().unwrap_or(0);
     let stage_n_blks = ctx.block_count(t);
     let n_pumping = output.n_pumping;
     debug_assert!(
@@ -687,11 +679,10 @@ pub(crate) fn extract_sim_stage_result(
     // is skipped so its template `0` survives — copying its stochastic cap would
     // report a nonzero available for a column the LP pinned to `0`.
     let ncs_col_upper: &[f64] = if ncs_n > 0 && stage_n_blks > 0 {
-        let start = ncs_col_start;
-        let end = start + ncs_n * stage_n_blks;
+        let ncs_cols = geometry.ncs_generation.clone();
         ncs_col_upper_extract_buf.clear();
-        if end <= ctx.template(t).col_upper.len() {
-            ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[start..end]);
+        if ncs_cols.end <= ctx.template(t).col_upper.len() {
+            ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[ncs_cols]);
         } else {
             ncs_col_upper_extract_buf.resize(ncs_n * stage_n_blks, 0.0);
         }

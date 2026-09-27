@@ -418,8 +418,7 @@ fn test_stochastic_load_training_completes() {
     };
 
     // The mock solver ignores set_row_bounds, so only the slice length (n_stages)
-    // matters here, not the row-start value.
-    let load_balance_row_starts = vec![1usize; n_stages];
+    // matters here, not geometry_per_stage's load-balance row range.
     let load_bus_indices = vec![0usize];
     let geometry_per_stage = vec![
         StageGeometry {
@@ -434,7 +433,6 @@ fn test_stochastic_load_training_completes() {
     let stage_ctx_fixture =
         StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
             .n_hydros_override(0)
-            .load_balance_row_starts(&load_balance_row_starts)
             .load_bus_indices(&load_bus_indices);
     let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
@@ -639,7 +637,6 @@ fn test_stochastic_load_seed_determinism() {
             },
         };
 
-        let load_balance_row_starts = vec![1usize; n_stages];
         let load_bus_indices = vec![0usize];
         let geometry_per_stage = vec![
             StageGeometry {
@@ -654,7 +651,6 @@ fn test_stochastic_load_seed_determinism() {
         let stage_ctx_fixture =
             StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
                 .n_hydros_override(0)
-                .load_balance_row_starts(&load_balance_row_starts)
                 .load_bus_indices(&load_bus_indices);
         let stage_ctx = stage_ctx_fixture.ctx();
         let result = train(

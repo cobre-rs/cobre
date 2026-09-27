@@ -657,9 +657,7 @@ pub struct StageContextFixture<'a> {
     n_hydros: usize,
     cost_scale_factor: f64,
     n_ncs: usize,
-    load_balance_row_starts: &'a [usize],
     load_bus_indices: &'a [usize],
-    ncs_col_starts: &'a [usize],
     ncs_stochastic_dense_col: &'a [usize],
     ncs_stochastic_windows: &'a [(Option<i32>, Option<i32>)],
     ncs_max_gen: &'a [f64],
@@ -701,9 +699,7 @@ impl<'a> StageContextFixture<'a> {
             n_hydros: state.hydro_count,
             cost_scale_factor: 1_000_000.0,
             n_ncs: 0,
-            load_balance_row_starts: &[],
             load_bus_indices: &[],
-            ncs_col_starts: &[],
             ncs_stochastic_dense_col: &[],
             ncs_stochastic_windows: &[],
             ncs_max_gen: &[],
@@ -719,9 +715,9 @@ impl<'a> StageContextFixture<'a> {
     }
 
     /// [`Self::new`], reading `templates`, `geometry_per_stage`,
-    /// `load_bus_indices`, `load_balance_row_starts`, `ncs_col_starts`, `n_ncs`
-    /// and `cost_scale_factor` from `stage_templates` — the same fields
-    /// [`StudySetup::stage_ctx`] reads from it.
+    /// `load_bus_indices`, `n_ncs` and `cost_scale_factor` from
+    /// `stage_templates` — the same fields [`StudySetup::stage_ctx`] reads
+    /// from it.
     ///
     /// # Panics
     /// See [`Self::new`].
@@ -738,8 +734,6 @@ impl<'a> StageContextFixture<'a> {
             &stage_templates.geometry_per_stage,
         );
         fixture.load_bus_indices = &stage_templates.load_bus_indices;
-        fixture.load_balance_row_starts = &stage_templates.load_balance_row_starts;
-        fixture.ncs_col_starts = &stage_templates.ncs_col_starts;
         fixture.n_ncs = stage_templates.n_ncs;
         fixture.cost_scale_factor = stage_templates.cost_scale_factor;
         fixture
@@ -761,25 +755,11 @@ impl<'a> StageContextFixture<'a> {
         self
     }
 
-    /// Sets [`StageContext::load_balance_row_starts`].
-    #[must_use]
-    pub fn load_balance_row_starts(mut self, v: &'a [usize]) -> Self {
-        self.load_balance_row_starts = v;
-        self
-    }
-
     /// Sets [`StageContext::load_bus_indices`] (and, through it, the
     /// `n_load_buses` [`Self::ctx`] derives).
     #[must_use]
     pub fn load_bus_indices(mut self, v: &'a [usize]) -> Self {
         self.load_bus_indices = v;
-        self
-    }
-
-    /// Sets [`StageContext::ncs_col_starts`].
-    #[must_use]
-    pub fn ncs_col_starts(mut self, v: &'a [usize]) -> Self {
-        self.ncs_col_starts = v;
         self
     }
 
@@ -870,10 +850,8 @@ impl<'a> StageContextFixture<'a> {
             n_hydros: self.n_hydros,
             cost_scale_factor: self.cost_scale_factor,
             n_load_buses: self.load_bus_indices.len(),
-            load_balance_row_starts: self.load_balance_row_starts,
             load_bus_indices: self.load_bus_indices,
             block_counts_per_stage: &self.block_counts_per_stage,
-            ncs_col_starts: self.ncs_col_starts,
             n_ncs: self.n_ncs,
             ncs_stochastic_dense_col: self.ncs_stochastic_dense_col,
             ncs_stochastic_windows: self.ncs_stochastic_windows,
@@ -1003,7 +981,7 @@ pub fn study_dims() -> StudyDimensions {
 
 /// Build the [`StudyDimensions`] matching the [`GeometryDims`] a test built its
 /// stage geometry from. `has_ncs` is always `false`: these fixtures never model NCS
-/// (production sets it from `!ncs_col_starts.is_empty()`).
+/// (production sets it from `!geometry_per_stage.is_empty()`).
 #[must_use]
 pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {

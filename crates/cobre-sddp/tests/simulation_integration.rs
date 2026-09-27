@@ -822,9 +822,7 @@ fn train_simulate_write_cycle() {
             block_hours_per_stage: &[],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &[],
             pumping_consumption_mw_per_m3s: &[],
@@ -1311,8 +1309,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
-        .load_balance_row_starts(&templates_result.load_balance_row_starts);
+    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
 
     let training_config = TrainingConfig {
@@ -1424,9 +1421,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             block_hours_per_stage: &block_hours_per_stage,
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
             n_ncs: 0,
-            pumping_col_starts: &[],
             n_pumping: 0,
             geometry_per_stage: &equipment_geometry,
             pumping_consumption_mw_per_m3s: &[],
@@ -1601,9 +1596,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
                     block_hours_per_stage: &block_hours_per_stage,
                     entity_counts: &entity_counts,
                     generic_constraint_row_entries: &[],
-                    ncs_col_starts: &[],
                     n_ncs: 0,
-                    pumping_col_starts: &[],
                     n_pumping: 0,
                     geometry_per_stage: &[],
                     pumping_consumption_mw_per_m3s: &[],

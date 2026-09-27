@@ -150,10 +150,8 @@ impl StudySetup {
             n_hydros: self.stage_data.stage_templates.n_hydros,
             cost_scale_factor: self.stage_data.stage_templates.cost_scale_factor,
             n_load_buses: self.stage_data.stage_templates.n_load_buses,
-            load_balance_row_starts: &self.stage_data.stage_templates.load_balance_row_starts,
             load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,
             block_counts_per_stage: &self.stage_data.block_counts_per_stage,
-            ncs_col_starts: &self.stage_data.stage_templates.ncs_col_starts,
             n_ncs: self.stage_data.stage_templates.n_ncs,
             ncs_stochastic_dense_col: &self.ncs_stochastic_dense_col,
             ncs_stochastic_windows: &self.ncs_stochastic_windows,
@@ -268,9 +266,7 @@ impl StudySetup {
                 .stage_data
                 .stage_templates
                 .generic_constraint_row_entries,
-            ncs_col_starts: &self.stage_data.stage_templates.ncs_col_starts,
             n_ncs: self.stage_data.stage_templates.n_ncs,
-            pumping_col_starts: &self.stage_data.stage_templates.pumping_col_starts,
             n_pumping: self.stage_data.stage_templates.n_pumping,
             geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
             hydro_cell_index: &self.stage_data.hydro_cell_index,

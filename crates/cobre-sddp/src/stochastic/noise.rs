@@ -9,7 +9,8 @@ use cobre_solver::SolverInterface;
 use cobre_stochastic::par::lag_kernel::{LagMajor, advance_lag_chain};
 use cobre_stochastic::{StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
-use crate::indexer::StateSpace;
+use crate::indexer::{BlockIdx, NcsSys, StateSpace};
+use crate::lp::builder::StageGeometry;
 use crate::{
     InflowNonNegativityMethod,
     context::{StageContext, TrainingContext},
@@ -404,18 +405,17 @@ pub(crate) fn transform_ncs_noise(
 /// block is system-indexed, so striding by slot misaddresses the column whenever
 /// only a subset of NCS are stochastic or their orders diverge.
 ///
-/// Callers rebuild lazily on a stage transition, when the per-stage NCS column
-/// start changes.
+/// Callers rebuild lazily on a stage transition, when the stage's own
+/// `geometry.ncs_generation` range changes.
 pub(crate) fn build_dense_ncs_col_indices(
     dense_col: &[usize],
-    ncs_col_start: usize,
-    block_count: usize,
+    geometry: &StageGeometry,
     indices_out: &mut Vec<usize>,
 ) {
     indices_out.clear();
     for &col in dense_col {
-        for blk in 0..block_count {
-            indices_out.push(ncs_col_start + col * block_count + blk);
+        for blk in 0..geometry.n_blks {
+            indices_out.push(geometry.ncs_generation_col(NcsSys::new(col), BlockIdx::new(blk)));
         }
     }
 }
@@ -474,34 +474,38 @@ pub(crate) fn gather_dense_ncs_bounds(
 ///
 /// `scratch.ncs_col_lower_buf`/`ncs_col_upper_buf` must already hold this
 /// solve's bounds (full stochastic-slot order) via a preceding
-/// [`transform_ncs_noise`] call. `ncs_col_start` is this stage's own NCS base
-/// column, never a single global stage-0 base — per-stage block counts make
-/// stage bases diverge. [`gather_dense_ncs_bounds`] forces `[0, 0]` for a slot
-/// dormant at this stage — the "patch NCS identically" contract shared by
-/// every solve site (D15: a divergence understates the bound).
+/// [`transform_ncs_noise`] call. `geometry` is this stage's own equipment
+/// geometry, never a single global stage-0 geometry — per-stage block counts
+/// make stage NCS bases diverge. [`gather_dense_ncs_bounds`] forces `[0, 0]`
+/// for a slot dormant at this stage — the "patch NCS identically" contract
+/// shared by every solve site (D15: a divergence understates the bound).
+///
+/// # Panics
+///
+/// Panics in debug builds when `geometry.n_blks != n_blks` — a fixture's
+/// geometry and block count disagree.
 pub(crate) fn apply_ncs_col_bounds<S: SolverInterface>(
     solver: &mut S,
     scratch: &mut ScratchBuffers,
-    ncs_col_start: usize,
+    geometry: &StageGeometry,
     dense_col: &[usize],
     windows: &[(Option<i32>, Option<i32>)],
     stage_id: i32,
     n_blks: usize,
 ) {
+    debug_assert_eq!(
+        geometry.n_blks, n_blks,
+        "geometry's own block count must match the passed n_blks",
+    );
     let expected_len = dense_col.len() * n_blks;
-    // Rebuild on `ncs_col_start` change, not length alone: two stages can share a
-    // length yet address different columns, so keying on length would set bounds
-    // on the previous stage's columns.
-    if scratch.last_ncs_col_start != ncs_col_start
+    // Rebuild on the geometry's NCS start changing, not length alone: two stages
+    // can share a length yet address different columns, so keying on length
+    // would set bounds on the previous stage's columns.
+    if scratch.last_ncs_col_start != geometry.ncs_generation.start
         || scratch.ncs_col_indices_buf.len() != expected_len
     {
-        build_dense_ncs_col_indices(
-            dense_col,
-            ncs_col_start,
-            n_blks,
-            &mut scratch.ncs_col_indices_buf,
-        );
-        scratch.last_ncs_col_start = ncs_col_start;
+        build_dense_ncs_col_indices(dense_col, geometry, &mut scratch.ncs_col_indices_buf);
+        scratch.last_ncs_col_start = geometry.ncs_generation.start;
     }
     gather_dense_ncs_bounds(
         windows,
@@ -557,6 +561,7 @@ mod tests {
         horizon_mode::HorizonMode,
         indexer::StateSpace,
         inflow_method::InflowNonNegativityMethod,
+        lp::builder::StageGeometry,
         noise::{
             NcsNoiseOffsets, apply_ncs_col_bounds, build_dense_ncs_col_indices,
             compute_effective_eta, gather_dense_ncs_bounds, shift_lag_state,
@@ -2296,14 +2301,20 @@ mod tests {
     #[test]
     fn dense_ncs_dormant_slot_is_zeroed() {
         let n_blks = 2_usize;
-        let ncs_col_start = 100_usize;
+        let ncs_start = 100_usize;
+        let n_ncs = 3_usize;
         let dense_col = vec![0_usize, 1, 2];
         let stage_id = 0_i32;
         // slot 0 enters at stage 1 (dormant at stage 0); slots 1,2 windowless.
         let windows = vec![(Some(1_i32), None), (None, None), (None, None)];
+        let geometry = StageGeometry {
+            ncs_generation: ncs_start..ncs_start + n_ncs * n_blks,
+            n_blks,
+            ..StageGeometry::default()
+        };
 
         let mut indices = Vec::new();
-        build_dense_ncs_col_indices(&dense_col, ncs_col_start, n_blks, &mut indices);
+        build_dense_ncs_col_indices(&dense_col, &geometry, &mut indices);
         // Every slot contributes a block: 100,101 | 102,103 | 104,105.
         assert_eq!(indices, vec![100, 101, 102, 103, 104, 105]);
         assert_eq!(indices.len(), dense_col.len() * n_blks);
@@ -2334,12 +2345,18 @@ mod tests {
     #[test]
     fn dense_ncs_no_dormancy_is_slot_order_identical() {
         let n_blks = 2_usize;
-        let ncs_col_start = 0_usize;
+        let ncs_start = 0_usize;
+        let n_ncs = 3_usize;
         let dense_col = vec![0_usize, 1, 2];
         let windows = vec![(None, None), (None, None), (None, None)];
+        let geometry = StageGeometry {
+            ncs_generation: ncs_start..ncs_start + n_ncs * n_blks,
+            n_blks,
+            ..StageGeometry::default()
+        };
 
         let mut indices = Vec::new();
-        build_dense_ncs_col_indices(&dense_col, ncs_col_start, n_blks, &mut indices);
+        build_dense_ncs_col_indices(&dense_col, &geometry, &mut indices);
         assert_eq!(indices, vec![0, 1, 2, 3, 4, 5]);
 
         let lower_src = vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0];
@@ -2375,14 +2392,20 @@ mod tests {
         let expected_len = dense_col.len() * n_blks;
         assert_eq!(expected_len, 4);
 
+        let geometry_at = |ncs_start: usize| StageGeometry {
+            ncs_generation: ncs_start..ncs_start + dense_col.len() * n_blks,
+            n_blks,
+            ..StageGeometry::default()
+        };
+
         // Reproduce the patch-site guard verbatim: rebuild iff the stored start
         // differs OR the buffer length differs.
         let mut indices_buf: Vec<usize> = Vec::new();
         let mut last_ncs_col_start = usize::MAX;
-        let rebuild = |start: usize, buf: &mut Vec<usize>, last: &mut usize| {
-            if *last != start || buf.len() != expected_len {
-                build_dense_ncs_col_indices(&dense_col, start, n_blks, buf);
-                *last = start;
+        let rebuild = |geometry: &StageGeometry, buf: &mut Vec<usize>, last: &mut usize| {
+            if *last != geometry.ncs_generation.start || buf.len() != expected_len {
+                build_dense_ncs_col_indices(&dense_col, geometry, buf);
+                *last = geometry.ncs_generation.start;
                 true
             } else {
                 false
@@ -2390,19 +2413,31 @@ mod tests {
         };
 
         // Stage A at start 100: first call always rebuilds (last == usize::MAX).
-        assert!(rebuild(100, &mut indices_buf, &mut last_ncs_col_start));
+        assert!(rebuild(
+            &geometry_at(100),
+            &mut indices_buf,
+            &mut last_ncs_col_start
+        ));
         assert_eq!(indices_buf, vec![100, 101, 102, 103]);
         assert_eq!(last_ncs_col_start, 100);
 
         // Stage B at start 200, SAME length (4): the start-tracking guard fires and
         // the buffer tracks the new base. A length-only guard would have skipped
         // this rebuild and left [100,101,102,103] — the latent bug.
-        assert!(rebuild(200, &mut indices_buf, &mut last_ncs_col_start));
+        assert!(rebuild(
+            &geometry_at(200),
+            &mut indices_buf,
+            &mut last_ncs_col_start
+        ));
         assert_eq!(indices_buf, vec![200, 201, 202, 203]);
         assert_eq!(last_ncs_col_start, 200);
 
         // Re-entering stage B (same start, same length): no rebuild.
-        assert!(!rebuild(200, &mut indices_buf, &mut last_ncs_col_start));
+        assert!(!rebuild(
+            &geometry_at(200),
+            &mut indices_buf,
+            &mut last_ncs_col_start
+        ));
         assert_eq!(indices_buf, vec![200, 201, 202, 203]);
     }
 
@@ -2516,9 +2551,14 @@ mod tests {
         let ncs_allow_curtailment = vec![true];
         let dense_col = vec![0_usize];
         let windows: Vec<(Option<i32>, Option<i32>)> = vec![(None, None)];
-        let ncs_col_start = 5_usize;
+        let ncs_start = 5_usize;
         let stage_id = 0_i32;
         let n_blks = 1_usize;
+        let geometry = StageGeometry {
+            ncs_generation: ncs_start..ncs_start + n_blks,
+            n_blks,
+            ..StageGeometry::default()
+        };
         let offsets = NcsNoiseOffsets {
             n_hydros: 0,
             n_load_buses: 0,
@@ -2540,8 +2580,7 @@ mod tests {
         );
         build_dense_ncs_col_indices(
             &dense_col,
-            ncs_col_start,
-            n_blks,
+            &geometry,
             &mut reference_scratch.ncs_col_indices_buf,
         );
         gather_dense_ncs_bounds(
@@ -2578,7 +2617,7 @@ mod tests {
         apply_ncs_col_bounds(
             &mut owner_solver,
             &mut owner_scratch,
-            ncs_col_start,
+            &geometry,
             &dense_col,
             &windows,
             stage_id,
@@ -2591,7 +2630,7 @@ mod tests {
         );
         assert_eq!(owner_solver.col_bounds_calls.len(), 1);
         let (indices, lower, upper) = &owner_solver.col_bounds_calls[0];
-        assert_eq!(indices, &[ncs_col_start]);
+        assert_eq!(indices, &[ncs_start]);
         // A_r = max_gen * clamp(mean + std * eta, 0, 1); allow_curtailment == true
         // pins the lower bound to 0 (dispatch is free to curtail down to it).
         let expected_upper = 100.0_f64 * (0.5 + 0.1 * 0.37_f64).clamp(0.0, 1.0);

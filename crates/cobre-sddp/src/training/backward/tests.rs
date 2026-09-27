@@ -2753,7 +2753,7 @@ fn backward_pass_load_patches_applied() {
     let patch_buf = PatchBuffer::new(1, 0, 1, 1, 0, 0, 0);
 
     // Template: 2 rows; row content is irrelevant here (this test exercises
-    // only the load-balance patch, addressed via load_balance_row_starts).
+    // only the load-balance patch, addressed via geometry_per_stage).
     let template = StageTemplate {
         num_cols: 3,
         num_rows: 2,
@@ -2836,8 +2836,7 @@ fn backward_pass_load_patches_applied() {
     let comm = StubComm;
     let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-    // load_balance_row_starts[successor=1]=10; load_bus_indices=[0]; 1 block/stage.
-    let load_balance_row_starts = vec![10_usize; n_stages];
+    // geometry_per_stage[successor=1].load_balance starts at 10; load_bus_indices=[0]; 1 block/stage.
     let load_bus_indices = vec![0_usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
@@ -2847,7 +2846,6 @@ fn backward_pass_load_patches_applied() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-            .load_balance_row_starts(&load_balance_row_starts)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         frozen: &mut templates.clone(),
@@ -3161,7 +3159,6 @@ fn backward_pass_cut_coefficients_unaffected() {
     let comm = StubComm;
     let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-    let load_balance_row_starts = vec![10_usize; n_stages];
     let load_bus_indices = vec![0_usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
@@ -3171,7 +3168,6 @@ fn backward_pass_cut_coefficients_unaffected() {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
         ctx: &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-            .load_balance_row_starts(&load_balance_row_starts)
             .load_bus_indices(&load_bus_indices)
             .ctx(),
         frozen: &mut templates.clone(),

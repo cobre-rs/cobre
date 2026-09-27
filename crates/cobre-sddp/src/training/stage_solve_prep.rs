@@ -223,7 +223,7 @@ impl StageSolvePrep {
                 apply_ncs_col_bounds(
                     solver,
                     scratch,
-                    ctx.ncs_col_start(stage),
+                    &ctx.geometry_per_stage[stage.0],
                     ctx.ncs_stochastic_dense_col,
                     ctx.ncs_stochastic_windows,
                     stage_id,

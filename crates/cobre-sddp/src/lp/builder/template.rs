@@ -59,14 +59,6 @@ pub struct StageTemplates {
     /// coefficient was divided by this at template build time; cost-domain
     /// reporting boundaries multiply back by it.
     pub cost_scale_factor: f64,
-    /// Per-stage row index of the first load-balance constraint.
-    ///
-    /// `load_balance_row_starts[s]` is `StageLayout::row_load_balance_start()`
-    /// for stage `s` — NOT a hand-derived `row_water_balance_start + n_hydros`
-    /// offset, which only held before the chronological per-block water rows
-    /// and the travel-time bucket-definition rows sat between the two.
-    /// Length equals `templates.len()`.
-    pub load_balance_row_starts: Vec<usize>,
     /// Number of buses with stochastic load noise (`std_mw > 0`); equals
     /// `normal_lp.n_entities()`. Load noise occupies opening-tree noise-vector
     /// indices `[n_hydros, n_hydros + n_load_buses)`.
@@ -74,37 +66,18 @@ pub struct StageTemplates {
     /// Position in the `buses` slice for each stochastic load bus, length
     /// `n_load_buses`, sorted by [`cobre_core::EntityId`] for declaration-order
     /// invariance. Bus `i`'s load-balance base row is
-    /// `load_balance_row_start + load_bus_indices[i] * n_blks + blk`.
+    /// [`StageGeometry::load_balance_row`].
     pub load_bus_indices: Vec<usize>,
     /// Per-stage metadata for active generic constraint rows: one
     /// [`GenericConstraintRowEntry`] per active `(constraint, block)` pair at
     /// stage `s`. Empty for stages with no active generic constraints.
     pub generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
-    /// Per-stage NCS column start indices.
-    ///
-    /// `ncs_col_starts[stage_idx]` is the column index of the first NCS generation
-    /// variable for that stage. The base shifts per stage with `n_blks`, so it is
-    /// legitimate per-stage geometry; the COUNT it strides is the scalar
-    /// [`Self::n_ncs`].
-    pub ncs_col_starts: Vec<usize>,
     /// NCS column count — the full system NCS count, identical at every stage.
     ///
     /// Under the dense layout every NCS keeps a column at every stage, so the count
     /// is a single scalar, not a per-stage Vec; a commissioning-dormant NCS keeps
     /// its column (pinned to `[0, 0]`).
     pub n_ncs: usize,
-    /// Per-stage pumping-flow column start indices.
-    ///
-    /// `pumping_col_starts[stage_idx]` is the column index of the first
-    /// pumping-flow variable for that stage, sourced from
-    /// `StageLayout::col_pumping_start`, the sole owner of the pumping-flow column
-    /// base. Pumping columns are block-major over ALL system stations (dense):
-    /// `pumping_col_starts[stage_idx] + p_sys * n_blks + blk`, where `p_sys` is the
-    /// SYSTEM station index. The base shifts per stage with `n_blks`, so it is
-    /// legitimate per-stage geometry; the COUNT it strides is the scalar
-    /// [`Self::n_pumping`]. A commissioning-dormant station keeps its column
-    /// (pinned to `[0, 0]`).
-    pub pumping_col_starts: Vec<usize>,
     /// Pumping-station column count — the full system station count, identical at
     /// every stage (dense). A commissioning-dormant station keeps its column.
     pub n_pumping: usize,
@@ -143,13 +116,10 @@ impl StageTemplates {
             block_hours_per_stage: Vec::new(),
             n_hydros,
             cost_scale_factor,
-            load_balance_row_starts: Vec::new(),
             n_load_buses: 0,
             load_bus_indices: Vec::new(),
             generic_constraint_row_entries: Vec::new(),
-            ncs_col_starts: Vec::new(),
             n_ncs: 0,
-            pumping_col_starts: Vec::new(),
             n_pumping: 0,
             geometry_per_stage: Vec::new(),
             diversion_upstream: HashMap::new(),
@@ -170,8 +140,7 @@ impl StageTemplates {
 /// matching base/length gap. Uniform-block studies coincide with stage 0.
 ///
 /// [`Default`] is the all-`0..0` geometry — every extraction read it gates returns
-/// zero — the safe fallback when no per-stage geometry is available, matching the
-/// sibling `ncs_col_starts` / `pumping_col_starts` empty-slice fallbacks.
+/// zero — the safe fallback when no per-stage geometry is available.
 #[derive(Debug, Clone, Default)]
 pub struct StageGeometry {
     /// Turbined-flow column range (one per hydro per block). `turbine.start` is
@@ -415,17 +384,10 @@ fn one_per_entity_col(family: &Range<usize>, i: usize) -> usize {
 pub(super) struct StageBuildOutput {
     /// Structural LP template for the stage.
     pub template: StageTemplate,
-    /// Row index of the first load-balance constraint (load-noise patches).
-    pub load_balance_row_start: usize,
     /// Active generic-constraint row metadata for the stage.
     pub gc_entries: Vec<GenericConstraintRowEntry>,
-    /// Column index of the first NCS generation variable.
-    pub ncs_col_start: usize,
     /// Number of NCS entities at the stage — the full system count (dense).
     pub ncs_count: usize,
-    /// Column index of the first pumping-flow variable (sourced from
-    /// `StageLayout::col_pumping_start`).
-    pub pumping_col_start: usize,
     /// Number of pumping stations ACTIVE (contributing columns) at the stage
     /// (the commissioning-gated count, sourced from [`StageLayout::n_pumping`]).
     pub n_pumping: usize,
@@ -447,7 +409,6 @@ pub(super) fn build_single_stage_template(
     stage_idx: usize,
 ) -> StageBuildOutput {
     let layout = StageLayout::new(ctx, state, stage, stage_idx);
-    let load_balance_row_start = layout.rows.load_balance.start();
 
     let (col_lower, mut col_upper, mut objective) =
         columns::fill_stage_columns(ctx, stage, stage_idx, &layout);
@@ -516,11 +477,8 @@ pub(super) fn build_single_stage_template(
 
     StageBuildOutput {
         template,
-        load_balance_row_start,
         gc_entries: layout.generic_constraint_rows,
-        ncs_col_start: layout.equipment.col_ncs_start,
         ncs_count: layout.equipment.n_ncs,
-        pumping_col_start: layout.equipment.col_pumping_start,
         n_pumping: layout.equipment.n_pumping,
         equipment_geometry,
     }
@@ -1151,22 +1109,15 @@ fn assemble_stage_templates_output(
     // Index `s` of every parallel Vec must refer to the same stage, so preserve the
     // per-stage push order.
     let mut templates = Vec::with_capacity(n_study);
-    let mut load_balance_row_starts = Vec::with_capacity(n_study);
     let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
-    let mut ncs_col_starts = Vec::with_capacity(n_study);
-    let mut pumping_col_starts = Vec::with_capacity(n_study);
     let mut geometry_per_stage = Vec::with_capacity(n_study);
     // The dense NCS/pumping counts are constant across stages, so they collapse to
-    // scalars (column STARTS stay per-stage, riding `n_blks`): the first output
-    // seeds the scalars, later outputs must agree.
+    // scalars: the first output seeds the scalars, later outputs must agree.
     let mut n_ncs: usize = 0;
     let mut n_pumping: usize = 0;
     for (s, out) in stage_outputs.into_iter().enumerate() {
         templates.push(out.template);
-        load_balance_row_starts.push(out.load_balance_row_start);
         generic_constraint_row_entries.push(out.gc_entries);
-        ncs_col_starts.push(out.ncs_col_start);
-        pumping_col_starts.push(out.pumping_col_start);
         if s == 0 {
             n_ncs = out.ncs_count;
             n_pumping = out.n_pumping;
@@ -1181,17 +1132,9 @@ fn assemble_stage_templates_output(
             );
         }
         debug_assert_eq!(
-            out.equipment_geometry.ncs_generation.start, out.ncs_col_start,
-            "geometry.ncs_generation must start at the legacy ncs_col_start",
-        );
-        debug_assert_eq!(
             out.equipment_geometry.ncs_generation.len(),
             out.ncs_count * out.equipment_geometry.n_blks,
             "geometry.ncs_generation must span ncs_count * n_blks columns",
-        );
-        debug_assert_eq!(
-            out.equipment_geometry.pumping_flow.start, out.pumping_col_start,
-            "geometry.pumping_flow must start at the legacy pumping_col_start",
         );
         debug_assert_eq!(
             out.equipment_geometry.pumping_flow.len(),
@@ -1221,13 +1164,10 @@ fn assemble_stage_templates_output(
         block_hours_per_stage,
         n_hydros,
         cost_scale_factor: ctx.resolved.resolved_parameters.cost_scale_factor,
-        load_balance_row_starts,
         n_load_buses,
         load_bus_indices,
         generic_constraint_row_entries,
-        ncs_col_starts,
         n_ncs,
-        pumping_col_starts,
         n_pumping,
         geometry_per_stage,
         diversion_upstream: diversion_upstream_output,

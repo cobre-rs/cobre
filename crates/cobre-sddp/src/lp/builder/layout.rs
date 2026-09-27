@@ -810,7 +810,7 @@ fn build_evap_indices(
     let mut out = Vec::with_capacity(n_evap_hydros * n_evap_slots);
     for i in 0..n_evap_hydros {
         for slot in 0..n_evap_slots {
-            let flat = i * n_evap_slots + slot;
+            let flat = evap_slot_flat(i, slot, n_evap_slots);
             let triple_base = col_start + flat * EVAP_COLS_PER_HYDRO;
             out.push(EvaporationIndices {
                 evaporation_flow_col: triple_base + EVAP_FLOW_OFFSET,
@@ -1566,6 +1566,14 @@ pub(super) fn one_per_entity(family: &Range<usize>, i: usize) -> usize {
     idx
 }
 
+/// Flat, slot-major `(evap hydro local_idx, slot)` stride: single owner of the
+/// evaporation stride every column and row family built from it shares.
+#[inline]
+fn evap_slot_flat(local_idx: usize, slot: usize, n_evap_slots: usize) -> usize {
+    debug_assert!(slot < n_evap_slots);
+    local_idx * n_evap_slots + slot
+}
+
 impl StageLayout<'_> {
     /// Turbine-flow column for cell `c`, block `blk`.
     #[inline]
@@ -1735,9 +1743,8 @@ impl StageLayout<'_> {
     /// silently aliases one hydro's slot onto another's.
     #[inline]
     fn evap_triple_base(&self, local_idx: usize, slot: BlockIdx) -> usize {
-        let slot = slot.get();
-        debug_assert!(slot < self.n_evap_slots);
-        self.equipment.evap_col_start + (local_idx * self.n_evap_slots + slot) * EVAP_COLS_PER_HYDRO
+        self.equipment.evap_col_start
+            + evap_slot_flat(local_idx, slot.get(), self.n_evap_slots) * EVAP_COLS_PER_HYDRO
     }
 
     /// Evaporation-outflow column for `(evap hydro local_idx, block blk)` (the
@@ -1811,14 +1818,21 @@ impl StageLayout<'_> {
         self.rows.load_balance.end()
     }
 
-    /// Start of evaporation constraint rows (one per `(evap hydro, slot)`,
-    /// slot-major): `row_evap_start() + local_evap_idx * n_evap_slots + slot`. The
-    /// evaporation row block follows the FPHA rows even when empty — reads
-    /// `self.rows.fpha_rows_end`.
+    /// Start of evaporation constraint rows, one per `(evap hydro, slot)`; see
+    /// [`Self::evap_row`]. The evaporation row block follows the FPHA rows even
+    /// when empty — reads `self.rows.fpha_rows_end`.
     #[inline]
     #[must_use]
     pub(crate) fn row_evap_start(&self) -> usize {
         self.rows.fpha_rows_end
+    }
+
+    /// Evaporation-equality row for `(evap hydro local, slot)`, slot-major over
+    /// [`Self::row_evap_start`] — the row-side sibling of [`Self::evap_flow_col`].
+    #[inline]
+    #[must_use]
+    pub(crate) fn evap_row(&self, local: EvapLocal, slot: BlockIdx) -> usize {
+        self.row_evap_start() + evap_slot_flat(local.get(), slot.get(), self.n_evap_slots)
     }
 
     /// Filling-target-local `local`'s soft `σ_fill` row, over [`Self::filling_target`].

@@ -4712,7 +4712,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
         let expected = geom.evap_indices[k].evap_row;
         let l = k / layout.n_evap_slots;
         let s = k % layout.n_evap_slots;
-        let actual = layout.row_evap_start() + l * layout.n_evap_slots + s;
+        let actual = layout.evap_row(EvapLocal::new(l), BlockIdx::new(s));
         assert_eq!(actual, expected, "evap row disagreement at k={k}");
         counts[6] += 1;
     }

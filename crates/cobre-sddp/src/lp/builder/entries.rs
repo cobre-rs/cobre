@@ -1206,7 +1206,6 @@ pub(super) fn fill_evaporation_entries(
 ) {
     let n_blks = layout.n_blks;
     let n_evap_slots = layout.n_evap_slots;
-    let row_evap_start = layout.row_evap_start();
 
     for (local_idx, &h) in layout.evap_hydro_indices.iter().enumerate() {
         let coeff = match ctx.evaporation_models.model(h.get()) {
@@ -1250,7 +1249,7 @@ pub(super) fn fill_evaporation_entries(
             let col_evaporation_flow = layout.evap_flow_col(local, BlockIdx::new(slot));
             let col_f_plus = layout.evap_f_plus_col(local, BlockIdx::new(slot));
             let col_f_minus = layout.evap_f_minus_col(local, BlockIdx::new(slot));
-            let row = row_evap_start + local_idx * n_evap_slots + slot;
+            let row = layout.evap_row(local, BlockIdx::new(slot));
 
             col_entries[col_evaporation_flow].push((row, 1.0));
             col_entries[col_v_in].push((row, -half_slope));

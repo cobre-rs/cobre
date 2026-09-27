@@ -1,7 +1,9 @@
 use cobre_core::{BlockMode, Stage};
 
 use crate::hydro_models::EvaporationModel;
-use crate::indexer::{BlockIdx, BusSys, FillingTargetLocal, FloorLocal, HydroCell, HydroSys};
+use crate::indexer::{
+    BlockIdx, BusSys, EvapLocal, FillingTargetLocal, FloorLocal, HydroCell, HydroSys,
+};
 
 use super::columns::{GroupBoundLookup, cell_min_generation, cell_min_turbined};
 use super::fpha_cursor::for_each_fpha_plane;
@@ -349,11 +351,11 @@ fn fill_fpha_rows(
 }
 
 /// Fill evaporation row bounds: equality `row_lower == row_upper == intercept_m3s`,
-/// one row per `(evap hydro, slot)` (slot-major `row_evap_start + local *
-/// n_evap_slots + slot`, in lockstep with the entries side). The volume-dependent
-/// term lives in the matrix entries ([`super::entries::fill_evaporation_entries`]),
-/// so the row bounds encode only the constant intercept, replicated across the
-/// hydro's evaporation slots.
+/// one row per `(evap hydro, slot)`, addressed by [`StageLayout::evap_row`] in
+/// lockstep with the entries side. The volume-dependent term lives in the matrix
+/// entries ([`super::entries::fill_evaporation_entries`]), so the row bounds
+/// encode only the constant intercept, replicated across the hydro's evaporation
+/// slots.
 fn fill_evaporation_rows(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
@@ -371,8 +373,9 @@ fn fill_evaporation_rows(
                     coefficients.len()
                 );
                 let intercept_m3s = coefficients[stage_idx].intercept_m3s;
+                let local = EvapLocal::new(local_idx);
                 for slot in 0..n_evap_slots {
-                    let row = layout.row_evap_start() + local_idx * n_evap_slots + slot;
+                    let row = layout.evap_row(local, BlockIdx::new(slot));
                     row_lower[row] = intercept_m3s;
                     row_upper[row] = intercept_m3s;
                 }

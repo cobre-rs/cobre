@@ -739,14 +739,6 @@ impl<'a> StageContextFixture<'a> {
         fixture
     }
 
-    /// Replaces the count derived from `state.hydro_count`, for a fixture
-    /// whose value disagrees with it.
-    #[must_use]
-    pub fn n_hydros_override(mut self, n: usize) -> Self {
-        self.n_hydros = n;
-        self
-    }
-
     /// Sets [`StageContext::load_bus_indices`] (and, through it, the
     /// `n_load_buses` [`Self::ctx`] derives).
     #[must_use]
@@ -4538,18 +4530,6 @@ mod stage_context_fixture_tests {
         assert_eq!(ctx.n_load_buses, 1);
         assert_eq!(ctx.block_count(StageIdx(0)), 3);
         assert_eq!(ctx.block_count(StageIdx(1)), 3);
-    }
-
-    #[test]
-    fn stage_context_fixture_n_hydros_override_replaces_the_derived_count() {
-        let state = state_layout(1, 0);
-        let templates = vec![transit_bucket_only_template(1, state.n_state)];
-        let state_boxes = permissive_state_boxes(state.n_state, 1);
-        let geometry_per_stage = vec![StageGeometry::default()];
-        let fixture =
-            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-                .n_hydros_override(0);
-        assert_eq!(fixture.ctx().n_hydros, 0);
     }
 
     #[test]

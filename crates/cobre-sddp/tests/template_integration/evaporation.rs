@@ -1144,9 +1144,11 @@ fn evap_bound_prevents_dump_valve() {
 #[test]
 fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
     use cobre_sddp::indexer::Boundary;
+    use cobre_sddp::indexer::HydroSys;
 
     let (system, config, hydro_models) = parallel_multiblock_evaporation_study();
     let setup = build_setup_in_code_with_models(system, &config, hydro_models);
+    let state = cobre_sddp::test_support::state_space(&setup);
     let templates = &setup.stage_data.stage_templates;
     let total_stage_hours = 744.0_f64;
 
@@ -1201,8 +1203,10 @@ fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
             .filter(|&c| csc_entry(t, c, ei.evap_row).is_some())
             .collect();
         let mut expected_cols = vec![
-            g.storage_boundary_grid.col(0, Boundary::Incoming),
-            g.storage_boundary_grid.col(0, Boundary::Outgoing),
+            g.storage_boundary_grid
+                .col(state, HydroSys::new(0), Boundary::Incoming),
+            g.storage_boundary_grid
+                .col(state, HydroSys::new(0), Boundary::Outgoing),
             ei.evaporation_flow_col,
             ei.f_evap_plus_col,
             ei.f_evap_minus_col,

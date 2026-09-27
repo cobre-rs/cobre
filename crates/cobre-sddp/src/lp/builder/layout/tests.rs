@@ -1353,11 +1353,11 @@ fn storage_boundary_endpoints_match_state_space_accessors() {
             outgoing
         );
         assert_eq!(
-            geometry.block_storage_col(HydroSys::new(h), Boundary::Incoming),
+            geometry.block_storage_col(&state, HydroSys::new(h), Boundary::Incoming),
             incoming
         );
         assert_eq!(
-            geometry.block_storage_col(HydroSys::new(h), Boundary::Outgoing),
+            geometry.block_storage_col(&state, HydroSys::new(h), Boundary::Outgoing),
             outgoing
         );
         compared += 4;

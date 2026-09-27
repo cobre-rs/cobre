@@ -803,7 +803,7 @@ impl TurbineBusSelectorFixture {
     fn geom(&self) -> GenericResolverGeom<'_> {
         GenericResolverGeom {
             state: &self.state,
-            storage_boundary_grid: StorageBoundaryGrid::new(0, 0, 0, Self::N_BLKS),
+            storage_boundary_grid: StorageBoundaryGrid::new(0, Self::N_BLKS),
             hydro_cell_index: &self.hydro_cell_index,
             turbine: &self.turbine,
             spillage: &self.empty,
@@ -994,7 +994,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 
     let geom = GenericResolverGeom {
         state: &state,
-        storage_boundary_grid: StorageBoundaryGrid::new(0, 0, 0, n_blks),
+        storage_boundary_grid: StorageBoundaryGrid::new(0, n_blks),
         hydro_cell_index: &hydro_cell_index,
         turbine: &empty,
         spillage: &empty,
@@ -2694,12 +2694,7 @@ fn make_chronological_geom<'a>(
     state: &'a StateSpace,
 ) -> GenericResolverGeom<'a> {
     let mut geom = make_geom(indexer, state, 2, &[]);
-    geom.storage_boundary_grid = StorageBoundaryGrid::new(
-        state.storage_in.start,
-        state.storage.start,
-        STORAGE_INTERNAL_START,
-        indexer.n_blks,
-    );
+    geom.storage_boundary_grid = StorageBoundaryGrid::new(STORAGE_INTERNAL_START, indexer.n_blks);
     geom
 }
 
@@ -2892,7 +2887,10 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
         );
         assert_eq!(
             initial,
-            vec![(geom.block_storage_col(0, Boundary::Incoming), 1.0)]
+            vec![(
+                geom.block_storage_col(HydroSys::new(0), Boundary::Incoming),
+                1.0
+            )]
         );
 
         let final_ = call(
@@ -2910,7 +2908,10 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
         );
         assert_eq!(
             final_,
-            vec![(geom.block_storage_col(0, Boundary::Outgoing), 1.0)]
+            vec![(
+                geom.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
+                1.0
+            )]
         );
     }
 }

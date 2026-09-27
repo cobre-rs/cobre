@@ -4400,21 +4400,21 @@ fn stage_geometry_block_storage_col_matches_layout() {
 
     for h in 0..layout.n_h {
         assert_eq!(
-            geometry.block_storage_col(HydroSys::new(h), Boundary::Incoming),
+            geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Incoming),
             storage_in_start + h,
             "S⁰ endpoint (the parallel-fill open-coded pair) must resolve to \
              storage_in_start + h at hydro {h}"
         );
         for k in 1..n_blks {
             assert_eq!(
-                geometry.block_storage_col(HydroSys::new(h), Boundary::Interior(k)),
+                geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Interior(k)),
                 storage_internal_start + h * (n_blks - 1) + (k - 1),
                 "interior boundary S{k} must resolve to storage_internal_start + \
                  h * (n_blks - 1) + (k - 1) at hydro {h}"
             );
         }
         assert_eq!(
-            geometry.block_storage_col(HydroSys::new(h), Boundary::Outgoing),
+            geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Outgoing),
             storage_final_start + h,
             "Sᴷ endpoint (the parallel-fill open-coded pair) must resolve to \
              storage_final_start + h at hydro {h}"

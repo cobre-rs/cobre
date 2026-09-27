@@ -994,8 +994,6 @@ fn build_geometry(
     // theta = N*(3+L); control region starts at theta + 1 (no anticipated thermals).
     let theta = hydro_count * (3 + max_par_order);
     let turbine_start = theta + 1;
-    // StateSpace::storage_in.start under the same no-anticipated-thermals assumption.
-    let storage_in_base = hydro_count * (2 + max_par_order);
     let spillage_start = turbine_start + hydro_count * n_blks;
     let diversion_start = spillage_start + hydro_count * n_blks;
     let thermal_start = diversion_start + hydro_count * n_blks;
@@ -1088,7 +1086,7 @@ fn build_geometry(
         filled_min_storage_floor: 0..0,
         filled_min_storage_floor_col: 0..0,
         n_blks,
-        storage_boundary_grid: StorageBoundaryGrid::new(storage_in_base, 0, 0, n_blks),
+        storage_boundary_grid: StorageBoundaryGrid::new(0, n_blks),
         block_mode: BlockMode::Parallel,
         fpha_hydro_indices,
         evap_hydro_indices: Vec::new(),

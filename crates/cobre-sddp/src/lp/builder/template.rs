@@ -239,8 +239,8 @@ pub struct StageGeometry {
     /// Number of operating blocks (K) at this stage — the block-major stride for
     /// every equipment family.
     pub n_blks: usize,
-    /// Storage-boundary address primitive for this stage, carrying both state
-    /// bases plus the interior control-region anchor mirroring
+    /// Storage-boundary address primitive for this stage, carrying the
+    /// interior control-region anchor mirroring
     /// `StageLayout::storage_boundary_grid`; feeds [`StageGeometry::block_storage_col`].
     pub storage_boundary_grid: StorageBoundaryGrid,
     /// Block formulation mode at this stage. Selects per-block storage extraction
@@ -274,8 +274,8 @@ impl StageGeometry {
     /// the single owner of the endpoints-vs-interior split.
     #[inline]
     #[must_use]
-    pub fn block_storage_col(&self, h: HydroSys, boundary: Boundary) -> usize {
-        self.storage_boundary_grid.col(h.get(), boundary)
+    pub fn block_storage_col(&self, state: &StateSpace, h: HydroSys, boundary: Boundary) -> usize {
+        self.storage_boundary_grid.col(state, h, boundary)
     }
 
     /// Hydro `h`'s water-balance row for block `blk`: its own block row on a

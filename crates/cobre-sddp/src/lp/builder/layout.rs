@@ -1770,16 +1770,11 @@ impl StageLayout<'_> {
     }
 
     /// The [`StorageBoundaryGrid`] address primitive for this stage's LP,
-    /// carrying this stage's state bases and interior anchor.
+    /// carrying its interior anchor.
     #[inline]
     #[must_use]
     pub(crate) fn storage_boundary_grid(&self) -> StorageBoundaryGrid {
-        StorageBoundaryGrid::new(
-            self.state.storage_in.start,
-            self.state.storage.start,
-            self.equipment.storage_internal_start,
-            self.n_blks,
-        )
+        StorageBoundaryGrid::new(self.equipment.storage_internal_start, self.n_blks)
     }
 
     /// Storage column at chronological `boundary` for hydro `h`; delegates to
@@ -1787,7 +1782,7 @@ impl StageLayout<'_> {
     /// split. At `n_blks = 1` only the two endpoints resolve (no interior).
     #[inline]
     pub(crate) fn block_storage_col(&self, h: HydroSys, boundary: Boundary) -> usize {
-        self.storage_boundary_grid().col(h.get(), boundary)
+        self.storage_boundary_grid().col(self.state, h, boundary)
     }
 
     // ── Role-(a) accessors (read through the borrowed StateSpace handle) ─────────

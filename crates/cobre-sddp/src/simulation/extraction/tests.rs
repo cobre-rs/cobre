@@ -5714,17 +5714,11 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
             }
         })
         .collect();
-    let state = test_support::state_layout(1, 0);
     StageGeometry {
         turbine: turbine_start..spillage_start,
         spillage: spillage_start..evap_start,
         n_blks: k,
-        storage_boundary_grid: StorageBoundaryGrid::new(
-            state.storage_in.start,
-            state.storage.start,
-            storage_internal_start,
-            k,
-        ),
+        storage_boundary_grid: StorageBoundaryGrid::new(storage_internal_start, k),
         block_mode,
         evap_indices,
         evap_hydro_indices: vec![HydroSys::new(0)],

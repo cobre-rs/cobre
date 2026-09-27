@@ -304,6 +304,8 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
     put_usize(buf, state.z_inflow_rows().start);
     put_usize(buf, *n_blks);
 
+    put_usize(buf, state.storage_in.start);
+    put_usize(buf, state.storage.start);
     for field in storage_boundary_grid.canonical_fields() {
         put_usize(buf, field);
     }

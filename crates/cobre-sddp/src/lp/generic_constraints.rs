@@ -117,8 +117,8 @@ impl GenericResolverGeom<'_> {
     /// [`StorageBoundaryGrid::col`](crate::indexer::StorageBoundaryGrid::col),
     /// the single owner of the endpoints-vs-interior split.
     #[inline]
-    fn block_storage_col(&self, h: usize, boundary: Boundary) -> usize {
-        self.storage_boundary_grid.col(h, boundary)
+    fn block_storage_col(&self, h: HydroSys, boundary: Boundary) -> usize {
+        self.storage_boundary_grid.col(self.state, h, boundary)
     }
 }
 
@@ -537,7 +537,7 @@ fn resolve_hydro_storage_boundary(
             None => boundary_offset * geom.n_blks,
         };
         let boundary = Boundary::from_index(k, geom.n_blks);
-        vec![(geom.block_storage_col(pos, boundary), 1.0)]
+        vec![(geom.block_storage_col(HydroSys::new(pos), boundary), 1.0)]
     } else {
         vec![]
     }

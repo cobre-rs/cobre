@@ -58,6 +58,8 @@ use crate::lp::builder::{
     FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, StageTemplates, StateBox,
     TemplateBuildCtx, encode_stage_templates_facts, encode_time_value_facts,
 };
+#[cfg(test)]
+use crate::lp::indexer::HydroSys;
 use crate::lp::indexer::{
     AnticipatedPlants, BlockRowFamily, CutStateProjection, HydroCellIndex, StateDim, StateSpace,
     StudyDimensions,
@@ -882,6 +884,27 @@ pub fn state_layout_with_transit_buckets(
         anticipated_lead_stages,
         &effective_lag_count,
     )
+}
+
+/// Per-hydro inflow `extract_hydros`/`extract_hydro_bus_generation` read from
+/// `StageExtractionSpec::inflow_m3s_per_hydro`: the lag-0 incoming column when
+/// `state` carries PAR lags, `0.0` otherwise.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn inflow_m3s_per_hydro_from_primal(
+    state: &StateSpace,
+    primal: &[f64],
+    n_hydros: usize,
+) -> Vec<f64> {
+    (0..n_hydros)
+        .map(|h| {
+            if state.max_par_order > 0 {
+                primal[state.lag_incoming_col(0, HydroSys::new(h)).get()]
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 /// Bucket-only [`StageTemplate`]: `num_cols` free columns, zero rows. `n_hydro = 0`

@@ -54,11 +54,9 @@ use crate::hydro_models::{
 };
 use crate::lead_time::AnticipatedResolution;
 use crate::lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound};
-#[cfg(test)]
-use crate::lp::builder::StateBox;
 use crate::lp::builder::{
-    FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
-    encode_stage_templates_facts, encode_time_value_facts,
+    FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, StageTemplates, StateBox,
+    TemplateBuildCtx, encode_stage_templates_facts, encode_time_value_facts,
 };
 use crate::lp::indexer::{
     AnticipatedPlants, BlockRowFamily, CutStateProjection, HydroCellIndex, StateDim, StateSpace,
@@ -629,6 +627,230 @@ pub fn geometry_with_load_balance(
         load_balance: BlockRowFamily::per_block(load_start..load_start + n_buses * n_blks),
         n_blks,
         ..StageGeometry::default()
+    }
+}
+
+/// One [`StageGeometry`] per entry, `{ n_blks, ..StageGeometry::default() }` —
+/// every column/row family empty, addressing no equipment.
+#[must_use]
+pub fn equipment_free_geometry(block_counts: &[usize]) -> Vec<StageGeometry> {
+    block_counts
+        .iter()
+        .map(|&n_blks| StageGeometry {
+            n_blks,
+            ..StageGeometry::default()
+        })
+        .collect()
+}
+
+/// Test-only [`StageContext`] builder that derives `n_hydros` from the
+/// [`StateSpace`] it is given and `block_counts_per_stage` from each stage's
+/// [`StageGeometry::n_blks`], instead of setting either independently — the
+/// stage-LP builder contract's count-ownership rule, applied to test fixtures.
+/// Slice fields default to `&[]`; a setter exists only for a field some
+/// literal in the crate sets away from that default.
+pub struct StageContextFixture<'a> {
+    templates: &'a [StageTemplate],
+    state_boxes: &'a [StateBox],
+    geometry_per_stage: &'a [StageGeometry],
+    block_counts_per_stage: Vec<usize>,
+    n_hydros: usize,
+    cost_scale_factor: f64,
+    n_ncs: usize,
+    load_balance_row_starts: &'a [usize],
+    load_bus_indices: &'a [usize],
+    ncs_col_starts: &'a [usize],
+    ncs_stochastic_dense_col: &'a [usize],
+    ncs_stochastic_windows: &'a [(Option<i32>, Option<i32>)],
+    ncs_max_gen: &'a [f64],
+    ncs_allow_curtailment: &'a [bool],
+    discount_factors: &'a [f64],
+    cumulative_discount_factors: &'a [f64],
+    study_stage_ids: &'a [i32],
+}
+
+impl<'a> StageContextFixture<'a> {
+    /// Borrows `templates`/`state_boxes`/`geometry_per_stage` as given; derives
+    /// `n_hydros` from `state.hydro_count` and `block_counts_per_stage` from
+    /// each stage's `geometry_per_stage[t].n_blks`.
+    ///
+    /// # Panics
+    /// Panics if `geometry_per_stage.len() != templates.len()` — every stage
+    /// must have one geometry.
+    #[must_use]
+    pub fn new(
+        state: &StateSpace,
+        templates: &'a [StageTemplate],
+        state_boxes: &'a [StateBox],
+        geometry_per_stage: &'a [StageGeometry],
+    ) -> Self {
+        assert_eq!(
+            geometry_per_stage.len(),
+            templates.len(),
+            "every stage must have one geometry"
+        );
+        Self {
+            templates,
+            state_boxes,
+            block_counts_per_stage: geometry_per_stage.iter().map(|g| g.n_blks).collect(),
+            geometry_per_stage,
+            n_hydros: state.hydro_count,
+            cost_scale_factor: 1_000_000.0,
+            n_ncs: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            ncs_col_starts: &[],
+            ncs_stochastic_dense_col: &[],
+            ncs_stochastic_windows: &[],
+            ncs_max_gen: &[],
+            ncs_allow_curtailment: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            study_stage_ids: &[],
+        }
+    }
+
+    /// [`Self::new`], reading `templates`, `geometry_per_stage`,
+    /// `load_bus_indices`, `load_balance_row_starts`, `ncs_col_starts`, `n_ncs`
+    /// and `cost_scale_factor` from `stage_templates` — the same fields
+    /// [`StudySetup::stage_ctx`] reads from it.
+    ///
+    /// # Panics
+    /// See [`Self::new`].
+    #[must_use]
+    pub fn from_stage_templates(
+        state: &StateSpace,
+        stage_templates: &'a StageTemplates,
+        state_boxes: &'a [StateBox],
+    ) -> Self {
+        let mut fixture = Self::new(
+            state,
+            &stage_templates.templates,
+            state_boxes,
+            &stage_templates.geometry_per_stage,
+        );
+        fixture.load_bus_indices = &stage_templates.load_bus_indices;
+        fixture.load_balance_row_starts = &stage_templates.load_balance_row_starts;
+        fixture.ncs_col_starts = &stage_templates.ncs_col_starts;
+        fixture.n_ncs = stage_templates.n_ncs;
+        fixture.cost_scale_factor = stage_templates.cost_scale_factor;
+        fixture
+    }
+
+    /// Replaces the count derived from `state.hydro_count`, for a fixture
+    /// whose value disagrees with it.
+    #[must_use]
+    pub fn n_hydros_override(mut self, n: usize) -> Self {
+        self.n_hydros = n;
+        self
+    }
+
+    /// Replaces the per-stage block counts derived from `geometry_per_stage`,
+    /// for a fixture whose hand-built geometry disagrees with its own `n_blks`.
+    #[must_use]
+    pub fn block_counts_override(mut self, v: &[usize]) -> Self {
+        self.block_counts_per_stage = v.to_vec();
+        self
+    }
+
+    /// Sets [`StageContext::load_balance_row_starts`].
+    #[must_use]
+    pub fn load_balance_row_starts(mut self, v: &'a [usize]) -> Self {
+        self.load_balance_row_starts = v;
+        self
+    }
+
+    /// Sets [`StageContext::load_bus_indices`] (and, through it, the
+    /// `n_load_buses` [`Self::ctx`] derives).
+    #[must_use]
+    pub fn load_bus_indices(mut self, v: &'a [usize]) -> Self {
+        self.load_bus_indices = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_col_starts`].
+    #[must_use]
+    pub fn ncs_col_starts(mut self, v: &'a [usize]) -> Self {
+        self.ncs_col_starts = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_stochastic_dense_col`].
+    #[must_use]
+    pub fn ncs_stochastic_dense_col(mut self, v: &'a [usize]) -> Self {
+        self.ncs_stochastic_dense_col = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_stochastic_windows`].
+    #[must_use]
+    pub fn ncs_stochastic_windows(mut self, v: &'a [(Option<i32>, Option<i32>)]) -> Self {
+        self.ncs_stochastic_windows = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_max_gen`].
+    #[must_use]
+    pub fn ncs_max_gen(mut self, v: &'a [f64]) -> Self {
+        self.ncs_max_gen = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_allow_curtailment`].
+    #[must_use]
+    pub fn ncs_allow_curtailment(mut self, v: &'a [bool]) -> Self {
+        self.ncs_allow_curtailment = v;
+        self
+    }
+
+    /// Sets [`StageContext::discount_factors`].
+    #[must_use]
+    pub fn discount_factors(mut self, v: &'a [f64]) -> Self {
+        self.discount_factors = v;
+        self
+    }
+
+    /// Sets [`StageContext::cumulative_discount_factors`].
+    #[must_use]
+    pub fn cumulative_discount_factors(mut self, v: &'a [f64]) -> Self {
+        self.cumulative_discount_factors = v;
+        self
+    }
+
+    /// Sets [`StageContext::study_stage_ids`].
+    #[must_use]
+    pub fn study_stage_ids(mut self, v: &'a [i32]) -> Self {
+        self.study_stage_ids = v;
+        self
+    }
+
+    /// Lends a [`StageContext`] borrowing this fixture's fields.
+    #[must_use]
+    pub fn ctx(&self) -> StageContext<'_> {
+        StageContext {
+            templates: self.templates,
+            state_boxes: self.state_boxes,
+            geometry_per_stage: self.geometry_per_stage,
+            n_hydros: self.n_hydros,
+            cost_scale_factor: self.cost_scale_factor,
+            n_load_buses: self.load_bus_indices.len(),
+            load_balance_row_starts: self.load_balance_row_starts,
+            load_bus_indices: self.load_bus_indices,
+            block_counts_per_stage: &self.block_counts_per_stage,
+            ncs_col_starts: self.ncs_col_starts,
+            n_ncs: self.n_ncs,
+            ncs_stochastic_dense_col: self.ncs_stochastic_dense_col,
+            ncs_stochastic_windows: self.ncs_stochastic_windows,
+            anticipated_windows: &[],
+            study_stage_ids: self.study_stage_ids,
+            ncs_max_gen: self.ncs_max_gen,
+            ncs_allow_curtailment: self.ncs_allow_curtailment,
+            discount_factors: self.discount_factors,
+            cumulative_discount_factors: self.cumulative_discount_factors,
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        }
     }
 }
 
@@ -4224,5 +4446,152 @@ mod trunk_fan_tests {
             "trunk+fan fixture must train without error: {:?}",
             outcome.error
         );
+    }
+}
+
+#[cfg(test)]
+mod stage_context_fixture_tests {
+    use super::{
+        GeometryDims, StageContextFixture, StageGeometry, equipment_free_geometry, geometry,
+        geometry_with_load_balance, permissive_state_boxes, state_layout,
+        transit_bucket_only_template,
+    };
+    use crate::setup::node_graph::StageIdx;
+
+    #[test]
+    fn stage_context_fixture_derives_counts_from_owners() {
+        let state = state_layout(2, 0);
+        let templates = vec![transit_bucket_only_template(1, state.n_state); 2];
+        let state_boxes = permissive_state_boxes(state.n_state, 2);
+        let geometry_per_stage = vec![geometry_with_load_balance(0, 1, 3); 2];
+        let load_bus_indices = vec![0_usize];
+        let fixture =
+            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+                .load_bus_indices(&load_bus_indices);
+        let ctx = fixture.ctx();
+        assert_eq!(ctx.n_hydros, 2);
+        assert_eq!(ctx.n_load_buses, 1);
+        assert_eq!(ctx.block_count(StageIdx(0)), 3);
+        assert_eq!(ctx.block_count(StageIdx(1)), 3);
+    }
+
+    #[test]
+    fn stage_context_fixture_n_hydros_override_replaces_the_derived_count() {
+        let state = state_layout(1, 0);
+        let templates = vec![transit_bucket_only_template(1, state.n_state)];
+        let state_boxes = permissive_state_boxes(state.n_state, 1);
+        let geometry_per_stage = vec![StageGeometry::default()];
+        let fixture =
+            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+                .n_hydros_override(0);
+        assert_eq!(fixture.ctx().n_hydros, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "every stage must have one geometry")]
+    fn stage_context_fixture_rejects_a_geometry_per_stage_length_mismatch() {
+        let state = state_layout(1, 0);
+        let templates = vec![transit_bucket_only_template(1, state.n_state); 2];
+        let state_boxes = permissive_state_boxes(state.n_state, 2);
+        let geometry_per_stage = vec![StageGeometry::default()];
+        let _ = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage);
+    }
+
+    #[test]
+    fn equipment_free_geometry_matches_production_layout_of_an_empty_stage() {
+        fn assert_equipment_free(g: StageGeometry, expected_n_blks: usize) {
+            let StageGeometry {
+                turbine,
+                spillage,
+                diversion,
+                thermal,
+                anticipated_decision,
+                line_fwd,
+                line_rev,
+                deficit,
+                excess,
+                generation,
+                ncs_generation,
+                pumping_flow,
+                evap_indices,
+                inflow_slack,
+                withdrawal_slack_neg,
+                withdrawal_slack_pos,
+                outflow_below_slack,
+                outflow_above_slack,
+                turbine_below_slack,
+                generation_below_slack,
+                contract_import,
+                contract_export,
+                water_balance,
+                load_balance,
+                fpha,
+                filling_target,
+                filling_target_col,
+                filled_min_storage_floor,
+                filled_min_storage_floor_col,
+                n_blks,
+                storage_boundary_grid: _,
+                block_mode: _,
+                fpha_hydro_indices,
+                evap_hydro_indices,
+                filling_target_hydro_indices,
+                filled_min_storage_floor_hydro_indices,
+            } = g;
+            for r in [
+                &turbine,
+                &spillage,
+                &diversion,
+                &thermal,
+                &anticipated_decision,
+                &line_fwd,
+                &line_rev,
+                &deficit,
+                &excess,
+                &generation,
+                &ncs_generation,
+                &pumping_flow,
+                &inflow_slack,
+                &withdrawal_slack_neg,
+                &withdrawal_slack_pos,
+                &outflow_below_slack,
+                &outflow_above_slack,
+                &turbine_below_slack,
+                &generation_below_slack,
+                &contract_import,
+                &contract_export,
+                &fpha,
+                &filling_target,
+                &filling_target_col,
+                &filled_min_storage_floor,
+                &filled_min_storage_floor_col,
+            ] {
+                assert!(r.is_empty(), "every column/row range must be empty");
+            }
+            for f in [&water_balance, &load_balance] {
+                assert!(f.range().is_empty(), "every row family must be empty");
+            }
+            assert!(evap_indices.is_empty());
+            assert!(fpha_hydro_indices.is_empty());
+            assert!(evap_hydro_indices.is_empty());
+            assert!(filling_target_hydro_indices.is_empty());
+            assert!(filled_min_storage_floor_hydro_indices.is_empty());
+            assert_eq!(n_blks, expected_n_blks);
+        }
+
+        for n_blks in [1_usize, 3] {
+            let free = equipment_free_geometry(&[n_blks])
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_equipment_free(free, n_blks);
+
+            let dims = GeometryDims {
+                n_blks,
+                ..GeometryDims::default()
+            };
+            let production = geometry(&dims, vec![], &[], vec![]);
+            assert_equipment_free(production, n_blks);
+        }
     }
 }

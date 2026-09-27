@@ -2182,84 +2182,6 @@ mod anticipated_ring_matches_forward_propagation {
 
     const N_STAGES: usize = 3;
 
-    /// A [`StochasticContext`] with no hydros, matching this module's
-    /// hydro-free `state`/`StageContext` fixture (`state_layout_full(0, ..)`).
-    fn hydro_free_stochastic_context(n_stages: usize) -> cobre_stochastic::StochasticContext {
-        use std::collections::BTreeMap;
-
-        use chrono::NaiveDate;
-        use cobre_core::scenario::CorrelationModel;
-        use cobre_core::temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-            StageStateConfig,
-        };
-        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
-        };
-
-        let bus = Bus {
-            id: EntityId(0),
-            name: "B0".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        let make_stage = |idx: usize, id: i32| Stage {
-            index: idx,
-            id,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: false,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 1,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-        let stages: Vec<Stage> = (0..n_stages)
-            .map(|i| make_stage(i, i32::try_from(i).unwrap()))
-            .collect();
-        let correlation = CorrelationModel {
-            method: "spectral".to_string(),
-            profiles: BTreeMap::new(),
-            schedule: vec![],
-        };
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .stages(stages)
-            .correlation(correlation)
-            .build()
-            .unwrap();
-        build_stochastic_context(
-            &system,
-            42,
-            None,
-            &[],
-            &[],
-            OpeningTreeInputs::default(),
-            ClassSchemes {
-                inflow: Some(SamplingScheme::InSample),
-                load: Some(SamplingScheme::InSample),
-                ncs: Some(SamplingScheme::InSample),
-            },
-        )
-        .unwrap()
-    }
-
     /// Mock solver returning the `n`-th configured [`LpSolution`] on its `n`-th
     /// `solve()` call — one per stage, in order (unlike the file's shared
     /// [`MockSolver`], which always returns the same fixed solution).
@@ -2571,7 +2493,7 @@ mod anticipated_ring_matches_forward_propagation {
         let num_cols = state.theta + 1;
         let template = ring_template(num_cols, state.n_state);
         let templates = vec![template.clone(), template.clone(), template];
-        let stochastic = hydro_free_stochastic_context(N_STAGES);
+        let stochastic = test_support::hydro_free_stochastic_context(N_STAGES, 1);
         let horizon = HorizonMode::Finite {
             num_stages: N_STAGES,
         };

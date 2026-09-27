@@ -3323,83 +3323,6 @@ mod dcs_forward {
         )
     }
 
-    /// A hydro-free `StochasticContext`, matching this module's
-    /// `raw_noise: &[]` (`StageKey`) and `n_hydros_override(0)` fixture: the
-    /// DCS mechanics under test never read inflow noise.
-    fn hydro_free_stochastic_context(n_stages: usize) -> cobre_stochastic::StochasticContext {
-        use chrono::NaiveDate;
-        use cobre_core::scenario::CorrelationModel;
-        use cobre_core::temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-            StageStateConfig,
-        };
-        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
-        };
-        use std::collections::BTreeMap;
-
-        let bus = Bus {
-            id: EntityId(0),
-            name: "B0".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let make_stage = |idx: usize| Stage {
-            index: idx,
-            id: idx as i32,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: false,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 3,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-        let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
-        let correlation = CorrelationModel {
-            method: "spectral".to_string(),
-            profiles: BTreeMap::new(),
-            schedule: vec![],
-        };
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .stages(stages)
-            .correlation(correlation)
-            .build()
-            .unwrap();
-        build_stochastic_context(
-            &system,
-            42,
-            None,
-            &[],
-            &[],
-            OpeningTreeInputs::default(),
-            ClassSchemes {
-                inflow: Some(SamplingScheme::InSample),
-                load: Some(SamplingScheme::InSample),
-                ncs: Some(SamplingScheme::InSample),
-            },
-        )
-        .unwrap()
-    }
-
     fn dcs_params(start_iteration: u64) -> DcsParams {
         DcsParams {
             k1: None,
@@ -3439,7 +3362,8 @@ mod dcs_forward {
         let state = test_support::state_layout(1, 0);
         let core = fwd_core_template();
         let templates = vec![core.clone(), core.clone()];
-        let stochastic = hydro_free_stochastic_context(2);
+        // fwd_core_template's row 0 is the state coupling row, not the z-inflow row a 1-hydro state implies.
+        let stochastic = test_support::hydro_free_stochastic_context(2, 3);
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let fcf = fwd_pool();
 
@@ -3462,6 +3386,7 @@ mod dcs_forward {
             2
         ];
         let geometry = equipment_free_geometry(&[1usize, 1]);
+        // Paired with the hydro-free stochastic context above.
         let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
             .n_hydros_override(0)
             .discount_factors(&discount_factors);
@@ -3707,14 +3632,12 @@ mod transit_bucket_copy_gap {
     const Z_INFLOW_COL: usize = 4;
     const Z_INFLOW_VALUE: f64 = 55.0;
 
-    /// A hydro-free `StochasticContext`, matching this module's
-    /// `raw_noise: &[]` (`StageKey`) and `n_hydros_override(0)` fixture: the
-    /// bucket/anticipated-ring copy path under test never reads inflow noise
-    /// (the observed `z_inflow` primal comes from the mock solver's canned
-    /// solution, not from a noise-driven RHS patch).
-    fn hydro_free_stochastic_context() -> cobre_stochastic::StochasticContext {
+    /// A single-hydro `StochasticContext` matching this module's 1-hydro
+    /// `state`/template fixture.
+    fn one_hydro_stochastic_context() -> cobre_stochastic::StochasticContext {
         use chrono::NaiveDate;
-        use cobre_core::scenario::CorrelationModel;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::{CorrelationModel, InflowModel};
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
@@ -3735,6 +3658,52 @@ mod transit_bucket_copy_gap {
             }],
             excess_cost: 0.0,
         };
+        let mut hydro = Hydro {
+            unit_groups: Vec::new(),
+            id: EntityId(1),
+            name: "H1".to_string(),
+            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            downstream_id: None,
+            travel_time_hours: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            specific_productivity_mw_per_m3s_per_m: None,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+        hydro.declare_mirror_unit_group(EntityId(0));
         let stage = Stage {
             index: 0,
             id: 0,
@@ -3748,7 +3717,7 @@ mod transit_bucket_copy_gap {
             }],
             block_mode: BlockMode::Parallel,
             state_config: StageStateConfig {
-                storage: false,
+                storage: true,
                 inflow_lags: false,
             },
             risk_config: StageRiskConfig::Expectation,
@@ -3757,6 +3726,15 @@ mod transit_bucket_copy_gap {
                 noise_method: NoiseMethod::Saa,
             },
         };
+        let inflow_model = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        };
         let correlation = CorrelationModel {
             method: "spectral".to_string(),
             profiles: BTreeMap::new(),
@@ -3764,7 +3742,9 @@ mod transit_bucket_copy_gap {
         };
         let system = SystemBuilder::new()
             .buses(vec![bus])
+            .hydros(vec![hydro])
             .stages(vec![stage])
+            .inflow_models(vec![inflow_model])
             .correlation(correlation)
             .build()
             .unwrap();
@@ -3861,7 +3841,7 @@ mod transit_bucket_copy_gap {
             test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
         let template = transit_bucket_template();
         let templates = vec![template.clone()];
-        let stochastic = hydro_free_stochastic_context();
+        let stochastic = one_hydro_stochastic_context();
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let fcf = FutureCostFunction::new(1, state.n_state, 1, 1, &[0]);
 
@@ -3878,7 +3858,6 @@ mod transit_bucket_copy_gap {
 
         let fixture =
             StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-                .n_hydros_override(0)
                 .block_counts_override(&[1usize]);
         let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
@@ -3920,7 +3899,7 @@ mod transit_bucket_copy_gap {
             local_m: 0,
             num_stages: 1,
             iteration: 1,
-            raw_noise: &[],
+            raw_noise: &[0.0],
             basis_row_capacity: template.num_rows,
             terminal_has_boundary_cuts: false,
             pool: &fcf.pools[0],

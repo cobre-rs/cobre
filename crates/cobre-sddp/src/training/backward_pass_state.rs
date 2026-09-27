@@ -2111,7 +2111,8 @@ mod tests {
         state_exchange::ExchangeBuffers,
         test_support::{
             StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
-            permissive_state_boxes, state_layout, study_dims, trial_state_records,
+            hydro_free_stochastic_context, permissive_state_boxes, state_layout, study_dims,
+            trial_state_records,
         },
         trajectory::TrajectoryRecord,
         workspace::{
@@ -2301,6 +2302,31 @@ mod tests {
         }
     }
 
+    /// A hydro-free, state-free counterpart of [`minimal_template_1_0`] — a
+    /// single theta column, no rows.
+    fn zero_hydro_template() -> StageTemplate {
+        StageTemplate {
+            num_cols: 1,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: vec![0_i32, 0],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![0.0],
+            col_upper: vec![f64::INFINITY],
+            objective: vec![1.0],
+            row_lower: vec![],
+            row_upper: vec![],
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        }
+    }
+
     fn solution_1_0(objective: f64, dual_storage: f64) -> LpSolution {
         LpSolution {
             objective,
@@ -2312,13 +2338,17 @@ mod tests {
         }
     }
 
-    fn single_workspace(solver: MockSolver, n_state: usize) -> Vec<SolverWorkspace<MockSolver>> {
+    fn single_workspace(
+        solver: MockSolver,
+        n_state: usize,
+        hydro_count: usize,
+    ) -> Vec<SolverWorkspace<MockSolver>> {
         use crate::lp::builder::PatchBuffer;
         vec![SolverWorkspace {
             rank: 0,
             worker_id: 0,
             solver: ProfiledSolver::new(solver),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0, 0, 0, 0),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),
@@ -2610,7 +2640,7 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
@@ -2765,7 +2795,7 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         // The basis node axis is the canonical NODE count (production sizes it to
         // `node_graph.nodes.len()`), not `n_stages`: a fan's per-child basis keys on
         // sibling node positions that exceed the stage count.
@@ -3093,7 +3123,7 @@ mod tests {
         (0..count)
             .map(|i| {
                 let mut ws =
-                    single_workspace(MockSolver::always_ok(solution_1_0(100.0, -5.0)), n_state);
+                    single_workspace(MockSolver::always_ok(solution_1_0(100.0, -5.0)), n_state, 1);
                 let mut w = ws.remove(0);
                 w.worker_id = i as i32;
                 w
@@ -3286,86 +3316,6 @@ mod tests {
         (node_graph, stochastic)
     }
 
-    /// A hydro-free [`cobre_stochastic::StochasticContext`], for a graph whose
-    /// External leaf's `run_enumerated_backward_over_graph` harness carries no
-    /// `external_inflow_library`: an empty inflow noise class needs no library
-    /// (unlike [`make_stochastic_context`]'s single hydro).
-    fn hydro_free_stochastic_context(
-        n_stages: usize,
-        branching_factor: usize,
-    ) -> cobre_stochastic::StochasticContext {
-        use chrono::NaiveDate;
-        use cobre_core::scenario::CorrelationModel;
-        use cobre_core::temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-            StageStateConfig,
-        };
-        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
-        };
-        use std::collections::BTreeMap;
-
-        let bus = Bus {
-            id: EntityId(0),
-            name: "B0".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        let make_stage = |idx: usize| Stage {
-            index: idx,
-            id: idx as i32,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: false,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-        let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
-        let correlation = CorrelationModel {
-            method: "spectral".to_string(),
-            profiles: BTreeMap::new(),
-            schedule: vec![],
-        };
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .stages(stages)
-            .correlation(correlation)
-            .build()
-            .unwrap();
-        build_stochastic_context(
-            &system,
-            42,
-            None,
-            &[],
-            &[],
-            OpeningTreeInputs::default(),
-            ClassSchemes {
-                inflow: Some(SamplingScheme::InSample),
-                load: Some(SamplingScheme::InSample),
-                ncs: Some(SamplingScheme::InSample),
-            },
-        )
-        .unwrap()
-    }
-
     /// A hand-built trunk+fan graph mirroring [`trunk_fan_graph`], except the
     /// trunk's two terminal children are ONE External leaf (id 2, scenario
     /// column 0 — `is_external_terminal_leaf` eligible) and ONE Generated leaf
@@ -3437,8 +3387,14 @@ mod tests {
         comm: &C,
     ) -> (Result<BackwardResult, SddpError>, Vec<usize>) {
         let n_stages = 3_usize;
-        let state = state_layout(1, 0);
-        let templates = vec![minimal_template_1_0(); n_stages];
+        let n_hydros = stochastic.n_hydros();
+        let state = state_layout(n_hydros, 0);
+        let template = if n_hydros == 0 {
+            zero_hydro_template()
+        } else {
+            minimal_template_1_0()
+        };
+        let templates = vec![template; n_stages];
         let frozen_templates: Vec<StageTemplate> = (0..node_graph.n_pools)
             .map(|p| templates[node_graph.pool_stage[p].0].clone())
             .collect();
@@ -3458,14 +3414,13 @@ mod tests {
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(100.0, -5.0);
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, n_hydros);
         let mut basis_store = empty_basis_store(1, node_graph.nodes.len());
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, comm.size(), comm.size());
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
@@ -3650,8 +3605,8 @@ mod tests {
 
         let traversal = Traversal::resolve(&node_graph, true, 1);
         let mut enumerated_state = EnumeratedForwardScratch::default();
-        enumerated_state.set_out_state_for_test(root, node_graph.nodes.len(), &[10.0]);
-        enumerated_state.set_out_state_for_test(trunk, node_graph.nodes.len(), &[20.0]);
+        enumerated_state.set_out_state_for_test(root, node_graph.nodes.len(), &[]);
+        enumerated_state.set_out_state_for_test(trunk, node_graph.nodes.len(), &[]);
         assert!(
             enumerated_state
                 .fused_terminal_slice(external_leaf)
@@ -3953,7 +3908,7 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
@@ -4083,7 +4038,7 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
@@ -4210,7 +4165,7 @@ mod tests {
         // One worker whose DCS binding-count contribution bumps only slot 1 (the
         // resident binding cut), matching what the DCS path emits at iteration i.
         let mut workspaces =
-            single_workspace(MockSolver::always_ok(solution_1_0(0.0, 0.0)), n_state);
+            single_workspace(MockSolver::always_ok(solution_1_0(0.0, 0.0)), n_state, 1);
         let contrib = &mut workspaces[0].backward_accum.metadata_sync_contribution;
         contrib.clear();
         contrib.resize(pop, 0);

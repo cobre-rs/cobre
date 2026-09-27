@@ -4367,84 +4367,6 @@ fn run_one_trial_state_with_stores(
     Ok(workspaces)
 }
 
-/// A [`cobre_stochastic::StochasticContext`] with no hydros, matching a
-/// transit-bucket-only `state`/`StageContext` fixture (0 hydros, no inflow
-/// noise) rather than [`make_stochastic_context`]'s single hydro.
-fn hydro_free_stochastic_context(
-    n_stages: usize,
-    branching_factor: usize,
-) -> cobre_stochastic::StochasticContext {
-    use chrono::NaiveDate;
-    use cobre_core::scenario::CorrelationModel;
-    use cobre_core::temporal::{
-        Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig,
-    };
-    use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
-    use std::collections::BTreeMap;
-
-    let bus = Bus {
-        id: EntityId(0),
-        name: "B0".to_string(),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        deficit_segments: vec![DeficitSegment {
-            depth_mw: None,
-            cost_per_mwh: 1000.0,
-        }],
-        excess_cost: 0.0,
-    };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-    let make_stage = |idx: usize| Stage {
-        index: idx,
-        id: idx as i32,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-        season_id: Some(0),
-        blocks: vec![Block {
-            index: 0,
-            name: "S".to_string(),
-            duration_hours: 744.0,
-        }],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: false,
-            inflow_lags: false,
-        },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor,
-            noise_method: NoiseMethod::Saa,
-        },
-    };
-    let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
-    let correlation = CorrelationModel {
-        method: "spectral".to_string(),
-        profiles: BTreeMap::new(),
-        schedule: vec![],
-    };
-    let system = SystemBuilder::new()
-        .buses(vec![bus])
-        .stages(stages)
-        .correlation(correlation)
-        .build()
-        .unwrap();
-    build_stochastic_context(
-        &system,
-        42,
-        None,
-        &[],
-        &[],
-        OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
-    )
-    .unwrap()
-}
-
 /// Regression: the backward trial-point path (`patch_opening_bounds`) inherits
 /// the `PatchBuffer` single-owner fix — every travel-time bucket incoming column
 /// is pinned to `x_hat`, a value constant across the opening loop (the
@@ -4456,7 +4378,7 @@ fn patch_opening_bounds_pins_transit_bucket_incoming_columns_per_stage_visit() {
         test_support::state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, vec![]);
     assert_eq!(state.n_state, 2);
 
-    let stochastic = hydro_free_stochastic_context(1, 1);
+    let stochastic = test_support::hydro_free_stochastic_context(1, 1);
     let template = test_support::transit_bucket_only_template(state.theta + 1, state.n_state);
 
     let templates = vec![template];

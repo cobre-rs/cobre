@@ -14,7 +14,7 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 use cobre_comm::LocalBackend;
-use cobre_core::scenario::{InflowModel, LoadModel, SamplingScheme};
+use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel, SamplingScheme};
 use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, StageLagTransition, Transition};
 use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
@@ -1665,6 +1665,76 @@ fn in_sample_class_schemes() -> ClassSchemes {
         load: Some(SamplingScheme::InSample),
         ncs: Some(SamplingScheme::InSample),
     }
+}
+
+/// A hydro-free [`StochasticContext`] over `n_stages` single-block stages,
+/// each with the given `branching_factor` — one deficit-fallback bus, no hydros.
+///
+/// # Panics
+///
+/// Never in practice: the system and stochastic literals built here are
+/// fixed and internally consistent.
+#[allow(clippy::expect_used)]
+#[must_use]
+pub fn hydro_free_stochastic_context(
+    n_stages: usize,
+    branching_factor: usize,
+) -> StochasticContext {
+    let bus = Bus {
+        id: EntityId(0),
+        name: "B0".to_string(),
+        operational_start_date: ymd(2024, 1, 1),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 1000.0,
+        }],
+        excess_cost: 0.0,
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let make_stage = |idx: usize| Stage {
+        index: idx,
+        id: idx as i32,
+        start_date: ymd(2024, 1, 1),
+        end_date: ymd(2024, 2, 1),
+        season_id: Some(0),
+        blocks: vec![Block {
+            index: 0,
+            name: "S".to_string(),
+            duration_hours: 744.0,
+        }],
+        block_mode: BlockMode::Parallel,
+        state_config: StageStateConfig {
+            storage: false,
+            inflow_lags: false,
+        },
+        risk_config: StageRiskConfig::Expectation,
+        scenario_config: ScenarioSourceConfig {
+            branching_factor,
+            noise_method: NoiseMethod::Saa,
+        },
+    };
+    let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
+    let correlation = CorrelationModel {
+        method: "spectral".to_string(),
+        profiles: BTreeMap::new(),
+        schedule: vec![],
+    };
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .stages(stages)
+        .correlation(correlation)
+        .build()
+        .expect("hydro_free_stochastic_context: valid study");
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        OpeningTreeInputs::default(),
+        in_sample_class_schemes(),
+    )
+    .expect("hydro_free_stochastic_context: build_stochastic_context must succeed")
 }
 
 /// Reverse `nodes`/`transitions` in place when `reversed`: `build_node_graph`

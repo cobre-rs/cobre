@@ -103,7 +103,7 @@ use crate::{
     hydro_models::PrepareHydroModelsResult,
     inflow_method::InflowNonNegativityMethod,
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution, SpreadResolution},
-    lp::builder::{StateBox, build_stage_templates},
+    lp::builder::{StageGeometry, StateBox, build_stage_templates},
     lp::indexer::{
         AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
         StateSpace, StudyDimensions, ThermalSys,
@@ -731,16 +731,16 @@ impl StudySetup {
             ncs_max_gen,
             ncs_allow_curtailment,
         } = build_ncs_entity_data(system, &stage_templates, &stochastic)?;
-        let block_counts_per_stage: Vec<usize> = stage_templates
-            .block_hours_per_stage
+        let blocks_per_stage: Vec<usize> = stage_templates
+            .geometry_per_stage
             .iter()
-            .map(Vec::len)
+            .map(|g| g.n_blks)
             .collect();
-        let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
+        let max_blocks = blocks_per_stage.iter().copied().max().unwrap_or(0);
 
         let pumping_consumption_mw_per_m3s = build_pumping_consumption(system);
         let contract_prices_per_stage =
-            build_contract_prices_per_stage(system, n_stages, &block_counts_per_stage);
+            build_contract_prices_per_stage(system, &stage_templates.geometry_per_stage);
         let contract_is_import = build_contract_is_import(system);
 
         let anticipated_windows = build_anticipated_windows(system, &study_dims.anticipated_plants);
@@ -772,7 +772,7 @@ impl StudySetup {
                 pumping_consumption_mw_per_m3s,
                 contract_prices_per_stage,
                 contract_is_import,
-                block_counts_per_stage,
+                block_counts_per_stage: blocks_per_stage,
                 stage_lag_transitions,
                 noise_group_ids,
                 scaling_report,
@@ -2549,21 +2549,20 @@ fn build_pumping_consumption(system: &System) -> Vec<f64> {
 ///
 /// Outer index is the study-stage index `t` (0-based, matching
 /// [`ResolvedBounds`](cobre_core::ResolvedBounds)'s contract stage axis); each
-/// inner slice is flat with the per-stage stride `block_counts_per_stage[t]` —
-/// index `c * n_blks + blk`, `c` ID-sorted parallel to `system.contracts()`
+/// inner slice is flat with the per-stage stride `geometry_per_stage[t].n_blks`
+/// — index `c * n_blks + blk`, `c` ID-sorted parallel to `system.contracts()`
 /// (the same order `EntityCounts::contract_ids` is built in) — carrying
 /// `contract_bounds_at_block(c, t, blk).price_per_mwh`. Empty inner slices for
 /// a contract-free system or a zero-block stage.
 fn build_contract_prices_per_stage(
     system: &System,
-    n_stages: usize,
-    block_counts_per_stage: &[usize],
+    geometry_per_stage: &[StageGeometry],
 ) -> Vec<Vec<f64>> {
     let bounds = system.bounds();
     let n_contracts = system.contracts().len();
-    (0..n_stages)
+    (0..geometry_per_stage.len())
         .map(|t| {
-            let n_blks = block_counts_per_stage[t];
+            let n_blks = geometry_per_stage[t].n_blks;
             (0..n_contracts)
                 .flat_map(|c| {
                     (0..n_blks)

@@ -821,12 +821,12 @@ fn stage_ctx_fields_match_study_setup() {
         "templates length mismatch"
     );
     assert_eq!(
-        ctx.n_hydros,
+        setup.stage_data.state.hydro_count,
         setup.stage_data.entity_counts.hydro_ids.len(),
         "n_hydros mismatch"
     );
     assert_eq!(
-        ctx.block_counts_per_stage.len(),
+        ctx.geometry_per_stage.len(),
         setup.stage_data.block_counts_per_stage.len(),
         "block_counts_per_stage length mismatch"
     );
@@ -9487,8 +9487,7 @@ fn test_contract_prices_per_block_are_uniform_without_overlay() {
 
     let prices = build_contract_prices_per_stage(
         &system,
-        block_counts_per_stage.len(),
-        &block_counts_per_stage,
+        &test_support::equipment_free_geometry(&block_counts_per_stage),
     );
 
     assert_eq!(prices.len(), block_counts_per_stage.len());
@@ -9549,7 +9548,10 @@ fn test_contract_price_table_carries_per_block_override() {
 
     let system = system_with_contracts(&block_counts_per_stage, bounds);
 
-    let prices = build_contract_prices_per_stage(&system, 1, &block_counts_per_stage);
+    let prices = build_contract_prices_per_stage(
+        &system,
+        &test_support::equipment_free_geometry(&block_counts_per_stage),
+    );
 
     assert_eq!(
         prices[0],

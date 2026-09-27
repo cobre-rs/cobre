@@ -106,7 +106,7 @@ pub(crate) fn lower_bound_patch_buffer(
     k_max: usize,
     stage_ctx: &StageContext<'_>,
 ) -> PatchBuffer {
-    let n_load_buses = stage_ctx.n_load_buses;
+    let n_load_buses = stage_ctx.load_bus_indices.len();
     let max_blocks = if n_load_buses > 0 {
         stage_ctx.block_count(StageIdx(0))
     } else {
@@ -200,7 +200,7 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
     scratch: &mut ScratchBuffers,
     objectives_buf: &mut Vec<f64>,
 ) -> Result<(), SddpError> {
-    let n_hydros = ctx.n_hydros;
+    let n_hydros = training_ctx.state.hydro_count;
     let initial_state = training_ctx.initial_state;
     let opening_tree = training_ctx.stochastic.opening_tree();
     // Enumerate the ROOT NODE's own Ω, not the stage-0 generated tree: an External

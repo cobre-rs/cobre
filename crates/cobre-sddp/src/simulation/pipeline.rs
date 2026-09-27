@@ -215,11 +215,11 @@ fn build_row_lower_unscaled<'a>(
     row_scale: &[f64],
     load_rhs_buf: &[f64],
     scratch_buf: &'a mut Vec<f64>,
-    n_load_buses: usize,
     load_rows: BlockRowFamily,
     n_blks: usize,
     load_bus_indices: &[usize],
 ) -> &'a [f64] {
+    let n_load_buses = load_bus_indices.len();
     scratch_buf.clear();
     scratch_buf.reserve(template_row_lower.len());
 
@@ -586,10 +586,10 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
 /// `t`'s load-balance row family and block count, or the empty family with `0`
 /// blocks when the stage has no stochastic load buses.
 fn resolve_load_rows(ctx: &StageContext<'_>, t: StageIdx) -> (BlockRowFamily, usize) {
-    if ctx.n_load_buses > 0 {
-        (ctx.geometry_per_stage[t.0].load_balance, ctx.block_count(t))
-    } else {
+    if ctx.load_bus_indices.is_empty() {
         (BlockRowFamily::default(), 0)
+    } else {
+        (ctx.geometry_per_stage[t.0].load_balance, ctx.block_count(t))
     }
 }
 
@@ -641,9 +641,8 @@ pub(crate) fn extract_sim_stage_result(
     // Realized inflow Z_t from the z_h primal: total natural inflow (PAR lag
     // included), gross of withdrawal.
     inflow_m3s_buf.clear();
-    for h in 0..ctx.n_hydros {
-        inflow_m3s_buf.push(unscaled_primal[state.z_inflow.start + h]);
-    }
+    inflow_m3s_buf.extend_from_slice(&unscaled_primal[state.z_inflow.clone()]);
+    debug_assert_eq!(inflow_m3s_buf.len(), state.hydro_count);
     let blk_hrs = output
         .block_hours_per_stage
         .get(t.0)
@@ -654,7 +653,6 @@ pub(crate) fn extract_sim_stage_result(
         &ctx.template(t).row_scale,
         load_rhs_buf,
         row_lower_buf,
-        ctx.n_load_buses,
         load_rows,
         load_n_blks,
         ctx.load_bus_indices,

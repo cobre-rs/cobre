@@ -149,7 +149,7 @@ fn classify_stage_rows(
     base_row_count: usize,
 ) -> Vec<RowFamily> {
     let geom = &ctx.geometry_per_stage[stage];
-    let n_hydros = ctx.n_hydros;
+    let n_hydros = state_space.hydro_count;
     let n_blks = geom.n_blks;
     let total_rows = template.num_rows;
 

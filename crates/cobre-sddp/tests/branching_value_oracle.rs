@@ -466,7 +466,7 @@ fn water_binding_external_fan_final_lb_matches_extensive_form() {
     // η = 0 — reproduces training's demand exactly. A stochastic (std > 0) or external
     // load would make the two disagree on demand and contaminate the value gap.
     assert_eq!(
-        setup.stage_ctx().n_load_buses,
+        setup.stage_ctx().load_bus_indices.len(),
         0,
         "water-binding fan load must be deterministic (std = 0) so oracle == training on demand"
     );

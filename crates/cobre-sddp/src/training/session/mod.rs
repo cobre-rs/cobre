@@ -200,7 +200,7 @@ where
             WorkspaceSizing {
                 hydro_count: state.hydro_count,
                 max_par_order: state.max_par_order,
-                n_load_buses: stage_ctx.n_load_buses,
+                n_load_buses: stage_ctx.load_bus_indices.len(),
                 max_blocks: config.loop_config.max_blocks,
                 n_buckets: state.n_buckets,
                 downstream_par_order: stage_ctx.downstream_par_order,

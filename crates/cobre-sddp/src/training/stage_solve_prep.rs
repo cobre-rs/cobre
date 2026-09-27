@@ -138,10 +138,10 @@ impl StageSolvePrep {
             transform_inflow_noise(params.raw_noise, stage, pinned_state, training_ctx, scratch);
         }
 
-        let load_blocks = if ctx.n_load_buses > 0 {
-            ctx.block_count(stage)
-        } else {
+        let load_blocks = if ctx.load_bus_indices.is_empty() {
             0
+        } else {
+            ctx.block_count(stage)
         };
         transform_load_noise(
             params.raw_noise,
@@ -157,7 +157,7 @@ impl StageSolvePrep {
             &ctx.template(stage).col_scale,
             producer_box,
         );
-        if ctx.n_load_buses > 0 {
+        if !ctx.load_bus_indices.is_empty() {
             let grid = BlockGrid::new(load_blocks, training_ctx.study_dims.max_deficit_segments);
             patch_buf.fill_load_patches(
                 ctx.geometry_per_stage[stage.0].load_balance,

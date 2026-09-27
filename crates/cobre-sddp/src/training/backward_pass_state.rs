@@ -3286,11 +3286,95 @@ mod tests {
         (node_graph, stochastic)
     }
 
+    /// A hydro-free [`cobre_stochastic::StochasticContext`], for a graph whose
+    /// External leaf's `run_enumerated_backward_over_graph` harness carries no
+    /// `external_inflow_library`: an empty inflow noise class needs no library
+    /// (unlike [`make_stochastic_context`]'s single hydro).
+    fn hydro_free_stochastic_context(
+        n_stages: usize,
+        branching_factor: usize,
+    ) -> cobre_stochastic::StochasticContext {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::CorrelationModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+        use cobre_stochastic::context::{
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+        };
+        use std::collections::BTreeMap;
+
+        let bus = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let make_stage = |idx: usize| Stage {
+            index: idx,
+            id: idx as i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+        let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
+        let correlation = CorrelationModel {
+            method: "spectral".to_string(),
+            profiles: BTreeMap::new(),
+            schedule: vec![],
+        };
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .stages(stages)
+            .correlation(correlation)
+            .build()
+            .unwrap();
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            OpeningTreeInputs::default(),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
+    }
+
     /// A hand-built trunk+fan graph mirroring [`trunk_fan_graph`], except the
     /// trunk's two terminal children are ONE External leaf (id 2, scenario
     /// column 0 — `is_external_terminal_leaf` eligible) and ONE Generated leaf
     /// (id 3 — never eligible), so a single node's backward exercises both the
     /// fusion-eligible and the exhaustive-solve branch side by side.
+    ///
+    /// Hydro-free: `run_enumerated_backward_over_graph`'s harness declares no
+    /// `external_inflow_library`, and the External leaf's declared column must
+    /// resolve against an empty inflow noise class to avoid it.
     fn mixed_terminal_fan_graph() -> (NodeGraph, cobre_stochastic::StochasticContext) {
         use crate::setup::node_graph::build_node_graph;
         use cobre_core::HorizonGraph;
@@ -3315,7 +3399,7 @@ mod tests {
         }
 
         let n_stages = 3_usize;
-        let stochastic = make_stochastic_context(n_stages, 3);
+        let stochastic = hydro_free_stochastic_context(n_stages, 3);
         let study_stage_ids = [0_i32, 1, 2];
         let resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
         let graph = HorizonGraph {

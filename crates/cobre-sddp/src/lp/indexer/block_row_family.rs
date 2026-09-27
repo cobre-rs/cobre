@@ -9,7 +9,7 @@
 
 use std::ops::Range;
 
-use super::BlockIdx;
+use super::{BlockGrid, BlockIdx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum RowsPerEntity {
@@ -50,14 +50,13 @@ impl BlockRowFamily {
     /// `entity`'s row for `blk`, striding by the owner's `n_blks`.
     #[inline]
     pub(crate) fn row(self, entity: usize, blk: BlockIdx, n_blks: usize) -> usize {
-        let (stride, blk_offset) = match self.rows_per_entity {
-            RowsPerEntity::One => (1, 0),
+        let row = match self.rows_per_entity {
+            RowsPerEntity::One => self.start + entity,
             RowsPerEntity::PerBlock => {
                 debug_assert!(blk.get() < n_blks, "block {} out of 0..{n_blks}", blk.get());
-                (n_blks, blk.get())
+                BlockGrid::new(n_blks, 0).flat(self.start, entity, blk)
             }
         };
-        let row = self.start + entity * stride + blk_offset;
         debug_assert!(
             row < self.end,
             "row {row} out of {}..{}",

@@ -127,11 +127,9 @@ fn fill_storage_columns(
 fn fill_transit_bucket_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
     let state = layout.state;
     for range in super::entries::transit_bucket_plant_ranges(state) {
-        let col_base = state.transit_buckets_out.start + range.start;
         let ring = super::entries::transit_bucket_ring(state, range.clone());
         ring.freeze_masked_columns(
             &layout.rows.transit_bucket_row_pos[range],
-            col_base,
             (0.0, f64::INFINITY),
             bufs,
         );
@@ -146,11 +144,9 @@ fn fill_transit_bucket_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) 
 /// latching slot is bounded later by [`fill_anticipated_columns`], which
 /// overwrites this fill when active).
 fn fill_anticipated_slot_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
-    let base = layout.anticipated.col_anticipated_slots_out_start;
     let ring = DeliveryRing::anticipated(layout.state);
     ring.freeze_masked_columns(
         &layout.anticipated.anticipated_slot_row_pos,
-        base,
         (f64::NEG_INFINITY, f64::INFINITY),
         bufs,
     );

@@ -248,7 +248,6 @@ impl DeliveryRing {
     pub(super) fn freeze_masked_columns(
         &self,
         row_pos: &[Option<usize>],
-        col_base: usize,
         reachable_bound: (f64, f64),
         bufs: &mut ColumnBufs<'_>,
     ) {
@@ -259,7 +258,8 @@ impl DeliveryRing {
         );
         let (reachable_lower, reachable_upper) = reachable_bound;
         for (offset, pos) in row_pos.iter().enumerate() {
-            let col = col_base + offset;
+            let (slot, lane) = self.slot_lane_at(offset);
+            let col = self.out_col(slot, lane);
             if pos.is_some() {
                 bufs.col_lower[col] = reachable_lower;
                 bufs.col_upper[col] = reachable_upper;
@@ -473,7 +473,7 @@ mod tests {
                 col_upper: &mut col_upper,
                 objective: &mut objective,
             };
-            ring.freeze_masked_columns(&row_pos, 50, reachable_bound, &mut bufs);
+            ring.freeze_masked_columns(&row_pos, reachable_bound, &mut bufs);
 
             assert_eq!(col_lower[50], reachable_bound.0, "{label}: col 50 lower");
             assert_eq!(col_upper[50], reachable_bound.1, "{label}: col 50 upper");

@@ -378,8 +378,8 @@ pub(super) fn transit_bucket_plant_ranges(state: &StateSpace) -> Vec<Range<usize
 pub(super) fn transit_bucket_ring(state: &StateSpace, range: Range<usize>) -> DeliveryRing {
     let depth = range.len();
     DeliveryRing::new(
-        state.transit_buckets_out.start + range.start..state.transit_buckets_out.start + range.end,
-        state.transit_buckets_in.start + range.start..state.transit_buckets_in.start + range.end,
+        state.bucket_outgoing_block(range.clone()),
+        state.bucket_incoming_block(range),
         1,
         depth,
     )
@@ -484,13 +484,13 @@ fn fill_arc_release_block_entries(
         )
     });
     let ring = transit_bucket_ring(layout.state, range.clone());
+    let row_pos = &layout.rows.transit_bucket_row_pos[range];
     let row_transit_bucket_def_start = layout.rows.transit_bucket_definition.start;
     for (d, &stage_weight) in stage_weights.iter().enumerate().skip(1) {
         if stage_weight == 0.0 {
             continue;
         }
-        let slot = range.start + ring.slot_target(0, d);
-        let Some(pos) = layout.rows.transit_bucket_row_pos[slot] else {
+        let Some(pos) = row_pos[ring.slot_target(0, d)] else {
             // A dropped lag targets only a stage past the horizon, unreachable once
             // `boundary_present` un-caps the mask (sddp.md "Terminal credit deferred").
             debug_assert!(
@@ -733,13 +733,13 @@ fn fill_arc_release_chrono_block_entries(
         )
     });
     let ring = transit_bucket_ring(layout.state, range.clone());
+    let row_pos = &layout.rows.transit_bucket_row_pos[range];
     let row_transit_bucket_def_start = layout.rows.transit_bucket_definition.start;
     for (d, &deposit_d) in block_deposit.iter().enumerate().skip(1) {
         if deposit_d == 0.0 {
             continue;
         }
-        let slot = range.start + ring.slot_target(0, d);
-        let Some(pos) = layout.rows.transit_bucket_row_pos[slot] else {
+        let Some(pos) = row_pos[ring.slot_target(0, d)] else {
             // A dropped block deposit targets only a lag past the horizon, unreachable
             // once `boundary_present` un-caps the mask (sddp.md "Terminal credit deferred").
             debug_assert!(
@@ -1396,8 +1396,8 @@ pub(super) fn fill_ncs_load_balance_entries(
 }
 
 /// Fill the z-inflow definition row per hydro `z_h − Σ_l ψ_l·lag_in[h,l] = base_h + σ_h·η_h`:
-/// `+1.0` on `z_h`, `−ψ_l` on each nonzero lag column. The lag layout is lag-major
-/// (`inflow_lags.start + lag * n_h + h`), matching the water-balance AR-dynamics entries.
+/// `+1.0` on `z_h`, `−ψ_l` on each nonzero lag column, addressed via
+/// [`StateSpace::lag_incoming_col`].
 pub(super) fn fill_z_inflow_entries(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
@@ -1406,7 +1406,6 @@ pub(super) fn fill_z_inflow_entries(
 ) {
     let n_h = layout.n_h;
     let lag_order = layout.lag_order;
-    let col_inflow_lags_start = layout.col_inflow_lags_start();
 
     for h_idx in 0..n_h {
         let row = layout.z_inflow_row(HydroSys::new(h_idx));
@@ -1418,7 +1417,7 @@ pub(super) fn fill_z_inflow_entries(
             let psi = ctx.par_lp.psi_slice(stage_idx, h_idx);
             for (lag, &psi_val) in psi.iter().enumerate() {
                 if psi_val != 0.0 && lag < lag_order {
-                    let col = col_inflow_lags_start + lag * n_h + h_idx;
+                    let col = layout.state.lag_incoming_col(lag, h_idx).get();
                     col_entries[col].push((row, -psi_val));
                 }
             }

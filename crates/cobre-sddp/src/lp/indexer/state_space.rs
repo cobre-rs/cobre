@@ -668,6 +668,24 @@ impl StateSpace {
         self.state_to_lp_column(StateDim::new(self.state_dim_bucket_range().start + b))
     }
 
+    /// Outgoing-bucket column block for the sub-range `local` (relative to
+    /// [`Self::transit_buckets_out`]'s own start).
+    #[inline]
+    #[must_use]
+    pub(crate) fn bucket_outgoing_block(&self, local: Range<usize>) -> Range<usize> {
+        debug_assert!(local.end <= self.n_buckets);
+        self.transit_buckets_out.start + local.start..self.transit_buckets_out.start + local.end
+    }
+
+    /// Incoming-bucket column block for the sub-range `local`; see
+    /// [`Self::bucket_outgoing_block`].
+    #[inline]
+    #[must_use]
+    pub(crate) fn bucket_incoming_block(&self, local: Range<usize>) -> Range<usize> {
+        debug_assert!(local.end <= self.n_buckets);
+        self.transit_buckets_in.start + local.start..self.transit_buckets_in.start + local.end
+    }
+
     fn commitment_hold_state_dim(&self, plant: usize, m: usize) -> StateDim {
         StateDim::new(
             self.state_dim_commitment_hold_range().start

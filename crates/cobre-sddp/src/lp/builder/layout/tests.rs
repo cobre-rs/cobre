@@ -2229,10 +2229,10 @@ fn stage_layout_operational_violation_rows_are_contiguous_blocks() {
 /// The control region is `thermal` then `anticipated_decision` (2 cols) then
 /// `line_fwd` — the anticipated ring's outgoing slots live entirely in the
 /// state region. So `col_line_fwd_start` equals
-/// `col_anticipated_decision_start + n_anticipated`, and
-/// `col_anticipated_slots_out_start` is sourced from the state-region
-/// position (immediately after `transit_buckets_out`), not from the control
-/// region.
+/// `col_anticipated_decision_start + n_anticipated`, and the ring's own
+/// out-block start (`StateSpace::commit_out.start`) is sourced from the
+/// state-region position (immediately after `transit_buckets_out`), not from
+/// the control region.
 #[test]
 fn anticipated_decision_columns_placed_between_thermal_and_line_fwd() {
     let mut fixtures = ZeroEntityFixtures::new();
@@ -2267,9 +2267,8 @@ fn anticipated_decision_columns_placed_between_thermal_and_line_fwd() {
     // immediately after `transit_buckets_out` (N*(1+L) + B). Here N=0, L=0,
     // B=0 → the ring starts at 0.
     assert_eq!(
-        layout.anticipated.col_anticipated_slots_out_start, 0,
-        "col_anticipated_slots_out_start must equal the state-region offset \
-             N*(1+L) + B"
+        layout.state.commit_out.start, 0,
+        "commit_out.start must equal the state-region offset N*(1+L) + B"
     );
     assert_eq!(
         layout.equipment.line_fwd.start - layout.equipment.thermal.start,
@@ -2975,10 +2974,11 @@ impl AntFixturesWithNStages {
     }
 }
 
-/// `col_anticipated_slots_out_start` is sourced from the state-region
-/// position immediately after `transit_buckets_out` (before `z_inflow`),
-/// `col_line_fwd_start` follows `anticipated_decision` directly, and
-/// `n_anticipated_state_out_def_rows` counts both active plants at stage 0.
+/// The ring's own out-block start (`StateSpace::commit_out.start`) is sourced
+/// from the state-region position immediately after `transit_buckets_out`
+/// (before `z_inflow`), `col_line_fwd_start` follows `anticipated_decision`
+/// directly, and `n_anticipated_state_out_def_rows` counts both active plants
+/// at stage 0.
 ///
 /// Fixture: `n_anticipated=2`, `K=[2,3]`, `k_max=3`, `n_stages=6`,
 /// `stage_idx=0`, `N=0`, `L=0`, `B=0`. Both plants are active: `0+2=2 < 6` and
@@ -2997,7 +2997,7 @@ fn test_layout_state_out_block_adjacent_to_decision() {
 
     // The outgoing ring sits in the state region: N*(1+L) + B.
     assert_eq!(
-        layout.anticipated.col_anticipated_slots_out_start, 0,
+        layout.state.commit_out.start, 0,
         "outgoing-ring columns must be sourced from the state-region offset \
              N*(1+L) + B"
     );
@@ -3034,13 +3034,10 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
     assert_eq!(layout.anticipated.n_anticipated_state_out_def_rows, 0);
     // Column block stays allocated at the state-region offset regardless of
     // activity: N*(1+L) + B = 0.
-    assert_eq!(layout.anticipated.col_anticipated_slots_out_start, 0);
+    assert_eq!(layout.state.commit_out.start, 0);
 }
 
-/// Zero-anticipated layouts must not grow `num_cols` or emit def rows.
-///
-/// `col_anticipated_slots_out_start` must equal `col_anticipated_decision_start`
-/// when `n_anticipated == 0` (empty block; both starts coincide).
+/// Zero-anticipated layouts emit no `anticipated_state_out_def` rows.
 #[test]
 fn test_layout_no_anticipated_unchanged_num_cols() {
     let mut fixtures = ZeroEntityFixtures::new();
@@ -3049,11 +3046,6 @@ fn test_layout_no_anticipated_unchanged_num_cols() {
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
-    assert_eq!(
-        layout.anticipated.col_anticipated_slots_out_start,
-        layout.anticipated.col_anticipated_decision_start,
-        "col_anticipated_slots_out_start must equal col_anticipated_decision_start when n_anticipated=0"
-    );
     assert_eq!(layout.anticipated.n_anticipated_state_out_def_rows, 0);
 }
 

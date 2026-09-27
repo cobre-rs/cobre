@@ -2156,8 +2156,8 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             layout_b.anticipated.col_anticipated_decision_start,
             layout_a.col_anticipated_state_start(),
             layout_b.col_anticipated_state_start(),
-            layout_a.anticipated.col_anticipated_slots_out_start,
-            layout_b.anticipated.col_anticipated_slots_out_start,
+            layout_a.state.commit_out.start,
+            layout_b.state.commit_out.start,
             ctx_a.n_anticipated,
             ctx_a
                 .anticipated_resolution

@@ -925,7 +925,8 @@ fn test_anticipated_fishing_same_count_both_stages() {
 /// every slot a plant reaches under the HOLD geometry (interior carry OR active
 /// deposit), and frozen `[0, 0]` at a padding slot. Deposit slots are modular:
 /// slot `delivery mod k_max` (delivery = 0 + K_i). Slot-major layout:
-/// `col = col_anticipated_slots_out_start + slot * n_anticipated + plant`.
+/// `col = StateSpace::commit_out.start + slot * n_anticipated + plant`
+/// (`DeliveryRing::anticipated`'s `out_col(slot, plant)`).
 ///
 /// - col 0 (slot 0, plant 0): PADDING — plant 0 (K=1) delivers at stage 1
 ///   (slot `1 mod 2 = 1`); its delivery-2 (slot 0) is not yet decided at stage 0.

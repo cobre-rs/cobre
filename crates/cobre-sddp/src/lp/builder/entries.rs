@@ -2233,7 +2233,7 @@ mod zero_cost_tests {
         state_layout_for, state_layout_with_resolution, two_block_stage,
     };
     use super::{
-        build_stage_matrix_entries, fill_anticipated_fishing_entries,
+        DeliveryRing, build_stage_matrix_entries, fill_anticipated_fishing_entries,
         fill_anticipated_slot_definition_entries, fill_anticipated_state_out_def_entries,
     };
 
@@ -2744,7 +2744,7 @@ mod zero_cost_tests {
             .enumerate()
             .map(|(i, &lead)| {
                 let slot = lead % k_max;
-                layout0.anticipated.col_anticipated_slots_out_start + slot * 2 + i
+                DeliveryRing::anticipated(layout0.state).out_col(slot, i)
             })
             .collect();
         for (i, &col) in deposit_cols.iter().enumerate() {
@@ -2854,7 +2854,7 @@ mod zero_cost_tests {
         for (k, &lead) in leads.iter().enumerate() {
             let row = layout.anticipated.row_anticipated_state_out_def_start + k;
             let slot = lead % k_max; // delivery (0 + lead) mod k_max
-            let col_state_out = layout.anticipated.col_anticipated_slots_out_start + slot * 2 + k;
+            let col_state_out = DeliveryRing::anticipated(layout.state).out_col(slot, k);
             let col_decision = layout.anticipated.col_anticipated_decision_start + k;
 
             assert!(
@@ -2911,7 +2911,7 @@ mod zero_cost_tests {
         let (row_lower, row_upper) = fill_stage_rows(&ctx, &stage, 4, &layout);
         let col_entries = build_stage_matrix_entries(&ctx, &stage, 4, &layout);
 
-        let base = layout.anticipated.col_anticipated_slots_out_start;
+        let base = layout.state.commit_out.start;
         let row_start = layout.anticipated.row_anticipated_slot_definition_start;
 
         // Reachable slot 2: free column, a defining row exists, and the CSC
@@ -3178,7 +3178,7 @@ mod zero_cost_tests {
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
         fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
 
-        let out_start = layout.anticipated.col_anticipated_slots_out_start;
+        let out_start = layout.state.commit_out.start;
         let n_ant_state = layout.n_anticipated * layout.state.k_max;
         for (offset, entries) in col_entries[out_start..out_start + n_ant_state]
             .iter()
@@ -3224,7 +3224,7 @@ mod zero_cost_tests {
 
         let row = layout.anticipated.row_anticipated_state_out_def_start;
         let slot = 3_usize;
-        let col_state_out = layout.anticipated.col_anticipated_slots_out_start + slot * 2;
+        let col_state_out = DeliveryRing::anticipated(layout.state).out_col(slot, 0);
         let col_decision = layout.anticipated.col_anticipated_decision_start;
 
         assert!(
@@ -3305,8 +3305,9 @@ mod zero_cost_tests {
 
         let row = layout.anticipated.row_anticipated_state_out_def_start;
         let col_decision = layout.anticipated.col_anticipated_decision_start;
-        let col_slot0 = layout.anticipated.col_anticipated_slots_out_start;
-        let col_slot3 = layout.anticipated.col_anticipated_slots_out_start + 3;
+        let ring = DeliveryRing::anticipated(layout.state);
+        let col_slot0 = ring.out_col(0, 0);
+        let col_slot3 = ring.out_col(3, 0);
 
         assert!(
             col_entries[col_slot0]
@@ -3355,7 +3356,7 @@ mod zero_cost_tests {
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
         fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
 
-        let out_start = layout.anticipated.col_anticipated_slots_out_start;
+        let out_start = layout.state.commit_out.start;
         let n_ant_state = layout.n_anticipated * layout.state.k_max;
         for (offset, entries) in col_entries[out_start..out_start + n_ant_state]
             .iter()

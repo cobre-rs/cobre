@@ -3403,7 +3403,7 @@ fn two_thermal_col_thermal_start(lead_stages: usize) -> usize {
 /// - `n_ant_state = 2 * 2 = 4`
 /// - `theta = 8` (N=0 → N*(3+L) = 0; theta = 2 * n_ant_state, outgoing + incoming)
 /// - `col_thermal_start = 9` (decision_start = theta+1 = 9; 0 turbine/spillage/diversion)
-/// - `col_anticipated_slots_out_start = 0` (N*(1+L)=0, outgoing ring)
+/// - `StateSpace::commit_out.start = 0` (N*(1+L)=0, outgoing ring)
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 fn two_anticipated_thermal_system(n_stages: usize) -> cobre_core::System {
     use chrono::NaiveDate;
@@ -3781,7 +3781,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //
 // Two-anticipated-thermal system geometry:
 //   n_hydros=0, n_anticipated=2 (K_0=1, K_1=2), k_max=2, n_ant_state=4
-//   col_anticipated_slots_out_start = 0   (N*(1+L) = 0, outgoing ring)
+//   StateSpace::commit_out.start = 0   (N*(1+L) = 0, outgoing ring)
 //   theta = 2 * n_ant_state = 8  (outgoing + incoming ring blocks)
 //   decision_start = 9
 //   col_thermal_start = 9  (0 turbine/spillage/diversion cols)
@@ -3789,7 +3789,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //
 // One-anticipated-thermal system geometry (K=2):
 //   n_hydros=0, n_anticipated=1, k_max=2, n_ant_state=2
-//   col_anticipated_slots_out_start = 0
+//   StateSpace::commit_out.start = 0
 //   col_anticipated_decision_start = anticipated_decision_col(2) = 6
 
 // ─── Anticipated Thermals K=1/2/3 Roundtrip ────────────────────────────────

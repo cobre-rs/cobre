@@ -195,16 +195,6 @@ pub(crate) struct AnticipatedLayout {
     /// columns (`col_anticipated_decision_start + local_idx`). Equals
     /// `col_thermal_end`.
     pub(crate) col_anticipated_decision_start: usize,
-    /// Start of the merged [`StateSpace::commit_out`]/[`StateSpace::commit_in`]
-    /// column block (the `A * k_max` in-study anticipated-ring slots,
-    /// slot-major/plant-minor). Sourced from `StateSpace::commit_out.start`, so
-    /// the offset is stage-invariant — keeping the global stage-0 cut map on the
-    /// correct column at every stage regardless of this stage's block count.
-    /// Read only by tests; production addresses the ring through
-    /// [`DeliveryRing::anticipated`](super::delivery_ring::DeliveryRing::anticipated)'s
-    /// own out block, never this copy.
-    #[cfg(test)]
-    pub(crate) col_anticipated_slots_out_start: usize,
     /// Start of the `anticipated_state_out_def` equality row block: one row
     /// per plant with a genuine, ACTIVE decision this stage
     /// (`PointResolution::genuine_decisions_at(stage_idx).next()`, AND the
@@ -263,24 +253,6 @@ pub(crate) struct AnticipatedLayout {
     /// the study horizon, or is not yet ready
     /// (`PointResolution::is_ready_at`). Length `n_anticipated * k_max`.
     pub(crate) anticipated_slot_row_pos: Vec<Option<usize>>,
-}
-
-/// [`AnticipatedLayout::col_anticipated_slots_out_start`]'s test-only value:
-/// the commitment-hold outgoing columns' stage-invariant state-region
-/// position (`state.commit_out.start`), NOT `thermal_end + n_anticipated`, so
-/// the global stage-0 cut map lands on the correct column even when this
-/// stage's block count differs from stage 0's. `commit_out` collapses to the
-/// literal `0..0` only when the in-study anticipated ring is empty,
-/// mirroring the same `0..0`-vs-cursor-position fallback every other
-/// optional-block start already needs — `thermal_end` in that case.
-#[cfg(test)]
-#[must_use]
-fn resolve_col_anticipated_slots_out_start(state: &StateSpace, thermal_end: usize) -> usize {
-    if state.commit_out.is_empty() {
-        thermal_end
-    } else {
-        state.commit_out.start
-    }
 }
 
 /// Equipment column ranges and their block-start cursors: every dispatchable
@@ -1468,11 +1440,6 @@ impl<'a> StageLayout<'a> {
 
         let anticipated = AnticipatedLayout {
             col_anticipated_decision_start: thermal_end,
-            #[cfg(test)]
-            col_anticipated_slots_out_start: resolve_col_anticipated_slots_out_start(
-                state,
-                thermal_end,
-            ),
             row_anticipated_state_out_def_start,
             n_anticipated_state_out_def_rows,
             anticipated_decision_row_pos,

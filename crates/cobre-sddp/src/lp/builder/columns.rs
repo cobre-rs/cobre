@@ -3427,7 +3427,7 @@ mod anticipated_objective_tests {
     use super::super::test_support::{
         state_layout_for, state_layout_with_resolution, two_block_stage,
     };
-    use super::{StageLayout, TemplateBuildCtx, fill_stage_columns};
+    use super::{DeliveryRing, StageLayout, TemplateBuildCtx, fill_stage_columns};
     use crate::indexer::{AnticipatedPlants, HydroCellIndex};
 
     const N_STAGES: usize = 6;
@@ -3686,7 +3686,7 @@ mod anticipated_objective_tests {
         // The active plant's newest ring slot is open (active), confirming the
         // merged fill ran the active branch. K_MAX == 1 here, so the newest
         // slot is the ring's own start (no per-plant offset needed).
-        let state_out_col = layout.anticipated.col_anticipated_slots_out_start;
+        let state_out_col = DeliveryRing::anticipated(layout.state).out_col(0, 0);
         assert_eq!(col_upper[state_out_col], f64::INFINITY);
     }
 

@@ -441,7 +441,7 @@ pub(super) fn fill_operational_violation_rows(
     // affect the result; the descriptor order is nonetheless pinned to the canonical
     // row-region order so the write order stays auditable against the layout.
     for h_idx in 0..layout.n_h {
-        let hydro = HydroSys::new(h_idx);
+        let hydro_sys = HydroSys::new(h_idx);
         for blk in 0..layout.n_blks {
             let b = BlockIdx::new(blk);
             let hb = ctx
@@ -450,12 +450,12 @@ pub(super) fn fill_operational_violation_rows(
                 .hydro_bounds_at_block(h_idx, stage_idx, blk);
             let families = [
                 (
-                    layout.min_outflow_row(hydro, b),
+                    layout.min_outflow_row(hydro_sys, b),
                     hb.min_outflow_m3s,
                     f64::INFINITY,
                 ),
                 (
-                    layout.max_outflow_row(hydro, b),
+                    layout.max_outflow_row(hydro_sys, b),
                     f64::NEG_INFINITY,
                     hb.max_outflow_m3s.unwrap_or(f64::INFINITY),
                 ),

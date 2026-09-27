@@ -617,7 +617,10 @@ impl StateSpace {
         (r % self.k_max) * self.n_anticipated + plant
     }
 
-    fn storage_state_dim(&self, h: usize) -> StateDim {
+    /// The storage state dimension for hydro `h` (`state_dim_storage_range().start + h`).
+    #[inline]
+    #[must_use]
+    pub(crate) fn storage_state_dim(&self, h: usize) -> StateDim {
         debug_assert!(h < self.hydro_count);
         StateDim::new(self.state_dim_storage_range().start + h)
     }
@@ -634,12 +637,20 @@ impl StateSpace {
         self.state_to_lp_column(self.storage_state_dim(h))
     }
 
+    /// The lag-major state dimension for hydro `h` at `lag`
+    /// (`state_dim_lag_range().start + lag * hydro_count + h`).
+    #[inline]
+    #[must_use]
+    pub(crate) fn lag_state_dim(&self, lag: usize, h: HydroSys) -> StateDim {
+        debug_assert!(lag < self.max_par_order && h.get() < self.hydro_count);
+        StateDim::new(self.state_dim_lag_range().start + lag * self.hydro_count + h.get())
+    }
+
     /// Incoming pinned lag column of hydro `h` at `lag` (lag-major block).
     #[must_use]
     pub(crate) fn lag_incoming_col(&self, lag: usize, h: usize) -> InCol {
         debug_assert!(lag < self.max_par_order && h < self.hydro_count);
-        let start = self.state_dim_lag_range().start;
-        self.state_to_lp_incoming_column(StateDim::new(start + lag * self.hydro_count + h))
+        self.state_to_lp_incoming_column(self.lag_state_dim(lag, HydroSys::new(h)))
     }
 
     /// Incoming pinned bucket column of bucket `b`
@@ -1820,6 +1831,19 @@ mod tests {
                 j,
                 "incoming classification must round-trip state dim {j}"
             );
+        }
+    }
+
+    /// `lag_state_dim` is lag-major, right after the storage region.
+    #[test]
+    fn lag_state_dim_is_lag_major_after_storage() {
+        let idx = finalized(3, 2, 0, 0, vec![]);
+        assert_eq!(idx.lag_state_dim(0, HydroSys::new(0)).get(), 3);
+        assert_eq!(idx.lag_state_dim(1, HydroSys::new(2)).get(), 8);
+        for l in 0..idx.max_par_order {
+            for h in 0..idx.hydro_count {
+                assert_eq!(idx.lag_state_dim(l, HydroSys::new(h)).get(), 3 + l * 3 + h);
+            }
         }
     }
 

@@ -96,9 +96,9 @@ pub(crate) fn apply_bucket_col_scale(col_scale: &mut [f64], state_layout: &State
         col_scale.len()
     );
     for (b, &(plant_idx, _lag)) in state_layout.transit_bucket_column_order.iter().enumerate() {
-        let d = col_scale[state_layout.storage.start + plant_idx];
-        col_scale[state_layout.transit_buckets_out.start + b] = d;
-        col_scale[state_layout.transit_buckets_in.start + b] = d;
+        let d = col_scale[state_layout.storage_outgoing_col(plant_idx).get()];
+        col_scale[state_layout.bucket_outgoing_col(b).get()] = d;
+        col_scale[state_layout.bucket_incoming_col(b).get()] = d;
     }
 }
 

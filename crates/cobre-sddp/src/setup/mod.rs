@@ -105,8 +105,8 @@ use crate::{
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution, SpreadResolution},
     lp::builder::{StateBox, build_stage_templates},
     lp::indexer::{
-        AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, StateSpace,
-        StudyDimensions, ThermalSys,
+        AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
+        StateSpace, StudyDimensions, ThermalSys,
     },
     risk_measure::{RiskMeasure, uniform_effective_measure},
     simulation::EntityCounts,
@@ -2674,7 +2674,7 @@ fn build_initial_state(
 
     for hs in &ic.storage {
         if let Some(&idx) = hydro_positions.get(&hs.hydro_id.0) {
-            state[idx] = hs.value_hm3;
+            state[layout.storage_state_dim(idx).get()] = hs.value_hm3;
         }
     }
 
@@ -2684,7 +2684,7 @@ fn build_initial_state(
         // the two collections or re-index the column — a separate index would
         // silently desync from that pin.
         if let Some(&idx) = hydro_positions.get(&hs.hydro_id.0) {
-            state[idx] = hs.value_hm3;
+            state[layout.storage_state_dim(idx).get()] = hs.value_hm3;
         }
     }
 
@@ -2693,8 +2693,8 @@ fn build_initial_state(
         let l = layout.max_par_order;
         for idx in 0..n_h {
             for lag in 0..l {
-                let slot = layout.inflow_lags.start + lag * n_h + idx;
-                state[slot] = derived_lag_values[idx * l + lag];
+                state[layout.lag_state_dim(lag, HydroSys::new(idx)).get()] =
+                    derived_lag_values[idx * l + lag];
             }
         }
     }

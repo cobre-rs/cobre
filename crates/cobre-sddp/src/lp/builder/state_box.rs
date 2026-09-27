@@ -16,6 +16,8 @@ use crate::indexer::{
 };
 use crate::time_value::TimeValue;
 
+use super::delivery_ring::DeliveryRing;
+
 /// Admissible interval per outgoing state dimension, both fields length
 /// [`StateSpace::n_state`]. A reachable dimension has `lower <= upper` by
 /// construction; an inverted or empty box is a load-time validator concern, not
@@ -123,6 +125,7 @@ fn fill_commitment_hold_box(
     let points: Vec<_> = (0..layout.n_anticipated)
         .map(|plant| anticipated_resolution_for(layout, AnticipatedLocal::new(plant), n_stages))
         .collect();
+    let ring = DeliveryRing::anticipated(layout);
 
     for depth in 0..layout.k_max {
         let r = stage_idx + depth + 1;
@@ -161,7 +164,7 @@ fn fill_commitment_hold_box(
             };
 
             if let Some((min_mw, max_mw)) = bound {
-                let j = layout.commit_out.start + slot * layout.n_anticipated + local_idx;
+                let j = ring.out_col(slot, local_idx);
                 lower[j] = min_mw;
                 upper[j] = max_mw;
             }

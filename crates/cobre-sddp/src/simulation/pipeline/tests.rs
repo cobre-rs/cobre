@@ -953,8 +953,8 @@ fn simulation_load_patches_applied() {
 /// `load_rhs_buf` remains empty and `forward_patch_count` equals the number of
 /// z-inflow patches filled.
 ///
-/// With `ctx.n_hydros = 0`, `fill_z_inflow_patches` fills zero patches (an empty
-/// `z_inflow_rhs`), so `forward_patch_count = 0`.
+/// With one hydro, `fill_z_inflow_patches` fills exactly one z-inflow patch, so
+/// `forward_patch_count` equals `state.hydro_count`.
 #[test]
 fn simulation_no_load_buses_unchanged() {
     let n_stages = 1;
@@ -991,7 +991,7 @@ fn simulation_no_load_buses_unchanged() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            n_hydros: 0,
+            n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
             load_balance_row_starts: &[],
@@ -1073,8 +1073,8 @@ fn simulation_no_load_buses_unchanged() {
     );
     assert_eq!(
         workspaces[0].patch_buf.forward_patch_count(),
-        0,
-        "forward_patch_count must be 0 when n_load_buses=0 and n_hydros=0, got {}",
+        state.hydro_count,
+        "forward_patch_count must equal the z-inflow patches filled, got {}",
         workspaces[0].patch_buf.forward_patch_count()
     );
 }
@@ -1133,7 +1133,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
             state_boxes: &state_boxes,
             geometry_per_stage: &[],
             templates: &templates,
-            n_hydros: 0,
+            n_hydros: 1,
             cost_scale_factor: 1_000_000.0,
             n_load_buses: 0,
             load_balance_row_starts: &[],

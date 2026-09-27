@@ -12,12 +12,12 @@ use std::ops::Range;
 use chrono::NaiveDate;
 use cobre_core::{
     AffineBound, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, CascadeTopology,
-    ConstraintExpression, ContractBlockBounds, EntityId, FillingConfig, GenericConstraint, Hydro,
-    HydroBlockBounds, HydroGenerationModel, HydroStageBounds, LineBlockBounds, LinearTerm,
-    NoiseMethod, NonControllableSource, PumpingBlockBounds, PumpingStation, ResolvedBounds,
-    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, ScenarioSourceConfig, SlackConfig, Stage, StageRiskConfig, StageStateConfig,
-    ThermalBlockBounds, ThermalStageBounds, VariableRef,
+    ConstraintExpression, ContractBlockBounds, ContractType, EntityId, FillingConfig,
+    GenericConstraint, Hydro, HydroBlockBounds, HydroGenerationModel, HydroStageBounds,
+    LineBlockBounds, LinearTerm, NoiseMethod, NonControllableSource, PumpingBlockBounds,
+    PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
+    ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, ScenarioSourceConfig, SlackConfig,
+    Stage, StageRiskConfig, StageStateConfig, ThermalBlockBounds, ThermalStageBounds, VariableRef,
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
@@ -3534,6 +3534,73 @@ fn contract_columns_reserve_import_then_export_blocks() {
         col_pumping_end + 9,
         "generic-slack start shifts by (2 + 1) * 3 == 9"
     );
+}
+
+/// Every contract column, import and export, is addressed exactly once by the
+/// block-major oracle `range.start + slot * n_blks + blk`.
+#[test]
+fn contract_col_covers_each_contract_column_once() {
+    let n_pumping = 2_usize;
+    let n_blks = 3_usize;
+    let fixtures = PumpingFixtures::new(n_pumping, 3);
+    let ctx = TemplateBuildCtx {
+        n_contract_import: 2,
+        n_contract_export: 1,
+        ..fixtures.make_ctx()
+    };
+
+    let stage = PumpingFixtures::stage_with_blocks(n_blks);
+    let state = state_layout_for(&ctx);
+    let layout = StageLayout::new(&ctx, &state, &stage, 0);
+
+    let mut hits = vec![0_usize; layout.num_cols];
+    let mut compared = 0_usize;
+    for (contract_type, range, n) in [
+        (
+            ContractType::Import,
+            layout.equipment.contract_import.clone(),
+            2,
+        ),
+        (
+            ContractType::Export,
+            layout.equipment.contract_export.clone(),
+            1,
+        ),
+    ] {
+        for slot in 0..n {
+            for blk in 0..n_blks {
+                let base = match contract_type {
+                    ContractType::Import => layout.equipment.col_contract_import_start,
+                    ContractType::Export => layout.equipment.col_contract_export_start,
+                };
+                let col = layout.block_grid().flat(base, slot, BlockIdx::new(blk));
+                let oracle = range.start + slot * n_blks + blk;
+                assert_eq!(
+                    col, oracle,
+                    "{contract_type:?} slot {slot} blk {blk}: builder address must match the oracle"
+                );
+                assert!(
+                    range.contains(&col),
+                    "{contract_type:?} slot {slot} blk {blk}: address must lie in its own range"
+                );
+                hits[col] += 1;
+                compared += 1;
+            }
+        }
+    }
+
+    for (c, &hit) in hits.iter().enumerate() {
+        let expected = usize::from(
+            layout.equipment.contract_import.contains(&c)
+                || layout.equipment.contract_export.contains(&c),
+        );
+        assert_eq!(hit, expected, "column {c}");
+    }
+    assert_eq!(
+        compared,
+        layout.equipment.contract_import.len() + layout.equipment.contract_export.len()
+    );
+    assert_eq!(compared, 9);
 }
 
 /// The shared `commissioning_active` predicate gates on

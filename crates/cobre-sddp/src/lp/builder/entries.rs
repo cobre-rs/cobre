@@ -1437,51 +1437,43 @@ pub(super) fn fill_operational_violation_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_blks = layout.n_blks;
-    let grid = layout.block_grid();
 
     for h_idx in 0..layout.n_h {
+        let hydro = HydroSys::new(h_idx);
         for blk in (0..n_blks).map(BlockIdx::new) {
-            let row = grid.flat(
-                layout.slack.oper_violation.min_outflow_rows.start,
-                h_idx,
-                blk,
-            );
-            for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
+            let row = layout.min_outflow_row(hydro, blk);
+            for c in ctx.hydro_cell_index.cells_of(hydro) {
                 let col_q = layout.turbine_col(HydroCell::new(c), blk);
                 col_entries[col_q].push((row, 1.0));
             }
-            let col_s = layout.spillage_col(HydroSys::new(h_idx), blk);
+            let col_s = layout.spillage_col(hydro, blk);
             col_entries[col_s].push((row, 1.0));
             // Diversion `d` is intentionally NOT coupled into either outflow row —
             // both bind the non-diverted `q + s` (see the fn doc); re-adding it is
             // the wrong-but-compiling bound.
-            let col_slack = layout.outflow_below_col(HydroSys::new(h_idx), blk);
+            let col_slack = layout.outflow_below_col(hydro, blk);
             col_entries[col_slack].push((row, 1.0));
         }
 
         for blk in (0..n_blks).map(BlockIdx::new) {
-            let row = grid.flat(
-                layout.slack.oper_violation.max_outflow_rows.start,
-                h_idx,
-                blk,
-            );
-            for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
+            let row = layout.max_outflow_row(hydro, blk);
+            for c in ctx.hydro_cell_index.cells_of(hydro) {
                 let col_q = layout.turbine_col(HydroCell::new(c), blk);
                 col_entries[col_q].push((row, 1.0));
             }
-            let col_s = layout.spillage_col(HydroSys::new(h_idx), blk);
+            let col_s = layout.spillage_col(hydro, blk);
             col_entries[col_s].push((row, 1.0));
-            let col_slack = layout.outflow_above_col(HydroSys::new(h_idx), blk);
+            let col_slack = layout.outflow_above_col(hydro, blk);
             col_entries[col_slack].push((row, -1.0));
         }
 
         // Per-cell, not plant-keyed: each cell's own min-turbine row couples ONLY
         // its own turbine column to its own slack column — never the plant's other
         // cells (see fill_operational_violation_rows for the matching per-cell RHS).
-        for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
+        for c in ctx.hydro_cell_index.cells_of(hydro) {
             let cell = HydroCell::new(c);
             for blk in (0..n_blks).map(BlockIdx::new) {
-                let row = grid.flat(layout.slack.oper_violation.min_turbine_rows.start, c, blk);
+                let row = layout.min_turbine_row(cell, blk);
                 let col_q = layout.turbine_col(cell, blk);
                 col_entries[col_q].push((row, 1.0));
                 let col_slack = layout.turbine_below_col(cell, blk);
@@ -1499,18 +1491,10 @@ pub(super) fn fill_operational_violation_entries(
         match layout.stage_production_role(ctx.production_models, h_idx, stage_idx) {
             StageProductionRole::Fpha(local_fpha_idx) => {
                 let fpha_base = layout.fpha_local_first_cell(local_fpha_idx).get();
-                for (offset, c) in ctx
-                    .hydro_cell_index
-                    .cells_of(HydroSys::new(h_idx))
-                    .enumerate()
-                {
+                for (offset, c) in ctx.hydro_cell_index.cells_of(hydro).enumerate() {
                     let cell = HydroCell::new(c);
                     for blk in (0..n_blks).map(BlockIdx::new) {
-                        let row = grid.flat(
-                            layout.slack.oper_violation.min_generation_rows.start,
-                            c,
-                            blk,
-                        );
+                        let row = layout.min_generation_row(cell, blk);
                         let col_g =
                             layout.generation_col(FphaCellLocal::new(fpha_base + offset), blk);
                         col_entries[col_g].push((row, 1.0));
@@ -1520,14 +1504,10 @@ pub(super) fn fill_operational_violation_entries(
                 }
             }
             StageProductionRole::Constant(rho) => {
-                for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
+                for c in ctx.hydro_cell_index.cells_of(hydro) {
                     let cell = HydroCell::new(c);
                     for blk in (0..n_blks).map(BlockIdx::new) {
-                        let row = grid.flat(
-                            layout.slack.oper_violation.min_generation_rows.start,
-                            c,
-                            blk,
-                        );
+                        let row = layout.min_generation_row(cell, blk);
                         let col_q = layout.turbine_col(cell, blk);
                         col_entries[col_q].push((row, rho));
                         let col_slack = layout.generation_below_col(cell, blk);
@@ -1536,14 +1516,10 @@ pub(super) fn fill_operational_violation_entries(
                 }
             }
             StageProductionRole::Dormant => {
-                for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
+                for c in ctx.hydro_cell_index.cells_of(hydro) {
                     let cell = HydroCell::new(c);
                     for blk in (0..n_blks).map(BlockIdx::new) {
-                        let row = grid.flat(
-                            layout.slack.oper_violation.min_generation_rows.start,
-                            c,
-                            blk,
-                        );
+                        let row = layout.min_generation_row(cell, blk);
                         let col_slack = layout.generation_below_col(cell, blk);
                         col_entries[col_slack].push((row, 1.0));
                     }

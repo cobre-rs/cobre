@@ -1701,6 +1701,42 @@ impl StageLayout<'_> {
         )
     }
 
+    #[inline]
+    pub(crate) fn min_outflow_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.block_flat(
+            self.slack.oper_violation.min_outflow_rows.start,
+            h.get(),
+            blk,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn max_outflow_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.block_flat(
+            self.slack.oper_violation.max_outflow_rows.start,
+            h.get(),
+            blk,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn min_turbine_row(&self, c: HydroCell, blk: BlockIdx) -> usize {
+        self.block_flat(
+            self.slack.oper_violation.min_turbine_rows.start,
+            c.get(),
+            blk,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn min_generation_row(&self, c: HydroCell, blk: BlockIdx) -> usize {
+        self.block_flat(
+            self.slack.oper_violation.min_generation_rows.start,
+            c.get(),
+            blk,
+        )
+    }
+
     /// Hydro `h`'s inflow-penalty slack column.
     #[inline]
     pub(crate) fn inflow_slack_col(&self, h: HydroSys) -> usize {

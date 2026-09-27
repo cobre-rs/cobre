@@ -2299,19 +2299,19 @@ fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
 
     [
         check(n_blks, &oper.min_outflow_rows, "min outflow", |i, blk| {
-            grid.flat(oper.min_outflow_rows.start, i, blk)
+            layout.min_outflow_row(HydroSys::new(i), blk)
         }),
         check(n_blks, &oper.max_outflow_rows, "max outflow", |i, blk| {
-            grid.flat(oper.max_outflow_rows.start, i, blk)
+            layout.max_outflow_row(HydroSys::new(i), blk)
         }),
         check(n_blks, &oper.min_turbine_rows, "min turbine", |i, blk| {
-            grid.flat(oper.min_turbine_rows.start, i, blk)
+            layout.min_turbine_row(HydroCell::new(i), blk)
         }),
         check(
             n_blks,
             &oper.min_generation_rows,
             "min generation",
-            |i, blk| grid.flat(oper.min_generation_rows.start, i, blk),
+            |i, blk| layout.min_generation_row(HydroCell::new(i), blk),
         ),
         check(n_blks, &geometry.thermal, "thermal", |i, blk| {
             grid.flat(geometry.thermal.start, i, blk)

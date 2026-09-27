@@ -440,27 +440,27 @@ pub(super) fn fill_operational_violation_rows(
     // Each family writes its own computed row index, so the visit order does not
     // affect the result; the descriptor order is nonetheless pinned to the canonical
     // row-region order so the write order stays auditable against the layout.
-    let grid = layout.block_grid();
     for h_idx in 0..layout.n_h {
+        let hydro = HydroSys::new(h_idx);
         for blk in 0..layout.n_blks {
+            let b = BlockIdx::new(blk);
             let hb = ctx
                 .resolved
                 .bounds
                 .hydro_bounds_at_block(h_idx, stage_idx, blk);
             let families = [
                 (
-                    layout.slack.oper_violation.min_outflow_rows.start,
+                    layout.min_outflow_row(hydro, b),
                     hb.min_outflow_m3s,
                     f64::INFINITY,
                 ),
                 (
-                    layout.slack.oper_violation.max_outflow_rows.start,
+                    layout.max_outflow_row(hydro, b),
                     f64::NEG_INFINITY,
                     hb.max_outflow_m3s.unwrap_or(f64::INFINITY),
                 ),
             ];
-            for (row_start, lower, upper) in families {
-                let row = grid.flat(row_start, h_idx, BlockIdx::new(blk));
+            for (row, lower, upper) in families {
                 row_lower[row] = lower;
                 row_upper[row] = upper;
             }
@@ -474,19 +474,11 @@ pub(super) fn fill_operational_violation_rows(
                 let cell = HydroCell::new(cell_idx);
                 let positions = ctx.hydro_cell_index.groups_of(cell);
 
-                let row_t = grid.flat(
-                    layout.slack.oper_violation.min_turbine_rows.start,
-                    cell_idx,
-                    BlockIdx::new(blk),
-                );
+                let row_t = layout.min_turbine_row(cell, BlockIdx::new(blk));
                 row_lower[row_t] = cell_min_turbined(&hydro.unit_groups, positions, lookup);
                 row_upper[row_t] = f64::INFINITY;
 
-                let row_g = grid.flat(
-                    layout.slack.oper_violation.min_generation_rows.start,
-                    cell_idx,
-                    BlockIdx::new(blk),
-                );
+                let row_g = layout.min_generation_row(cell, BlockIdx::new(blk));
                 row_lower[row_g] = cell_min_generation(&hydro.unit_groups, positions, lookup);
                 row_upper[row_g] = f64::INFINITY;
             }

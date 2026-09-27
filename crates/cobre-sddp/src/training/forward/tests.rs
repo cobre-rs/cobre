@@ -162,20 +162,21 @@ impl SolverInterface for MockSolver {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Minimal N=1, L=0 template: `[storage_out, z_inflow, storage_in, theta]`, one row.
+/// Minimal N=1, L=0 template: `[storage_out, z_inflow, storage_in, theta]`.
+/// row 0: z-inflow definition (`z_inflow[0]` = rhs); row 1: storage-fixing.
 fn minimal_template_1_0() -> StageTemplate {
     StageTemplate {
         num_cols: 4,
-        num_rows: 1,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 0, 1, 1], // col 2 (storage_in) has NZ at row 0
-        row_indices: vec![0_i32],
-        values: vec![1.0],
+        num_rows: 2,
+        num_nz: 2,
+        col_starts: vec![0_i32, 0, 1, 2, 2], // col 1 (z_inflow) NZ at row 0; col 2 (storage_in) NZ at row 1
+        row_indices: vec![0_i32, 1],
+        values: vec![1.0, 1.0],
         col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
         col_upper: vec![f64::INFINITY; 4],
         objective: vec![0.0, 0.0, 0.0, 1.0], // minimise theta (at col 3)
-        row_lower: vec![0.0],
-        row_upper: vec![0.0],
+        row_lower: vec![0.0, 0.0],
+        row_upper: vec![0.0, 0.0],
         n_state: 1,
         n_transfer: 0,
         n_dual_relevant: 1,
@@ -192,7 +193,7 @@ fn fixed_solution(num_cols: usize, objective: f64, theta_col: usize, theta_val: 
     LpSolution {
         objective,
         primal,
-        dual: vec![0.0; 1], // single structural row for minimal template
+        dual: vec![0.0; 1], // forward pass never reads dual; length is arbitrary
         reduced_costs: vec![0.0; num_cols],
         iterations: 0,
         solve_time_seconds: 0.0,

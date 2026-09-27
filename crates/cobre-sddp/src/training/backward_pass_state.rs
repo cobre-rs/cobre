@@ -2279,6 +2279,7 @@ mod tests {
         }
     }
 
+    // row 0: z-inflow definition (z_inflow[0] = rhs), the only row; col 1 is the free z column.
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
             num_cols: 3,
@@ -2287,7 +2288,7 @@ mod tests {
             col_starts: vec![0_i32, 0, 1, 1],
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0],
             col_upper: vec![f64::INFINITY; 3],
             objective: vec![0.0, 0.0, 1.0],
             row_lower: vec![0.0],

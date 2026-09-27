@@ -555,17 +555,17 @@ mod tests {
 
     /// Minimal stage template for N=1 hydro, L=0 PAR order.
     ///
-    /// Column layout: [storage (0), `storage_in` (1), theta (2)]
-    /// Row layout: [`storage_fixing` (0)]
+    /// Column layout: [storage (0), `z_inflow` (1), theta (2)]
+    /// Row layout: [z-inflow definition (0)]
     fn minimal_template() -> StageTemplate {
         StageTemplate {
             num_cols: 3,
             num_rows: 1,
             num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1], // col 1 (storage_in) has NZ at row 0
+            col_starts: vec![0_i32, 0, 1, 1], // col 1 (z_inflow) has NZ at row 0
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0],
             col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
             objective: vec![0.0, 0.0, 1.0], // minimise theta
             row_lower: vec![0.0],

@@ -57,16 +57,8 @@ pub(super) fn fill_anticipated_fishing_entries(
     let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active = 0_usize;
     for local_idx in 0..ctx.n_anticipated {
-        // Indexed via `.get` rather than `[local_idx]`: `n_anticipated` sizes
-        // this loop, but `build_anticipated_fishing_row_pos` returns an empty
-        // vec whenever `k_max == 0`, regardless of `n_anticipated`.
-        let Some(pos) = layout
-            .anticipated
-            .anticipated_fishing_row_pos
-            .get(local_idx)
-            .copied()
-            .flatten()
-        else {
+        let local = AnticipatedLocal::new(local_idx);
+        let Some(row) = layout.anticipated_fishing_row(local) else {
             continue;
         };
         // Reachable only because `build_anticipated_fishing_row_pos` gates
@@ -75,10 +67,7 @@ pub(super) fn fill_anticipated_fishing_entries(
         // an `n_anticipated`-only gate would reach this modulo on an empty
         // ring.
         let slot = stage_idx % layout.state.k_max;
-        let row = layout.anticipated.row_anticipated_fishing_start + pos;
-        let thermal_idx = ctx
-            .anticipated_plants
-            .thermal_of(AnticipatedLocal::new(local_idx));
+        let thermal_idx = ctx.anticipated_plants.thermal_of(local);
         let mut block_hours_total: f64 = 0.0;
         for blk in 0..n_blks {
             let col_gen = grid.flat(
@@ -114,7 +103,6 @@ pub(super) fn fill_anticipated_state_out_def_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_stages = ctx.resolved.bounds.n_stages();
-    let row_start = layout.anticipated.row_anticipated_state_out_def_start;
     let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active: usize = 0;
     for_each_ring_residue(layout.state, n_stages, stage_idx, |res, point| {
@@ -126,24 +114,16 @@ pub(super) fn fill_anticipated_state_out_def_entries(
         if delivery_stage != res.target {
             return;
         }
-        // Indexed via `.get` rather than `[res.plant]`: `build_anticipated_decision_row_pos`
-        // returns an empty vec whenever `k_max == 0`, regardless of `n_anticipated`.
-        let Some(pos) = layout
-            .anticipated
-            .anticipated_decision_row_pos
-            .get(res.plant)
-            .copied()
-            .flatten()
-        else {
+        let local = AnticipatedLocal::new(res.plant);
+        let Some(row) = layout.anticipated_state_out_def_row(local) else {
             return;
         };
-        let row = row_start + pos;
         debug_assert!(
             delivery_stage > stage_idx,
             "a genuine decision's delivery stage must be strictly after the decision \
              stage (K=0 self-delivery must already be excluded)"
         );
-        let col_decision = layout.anticipated_decision_col(AnticipatedLocal::new(res.plant));
+        let col_decision = layout.anticipated_decision_col(local);
         ring.emit_deposit(res.slot, res.plant, row, col_decision, col_entries);
         n_active += 1;
     });
@@ -491,13 +471,12 @@ fn fill_arc_release_block_entries(
         )
     });
     let ring = transit_bucket_ring(layout.state, range.clone());
-    let row_pos = &layout.rows.transit_bucket_row_pos[range];
-    let row_transit_bucket_def_start = layout.rows.transit_bucket_definition.start;
     for (d, &stage_weight) in stage_weights.iter().enumerate().skip(1) {
         if stage_weight == 0.0 {
             continue;
         }
-        let Some(pos) = row_pos[ring.slot_target(0, d)] else {
+        let Some(row_def) = layout.transit_bucket_definition_row(&range, ring.slot_target(0, d))
+        else {
             // A dropped lag targets only a stage past the horizon, unreachable once
             // `boundary_present` un-caps the mask (sddp.md "Terminal credit deferred").
             debug_assert!(
@@ -509,7 +488,6 @@ fn fill_arc_release_block_entries(
             );
             continue;
         };
-        let row_def = row_transit_bucket_def_start + pos;
         push_plant_release(
             ctx,
             layout,
@@ -740,13 +718,12 @@ fn fill_arc_release_chrono_block_entries(
         )
     });
     let ring = transit_bucket_ring(layout.state, range.clone());
-    let row_pos = &layout.rows.transit_bucket_row_pos[range];
-    let row_transit_bucket_def_start = layout.rows.transit_bucket_definition.start;
     for (d, &deposit_d) in block_deposit.iter().enumerate().skip(1) {
         if deposit_d == 0.0 {
             continue;
         }
-        let Some(pos) = row_pos[ring.slot_target(0, d)] else {
+        let Some(row_def) = layout.transit_bucket_definition_row(&range, ring.slot_target(0, d))
+        else {
             // A dropped block deposit targets only a lag past the horizon, unreachable
             // once `boundary_present` un-caps the mask (sddp.md "Terminal credit deferred").
             debug_assert!(
@@ -758,7 +735,6 @@ fn fill_arc_release_chrono_block_entries(
             );
             continue;
         };
-        let row_def = row_transit_bucket_def_start + pos;
         push_plant_release(
             ctx,
             layout,

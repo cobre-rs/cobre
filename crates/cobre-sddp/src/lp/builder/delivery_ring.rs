@@ -20,6 +20,7 @@ use std::ops::Range;
 use crate::indexer::StateSpace;
 
 use super::columns::ColumnBufs;
+use super::layout::position_table_row;
 
 /// A lagged-delivery ring over one dense, slot-major/lane-minor state-column
 /// grid: `n_lanes` parallel delivery lanes (plants), each `depth` slots deep.
@@ -176,11 +177,11 @@ impl DeliveryRing {
             "row_pos must be sized n_lanes * depth (dense, slot-major, lane-minor)"
         );
         let mut n_reachable = 0_usize;
-        for (flat, pos) in row_pos.iter().enumerate() {
-            let Some(pos) = *pos else { continue };
-            let slot = flat / self.n_lanes;
-            let lane = flat % self.n_lanes;
-            let row = row_start + pos;
+        for flat in 0..row_pos.len() {
+            let Some(row) = position_table_row(row_start, row_pos, flat) else {
+                continue;
+            };
+            let (slot, lane) = self.slot_lane_at(flat);
             col_entries[self.out_col(slot, lane)].push((row, 1.0));
             if slot + 1 < self.depth {
                 col_entries[self.in_col(slot + 1, lane)].push((row, -1.0));
@@ -220,11 +221,11 @@ impl DeliveryRing {
             "row_pos must be sized n_lanes * depth (dense, slot-major, lane-minor)"
         );
         let mut n_reachable = 0_usize;
-        for (flat, pos) in row_pos.iter().enumerate() {
-            let Some(pos) = *pos else { continue };
-            let slot = flat / self.n_lanes;
-            let lane = flat % self.n_lanes;
-            let row = row_start + pos;
+        for flat in 0..row_pos.len() {
+            let Some(row) = position_table_row(row_start, row_pos, flat) else {
+                continue;
+            };
+            let (slot, lane) = self.slot_lane_at(flat);
             col_entries[self.out_col(slot, lane)].push((row, 1.0));
             col_entries[self.in_col(slot, lane)].push((row, -1.0));
             n_reachable += 1;

@@ -7,7 +7,7 @@ use crate::indexer::{
 
 use super::columns::{GroupBoundLookup, cell_min_generation, cell_min_turbined};
 use super::fpha_cursor::for_each_fpha_plane;
-use super::layout::{StageLayout, TemplateBuildCtx};
+use super::layout::{StageLayout, TemplateBuildCtx, position_table_row};
 
 /// Fill row lower/upper bounds for one stage.
 ///
@@ -568,8 +568,7 @@ fn fill_zero_equality_rows(
     row_upper: &mut [f64],
 ) -> usize {
     let mut n_active = 0_usize;
-    for pos in row_pos.iter().flatten() {
-        let row = row_start + pos;
+    for row in (0..row_pos.len()).filter_map(|i| position_table_row(row_start, row_pos, i)) {
         row_lower[row] = 0.0;
         row_upper[row] = 0.0;
         n_active += 1;

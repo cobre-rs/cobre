@@ -1566,6 +1566,19 @@ pub(super) fn one_per_entity(family: &Range<usize>, i: usize) -> usize {
     idx
 }
 
+/// Entity `i`'s row within a sparse row family, or `None` when `i` is absent
+/// or the family masks it out — the position table's own `None` behavior, not
+/// a range-membership check.
+#[inline]
+#[must_use]
+pub(super) fn position_table_row(
+    row_start: usize,
+    row_pos: &[Option<usize>],
+    i: usize,
+) -> Option<usize> {
+    row_pos.get(i).copied().flatten().map(|pos| row_start + pos)
+}
+
 /// Flat, slot-major `(evap hydro local_idx, slot)` stride: single owner of the
 /// evaporation stride every column and row family built from it shares.
 #[inline]
@@ -1710,6 +1723,44 @@ impl StageLayout<'_> {
     #[inline]
     pub(crate) fn anticipated_decision_col(&self, local: AnticipatedLocal) -> usize {
         one_per_entity(&self.anticipated_decision(), local.get())
+    }
+
+    /// Anticipated-local `local`'s commitment-maturity row, or `None` when no
+    /// delivery matures this stage (including a `K = 0` self-delivery).
+    #[inline]
+    pub(crate) fn anticipated_fishing_row(&self, local: AnticipatedLocal) -> Option<usize> {
+        position_table_row(
+            self.anticipated.row_anticipated_fishing_start,
+            &self.anticipated.anticipated_fishing_row_pos,
+            local.get(),
+        )
+    }
+
+    /// Anticipated-local `local`'s deposit-definition row, or `None` when the
+    /// plant has no genuine, active decision this stage.
+    #[inline]
+    pub(crate) fn anticipated_state_out_def_row(&self, local: AnticipatedLocal) -> Option<usize> {
+        position_table_row(
+            self.anticipated.row_anticipated_state_out_def_start,
+            &self.anticipated.anticipated_decision_row_pos,
+            local.get(),
+        )
+    }
+
+    /// Transit-bucket definition row for plant-local `slot` within `plant`'s
+    /// contiguous bucket sub-range, or `None` when that lag is beyond this
+    /// stage's reachable cap.
+    #[inline]
+    pub(crate) fn transit_bucket_definition_row(
+        &self,
+        plant: &Range<usize>,
+        slot: usize,
+    ) -> Option<usize> {
+        position_table_row(
+            self.rows.transit_bucket_definition.start,
+            &self.rows.transit_bucket_row_pos[plant.clone()],
+            slot,
+        )
     }
 
     /// Filling-target-local `local`'s `σ_fill` slack column.

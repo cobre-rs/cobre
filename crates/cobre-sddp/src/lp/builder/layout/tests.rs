@@ -4558,12 +4558,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
             .copied()
             .flatten()
             .map(|pos| anticipated.row_anticipated_fishing_start + pos);
-        let actual = anticipated
-            .anticipated_fishing_row_pos
-            .get(i)
-            .copied()
-            .flatten()
-            .map(|pos| anticipated.row_anticipated_fishing_start + pos);
+        let actual = layout.anticipated_fishing_row(AnticipatedLocal::new(i));
         assert_eq!(actual, expected, "fishing row disagreement at local {i}");
         if let Some(row) = actual {
             fishing_rows.push(row);
@@ -4587,12 +4582,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
             .copied()
             .flatten()
             .map(|pos| anticipated.row_anticipated_state_out_def_start + pos);
-        let actual = anticipated
-            .anticipated_decision_row_pos
-            .get(i)
-            .copied()
-            .flatten()
-            .map(|pos| anticipated.row_anticipated_state_out_def_start + pos);
+        let actual = layout.anticipated_state_out_def_row(AnticipatedLocal::new(i));
         assert_eq!(
             actual, expected,
             "state-out-def row disagreement at local {i}"
@@ -4654,11 +4644,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
                 .copied()
                 .flatten()
                 .map(|pos| layout.rows.transit_bucket_definition.start + pos);
-            let actual = row_pos
-                .get(slot)
-                .copied()
-                .flatten()
-                .map(|pos| layout.rows.transit_bucket_definition.start + pos);
+            let actual = layout.transit_bucket_definition_row(&range, slot);
             assert_eq!(
                 actual, expected,
                 "transit definition row disagreement at range={range:?} slot={slot}"

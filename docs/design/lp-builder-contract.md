@@ -64,6 +64,12 @@ stride taken from one source. Consumers call accessors instead of computing
 serves a named per-solve access pattern, is written from the single owner when the
 templates are built, and is never recomputed independently.
 
+A family's owner exposes its range. A consumer that reads the whole family, whether
+by copying it, slicing it or checking a length against it, uses that range and
+computes no address. An element accessor is added on the owner when a consumer
+first needs individual elements, and every element read of that family then goes
+through it. A family no consumer indexes element by element gets no accessor.
+
 - **Must not:** derive the same address fact in two places, or let a consumer compute
   an entity's row or column by hand.
 

@@ -19,7 +19,7 @@ use std::path::Path;
 
 use cobre_core::{BlockMode, EntityId};
 use cobre_sddp::StudySetup;
-use cobre_sddp::indexer::{BlockIdx, BusSys, HydroSys, StateSpace};
+use cobre_sddp::indexer::{BlockIdx, BusSys, HydroSys, NcsSys, StateSpace};
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::{NodePos, StageIdx};
 use cobre_sddp::test_support::{
@@ -90,8 +90,9 @@ fn load_chunk(geom: &StageGeometry, bus_pos: usize) -> Range<usize> {
 }
 
 fn ncs_chunk(geom: &StageGeometry, sys_idx: usize) -> Range<usize> {
-    geom.ncs_generation_col(sys_idx, BlockIdx::new(0))
-        ..geom.ncs_generation_col(sys_idx, BlockIdx::new(geom.n_blks - 1)) + 1
+    let ncs = NcsSys::new(sys_idx);
+    geom.ncs_generation_col(ncs, BlockIdx::new(0))
+        ..geom.ncs_generation_col(ncs, BlockIdx::new(geom.n_blks - 1)) + 1
 }
 
 /// Maps stochastic NCS slot `r` (`setup.stochastic.ncs_entity_ids()[r]`) to its

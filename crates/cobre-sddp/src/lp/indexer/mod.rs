@@ -113,7 +113,7 @@ pub use block_row_family::BlockRowFamily;
 pub use cut_state_projection::CutStateProjection;
 pub use entity_index::{
     AnticipatedLocal, BusSys, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
-    HydroCell, HydroSys, LineSys, ThermalSys,
+    HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, ThermalSys,
 };
 pub use hydro_cell::HydroCellIndex;
 pub use index::{BlockIdx, Boundary, CutSlot, InCol, OutCol, StateDim};

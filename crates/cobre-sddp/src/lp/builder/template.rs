@@ -21,8 +21,8 @@ use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
-    EvaporationIndices, FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, StateSpace,
-    StorageBoundaryGrid,
+    EvaporationIndices, FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, NcsSys,
+    PumpingSys, StateSpace, StorageBoundaryGrid,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::bucket_topology::build_transit_bucket_topology;
@@ -331,8 +331,9 @@ impl StageGeometry {
     /// NCS entity `ncs_sys`'s generation column for block `blk`.
     #[inline]
     #[must_use]
-    pub fn ncs_generation_col(&self, ncs_sys: usize, blk: BlockIdx) -> usize {
-        let col = BlockGrid::new(self.n_blks, 0).flat(self.ncs_generation.start, ncs_sys, blk);
+    pub fn ncs_generation_col(&self, ncs_sys: NcsSys, blk: BlockIdx) -> usize {
+        let col =
+            BlockGrid::new(self.n_blks, 0).flat(self.ncs_generation.start, ncs_sys.get(), blk);
         debug_assert!(
             col < self.ncs_generation.end,
             "NCS column {col} outside {:?}",
@@ -344,8 +345,9 @@ impl StageGeometry {
     /// Pumping station `pumping_sys`'s flow column for block `blk`.
     #[inline]
     #[must_use]
-    pub fn pumping_flow_col(&self, pumping_sys: usize, blk: BlockIdx) -> usize {
-        let col = BlockGrid::new(self.n_blks, 0).flat(self.pumping_flow.start, pumping_sys, blk);
+    pub fn pumping_flow_col(&self, pumping_sys: PumpingSys, blk: BlockIdx) -> usize {
+        let col =
+            BlockGrid::new(self.n_blks, 0).flat(self.pumping_flow.start, pumping_sys.get(), blk);
         debug_assert!(
             col < self.pumping_flow.end,
             "pumping column {col} outside {:?}",

@@ -32,8 +32,8 @@ use crate::block_clock::{BlockClock, M3S_TO_HM3};
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
-    FillingTargetLocal, FloorLocal, HydroCell, HydroCellIndex, HydroSys, StateSpace, ThermalSys,
-    anticipated_resolution_for,
+    FillingTargetLocal, FloorLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys, PumpingSys,
+    StateSpace, ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -716,7 +716,7 @@ fn geometry_pumping_family_matches_the_pumping_column_start() {
         for p in 0..n_pumping {
             for blk in 0..geom.n_blks {
                 assert_eq!(
-                    geom.pumping_flow_col(p, BlockIdx::new(blk)),
+                    geom.pumping_flow_col(PumpingSys::new(p), BlockIdx::new(blk)),
                     start + p * geom.n_blks + blk,
                     "stage {t}: pumping_flow_col({p}, {blk}) must equal \
                      pumping_col_starts[t] + p*n_blks+blk"
@@ -943,7 +943,7 @@ fn geometry_ncs_family_matches_the_ncs_column_start() {
         for sys_idx in 0..n_ncs {
             for blk in 0..geom.n_blks {
                 assert_eq!(
-                    geom.ncs_generation_col(sys_idx, BlockIdx::new(blk)),
+                    geom.ncs_generation_col(NcsSys::new(sys_idx), BlockIdx::new(blk)),
                     start + sys_idx * geom.n_blks + blk,
                     "stage {t}: ncs_generation_col({sys_idx}, {blk}) must equal \
                      ncs_col_starts[t] + sys_idx*n_blks+blk"

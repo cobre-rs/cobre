@@ -30,8 +30,8 @@ use crate::lp::builder::{
 };
 use crate::lp::indexer::{
     AnticipatedLocal, BlockGrid, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal,
-    FloorLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, StateSpace, StudyDimensions,
-    anticipated_resolution_for, is_anticipated_decision_active_for_delivery,
+    FloorLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys, PumpingSys, StateSpace,
+    StudyDimensions, anticipated_resolution_for, is_anticipated_decision_active_for_delivery,
 };
 use crate::setup::NodeId;
 use crate::simulation::types::{
@@ -1906,14 +1906,14 @@ fn extract_non_controllables(
     let mut results = Vec::with_capacity(n_ncs * n_blks);
     let mut total_curtailment_cost = 0.0;
 
-    for (local_idx, &ncs_id) in spec.ncs_entity_ids.iter().enumerate() {
+    for (ncs_sys, &ncs_id) in spec.ncs_entity_ids.iter().enumerate() {
         for blk in 0..n_blks {
             let col = spec
                 .geometry
-                .ncs_generation_col(local_idx, BlockIdx::new(blk));
+                .ncs_generation_col(NcsSys::new(ncs_sys), BlockIdx::new(blk));
             let generation_mw = view.primal[col];
             // `ncs_col_upper` is the same block-major layout zero-based, so `flat` from 0.
-            let col_upper_offset = grid.flat(0, local_idx, BlockIdx::new(blk));
+            let col_upper_offset = grid.flat(0, ncs_sys, BlockIdx::new(blk));
             debug_assert!(
                 col_upper_offset < spec.ncs_col_upper.len(),
                 "NCS col_upper out of bounds: offset {col_upper_offset}, len {}",
@@ -1981,7 +1981,9 @@ fn extract_pumping_stations(
         let pumping_station_id = spec.entity_counts.pumping_station_ids[p_sys];
         let consumption = spec.pumping_consumption_mw_per_m3s[p_sys];
         for blk in 0..n_blks {
-            let col = spec.geometry.pumping_flow_col(p_sys, BlockIdx::new(blk));
+            let col = spec
+                .geometry
+                .pumping_flow_col(PumpingSys::new(p_sys), BlockIdx::new(blk));
             let pumped_flow_m3s = view.primal[col];
             #[allow(clippy::cast_possible_truncation)]
             results.push(SimulationPumpingResult {

@@ -503,15 +503,19 @@ fn resolve_turbine_cells(
 
 /// Resolve `HydroStorage` to its stage-level outgoing storage column.
 ///
-/// Role (a): the storage column is `state.storage.start + h`, read through the
-/// state handle. Returns empty vec when the hydro ID is not found in `hydro_pos`.
+/// Role (a): the storage column is `state.storage_outgoing_col(h)`, read
+/// through the state handle. Returns empty vec when the hydro ID is not found
+/// in `hydro_pos`.
 fn resolve_hydro_storage(
     hydro_id: EntityId,
     geom: &GenericResolverGeom<'_>,
     hydro_pos: &BTreeMap<EntityId, usize>,
 ) -> Vec<(usize, f64)> {
     if let Some(&pos) = hydro_pos.get(&hydro_id) {
-        vec![(geom.state.storage.start + pos, 1.0)]
+        vec![(
+            geom.state.storage_outgoing_col(HydroSys::new(pos)).get(),
+            1.0,
+        )]
     } else {
         vec![]
     }
@@ -559,7 +563,7 @@ fn resolve_hydro_storage_boundary(
 /// extra sort.
 ///
 /// The `z_inflow.is_empty()` guard is load-bearing: `z_inflow` is empty when
-/// `hydro_count == 0` (unlike `storage`), so `z_inflow.start` would be meaningless.
+/// `hydro_count == 0` (unlike `storage`), so `z_inflow_col` would be meaningless.
 /// Returns an empty vec when `hydro_count == 0` or `hydro_id` is unknown.
 fn resolve_hydro_inflow(
     hydro_id: EntityId,
@@ -586,7 +590,7 @@ fn resolve_hydro_inflow(
 
     let mut result = Vec::with_capacity(1 + 2 * upstream.len() + diversion_into.len());
 
-    result.push((geom.state.z_inflow.start + pos_h, 1.0));
+    result.push((geom.state.z_inflow_col(HydroSys::new(pos_h)).get(), 1.0));
 
     // Upstream releases (turbine + spillage): same column set as the storage-balance
     // inflow side but coefficient +1.0 (rate), not −τ (volume). Turbine sums every

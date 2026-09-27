@@ -1821,14 +1821,11 @@ impl StageLayout<'_> {
         family_slot: usize,
         blk: BlockIdx,
     ) -> usize {
-        self.block_flat(
-            match contract_type {
-                ContractType::Import => self.equipment.contract_import.start,
-                ContractType::Export => self.equipment.contract_export.start,
-            },
-            family_slot,
-            blk,
-        )
+        let family = match contract_type {
+            ContractType::Import => &self.equipment.contract_import,
+            ContractType::Export => &self.equipment.contract_export,
+        };
+        self.block_flat(family.start, family_slot, blk)
     }
 
     /// Base column of the `(evap hydro local_idx, slot)` triple, slot-major

@@ -1902,6 +1902,57 @@ mod tests {
         }
     }
 
+    /// Number of pinned addresses compared per family: `storage` covers both
+    /// storage accessors and the z-inflow lag-0 arm, one per hydro; `lag`
+    /// covers the lag ≥ 1 arm compared against `lag_incoming_col`. A
+    /// degenerate fixture (`hydro_count == 0`) cannot pass the calling test's
+    /// assertions vacuously.
+    fn count_pinned_state_columns(idx: &StateSpace) -> (usize, usize) {
+        let mut storage = 0;
+        let mut lag = 0;
+        for h in 0..idx.hydro_count {
+            assert_eq!(idx.storage_outgoing_col(HydroSys::new(h)).get(), h);
+            assert_eq!(
+                idx.storage_incoming_col(HydroSys::new(h)).get(),
+                idx.storage_in.start + h
+            );
+            assert_eq!(
+                idx.state_to_lp_column(idx.lag_state_dim(0, HydroSys::new(h)))
+                    .get(),
+                idx.z_inflow.start + h
+            );
+            storage += 1;
+            for l in 1..idx.max_par_order {
+                assert_eq!(
+                    idx.state_to_lp_column(idx.lag_state_dim(l, HydroSys::new(h)))
+                        .get(),
+                    idx.lag_incoming_col(l - 1, HydroSys::new(h)).get()
+                );
+                lag += 1;
+            }
+        }
+        (storage, lag)
+    }
+
+    /// The builder's exact storage/z-inflow/AR-lag column spellings — the
+    /// migration pin for routing them through [`StateSpace`]'s own accessors
+    /// instead of hand address arithmetic.
+    #[test]
+    fn builder_state_column_spellings_match_the_state_space() {
+        for idx in [
+            finalized(3, 2, 0, 0, vec![]),
+            finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 2, vec![1, 2]),
+        ] {
+            let (storage, lag) = count_pinned_state_columns(&idx);
+            assert!(storage > 0 && lag > 0);
+            assert_eq!(
+                idx.inflow_lags,
+                idx.inflow_lags.start..idx.inflow_lags.start + idx.max_par_order * idx.hydro_count
+            );
+            assert_eq!(idx.z_inflow.len(), idx.hydro_count);
+        }
+    }
+
     #[test]
     fn z_inflow_rows_lead_the_row_space_one_per_hydro() {
         let idx = finalized(5, 2, 0, 0, vec![]);

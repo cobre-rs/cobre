@@ -992,7 +992,6 @@ fn single_stage_system_produces_no_cuts() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1077,7 +1076,6 @@ fn two_stage_system_two_trial_states_generates_two_cuts_at_stage_0() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1169,7 +1167,6 @@ fn cut_inserted_with_correct_stage_iteration_and_forward_pass_index() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1255,7 +1252,6 @@ fn no_cuts_generated_at_last_stage() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1342,7 +1338,6 @@ fn elapsed_ms_is_non_negative() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1424,7 +1419,6 @@ fn infeasible_solver_returns_sddp_infeasible_error() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1541,7 +1535,6 @@ fn cut_coefficients_and_intercept_match_dual_extraction_formula() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1639,7 +1632,6 @@ fn cut_gradient_sign_physically_correct() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1748,7 +1740,6 @@ fn cut_is_tight_at_trial_state() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1847,7 +1838,6 @@ fn single_rank_backward_pass_with_local_backend_produces_correct_fcf() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -1957,7 +1947,6 @@ fn forward_pass_index_matches_global_scenario_index() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -2053,7 +2042,6 @@ fn warm_start_uses_prepopulated_forward_basis() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -2142,7 +2130,6 @@ fn multi_opening_subsequent_openings_use_internal_hotstart() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -2237,7 +2224,6 @@ fn backward_solver_error_propagates() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -2375,8 +2361,7 @@ fn test_backward_pass_parallel_cut_determinism() {
     let mut basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
     let state_boxes = permissive_state_boxes(n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let _ = run_backward_pass(&mut BackwardPassInputs {
@@ -3285,7 +3270,6 @@ fn per_stage_cut_sync_invariant_after_bug1_fix() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -3410,7 +3394,6 @@ fn metadata_sync_updates_active_count_and_last_active_iter() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -3589,7 +3572,6 @@ fn run_backward_pass_with_n_workers(n_workers: usize) -> FutureCostFunction {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -3941,7 +3923,6 @@ fn allgatherv_single_rank_two_workers_stage_stats_has_per_worker_entries() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -4156,7 +4137,6 @@ fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -4259,8 +4239,7 @@ fn run_one_trial_state_with_stores(
     let templates = vec![minimal_template_1_0(), minimal_template_1_0()];
     let state_boxes = permissive_state_boxes(n_state, n_stages);
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite {
@@ -4849,7 +4828,6 @@ fn handshake_passes_with_local_backend() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -5000,7 +4978,6 @@ fn handshake_rejects_nonuniform_workers() {
             &state_boxes,
             &equipment_free_geometry(&vec![0; templates.len()]),
         )
-        .n_hydros_override(0)
         .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
@@ -5263,8 +5240,7 @@ fn run_dcs_backward_trial_state_at(
     let state_boxes = permissive_state_boxes(n_state, n_stages);
 
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let study_dims = test_support::study_dims();
     let training_ctx = TrainingContext {
@@ -5764,8 +5740,7 @@ fn backward_dcs_frozen_cuts_present_no_duplicate_rows() {
     let state_boxes = permissive_state_boxes(n_state, n_stages);
 
     let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let study_dims = test_support::study_dims();
     let training_ctx = TrainingContext {

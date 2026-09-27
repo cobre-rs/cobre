@@ -443,8 +443,7 @@ fn ac_train_completes_with_iteration_limit() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
@@ -526,8 +525,7 @@ fn ac_train_returns_partial_on_infeasible() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
@@ -622,8 +620,7 @@ fn ac_train_emits_correct_event_sequence() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     train(
         &mut solver,
@@ -802,8 +799,7 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     train(
         &mut solver,
@@ -954,8 +950,7 @@ fn ac_train_result_fields_populated() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
@@ -1037,8 +1032,7 @@ fn ac_train_with_no_event_sender() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
@@ -1117,8 +1111,7 @@ fn ac_total_time_ms_is_non_negative() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
@@ -1205,8 +1198,7 @@ fn cut_selection_none_skips_step() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     train(
         &mut solver,
@@ -1302,8 +1294,7 @@ fn cut_selection_level1_runs_at_frequency() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     train(
         &mut solver,
@@ -1408,8 +1399,7 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     train(
         &mut solver,
@@ -1524,8 +1514,7 @@ fn existing_train_tests_pass_with_none() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
@@ -1613,8 +1602,7 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let outcome = train(
         &mut solver,
@@ -1715,8 +1703,7 @@ fn start_iteration_resumes_from_offset() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let outcome = train(
         &mut solver,
@@ -1800,8 +1787,7 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
     let outcome = train(
         &mut solver,
@@ -2539,8 +2525,7 @@ fn template_freeze_event_emitted() {
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let geometry = equipment_free_geometry(&[1usize, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = fixture.ctx();
 
     train(

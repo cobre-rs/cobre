@@ -2647,8 +2647,7 @@ mod tests {
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
@@ -2805,8 +2804,7 @@ mod tests {
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-        let fixture = StageContextFixture::new(state, templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        let fixture = StageContextFixture::new(state, templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
@@ -3192,8 +3190,7 @@ mod tests {
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-        let fixture = StageContextFixture::new(state, templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        let fixture = StageContextFixture::new(state, templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
@@ -3916,8 +3913,7 @@ mod tests {
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&vec![0; templates.len()]);
         let fixture =
-            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry)
-                .n_hydros_override(0);
+            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
@@ -4045,8 +4041,7 @@ mod tests {
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&vec![0; templates.len()]);
-        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {

@@ -977,13 +977,12 @@ mod tests {
     /// `TrainingContext` pair, mirroring how `StudySetup` owns `StageData` and
     /// lends `stage_ctx()`/`training_ctx()`. Every simple test shares this shape
     /// (single 1-block stage, no load buses/NCS/anticipated thermals); only the
-    /// template, `n_hydros`, opening tree, inflow method, and initial state
+    /// template, hydro count, opening tree, inflow method, and initial state
     /// differ per test.
     struct SimpleLbFixture {
         templates: Vec<StageTemplate>,
         state_boxes: Vec<StateBox>,
         geometry_per_stage: Vec<StageGeometry>,
-        n_hydros: usize,
         state: StateSpace,
         cut_state_layouts: Vec<CutStateProjection>,
         study_dims: StudyDimensions,
@@ -997,7 +996,6 @@ mod tests {
     impl SimpleLbFixture {
         fn new(
             template: StageTemplate,
-            n_hydros: usize,
             hydro_count: usize,
             opening_tree: OpeningTree,
             inflow_method: InflowNonNegativityMethod,
@@ -1005,13 +1003,12 @@ mod tests {
         ) -> Self {
             let state = test_support::state_layout(hydro_count, 0);
             let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 2);
-            let stochastic = wrap_opening_tree(n_hydros, opening_tree);
+            let stochastic = wrap_opening_tree(hydro_count, opening_tree);
             let node_graph = test_support::chain_node_graph(&stochastic);
             Self {
                 state_boxes: permissive_state_boxes(state.n_state, 1),
                 templates: vec![template],
                 geometry_per_stage: equipment_free_geometry(&[1]),
-                n_hydros,
                 cut_state_layouts,
                 study_dims: test_support::study_dims(),
                 horizon: HorizonMode::Finite { num_stages: 2 },
@@ -1030,7 +1027,6 @@ mod tests {
                 &self.state_boxes,
                 &self.geometry_per_stage,
             )
-            .n_hydros_override(self.n_hydros)
         }
 
         fn training_ctx(&self) -> TrainingContext<'_> {
@@ -1065,7 +1061,6 @@ mod tests {
     fn one_opening_expectation_lb_equals_single_objective() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::None,
@@ -1116,7 +1111,6 @@ mod tests {
     fn three_openings_expectation_lb_equals_mean() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(3),
             InflowNonNegativityMethod::None,
@@ -1168,7 +1162,6 @@ mod tests {
     fn two_openings_pure_cvar_alpha_half_lb_equals_worst() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(2),
             InflowNonNegativityMethod::None,
@@ -1227,7 +1220,6 @@ mod tests {
     fn two_openings_cvar_alpha_one_equals_expectation() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(2),
             InflowNonNegativityMethod::None,
@@ -1301,7 +1293,6 @@ mod tests {
     fn infeasible_solve_maps_to_sddp_infeasible() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::None,
@@ -1351,7 +1342,6 @@ mod tests {
     fn broadcast_failure_maps_to_communication_error() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::None,
@@ -1408,7 +1398,6 @@ mod tests {
         {
             let fixture = SimpleLbFixture::new(
                 minimal_template(),
-                0,
                 1,
                 simple_opening_tree(1),
                 InflowNonNegativityMethod::None,
@@ -1460,7 +1449,6 @@ mod tests {
         {
             let fixture = SimpleLbFixture::new(
                 minimal_template(),
-                0,
                 1,
                 simple_opening_tree(1),
                 InflowNonNegativityMethod::None,
@@ -1519,7 +1507,6 @@ mod tests {
     fn integration_two_openings_local_backend_expectation() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(2),
             InflowNonNegativityMethod::None,
@@ -1576,7 +1563,6 @@ mod tests {
     fn integration_monotonicity_more_cuts_yields_higher_or_equal_lb() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(2),
             InflowNonNegativityMethod::None,
@@ -1657,7 +1643,6 @@ mod tests {
     fn test_lb_none_method_unchanged() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(2),
             InflowNonNegativityMethod::None,
@@ -1714,7 +1699,6 @@ mod tests {
     fn test_lb_truncation_no_crash() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::Truncation,
@@ -1764,7 +1748,6 @@ mod tests {
     fn test_lb_truncation_with_penalty_no_crash() {
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::TruncationWithPenalty,
@@ -2073,7 +2056,6 @@ mod tests {
         // grows to 1 after the first call).
         let fixture = SimpleLbFixture::new(
             minimal_template(),
-            1,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::None,
@@ -3161,7 +3143,6 @@ mod tests {
     fn lb_init_rank0_resolves_root_pool_by_stage_not_array_position() {
         let mut fixture = SimpleLbFixture::new(
             minimal_template(),
-            0,
             1,
             simple_opening_tree(1),
             InflowNonNegativityMethod::None,

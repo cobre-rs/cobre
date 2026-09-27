@@ -665,8 +665,7 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -776,8 +775,7 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -891,8 +889,7 @@ fn cost_statistics_accumulated_correctly() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -1478,8 +1475,7 @@ fn run_one_iteration(
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     run_forward_pass(
         std::slice::from_mut(ws),
@@ -1617,8 +1613,7 @@ fn test_forward_pass_parallel_cost_agreement() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
 
     let mut ws1 = single_workspace(MockSolver::always_ok(solution.clone()), &state);
@@ -1760,8 +1755,7 @@ fn test_forward_pass_work_distribution() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let _result = run_forward_pass(
         &mut workspaces,
@@ -2168,8 +2162,7 @@ fn none_method_unchanged_with_truncation_code_present() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
@@ -2401,8 +2394,7 @@ fn test_forward_pass_parallel_infeasibility() {
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let geometry = equipment_free_geometry(&[1usize, 1, 1]);
-    let fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let ctx = fixture.ctx();
     let result = run_forward_pass(
         &mut workspaces,

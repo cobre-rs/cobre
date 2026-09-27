@@ -273,24 +273,31 @@ fn fill_parallel_water_entries(
     let n_h = layout.n_h;
     let n_blks = layout.n_blks;
     let zeta = layout.clock.zeta();
-    let col_storage_in_start = layout.col_storage_in_start();
 
     for h_idx in 0..n_h {
         let hydro = &ctx.hydros[h_idx];
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
+        let storage_out_col = layout
+            .state
+            .storage_outgoing_col(HydroSys::new(h_idx))
+            .get();
+        let storage_in_col = layout
+            .state
+            .storage_incoming_col(HydroSys::new(h_idx))
+            .get();
 
         if is_prefilling(ctx, stage, h_idx) {
             // Frozen-storage identity `v_h − v_h_in = 0`: emit ONLY these two entries.
             // Any inflow/upstream/AR-lag/withdrawal/evaporation coupling left here makes
             // `β_h` stale-nonzero — a wrong cut that still compiles.
-            col_entries[h_idx].push((row, 1.0));
-            col_entries[col_storage_in_start + h_idx].push((row, -1.0));
+            col_entries[storage_out_col].push((row, 1.0));
+            col_entries[storage_in_col].push((row, -1.0));
             fill_prefilling_shortcircuit(ctx, stage, h_idx, layout, col_entries);
             continue;
         }
 
-        col_entries[h_idx].push((row, 1.0));
-        col_entries[col_storage_in_start + h_idx].push((row, -1.0));
+        col_entries[storage_out_col].push((row, 1.0));
+        col_entries[storage_in_col].push((row, -1.0));
 
         // The maturing-now bucket `b_1^in`: a SINGLE entry — the confluence sum over
         // every upstream arc lives in the state variable itself. Absent with no arc.
@@ -929,7 +936,7 @@ fn fill_filling_target_entries(layout: &StageLayout, col_entries: &mut [Vec<(usi
         .enumerate()
     {
         let row = row_start + local_idx;
-        col_entries[h.get()].push((row, 1.0));
+        col_entries[layout.state.storage_outgoing_col(h).get()].push((row, 1.0));
         col_entries[layout.filling_target_slack_col(FillingTargetLocal::new(local_idx))]
             .push((row, 1.0));
     }
@@ -954,7 +961,7 @@ fn fill_filled_min_storage_floor_entries(
         .enumerate()
     {
         let row = row_start + local_idx;
-        col_entries[h.get()].push((row, 1.0));
+        col_entries[layout.state.storage_outgoing_col(h).get()].push((row, 1.0));
         col_entries[layout.filled_min_storage_floor_slack_col(FloorLocal::new(local_idx))]
             .push((row, 1.0));
     }
@@ -3491,7 +3498,7 @@ mod zero_cost_tests {
         let n_h = ctx.n_hydros;
         let lag_order = ctx.max_par_order;
         for h in 0..n_h {
-            let col = layout.col_storage_in_start() + h;
+            let col = layout.state.storage_in.start + h;
             let has_diag = col_entries[col]
                 .iter()
                 .any(|&(r, v)| r == h && (v - 1.0).abs() < 1e-15);
@@ -6027,7 +6034,7 @@ mod pumping_water_tests {
                 );
                 pin_bounds.push(0.0);
             }
-            pin_cols.push(layout.col_storage_in_start() + downstream_idx);
+            pin_cols.push(layout.state.storage_in.start + downstream_idx);
             pin_bounds.push(50.0);
             pin_cols.push(downstream_idx);
             pin_bounds.push(50.0);
@@ -8169,7 +8176,7 @@ mod pumping_water_tests {
             z_inflow_row_u: layout.z_inflow_row(HydroSys::new(u_idx)),
             filling_target_row_d: layout.filling.row_filling_target_start + d_target_local,
             n_target_rows: layout.filling.filling_target_hydro_indices.len(),
-            storage_in_u: layout.col_storage_in_start() + u_idx,
+            storage_in_u: layout.state.storage_in.start + u_idx,
         };
         (csc, offsets)
     }
@@ -8811,7 +8818,7 @@ mod pumping_water_tests {
             h2_idx,
             water_row_h2: layout.rows.water_balance.start() + h2_idx,
             water_row_h3: layout.rows.water_balance.start() + h3_idx,
-            col_storage_in_h2: layout.col_storage_in_start() + h2_idx,
+            col_storage_in_h2: layout.state.storage_in.start + h2_idx,
             z_h2: layout.col_z_inflow_start() + h2_idx,
             h1_turbine: (0..layout.n_blks)
                 .map(|blk| layout.turbine_col(HydroCell::new(h1_idx), BlockIdx::new(blk)))
@@ -8981,7 +8988,7 @@ mod pumping_water_tests {
         // Frozen identity intact on H2's own row.
         assert_eq!(csc_at(&csc, h2_idx, row_h), 1.0, "v_{{H2}} +1.0");
         assert_eq!(
-            csc_at(&csc, layout.col_storage_in_start() + h2_idx, row_h),
+            csc_at(&csc, layout.state.storage_in.start + h2_idx, row_h),
             -1.0,
             "v_{{H2,in}} −1.0"
         );
@@ -9219,7 +9226,7 @@ mod pumping_water_tests {
             h2_idx,
             water_row_h2: layout.rows.water_balance.start() + h2_idx,
             water_row_h3: layout.rows.water_balance.start() + h3_idx,
-            col_storage_in_h2: layout.col_storage_in_start() + h2_idx,
+            col_storage_in_h2: layout.state.storage_in.start + h2_idx,
             z_h2: layout.col_z_inflow_start() + h2_idx,
             h1_turbine: (0..layout.n_blks)
                 .map(|blk| layout.turbine_col(HydroCell::new(h1_idx), BlockIdx::new(blk)))
@@ -9310,7 +9317,7 @@ mod pumping_water_tests {
 
         assert_eq!(csc_at(&csc, h2_idx, row_h), 1.0, "v_{{H2}} +1.0");
         assert_eq!(
-            csc_at(&csc, layout.col_storage_in_start() + h2_idx, row_h),
+            csc_at(&csc, layout.state.storage_in.start + h2_idx, row_h),
             -1.0,
             "v_{{H2,in}} −1.0"
         );
@@ -9424,8 +9431,8 @@ mod pumping_water_tests {
             water_row_h1: layout.rows.water_balance.start() + h1_idx,
             water_row_h2: layout.rows.water_balance.start() + h2_idx,
             water_row_h3: layout.rows.water_balance.start() + h3_idx,
-            col_storage_in_h1: layout.col_storage_in_start() + h1_idx,
-            col_storage_in_h2: layout.col_storage_in_start() + h2_idx,
+            col_storage_in_h1: layout.state.storage_in.start + h1_idx,
+            col_storage_in_h2: layout.state.storage_in.start + h2_idx,
             z_h1: layout.col_z_inflow_start() + h1_idx,
             z_h2: layout.col_z_inflow_start() + h2_idx,
         };
@@ -9600,7 +9607,7 @@ mod pumping_water_tests {
             let row = layout.rows.water_balance.start() + h_idx;
             assert_eq!(csc_at(&csc, h_idx, row), 1.0, "{label}: v +1.0");
             assert_eq!(
-                csc_at(&csc, layout.col_storage_in_start() + h_idx, row),
+                csc_at(&csc, layout.state.storage_in.start + h_idx, row),
                 -1.0,
                 "{label}: v_in −1.0"
             );
@@ -9675,7 +9682,7 @@ mod pumping_water_tests {
             h2_idx,
             d_idx,
             z_h2: layout.col_z_inflow_start() + h2_idx,
-            col_storage_in_h2: layout.col_storage_in_start() + h2_idx,
+            col_storage_in_h2: layout.state.storage_in.start + h2_idx,
             h1_turbine: (0..layout.n_blks)
                 .map(|blk| layout.turbine_col(HydroCell::new(h1_idx), BlockIdx::new(blk)))
                 .collect(),
@@ -10081,7 +10088,7 @@ mod pumping_water_tests {
         let (col_lower, col_upper, _obj) = cols;
         let h = 0_usize;
         let local = 0_usize;
-        let col_s_in = layout.col_storage_in_start() + h;
+        let col_s_in = layout.state.storage_in.start + h;
         let col_s_out = h;
 
         // Single FPHA row (one plane) on the stage endpoints, −γᵥ/2 on both.

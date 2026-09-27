@@ -1280,7 +1280,7 @@ fn block_storage_col_resolves_all_boundaries() {
     let h = 1;
     assert_eq!(
         chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Incoming),
-        chrono_k3.col_storage_in_start() + h,
+        chrono_k3.state.storage_in.start + h,
         "k = 0 resolves to the incoming-state column storage_in[h]"
     );
     assert_eq!(
@@ -1315,7 +1315,7 @@ fn block_storage_col_resolves_all_boundaries() {
     for h in 0..ctx.n_hydros {
         assert_eq!(
             chrono_k1.block_storage_col(HydroSys::new(h), Boundary::Incoming),
-            chrono_k1.col_storage_in_start() + h,
+            chrono_k1.state.storage_in.start + h,
             "K = 1 endpoint k = 0 resolves to storage_in[h]"
         );
         assert_eq!(

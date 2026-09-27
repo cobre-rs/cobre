@@ -1794,13 +1794,6 @@ impl StageLayout<'_> {
         self.state.theta
     }
 
-    /// First incoming-storage column; reads `self.state.storage_in.start`.
-    #[inline]
-    #[must_use]
-    pub(crate) fn col_storage_in_start(&self) -> usize {
-        self.state.storage_in.start
-    }
-
     /// First AR-lag column; reads `self.state.inflow_lags.start`.
     #[inline]
     #[must_use]

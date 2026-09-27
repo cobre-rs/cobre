@@ -102,9 +102,16 @@ fn fill_storage_columns(
             );
         let hb = ctx.resolved.bounds.hydro_bounds(h_idx, stage_idx);
         let storage_lower = if floor_off { 0.0 } else { hb.min_storage_hm3 };
-        bufs.col_lower[h_idx] = storage_lower;
-        bufs.col_upper[h_idx] = hb.max_storage_hm3;
-        let storage_in_col = layout.col_storage_in_start() + h_idx;
+        let storage_out_col = layout
+            .state
+            .storage_outgoing_col(HydroSys::new(h_idx))
+            .get();
+        let storage_in_col = layout
+            .state
+            .storage_incoming_col(HydroSys::new(h_idx))
+            .get();
+        bufs.col_lower[storage_out_col] = storage_lower;
+        bufs.col_upper[storage_out_col] = hb.max_storage_hm3;
         bufs.col_lower[storage_in_col] = f64::NEG_INFINITY;
         bufs.col_upper[storage_in_col] = f64::INFINITY;
         // Interior Sᵏ reuse the outgoing column's EXACT bounds, floor_off included: the

@@ -4316,7 +4316,7 @@ fn chronological_water_balance_telescopes_to_parallel() {
         "outgoing storage Sᴷ",
     );
     assert_telescopes(
-        par_layout.col_storage_in_start() + h,
+        par_layout.state.storage_in.start + h,
         chr_layout.block_storage_col(HydroSys::new(h), Boundary::Incoming),
         "incoming storage S⁰",
     );
@@ -4394,7 +4394,7 @@ fn stage_geometry_block_storage_col_matches_layout() {
     let n_blks = 3_usize;
     let (layout, _, _) = block_layout_and_template(BlockMode::Chronological, n_blks);
     let geometry = layout.geometry(BlockMode::Chronological);
-    let storage_in_start = layout.col_storage_in_start();
+    let storage_in_start = layout.state.storage_in.start;
     let storage_internal_start = layout.equipment.storage_internal_start;
     let storage_final_start = layout.state.storage.start;
 

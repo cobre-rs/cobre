@@ -2,6 +2,8 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
+use std::ops::Range;
+
 use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
@@ -36,8 +38,46 @@ pub struct ClassDimensions {
 impl ClassDimensions {
     /// Sum of the three per-class entity counts.
     #[must_use]
+    #[inline]
     pub fn total(&self) -> usize {
         self.n_hydros + self.n_load_buses + self.n_ncs
+    }
+
+    /// The hydro segment's range within the noise vector.
+    #[must_use]
+    #[inline]
+    pub fn hydro_range(&self) -> Range<usize> {
+        0..self.n_hydros
+    }
+
+    /// The load-bus segment's range within the noise vector.
+    #[must_use]
+    #[inline]
+    pub fn load_bus_range(&self) -> Range<usize> {
+        self.n_hydros..self.n_hydros + self.n_load_buses
+    }
+
+    /// The NCS segment's range within the noise vector.
+    #[must_use]
+    #[inline]
+    pub fn ncs_range(&self) -> Range<usize> {
+        let start = self.load_bus_range().end;
+        start..start + self.n_ncs
+    }
+
+    /// Splits `noise` into its `[hydros | load buses | NCS]` segments.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `noise.len() < self.n_hydros + self.n_load_buses`.
+    #[inline]
+    pub fn split_segments_mut<'b>(
+        &self,
+        noise: &'b mut [f64],
+    ) -> (&'b mut [f64], &'b mut [f64], &'b mut [f64]) {
+        let (hydro, rest) = noise.split_at_mut(self.n_hydros);
+        let (load, ncs) = rest.split_at_mut(self.n_load_buses);
+        (hydro, load, ncs)
     }
 
     /// Asserts `entity_order` observes the `[hydros | load buses | NCS]`
@@ -496,6 +536,25 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn class_dimensions_ranges_and_split_match_the_layout() {
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 3,
+        };
+        assert_eq!(dims.hydro_range(), 0..2);
+        assert_eq!(dims.load_bus_range(), 2..2);
+        assert_eq!(dims.ncs_range(), 2..5);
+        assert_eq!(dims.total(), 5);
+
+        let mut noise = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (hydro, load, ncs) = dims.split_segments_mut(&mut noise);
+        assert_eq!(hydro, &[1.0, 2.0]);
+        assert!(load.is_empty());
+        assert_eq!(ncs, &[3.0, 4.0, 5.0]);
     }
 
     #[test]

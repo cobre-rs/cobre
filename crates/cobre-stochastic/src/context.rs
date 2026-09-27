@@ -75,10 +75,22 @@ pub struct NoiseEntityOrder {
 }
 
 impl NoiseEntityOrder {
+    /// The per-class entity counts of this order's three blocks.
+    #[must_use]
+    #[inline]
+    pub fn class_dimensions(&self) -> ClassDimensions {
+        ClassDimensions {
+            n_hydros: self.hydro_ids.len(),
+            n_load_buses: self.load_bus_ids.len(),
+            n_ncs: self.ncs_entity_ids.len(),
+        }
+    }
+
     /// The noise dimension: the three blocks' combined length.
     #[must_use]
+    #[inline]
     pub fn dim(&self) -> usize {
-        self.hydro_ids.len() + self.load_bus_ids.len() + self.ncs_entity_ids.len()
+        self.class_dimensions().total()
     }
 
     /// The three blocks concatenated as `hydro_ids ++ load_bus_ids ++ ncs_entity_ids`.
@@ -97,8 +109,8 @@ impl NoiseEntityOrder {
 ///
 /// Single owner: every site sizing or slicing the noise vector calls this rather
 /// than re-deriving a class block — a second copy that omits the NCS block sizes
-/// the noise vector short, and the samplers' NCS class offset
-/// (`hydro_ids.len() + load_bus_ids.len()`) then indexes past the end of a row.
+/// the noise vector short, and [`ClassDimensions::ncs_range`] then indexes past
+/// the end of a row.
 /// An NCS with `std = 0` is included unconditionally: it contributes zero noise
 /// after the transform, and dropping it would shift the canonical entity order.
 ///
@@ -261,16 +273,13 @@ pub struct StochasticContext {
     opening_tree: OpeningTree,
     normal_lp: PrecomputedNormal,
     ncs_normal: PrecomputedNormal,
-    ncs_entity_ids: Vec<EntityId>,
     entity_order: Box<[EntityId]>,
     base_seed: u64,
     /// Seed for `OutOfSample` forward-pass noise, independent of `base_seed`.
     /// `None` means unconfigured; the `ForwardSampler` factory validates
     /// presence before constructing an `OutOfSample` sampler.
     forward_seed: Option<u64>,
-    dim: usize,
-    n_load_buses: usize,
-    n_stochastic_ncs: usize,
+    class_dimensions: ClassDimensions,
     provenance: StochasticProvenance,
 }
 
@@ -330,17 +339,25 @@ impl StochasticContext {
         self.forward_seed
     }
 
+    /// Returns the per-class entity counts of the noise dimension.
+    #[must_use]
+    #[inline]
+    pub fn class_dimensions(&self) -> ClassDimensions {
+        self.class_dimensions
+    }
+
     /// Returns the noise dimension (`n_hydros + n_load_buses + n_stochastic_ncs`).
     #[must_use]
+    #[inline]
     pub fn dim(&self) -> usize {
-        self.dim
+        self.class_dimensions.total()
     }
 
     /// Returns the number of stochastic load buses in the noise dimension.
     #[must_use]
     #[inline]
     pub fn n_load_buses(&self) -> usize {
-        self.n_load_buses
+        self.class_dimensions.n_load_buses
     }
 
     /// Returns the precomputed normal noise LP parameters for stochastic load buses.
@@ -356,7 +373,7 @@ impl StochasticContext {
     /// Returns the sorted entity IDs of NCS entities in the stochastic pipeline.
     #[must_use]
     pub fn ncs_entity_ids(&self) -> &[EntityId] {
-        &self.ncs_entity_ids
+        &self.entity_order[self.class_dimensions.ncs_range()]
     }
 
     /// Returns the canonical entity ID ordering for the noise dimension
@@ -370,14 +387,14 @@ impl StochasticContext {
     #[must_use]
     #[inline]
     pub fn n_stochastic_ncs(&self) -> usize {
-        self.n_stochastic_ncs
+        self.class_dimensions.n_ncs
     }
 
     /// Returns the number of hydro entities in the noise dimension.
     #[must_use]
     #[inline]
     pub fn n_hydros(&self) -> usize {
-        self.dim - self.n_load_buses - self.n_stochastic_ncs
+        self.class_dimensions.n_hydros
     }
 
     /// Returns the number of study stages in the opening tree.
@@ -621,15 +638,14 @@ pub fn build_stochastic_context(
     let stage_index = stage_id_to_index(&study_stages);
 
     let noise_order = noise_entity_order(system, &schemes);
-    let dim = noise_order.dim();
+    let class_dimensions = noise_order.class_dimensions();
+    let dim = class_dimensions.total();
     let entity_order = noise_order.entity_order();
     let NoiseEntityOrder {
         hydro_ids,
         load_bus_ids,
         ncs_entity_ids,
     } = noise_order;
-    let n_load_buses = load_bus_ids.len();
-    let n_stochastic_ncs = ncs_entity_ids.len();
 
     let provenance = {
         let opening_tree_prov = if user_opening_tree.is_some() {
@@ -677,16 +693,10 @@ pub fn build_stochastic_context(
         par_lp
     };
 
-    let dims = ClassDimensions {
-        n_hydros: hydro_ids.len(),
-        n_load_buses,
-        n_ncs: n_stochastic_ncs,
-    };
-
     let correlation = if dim == 0 || system.correlation().profiles.is_empty() {
         DecomposedCorrelation::empty()
     } else {
-        DecomposedCorrelation::build(system.correlation(), &entity_order, dims)?
+        DecomposedCorrelation::build(system.correlation(), &entity_order, class_dimensions)?
     };
 
     let opening_tree = if let Some(tree) = user_opening_tree {
@@ -698,7 +708,7 @@ pub fn build_stochastic_context(
             dim,
             &correlation,
             &entity_order,
-            dims,
+            class_dimensions,
             &OpeningTreeGenerationInputs {
                 historical_library,
                 external_scenario_counts: external_scenario_counts.as_deref(),
@@ -778,13 +788,10 @@ pub fn build_stochastic_context(
         opening_tree,
         normal_lp,
         ncs_normal,
-        ncs_entity_ids,
         entity_order: entity_order.into_boxed_slice(),
         base_seed,
         forward_seed,
-        dim,
-        n_load_buses,
-        n_stochastic_ncs,
+        class_dimensions,
         provenance,
     })
 }

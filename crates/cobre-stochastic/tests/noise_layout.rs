@@ -75,6 +75,12 @@ fn every_class_present_layout_matches_entity_order() {
     assert_eq!(ncs, ctx.ncs_entity_ids());
     assert_eq!(ncs.len(), ctx.n_stochastic_ncs());
     assert_eq!(ctx.dim(), ctx.entity_order().len());
+
+    let dims = ctx.class_dimensions();
+    assert_eq!(&ctx.entity_order()[dims.hydro_range()], hydro);
+    assert_eq!(&ctx.entity_order()[dims.load_bus_range()], load);
+    assert_eq!(&ctx.entity_order()[dims.ncs_range()], ncs);
+    assert_eq!(dims.total(), ctx.dim());
 }
 
 #[test]
@@ -111,4 +117,10 @@ fn empty_load_class_layout_matches_entity_order() {
     assert_eq!(ncs, ctx.ncs_entity_ids());
     assert_eq!(ncs.len(), ctx.n_stochastic_ncs());
     assert_eq!(ctx.dim(), ctx.entity_order().len());
+
+    let dims = ctx.class_dimensions();
+    assert_eq!(&ctx.entity_order()[dims.hydro_range()], hydro);
+    assert_eq!(&ctx.entity_order()[dims.load_bus_range()], load);
+    assert_eq!(&ctx.entity_order()[dims.ncs_range()], ncs);
+    assert_eq!(dims.total(), ctx.dim());
 }

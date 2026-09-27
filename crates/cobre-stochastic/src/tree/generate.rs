@@ -261,7 +261,7 @@ fn generate_stage_raw_noise(
                 #[allow(clippy::cast_possible_truncation)]
                 let window_idx = (seed % (n_windows as u64)) as usize;
                 let eta = lib.eta_slice(window_idx, stage_idx);
-                noise_slice[..dims.n_hydros].copy_from_slice(eta);
+                noise_slice[dims.hydro_range()].copy_from_slice(eta);
             }
             return Ok(true);
         }
@@ -389,8 +389,7 @@ pub fn generate_opening_tree<'a>(
         for opening_idx in 0..n_openings {
             let start = opening_idx * dim;
             let noise = &mut stage_slice[start..start + dim];
-            let (inflow_noise, rest) = noise.split_at_mut(dims.n_hydros);
-            let (load_noise, ncs_noise) = rest.split_at_mut(dims.n_load_buses);
+            let (inflow_noise, load_noise, ncs_noise) = dims.split_segments_mut(noise);
             DecomposedCorrelation::apply_groups_for_class(
                 groups,
                 EntityClass::Inflow,

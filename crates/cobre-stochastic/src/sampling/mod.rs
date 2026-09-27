@@ -185,10 +185,9 @@ impl ForwardSampler<'_> {
     // to write into req.noise_buf and return a slice borrowing from it.
     #[allow(clippy::needless_pass_by_value)]
     pub fn sample<'b>(&self, req: SampleRequest<'b>) -> Result<ForwardNoise<'b>, StochasticError> {
-        let total_dim = self.dims.n_hydros + self.dims.n_load_buses + self.dims.n_ncs;
+        let total_dim = self.dims.total();
 
-        let (inflow_buf, rest) = req.noise_buf.split_at_mut(self.dims.n_hydros);
-        let (load_buf, ncs_buf) = rest.split_at_mut(self.dims.n_load_buses);
+        let (inflow_buf, load_buf, ncs_buf) = self.dims.split_segments_mut(req.noise_buf);
 
         let class_req = ClassSampleRequest {
             iteration: req.iteration,
@@ -614,11 +613,12 @@ pub fn build_forward_sampler(
         stages,
         &noise_methods,
     );
+    let hydro_range = dims.hydro_range();
     let build_inflow = |source| {
         build_class_sampler(ClassSamplerParams {
             source,
-            offset: 0,
-            len: dims.n_hydros,
+            offset: hydro_range.start,
+            len: hydro_range.len(),
             forward_seed: inflow_forward_seed,
             noise_methods: &noise_methods,
             tree: Some(ctx.tree_view()),
@@ -634,10 +634,11 @@ pub fn build_forward_sampler(
         };
 
     warn_unsupported_forward_noise_methods(EntityClass::Load, load_scheme, stages, &noise_methods);
+    let load_range = dims.load_bus_range();
     let load = build_class_sampler(ClassSamplerParams {
         source: resolve_class_source(load_scheme, EntityClass::Load, external_load_library)?,
-        offset: dims.n_hydros,
-        len: dims.n_load_buses,
+        offset: load_range.start,
+        len: load_range.len(),
         forward_seed: load_forward_seed,
         noise_methods: &noise_methods,
         tree: Some(ctx.tree_view()),
@@ -645,10 +646,11 @@ pub fn build_forward_sampler(
     })?;
 
     warn_unsupported_forward_noise_methods(EntityClass::Ncs, ncs_scheme, stages, &noise_methods);
+    let ncs_range = dims.ncs_range();
     let ncs = build_class_sampler(ClassSamplerParams {
         source: resolve_class_source(ncs_scheme, EntityClass::Ncs, external_ncs_library)?,
-        offset: dims.n_hydros + dims.n_load_buses,
-        len: dims.n_ncs,
+        offset: ncs_range.start,
+        len: ncs_range.len(),
         forward_seed: ncs_forward_seed,
         noise_methods: &noise_methods,
         tree: Some(ctx.tree_view()),

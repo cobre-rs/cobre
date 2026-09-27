@@ -991,7 +991,6 @@ pub(super) fn fill_load_balance_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_blks = layout.n_blks;
-    let grid = layout.block_grid();
 
     for h_idx in 0..ctx.hydros.len() {
         let h_sys = HydroSys::new(h_idx);
@@ -1071,14 +1070,14 @@ pub(super) fn fill_load_balance_entries(
     // contract: a dormant contract's column is `[0, 0]`.
     for (c_sys, contract) in ctx.contracts.iter().enumerate() {
         let (contract_type, family_slot) = contract_family_slot(ctx.contracts, c_sys);
-        let (base, sign) = match contract_type {
-            ContractType::Import => (layout.equipment.col_contract_import_start, 1.0),
-            ContractType::Export => (layout.equipment.col_contract_export_start, -1.0),
+        let sign = match contract_type {
+            ContractType::Import => 1.0,
+            ContractType::Export => -1.0,
         };
         if let Some(&b_idx) = ctx.bus_pos.get(&contract.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.load_balance_row(BusSys::new(b_idx), blk);
-                let col = grid.flat(base, family_slot, blk);
+                let col = layout.contract_col(contract_type, family_slot, blk);
                 col_entries[col].push((row, sign));
             }
         }
@@ -4543,7 +4542,7 @@ mod pumping_water_tests {
         let b_idx = ctx.bus_pos[&EntityId(1)];
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
-            let col = layout.equipment.col_contract_import_start + blk;
+            let col = layout.equipment.contract_import.start + blk;
             assert_eq!(
                 col_entries[col],
                 vec![(row, 1.0)],
@@ -4573,7 +4572,7 @@ mod pumping_water_tests {
         let b_idx = ctx.bus_pos[&EntityId(1)];
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
-            let col = layout.equipment.col_contract_export_start + blk;
+            let col = layout.equipment.contract_export.start + blk;
             assert_eq!(
                 col_entries[col],
                 vec![(row, -1.0)],
@@ -4583,8 +4582,8 @@ mod pumping_water_tests {
     }
 
     /// Mixed import/export at distinct per-family slots land on the right column
-    /// bases with the right signs: import at `col_contract_import_start`, export at
-    /// `col_contract_export_start`.
+    /// bases with the right signs: import at `contract_import.start`, export at
+    /// `contract_export.start`.
     #[test]
     fn contract_mixed_import_export_use_per_family_bases() {
         let fixtures = PumpFixtures::new_with_contracts(
@@ -4607,8 +4606,8 @@ mod pumping_water_tests {
         let b_idx = ctx.bus_pos[&EntityId(1)];
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
-            let import_col = layout.equipment.col_contract_import_start + blk;
-            let export_col = layout.equipment.col_contract_export_start + blk;
+            let import_col = layout.equipment.contract_import.start + blk;
+            let export_col = layout.equipment.contract_export.start + blk;
             assert_eq!(
                 col_entries[import_col],
                 vec![(row, 1.0)],
@@ -4623,8 +4622,8 @@ mod pumping_water_tests {
     }
 
     /// Two imports on one bus address distinct per-family slots: the first
-    /// (`family_slot` 0) lands on `col_contract_import_start + 0*n_blks + blk`, the
-    /// second (`family_slot` 1) on `col_contract_import_start + 1*n_blks + blk`. A
+    /// (`family_slot` 0) lands on `contract_import.start + 0*n_blks + blk`, the
+    /// second (`family_slot` 1) on `contract_import.start + 1*n_blks + blk`. A
     /// regression to using `c_sys` instead of `family_slot` would collide them.
     #[test]
     fn contract_second_import_uses_family_slot_one() {
@@ -4648,8 +4647,8 @@ mod pumping_water_tests {
         let b_idx = ctx.bus_pos[&EntityId(1)];
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
-            let slot0_col = layout.equipment.col_contract_import_start + blk;
-            let slot1_col = layout.equipment.col_contract_import_start + n_blks + blk;
+            let slot0_col = layout.equipment.contract_import.start + blk;
+            let slot1_col = layout.equipment.contract_import.start + n_blks + blk;
             assert_eq!(
                 col_entries[slot0_col],
                 vec![(row, 1.0)],
@@ -4682,7 +4681,7 @@ mod pumping_water_tests {
 
         let n_blks = layout.n_blks;
         for blk in 0..n_blks {
-            let col = layout.equipment.col_contract_import_start + blk;
+            let col = layout.equipment.contract_import.start + blk;
             assert!(
                 col_entries[col].is_empty(),
                 "blk {blk}: contract on an unmapped bus must write no load-balance entry"

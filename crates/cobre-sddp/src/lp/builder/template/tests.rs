@@ -1230,7 +1230,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
     assert_eq!(geometry.contract_import.len(), 2, "1 import * 2 blocks");
     assert_eq!(geometry.contract_export.len(), 2, "1 export * 2 blocks");
     assert_eq!(
-        geometry.contract_import.start, layout.equipment.col_contract_import_start,
+        geometry.contract_import.start, layout.equipment.contract_import.start,
         "import range anchored at the layout import-block start"
     );
     assert_eq!(

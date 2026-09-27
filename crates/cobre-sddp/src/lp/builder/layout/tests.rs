@@ -3487,11 +3487,11 @@ fn contract_columns_empty_keep_generic_slack_at_pumping_end() {
 
     let col_pumping_end = layout.equipment.col_pumping_start + layout.equipment.n_pumping * n_blks;
     assert_eq!(
-        layout.equipment.col_contract_import_start, col_pumping_end,
+        layout.equipment.contract_import.start, col_pumping_end,
         "empty import block starts at col_pumping_end"
     );
     assert_eq!(
-        layout.equipment.col_contract_export_start, col_pumping_end,
+        layout.equipment.contract_export.start, col_pumping_end,
         "empty export block collapses onto col_pumping_end"
     );
     assert_eq!(
@@ -3521,11 +3521,11 @@ fn contract_columns_reserve_import_then_export_blocks() {
 
     let col_pumping_end = layout.equipment.col_pumping_start + layout.equipment.n_pumping * n_blks;
     assert_eq!(
-        layout.equipment.col_contract_import_start, col_pumping_end,
+        layout.equipment.contract_import.start, col_pumping_end,
         "import block starts at col_pumping_end"
     );
     assert_eq!(
-        layout.equipment.col_contract_export_start,
+        layout.equipment.contract_export.start,
         col_pumping_end + 6,
         "export block follows the 6-column import block"
     );
@@ -3569,11 +3569,7 @@ fn contract_col_covers_each_contract_column_once() {
     ] {
         for slot in 0..n {
             for blk in 0..n_blks {
-                let base = match contract_type {
-                    ContractType::Import => layout.equipment.col_contract_import_start,
-                    ContractType::Export => layout.equipment.col_contract_export_start,
-                };
-                let col = layout.block_grid().flat(base, slot, BlockIdx::new(blk));
+                let col = layout.contract_col(contract_type, slot, BlockIdx::new(blk));
                 let oracle = range.start + slot * n_blks + blk;
                 assert_eq!(
                     col, oracle,

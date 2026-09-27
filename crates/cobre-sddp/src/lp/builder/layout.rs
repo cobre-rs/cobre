@@ -4,10 +4,10 @@ use std::ops::Range;
 use cobre_core::commissioning::{Phase, filling_phase};
 use cobre_core::{
     AffineBound, BlockMode, Bus, CascadeTopology, CoefficientRef, ConstraintExpression,
-    EnergyContract, EntityId, GenericConstraint, Hydro, Line, LoadModel, NonControllableSource,
-    PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedLoadFactors,
-    ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, SlackConfig, Stage, Thermal,
-    VariableRef,
+    ContractType, EnergyContract, EntityId, GenericConstraint, Hydro, Line, LoadModel,
+    NonControllableSource, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
+    ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, SlackConfig,
+    Stage, Thermal, VariableRef,
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
@@ -328,18 +328,8 @@ pub(crate) struct EquipmentColumns {
     /// each. Read into the scalar `StageTemplates::n_pumping` that bounds the
     /// per-(station, block) simulation primal read.
     pub(crate) n_pumping: usize,
-    /// Start of import-contract columns (one per import contract per block,
-    /// block-major): `col_contract_import_start + import_idx * n_blks + blk`. The
-    /// import block follows pumping; with `n_contract_import == 0` it is empty and
-    /// `col_contract_import_start == col_pumping_end`.
-    pub(crate) col_contract_import_start: usize,
     /// Full import-contract count (identical at every stage).
     pub(crate) n_contract_import: usize,
-    /// Start of export-contract columns (one per export contract per block,
-    /// block-major): `col_contract_export_start + export_idx * n_blks + blk`. The
-    /// export block follows the import block; with `n_contract_export == 0` it is
-    /// empty and `col_contract_export_start == col_contract_import_end`.
-    pub(crate) col_contract_export_start: usize,
     /// Full export-contract count (identical at every stage).
     pub(crate) n_contract_export: usize,
     /// Column range for import-contract variables (one per import contract per
@@ -1478,9 +1468,7 @@ impl<'a> StageLayout<'a> {
             n_ncs,
             col_pumping_start,
             n_pumping,
-            col_contract_import_start: contract_import.start,
             n_contract_import,
-            col_contract_export_start: contract_export.start,
             n_contract_export,
             contract_import,
             contract_export,
@@ -1821,6 +1809,26 @@ impl StageLayout<'_> {
     #[inline]
     pub(crate) fn pumping_flow_col(&self, pumping_sys: PumpingSys, blk: BlockIdx) -> usize {
         self.block_flat(self.equipment.col_pumping_start, pumping_sys.get(), blk)
+    }
+
+    /// `contract_type`'s contract column at per-direction slot `family_slot`
+    /// (from [`contract_family_slot`](crate::generic_constraints::contract_family_slot))
+    /// for block `blk`.
+    #[inline]
+    pub(crate) fn contract_col(
+        &self,
+        contract_type: ContractType,
+        family_slot: usize,
+        blk: BlockIdx,
+    ) -> usize {
+        self.block_flat(
+            match contract_type {
+                ContractType::Import => self.equipment.contract_import.start,
+                ContractType::Export => self.equipment.contract_export.start,
+            },
+            family_slot,
+            blk,
+        )
     }
 
     /// Base column of the `(evap hydro local_idx, slot)` triple, slot-major

@@ -17,10 +17,9 @@
 //! carries arithmetic: offset formulas stay with the owning value type — these
 //! types only gate which `usize` crosses which boundary.
 //!
-//! `ContractSys` is deliberately NOT introduced: its fills are pure
-//! `grid.flat(...)` arithmetic webs with no dedicated resolver seam (the
-//! contract loops in `fill_load_balance_entries`), so a system-index type for
-//! it would have no call site and ship as a dead type.
+//! `ContractSys` is deliberately NOT introduced: contract columns are addressed
+//! by the per-direction slot from `contract_family_slot`, never by a system
+//! index, so a system-index type would have no call site.
 //!
 //! ## Cross-family assignment pins
 //!

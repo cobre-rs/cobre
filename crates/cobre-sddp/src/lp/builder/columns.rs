@@ -1177,8 +1177,8 @@ pub(super) fn fill_pumping_columns(
     }
 }
 
-/// Energy-contract columns. The family base (`col_contract_import_start` /
-/// `col_contract_export_start`) is addressed by the per-family slot from
+/// Energy-contract columns, addressed through [`StageLayout::contract_col`] by the
+/// per-family slot from
 /// [`contract_family_slot`](crate::generic_constraints::contract_family_slot) — the
 /// single owner the load-balance fill and the resolver also share — not by `c_sys`.
 ///
@@ -1199,20 +1199,13 @@ fn fill_contract_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    let grid = layout.block_grid();
     for (c_sys, contract) in ctx.contracts.iter().enumerate() {
         let active =
             commissioning_active(contract.entry_stage_id, contract.exit_stage_id, stage.id);
         let (contract_type, family_slot) = contract_family_slot(ctx.contracts, c_sys);
-        let (base, family_count) = match contract_type {
-            ContractType::Import => (
-                layout.equipment.col_contract_import_start,
-                layout.equipment.n_contract_import,
-            ),
-            ContractType::Export => (
-                layout.equipment.col_contract_export_start,
-                layout.equipment.n_contract_export,
-            ),
+        let family_count = match contract_type {
+            ContractType::Import => layout.equipment.n_contract_import,
+            ContractType::Export => layout.equipment.n_contract_export,
         };
         debug_assert!(
             family_slot < family_count,
@@ -1223,7 +1216,7 @@ fn fill_contract_columns(
                 .resolved
                 .bounds
                 .contract_bounds_at_block(c_sys, stage_idx, blk);
-            let col = grid.flat(base, family_slot, BlockIdx::new(blk));
+            let col = layout.contract_col(contract_type, family_slot, BlockIdx::new(blk));
             if active {
                 bufs.col_lower[col] = cb.min_mw;
                 bufs.col_upper[col] = cb.max_mw;
@@ -5597,8 +5590,8 @@ mod contract_column_tests {
             col_lower,
             col_upper,
             objective,
-            layout.equipment.col_contract_import_start,
-            layout.equipment.col_contract_export_start,
+            layout.equipment.contract_import.start,
+            layout.equipment.contract_export.start,
         )
     }
 
@@ -6521,8 +6514,8 @@ mod line_contract_pumping_block_bound_tests {
             line_fwd_start: layout.equipment.line_fwd.start,
             line_rev_start: layout.equipment.line_rev.start,
             pumping_start: layout.equipment.col_pumping_start,
-            contract_import_start: layout.equipment.col_contract_import_start,
-            contract_export_start: layout.equipment.col_contract_export_start,
+            contract_import_start: layout.equipment.contract_import.start,
+            contract_export_start: layout.equipment.contract_export.start,
             n_blks: layout.n_blks,
         };
 

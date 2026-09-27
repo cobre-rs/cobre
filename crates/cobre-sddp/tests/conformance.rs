@@ -142,27 +142,25 @@ impl SolverInterface for MockSolver {
     }
 }
 
-/// Minimal stage template for a single hydro, zero PAR lags.
-///
-/// Column layout (N=1, L=0): `storage_out`(0), `z_inflow`(1), `storage_in`(2), `theta`(3).
-/// Row layout: `z_inflow`(0), storage-fixing(1).
+/// Minimal stage template for a hydro-free system (single `theta` column, no
+/// rows): pairs with `wrap_opening_tree`'s empty-system stochastic context.
 fn minimal_template() -> StageTemplate {
     StageTemplate {
-        num_cols: 4,
-        num_rows: 2,
-        num_nz: 2,
-        col_starts: vec![0, 0, 1, 2, 2],
-        row_indices: vec![0, 1],
-        values: vec![1.0, 1.0],
-        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 0.0],
-        row_upper: vec![0.0, 0.0],
-        n_state: 1,
+        num_cols: 1,
+        num_rows: 0,
+        num_nz: 0,
+        col_starts: vec![0, 0],
+        row_indices: vec![],
+        values: vec![],
+        col_lower: vec![0.0],
+        col_upper: vec![f64::INFINITY],
+        objective: vec![1.0],
+        row_lower: vec![],
+        row_upper: vec![],
+        n_state: 0,
         n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
+        n_dual_relevant: 0,
+        n_hydro: 0,
         max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
@@ -843,7 +841,7 @@ mod lb_conformance {
     /// public-API integration test.
     #[test]
     fn evaluate_lower_bound_monotonicity_with_additional_cuts() {
-        let state_layout = state_layout_for(1, 0);
+        let state_layout = state_layout_for(0, 0);
         let template = minimal_template();
         let templates = vec![template];
         let fcf = make_fcf(2, state_layout.n_state);
@@ -863,8 +861,7 @@ mod lb_conformance {
         let stochastic = wrap_opening_tree(opening_tree);
 
         let geometry = equipment_free_geometry(&[1]);
-        let fixture = StageContextFixture::new(&state_layout, &templates, &[], &geometry)
-            .n_hydros_override(0);
+        let fixture = StageContextFixture::new(&state_layout, &templates, &[], &geometry);
         let ctx = fixture.ctx();
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let study_dims = StudyDimensions::default();

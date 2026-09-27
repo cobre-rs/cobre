@@ -432,7 +432,6 @@ fn test_stochastic_load_training_completes() {
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let stage_ctx_fixture =
         StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-            .n_hydros_override(0)
             .load_bus_indices(&load_bus_indices);
     let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
@@ -524,8 +523,7 @@ fn test_deterministic_load_training_matches_baseline() {
     let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx_fixture =
-        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let stage_ctx_fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
@@ -650,7 +648,6 @@ fn test_stochastic_load_seed_determinism() {
         let state_boxes = permissive_state_boxes(state.n_state, n_stages);
         let stage_ctx_fixture =
             StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
-                .n_hydros_override(0)
                 .load_bus_indices(&load_bus_indices);
         let stage_ctx = stage_ctx_fixture.ctx();
         let result = train(

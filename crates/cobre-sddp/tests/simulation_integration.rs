@@ -640,8 +640,7 @@ fn train_simulate_write_cycle() {
     let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let stage_ctx_fixture =
-        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
     let study_dims = study_dims_for(0, 0, 0, 0, false);
@@ -807,8 +806,7 @@ fn train_simulate_write_cycle() {
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let geometry_sim = equipment_free_geometry(&vec![0usize; fx.n_stages]);
     let stage_ctx_fixture_sim =
-        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry_sim)
-            .n_hydros_override(0);
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry_sim);
     simulate(
         &mut sim_workspaces,
         &stage_ctx_fixture_sim.ctx(),
@@ -1506,8 +1504,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
     let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let stage_ctx_fixture =
-        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry)
-            .n_hydros_override(0);
+        StageContextFixture::new(&fx.state, &fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
     let study_dims = study_dims_for(0, 0, 0, 0, false);

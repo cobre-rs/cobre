@@ -1698,8 +1698,7 @@ mod by_node_scratch {
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&[0, 0]);
         let fixture =
-            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry)
-                .n_hydros_override(0);
+            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {
@@ -1819,8 +1818,7 @@ mod by_node_scratch {
         let state_boxes = permissive_state_boxes(n_state, n_stages);
         let geometry = equipment_free_geometry(&[0, 0]);
         let fixture =
-            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry)
-                .n_hydros_override(0);
+            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry);
         let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {

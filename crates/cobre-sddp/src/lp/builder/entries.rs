@@ -2627,7 +2627,7 @@ mod zero_cost_tests {
         // CSC coupling: the maturing slot's incoming (commit_in) column carries
         // (row, -block_hours_total) for each plant under the always-active
         // predicate. At stage 0 the maturing slot is 0 (0 mod k_max), so it is
-        // commit_in slot 0 = col_anticipated_state_start() + local_idx.
+        // commit_in slot 0 = state.commit_in.start + local_idx.
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 0, &layout, &mut col_entries);
 
@@ -2635,7 +2635,7 @@ mod zero_cost_tests {
         let expected_neg = -block_hours_total;
         for local_idx in 0..layout.anticipated.n_anticipated_fishing_rows {
             let row = layout.anticipated.row_anticipated_fishing_start + local_idx;
-            let col_state = layout.col_anticipated_state_start() + local_idx;
+            let col_state = layout.state.commit_in.start + local_idx;
             let state_couplings: Vec<&(usize, f64)> = col_entries[col_state]
                 .iter()
                 .filter(|(r, _)| *r == row)
@@ -3413,7 +3413,7 @@ mod zero_cost_tests {
         fill_anticipated_fishing_entries(&ctx, &stage, 2, &layout, &mut col_entries);
 
         let row = layout.anticipated.row_anticipated_fishing_start;
-        let col_in_slot2 = layout.col_anticipated_state_start() + 2;
+        let col_in_slot2 = layout.state.commit_in.start + 2;
         let block_hours_total: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let expected_neg = -block_hours_total;
 
@@ -3448,7 +3448,7 @@ mod zero_cost_tests {
     /// source). Anticipated-state-fixing diagonals are checked dynamically:
     /// the test builds a fixture with `n_anticipated = 2, k_max = 3` and
     /// asserts every `(slot, plant)` column at
-    /// `col_anticipated_state_start + slot*A + plant` has no entry at
+    /// `state.commit_in.start + slot*A + plant` has no entry at
     /// row `slot*A + plant` (the diagonal entry that existed in the
     /// pre-cutover layout, before state pinning moved to column bounds).
     ///
@@ -3478,7 +3478,7 @@ mod zero_cost_tests {
             .ring_size(&ctx.anticipated_lead_stages);
         for slot in 0..k {
             for plant in 0..a {
-                let col = layout.col_anticipated_state_start() + slot * a + plant;
+                let col = layout.state.commit_in.start + slot * a + plant;
                 let diag_row = slot * a + plant;
                 let has_diag = col_entries[col]
                     .iter()
@@ -3509,7 +3509,7 @@ mod zero_cost_tests {
         }
         for lag in 0..lag_order {
             for h in 0..n_h {
-                let col = layout.col_inflow_lags_start() + lag * n_h + h;
+                let col = layout.state.inflow_lags.start + lag * n_h + h;
                 let diag_row = n_h + lag * n_h + h;
                 let has_diag = col_entries[col]
                     .iter()
@@ -5376,8 +5376,8 @@ mod pumping_water_tests {
                 .map(|(_, &v)| v)
                 .sum()
         };
-        // Lag column for (lag 0, downstream hydro): col_inflow_lags_start + 0*n_h + h.
-        let lag_col = ar_layout.col_inflow_lags_start() + down_idx;
+        // Lag column for (lag 0, downstream hydro): inflow_lags.start + 0*n_h + h.
+        let lag_col = ar_layout.state.inflow_lags.start + down_idx;
         let ar_row = i32::try_from(ar_layout.rows.water_balance.start() + down_idx).unwrap();
         assert_eq!(
             ar_coeff_at(lag_col, ar_row),

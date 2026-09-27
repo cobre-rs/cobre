@@ -1794,25 +1794,6 @@ impl StageLayout<'_> {
         self.state.theta
     }
 
-    /// First AR-lag column; reads `self.state.inflow_lags.start`.
-    #[inline]
-    #[must_use]
-    pub(crate) fn col_inflow_lags_start(&self) -> usize {
-        self.state.inflow_lags.start
-    }
-
-    /// First commitment-hold incoming column (in-study + post-horizon);
-    /// reads `self.state.commit_in.start`.
-    // Rationale: mirrors the sibling col_*_start accessors above for
-    // test-fixture symmetry; no production call site reads through it yet
-    // (unlike its siblings, which production code does call).
-    #[allow(dead_code)]
-    #[inline]
-    #[must_use]
-    pub(crate) fn col_anticipated_state_start(&self) -> usize {
-        self.state.commit_in.start
-    }
-
     /// Column-side state dimension; reads `self.state.n_state`.
     #[inline]
     #[must_use]

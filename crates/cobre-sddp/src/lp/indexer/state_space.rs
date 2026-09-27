@@ -503,7 +503,7 @@ impl StateSpace {
                 if lag == 0 {
                     self.z_inflow_col(HydroSys::new(h)).get()
                 } else {
-                    n + (lag - 1) * n + h
+                    self.lag_incoming_col(lag - 1, HydroSys::new(h)).get()
                 }
             }
         })

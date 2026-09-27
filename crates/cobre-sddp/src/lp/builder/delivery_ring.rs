@@ -80,10 +80,9 @@ impl DeliveryRing {
     /// [`StateSpace::commit_in`] region.
     #[must_use]
     pub fn anticipated(state: &StateSpace) -> Self {
-        let n_ant_state = state.n_anticipated * state.k_max;
         Self::new(
-            state.commit_out.start..state.commit_out.start + n_ant_state,
-            state.commit_in.start..state.commit_in.start + n_ant_state,
+            state.commit_out.clone(),
+            state.commit_in.clone(),
             state.n_anticipated,
             state.k_max,
         )

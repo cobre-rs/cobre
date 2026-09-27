@@ -161,8 +161,7 @@ fn fill_anticipated_slot_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>
 
 /// AR lag columns: unconstrained (signed).
 fn fill_ar_lag_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
-    let n_lag_cols = layout.lag_order * layout.n_h;
-    for lag_col in layout.col_inflow_lags_start()..layout.col_inflow_lags_start() + n_lag_cols {
+    for lag_col in layout.state.inflow_lags.clone() {
         bufs.col_lower[lag_col] = f64::NEG_INFINITY;
         bufs.col_upper[lag_col] = f64::INFINITY;
     }

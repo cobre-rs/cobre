@@ -2887,9 +2887,7 @@ fn splice_transit_bucket_seed(
 ) {
     let seed = build_initial_transit_bucket_state(system, topology);
     debug_assert_eq!(seed.len(), layout.n_buckets);
-    for (b, &value) in seed.iter().enumerate() {
-        state[layout.transit_buckets_out.start + b] = value;
-    }
+    state[layout.transit_buckets_out.clone()].copy_from_slice(&seed);
 }
 
 // ---------------------------------------------------------------------------

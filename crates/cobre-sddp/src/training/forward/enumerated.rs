@@ -388,12 +388,10 @@ fn solve_forward_node<S: SolverInterface + Send>(
         (view_objective - d_t * unscaled_primal[state.theta]) * ctx.cost_scale_factor
     };
 
-    let lag_start = state.inflow_lags.start;
-    let lag_len = state.hydro_count * state.max_par_order;
     ws.scratch.lag_matrix_buf.clear();
     ws.scratch
         .lag_matrix_buf
-        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+        .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = ctx.stage_lag(t);
     let downstream_par_order = ws

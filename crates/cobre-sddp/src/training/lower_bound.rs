@@ -225,15 +225,11 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
 
     if let Some(par_lp) = truncation_par {
         let max_order = training_ctx.state.max_par_order;
-        let lag_len = max_order * n_hydros;
         scratch.lag_matrix_buf.clear();
-        scratch.lag_matrix_buf.resize(lag_len, 0.0);
-        for h in 0..n_hydros {
-            for l in 0..max_order {
-                scratch.lag_matrix_buf[l * n_hydros + h] =
-                    initial_state[training_ctx.state.inflow_lags.start + l * n_hydros + h];
-            }
-        }
+        scratch
+            .lag_matrix_buf
+            .extend_from_slice(&initial_state[training_ctx.state.inflow_lags.clone()]);
+        debug_assert_eq!(scratch.lag_matrix_buf.len(), max_order * n_hydros);
 
         scratch.eta_floor_buf.clear();
         scratch.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);

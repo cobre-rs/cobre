@@ -358,8 +358,8 @@ fn extract_transit_buckets(
         return Vec::new();
     }
     debug_assert!(
-        state.transit_buckets_out.start + state.n_buckets <= view.primal.len()
-            && state.transit_buckets_in.start + state.n_buckets <= view.primal.len(),
+        state.transit_buckets_out.end <= view.primal.len()
+            && state.transit_buckets_in.end <= view.primal.len(),
         "bucket primal out of bounds: n_buckets {}, primal len {}",
         state.n_buckets,
         view.primal.len(),

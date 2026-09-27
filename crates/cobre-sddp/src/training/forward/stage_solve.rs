@@ -179,12 +179,10 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     rec.node_id = node_id;
 
     // Save incoming lag values before overwriting state with primal.
-    let lag_start = state.inflow_lags.start;
-    let lag_len = state.hydro_count * state.max_par_order;
     ws.scratch.lag_matrix_buf.clear();
     ws.scratch
         .lag_matrix_buf
-        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+        .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = resolve_stage_lag_transition(ctx.stage_lag_transitions, t.0);
     let downstream_par_order = ws

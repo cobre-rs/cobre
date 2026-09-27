@@ -89,15 +89,11 @@ pub(crate) fn transform_inflow_noise(
         InflowNonNegativityMethod::Truncation
         | InflowNonNegativityMethod::TruncationWithPenalty => {
             let max_order = state.max_par_order;
-            let lag_len = max_order * n_hydros;
             scratch.lag_matrix_buf.clear();
-            scratch.lag_matrix_buf.resize(lag_len, 0.0);
-            for h in 0..n_hydros {
-                for l in 0..max_order {
-                    scratch.lag_matrix_buf[l * n_hydros + h] =
-                        current_state[state.inflow_lags.start + l * n_hydros + h];
-                }
-            }
+            scratch
+                .lag_matrix_buf
+                .extend_from_slice(&current_state[state.inflow_lags.clone()]);
+            debug_assert_eq!(scratch.lag_matrix_buf.len(), max_order * n_hydros);
 
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
@@ -219,7 +215,6 @@ pub(crate) fn accumulate_and_shift_lag_state(
     let lag_start = layout.inflow_lags.start;
     let n_h = layout.hydro_count;
     let l_max = layout.max_par_order;
-    let z_start = layout.z_inflow.start;
 
     // LagMajor::index treats offset 0 as this call's lag block, not the state
     // vector's absolute start — slicing from `lag_start` keeps every kernel
@@ -232,7 +227,7 @@ pub(crate) fn accumulate_and_shift_lag_state(
         },
         &mut state[lag_start..],
         incoming_lags,
-        &unscaled_primal[z_start..z_start + n_h],
+        &unscaled_primal[layout.z_inflow.clone()],
         stage_lag,
         lag,
         ds,

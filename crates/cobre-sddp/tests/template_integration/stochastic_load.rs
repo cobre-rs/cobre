@@ -1,6 +1,29 @@
 //! `stochastic_load` section tests.
 
 use super::*;
+use cobre_core::scenario::SamplingScheme;
+use cobre_core::temporal::Stage;
+
+/// A [`PrecomputedNormal`] built over `system`'s own noise-member load buses,
+/// so it satisfies the strict `n_entities() == n_load_buses` equality
+/// [`build_stage_templates_resolving_layout`] now asserts.
+fn noise_member_load_normal(system: &cobre_core::System) -> PrecomputedNormal {
+    let stages: Vec<Stage> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let max_blocks = stages.iter().map(|s| s.blocks.len()).max().unwrap_or(0);
+    PrecomputedNormal::build(
+        system.load_models(),
+        &[],
+        &stages,
+        &system.load_noise_member_bus_ids(SamplingScheme::InSample),
+        max_blocks,
+    )
+    .expect("load normal builds over the noise-member buses")
+}
 
 #[test]
 fn stage_templates_load_balance_family_starts_after_the_water_rows() {
@@ -9,7 +32,7 @@ fn stage_templates_load_balance_family_starts_after_the_water_rows() {
         &system,
         no_penalty_config(),
         &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
+        &noise_member_load_normal(&system),
         &default_production(&system),
         &default_evaporation(&system),
         &ResolvedParameters::default(),
@@ -44,7 +67,7 @@ fn stage_templates_n_load_buses_matches_stochastic_buses() {
         &system,
         no_penalty_config(),
         &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
+        &noise_member_load_normal(&system),
         &default_production(&system),
         &default_evaporation(&system),
         &ResolvedParameters::default(),

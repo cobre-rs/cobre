@@ -7,6 +7,7 @@
 )]
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 
 use chrono::NaiveDate;
 use cobre_core::{
@@ -2259,6 +2260,102 @@ fn stage_layout_operational_violation_rows_are_contiguous_blocks() {
         layout.slack.oper_violation.max_outflow_rows.end + n_op,
         "min_generation must start one min_turbine block (n_op rows) after max_outflow ends"
     );
+}
+
+// ── Block-strided address pin (rows, thermal and excess columns) ────────
+
+/// Every position `k` in a block-major row or column family resolves to
+/// `range.start + k` via `BlockGrid::flat` at `(k / n_blks, k % n_blks)` — a
+/// transposed stride fails the moment `n_blks >= 2`. Returns each family's
+/// count, in this order: min outflow, max outflow, min turbine, min
+/// generation, thermal, excess.
+fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
+    fn check(
+        n_blks: usize,
+        range: &Range<usize>,
+        label: &str,
+        addr: impl Fn(usize, BlockIdx) -> usize,
+    ) -> usize {
+        assert_eq!(
+            range.len() % n_blks,
+            0,
+            "{label} family length not a multiple of n_blks"
+        );
+        for k in 0..range.len() {
+            let (i, blk) = (k / n_blks, k % n_blks);
+            assert_eq!(
+                range.start + k,
+                addr(i, BlockIdx::new(blk)),
+                "{label} address mismatch at k={k}"
+            );
+        }
+        range.len()
+    }
+
+    let n_blks = layout.n_blks;
+    let grid = layout.block_grid();
+    let geometry = layout.geometry(BlockMode::Parallel);
+    let oper = &layout.slack.oper_violation;
+
+    [
+        check(n_blks, &oper.min_outflow_rows, "min outflow", |i, blk| {
+            grid.flat(oper.min_outflow_rows.start, i, blk)
+        }),
+        check(n_blks, &oper.max_outflow_rows, "max outflow", |i, blk| {
+            grid.flat(oper.max_outflow_rows.start, i, blk)
+        }),
+        check(n_blks, &oper.min_turbine_rows, "min turbine", |i, blk| {
+            grid.flat(oper.min_turbine_rows.start, i, blk)
+        }),
+        check(
+            n_blks,
+            &oper.min_generation_rows,
+            "min generation",
+            |i, blk| grid.flat(oper.min_generation_rows.start, i, blk),
+        ),
+        check(n_blks, &geometry.thermal, "thermal", |i, blk| {
+            grid.flat(geometry.thermal.start, i, blk)
+        }),
+        check(n_blks, &geometry.excess, "excess", |i, blk| {
+            grid.flat(geometry.excess.start, i, blk)
+        }),
+    ]
+}
+
+/// Runs [`assert_block_strided_addresses`] over `FphaMixFixtures` (hydros and
+/// cells, one block) and over a `ZeroEntityFixtures` copy with
+/// `n_thermals`/`n_buses` set and four blocks, so every family's summed count
+/// is nonzero and at least one layout is multi-block.
+#[test]
+fn block_strided_addresses_match_their_family_ranges() {
+    let fpha_fixtures = FphaMixFixtures::new();
+    let fpha_ctx = fpha_fixtures.make_ctx();
+    let fpha_stage = minimal_stage();
+    let fpha_state = state_layout_for(&fpha_ctx);
+    let fpha_layout = StageLayout::new(&fpha_ctx, &fpha_state, &fpha_stage, 0);
+    let fpha_counts = assert_block_strided_addresses(&fpha_layout);
+
+    let mut zero_fixtures = ZeroEntityFixtures::new();
+    let thermal_ctx = TemplateBuildCtx {
+        n_thermals: 2,
+        n_buses: 2,
+        ..zero_fixtures.make_ctx(0, vec![], &[])
+    };
+    let thermal_stage = stage_with_blocks(BlockMode::Parallel, 4);
+    let thermal_state = state_layout_for(&thermal_ctx);
+    let thermal_layout = StageLayout::new(&thermal_ctx, &thermal_state, &thermal_stage, 0);
+    assert_eq!(
+        thermal_layout.n_blks, 4,
+        "fixture must build a 4-block layout"
+    );
+    let thermal_counts = assert_block_strided_addresses(&thermal_layout);
+
+    for (idx, (fpha, thermal)) in fpha_counts.iter().zip(thermal_counts).enumerate() {
+        assert!(
+            fpha + thermal > 0,
+            "family {idx} has zero rows/cols across both layouts"
+        );
+    }
 }
 
 // ── Anticipated-decision column positioning ──────────────────────────────

@@ -352,12 +352,14 @@ mod tests {
     };
     use crate::{
         SddpError,
-        context::StageContext,
         cut::pool::CutPool,
-        lp::builder::{PatchBuffer, StateBox},
+        lp::builder::{PatchBuffer, StageGeometry, StateBox},
         noise::{DownstreamAccumState, LagAccumState, accumulate_and_shift_lag_state},
         setup::{NodeId, StageIdx},
-        test_support::state_layout_with_transit_buckets,
+        test_support::{
+            StageContextFixture, equipment_free_geometry, state_layout,
+            state_layout_with_transit_buckets,
+        },
         workspace::{CapturedBasis, SolverWorkspace, WorkspaceSizing},
     };
 
@@ -432,32 +434,13 @@ mod tests {
         )
     }
 
-    /// Build a minimal `StageContext` wrapping a single template.
-    fn make_context(templates: &[StageTemplate]) -> StageContext<'_> {
-        StageContext {
-            geometry_per_stage: &[],
-            templates,
-            state_boxes: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        }
+    /// Build a minimal `StageContext` fixture wrapping a single template.
+    fn make_context<'a>(
+        templates: &'a [StageTemplate],
+        geometry_per_stage: &'a [StageGeometry],
+    ) -> StageContextFixture<'a> {
+        let state = state_layout(0, 0);
+        StageContextFixture::new(&state, templates, &[], geometry_per_stage)
     }
 
     /// Build an empty `CutPool` (no active cuts, `populated_count = 0`).
@@ -473,7 +456,9 @@ mod tests {
     fn run_stage_solve_cold_start_returns_view() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -510,7 +495,9 @@ mod tests {
     fn run_stage_solve_warm_start_frozen_path_succeeds() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -572,7 +559,9 @@ mod tests {
     fn run_stage_solve_propagates_infeasible() {
         let template = make_infeasible_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = CutPool::new(16, 0, 1, 0);
         let mut ws = make_workspace(&template);
 
@@ -615,7 +604,9 @@ mod tests {
     fn basis_deficit_rejected_before_solver_sees_it() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -671,7 +662,9 @@ mod tests {
     fn run_stage_solve_cross_node_stored_basis_is_treated_as_cold() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -719,7 +712,9 @@ mod tests {
     fn run_stage_solve_terminal_static_applies_basis_1to1_without_reconstruct_basis() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -793,7 +788,9 @@ mod tests {
     fn run_stage_solve_interior_warm_start_invokes_reconstruct_basis() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -845,7 +842,9 @@ mod tests {
     fn run_stage_solve_terminal_static_cross_node_stored_basis_is_treated_as_cold() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -888,7 +887,9 @@ mod tests {
     fn run_stage_solve_terminal_static_shape_mismatch_is_treated_as_cold() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 

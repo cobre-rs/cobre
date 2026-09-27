@@ -2099,7 +2099,7 @@ mod tests {
     };
 
     use crate::{
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
         horizon_mode::HorizonMode,
@@ -2110,8 +2110,8 @@ mod tests {
         solver_stats::WORKER_STATS_ENTRY_STRIDE,
         state_exchange::ExchangeBuffers,
         test_support::{
-            all_enabled_cut_state_layouts, permissive_state_boxes, state_layout, study_dims,
-            trial_state_records,
+            StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
+            permissive_state_boxes, state_layout, study_dims, trial_state_records,
         },
         trajectory::TrajectoryRecord,
         workspace::{
@@ -2615,30 +2615,10 @@ mod tests {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -2793,30 +2773,10 @@ mod tests {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(state, templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph,
@@ -3200,30 +3160,10 @@ mod tests {
         // Cut-batch scratch is pool-indexed (backward writes `cut_batches[successor_pool_id]`).
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(state, templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph,
@@ -3439,30 +3379,10 @@ mod tests {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, comm.size(), comm.size());
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph,
@@ -3954,30 +3874,11 @@ mod tests {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture =
+            StageContextFixture::new(&state_layout_fixture, &templates, &state_boxes, &geometry)
+                .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -4103,30 +4004,10 @@ mod tests {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+            .n_hydros_override(0);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -4739,30 +4620,23 @@ mod tests {
             })
             .collect();
 
-        let stage_ctx = StageContext {
-            templates: &setup.stage_data.stage_templates.templates,
-            state_boxes: &setup.stage_data.stage_templates.state_boxes,
-            geometry_per_stage: &setup.stage_data.stage_templates.geometry_per_stage,
-            n_hydros: setup.stage_data.stage_templates.n_hydros,
-            cost_scale_factor: setup.stage_data.stage_templates.cost_scale_factor,
-            n_load_buses: setup.stage_data.stage_templates.n_load_buses,
-            load_balance_row_starts: &setup.stage_data.stage_templates.load_balance_row_starts,
-            load_bus_indices: &setup.stage_data.stage_templates.load_bus_indices,
-            block_counts_per_stage: &setup.stage_data.block_counts_per_stage,
-            ncs_col_starts: &setup.stage_data.stage_templates.ncs_col_starts,
-            n_ncs: setup.stage_data.stage_templates.n_ncs,
-            ncs_stochastic_dense_col: &setup.ncs_stochastic_dense_col,
-            ncs_stochastic_windows: &setup.ncs_stochastic_windows,
-            anticipated_windows: &setup.anticipated_windows,
-            study_stage_ids: &setup.study_stage_ids,
-            ncs_max_gen: &setup.ncs_max_gen,
-            ncs_allow_curtailment: &setup.ncs_allow_curtailment,
-            discount_factors: setup.stage_data.time_value.discount_factors(),
-            cumulative_discount_factors: setup.stage_data.time_value.cumulative_discount_factors(),
-            stage_lag_transitions: &setup.stage_data.stage_lag_transitions,
-            noise_group_ids: &setup.stage_data.noise_group_ids,
-            downstream_par_order: setup.downstream_par_order,
-        };
+        let fixture = StageContextFixture::from_stage_templates(
+            &setup.stage_data.state,
+            &setup.stage_data.stage_templates,
+            &setup.stage_data.stage_templates.state_boxes,
+        )
+        .ncs_stochastic_dense_col(&setup.ncs_stochastic_dense_col)
+        .ncs_stochastic_windows(&setup.ncs_stochastic_windows)
+        .anticipated_windows(&setup.anticipated_windows)
+        .study_stage_ids(&setup.study_stage_ids)
+        .ncs_max_gen(&setup.ncs_max_gen)
+        .ncs_allow_curtailment(&setup.ncs_allow_curtailment)
+        .discount_factors(setup.stage_data.time_value.discount_factors())
+        .cumulative_discount_factors(setup.stage_data.time_value.cumulative_discount_factors())
+        .stage_lag_transitions(&setup.stage_data.stage_lag_transitions)
+        .noise_group_ids(&setup.stage_data.noise_group_ids)
+        .downstream_par_order(setup.downstream_par_order);
+        let stage_ctx = fixture.ctx();
         let tr = &setup.scenario_libraries.training;
         let training_ctx = TrainingContext {
             horizon: &setup.horizon,

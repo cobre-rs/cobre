@@ -30,7 +30,7 @@ use crate::solve::partition;
 use crate::{
     CutPool, SddpError, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::FutureCostFunction,
     horizon_mode::HorizonMode,
     inflow_method::InflowNonNegativityMethod,
@@ -38,7 +38,7 @@ use crate::{
     lp::indexer::StateSpace,
     risk_measure::RiskMeasure,
     setup::{NodeId, NodePos},
-    test_support::{self, permissive_state_boxes},
+    test_support::{self, StageContextFixture, equipment_free_geometry, permissive_state_boxes},
     trajectory::TrajectoryRecord,
     workspace::{BackwardAccumulators, BasisStore, ScratchBuffers, SolverWorkspace},
 };
@@ -663,30 +663,10 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
         BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -794,30 +774,10 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -929,30 +889,10 @@ fn cost_statistics_accumulated_correctly() {
         BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -1536,30 +1476,10 @@ fn run_one_iteration(
     let stages = make_stages_3();
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     run_forward_pass(
         std::slice::from_mut(ws),
         basis_store,
@@ -1695,30 +1615,10 @@ fn test_forward_pass_parallel_cost_agreement() {
     let n_scenarios = 10;
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
 
     let mut ws1 = single_workspace(MockSolver::always_ok(solution.clone()), &state);
     let mut records1 = empty_records(n_scenarios * 3);
@@ -1858,30 +1758,10 @@ fn test_forward_pass_work_distribution() {
     let mut basis_store = BasisStore::new(n_scenarios, num_stages);
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let _result = run_forward_pass(
         &mut workspaces,
         &mut basis_store,
@@ -2117,30 +1997,9 @@ fn run_single_stage_forward(
     let mut basis_store = BasisStore::new(1, 1);
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize]);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let ctx = fixture.ctx();
     let stages = vec![Stage {
         index: 0,
         id: 0,
@@ -2307,30 +2166,10 @@ fn none_method_unchanged_with_truncation_code_present() {
         BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let result = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -2560,30 +2399,10 @@ fn test_forward_pass_parallel_infeasibility() {
     let mut basis_store = BasisStore::new(n_scenarios, num_stages);
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1, 1]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let result = run_forward_pass(
         &mut workspaces,
         &mut basis_store,
@@ -2721,34 +2540,13 @@ fn forward_pass_load_noise_positive_realization() {
     let mut basis_store = BasisStore::new(1, 1);
     let load_balance_row_starts = vec![10usize];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &geometry_per_stage,
-        templates: &templates,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses,
-        load_balance_row_starts: &load_balance_row_starts,
-        load_bus_indices: &load_bus_indices,
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        .load_balance_row_starts(&load_balance_row_starts)
+        .load_bus_indices(&load_bus_indices);
+    let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -2883,34 +2681,13 @@ fn forward_pass_load_noise_clamped_to_zero() {
     let mut basis_store = BasisStore::new(1, 1);
     let load_balance_row_starts = vec![10usize];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &geometry_per_stage,
-        templates: &templates,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses,
-        load_balance_row_starts: &load_balance_row_starts,
-        load_bus_indices: &load_bus_indices,
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        .load_balance_row_starts(&load_balance_row_starts)
+        .load_bus_indices(&load_bus_indices);
+    let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -2994,30 +2771,11 @@ fn forward_pass_no_load_buses_unchanged() {
     let mut basis_store = BasisStore::new(1, 3);
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0, // skip inflow noise loop (minimal_template_1_0 has 1 row)
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1, 1, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1, 1, 1]);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+        // skip inflow noise loop (minimal_template_1_0 has 1 row)
+        .n_hydros_override(0);
+    let ctx = fixture.ctx();
     let _fwd = run_forward_pass(
         std::slice::from_mut(&mut ws),
         &mut basis_store,
@@ -3420,7 +3178,7 @@ mod dcs_forward {
     use cobre_solver::{ActiveSolver, SolverInterface, StageTemplate};
 
     use super::super::{StageKey, run_forward_stage};
-    use crate::context::{StageContext, TrainingContext};
+    use crate::context::TrainingContext;
     use crate::cut::FutureCostFunction;
     use crate::cut_selection::CutMetadata;
     use crate::dcs::DcsParams;
@@ -3431,6 +3189,7 @@ mod dcs_forward {
     use crate::lp::builder::{PatchBuffer, StateBox};
     use crate::setup::{NodeId, NodePos, StageIdx};
     use crate::test_support;
+    use crate::test_support::{StageContextFixture, equipment_free_geometry};
     use crate::trajectory::TrajectoryRecord;
     use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
 
@@ -3632,30 +3391,11 @@ mod dcs_forward {
             };
             2
         ];
-        let ctx = StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            state_boxes: &state_boxes,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize, 1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &discount_factors,
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1usize, 1]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+            .n_hydros_override(0)
+            .discount_factors(&discount_factors);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -3870,13 +3610,14 @@ mod transit_bucket_copy_gap {
 
     use super::super::{StageKey, run_forward_stage};
     use super::MockSolver;
-    use crate::context::{StageContext, TrainingContext};
+    use crate::context::TrainingContext;
     use crate::cut::FutureCostFunction;
     use crate::horizon_mode::HorizonMode;
     use crate::inflow_method::InflowNonNegativityMethod;
     use crate::lp::builder::{PatchBuffer, StageGeometry, StateBox};
     use crate::setup::{NodeId, NodePos, StageIdx};
     use crate::test_support;
+    use crate::test_support::StageContextFixture;
     use crate::trajectory::TrajectoryRecord;
     use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
 
@@ -3988,30 +3729,11 @@ mod transit_bucket_copy_gap {
             upper: vec![f64::INFINITY; state.n_state],
         }];
 
-        let ctx = StageContext {
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            state_boxes: &state_boxes,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let fixture =
+            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+                .n_hydros_override(0)
+                .block_counts_override(&[1usize]);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),

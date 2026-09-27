@@ -15,7 +15,7 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_comm::LocalBackend;
 use cobre_core::scenario::{InflowModel, LoadModel, SamplingScheme};
-use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, Transition};
+use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, StageLagTransition, Transition};
 use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
     CascadeTopology, ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro,
@@ -667,6 +667,10 @@ pub struct StageContextFixture<'a> {
     discount_factors: &'a [f64],
     cumulative_discount_factors: &'a [f64],
     study_stage_ids: &'a [i32],
+    anticipated_windows: &'a [(Option<i32>, Option<i32>)],
+    stage_lag_transitions: &'a [StageLagTransition],
+    noise_group_ids: &'a [u32],
+    downstream_par_order: usize,
 }
 
 impl<'a> StageContextFixture<'a> {
@@ -707,6 +711,10 @@ impl<'a> StageContextFixture<'a> {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             study_stage_ids: &[],
+            anticipated_windows: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         }
     }
 
@@ -824,6 +832,34 @@ impl<'a> StageContextFixture<'a> {
         self
     }
 
+    /// Sets [`StageContext::anticipated_windows`].
+    #[must_use]
+    pub fn anticipated_windows(mut self, v: &'a [(Option<i32>, Option<i32>)]) -> Self {
+        self.anticipated_windows = v;
+        self
+    }
+
+    /// Sets [`StageContext::stage_lag_transitions`].
+    #[must_use]
+    pub fn stage_lag_transitions(mut self, v: &'a [StageLagTransition]) -> Self {
+        self.stage_lag_transitions = v;
+        self
+    }
+
+    /// Sets [`StageContext::noise_group_ids`].
+    #[must_use]
+    pub fn noise_group_ids(mut self, v: &'a [u32]) -> Self {
+        self.noise_group_ids = v;
+        self
+    }
+
+    /// Sets [`StageContext::downstream_par_order`].
+    #[must_use]
+    pub fn downstream_par_order(mut self, v: usize) -> Self {
+        self.downstream_par_order = v;
+        self
+    }
+
     /// Lends a [`StageContext`] borrowing this fixture's fields.
     #[must_use]
     pub fn ctx(&self) -> StageContext<'_> {
@@ -841,15 +877,15 @@ impl<'a> StageContextFixture<'a> {
             n_ncs: self.n_ncs,
             ncs_stochastic_dense_col: self.ncs_stochastic_dense_col,
             ncs_stochastic_windows: self.ncs_stochastic_windows,
-            anticipated_windows: &[],
+            anticipated_windows: self.anticipated_windows,
             study_stage_ids: self.study_stage_ids,
             ncs_max_gen: self.ncs_max_gen,
             ncs_allow_curtailment: self.ncs_allow_curtailment,
             discount_factors: self.discount_factors,
             cumulative_discount_factors: self.cumulative_discount_factors,
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
+            stage_lag_transitions: self.stage_lag_transitions,
+            noise_group_ids: self.noise_group_ids,
+            downstream_par_order: self.downstream_par_order,
         }
     }
 }

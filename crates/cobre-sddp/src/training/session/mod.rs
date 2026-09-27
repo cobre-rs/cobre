@@ -1548,12 +1548,12 @@ mod tests {
     use crate::{
         CutPool, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
         config::{CutManagementConfig, EventConfig, LoopConfig},
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::fcf::FutureCostFunction,
         error::SddpError,
         horizon_mode::HorizonMode,
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::StateBox,
+        lp::builder::{StageGeometry, StateBox},
         lp::indexer::{CutStateProjection, StateSpace, StudyDimensions},
         risk_measure::RiskMeasure,
         setup::node_graph::StageIdx,
@@ -1561,7 +1561,9 @@ mod tests {
             NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         },
         solver_stats::WORKER_STATS_ENTRY_STRIDE,
-        test_support::{self, permissive_state_boxes},
+        test_support::{
+            self, StageContextFixture, equipment_free_geometry, permissive_state_boxes,
+        },
     };
 
     // ── Shared helpers (mirrors training.rs test helpers) ──────────────────
@@ -1920,33 +1922,11 @@ mod tests {
 
     fn make_stage_ctx<'a>(
         templates: &'a [StageTemplate],
-        block_counts: &'a [usize],
+        geometry_per_stage: &'a [StageGeometry],
         state_boxes: &'a [StateBox],
-    ) -> StageContext<'a> {
-        StageContext {
-            geometry_per_stage: &[],
-            templates,
-            state_boxes,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: block_counts,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        }
+    ) -> StageContextFixture<'a> {
+        let state = test_support::state_layout(0, 0);
+        StageContextFixture::new(&state, templates, state_boxes, geometry_per_stage)
     }
 
     fn make_training_ctx<'a>(
@@ -2003,7 +1983,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2083,7 +2065,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2175,7 +2159,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2240,7 +2226,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2306,7 +2294,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2363,7 +2353,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2437,7 +2429,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2926,7 +2920,9 @@ mod tests {
         let comm = Rank0Of2;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);
@@ -3002,7 +2998,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);
@@ -3057,7 +3055,9 @@ mod tests {
         let comm = Rank0Of2;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);

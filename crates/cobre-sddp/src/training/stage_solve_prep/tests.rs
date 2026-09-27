@@ -22,7 +22,7 @@ use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochasti
 
 use super::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource};
 use crate::{
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     horizon_mode::HorizonMode,
     inflow_method::InflowNonNegativityMethod,
     lp::builder::{PatchBuffer, StateBox},
@@ -33,7 +33,8 @@ use crate::{
     },
     setup::node_graph::StageIdx,
     test_support::{
-        all_enabled_cut_state_layouts, geometry_with_load_balance, state_layout, study_dims,
+        StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
+        geometry_with_load_balance, state_layout, study_dims,
     },
     workspace::{ScratchBuffers, WorkspaceSizing},
 };
@@ -314,30 +315,9 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     let template = minimal_forward_template();
     let templates = vec![template.clone()];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        templates: &templates,
-        geometry_per_stage: &[],
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1]);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let ctx = fixture.ctx();
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let study_dims = study_dims();
     let training_ctx = TrainingContext {
@@ -575,30 +555,14 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     let ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)> = vec![(None, None)];
     let ncs_col_starts = vec![0_usize];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        templates: &templates,
-        geometry_per_stage: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1],
-        ncs_col_starts: &ncs_col_starts,
-        n_ncs: 1,
-        ncs_stochastic_dense_col: &ncs_stochastic_dense_col,
-        ncs_stochastic_windows: &ncs_stochastic_windows,
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &ncs_max_gen,
-        ncs_allow_curtailment: &ncs_allow_curtailment,
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1]);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+        .ncs_col_starts(&ncs_col_starts)
+        .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)
+        .ncs_stochastic_windows(&ncs_stochastic_windows)
+        .ncs_max_gen(&ncs_max_gen)
+        .ncs_allow_curtailment(&ncs_allow_curtailment);
+    let ctx = fixture.ctx();
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let study_dims = StudyDimensions {
         has_ncs: true,
@@ -736,30 +700,12 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     let templates = vec![single_hydro_load_template()];
     let state_boxes = vec![unbounded_state_box(state.n_state)];
     let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1)];
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        templates: &templates,
-        geometry_per_stage: &geometry_per_stage,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 1,
-        load_balance_row_starts: &[1],
-        load_bus_indices: &[0],
-        block_counts_per_stage: &[1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let load_balance_row_starts = [1_usize];
+    let load_bus_indices = [0_usize];
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+        .load_balance_row_starts(&load_balance_row_starts)
+        .load_bus_indices(&load_bus_indices);
+    let ctx = fixture.ctx();
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let study_dims = study_dims();
     let training_ctx = TrainingContext {

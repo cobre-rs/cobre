@@ -553,7 +553,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::{
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         horizon_mode::HorizonMode,
         indexer::StateSpace,
         inflow_method::InflowNonNegativityMethod,
@@ -564,6 +564,7 @@ mod tests {
         },
         setup::node_graph::StageIdx,
         test_support,
+        test_support::{StageContextFixture, equipment_free_geometry},
         workspace::ScratchBuffers,
     };
 
@@ -996,30 +997,9 @@ mod tests {
         let templates = vec![template];
         let inflow_method = InflowNonNegativityMethod::None;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let ctx = StageContext {
-            state_boxes: &[],
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1]);
+        let fixture = StageContextFixture::new(&state, &templates, &[], &geometry);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1077,30 +1057,9 @@ mod tests {
         let templates = vec![template];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let ctx = StageContext {
-            state_boxes: &[],
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1]);
+        let fixture = StageContextFixture::new(&state, &templates, &[], &geometry);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1158,30 +1117,9 @@ mod tests {
         let templates = vec![template];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let ctx = StageContext {
-            state_boxes: &[],
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1]);
+        let fixture = StageContextFixture::new(&state, &templates, &[], &geometry);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),

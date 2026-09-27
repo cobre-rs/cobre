@@ -44,7 +44,7 @@ use super::BackwardResult;
 use crate::{
     backward_pass_state::{BackwardPassInputs, BackwardPassState},
     build_cut_row_batch_into,
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::{FutureCostFunction, row::build_cut_row_batch},
     cut_sync::CutSyncBuffers,
     forward::EnumeratedForwardScratch,
@@ -57,7 +57,7 @@ use crate::{
     setup::node_graph::{NodePos, StageIdx, Traversal},
     solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
-    test_support::{self, permissive_state_boxes},
+    test_support::{self, StageContextFixture, equipment_free_geometry, permissive_state_boxes},
     trajectory::TrajectoryRecord,
     workspace::{BackwardAccumulators, BasisStore, CapturedBasis, ScratchBuffers, SolverWorkspace},
 };
@@ -985,30 +985,14 @@ fn single_stage_system_produces_no_cuts() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1086,30 +1070,14 @@ fn two_stage_system_two_trial_states_generates_two_cuts_at_stage_0() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1194,30 +1162,14 @@ fn cut_inserted_with_correct_stage_iteration_and_forward_pass_index() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1296,30 +1248,14 @@ fn no_cuts_generated_at_last_stage() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1399,30 +1335,14 @@ fn elapsed_ms_is_non_negative() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1497,30 +1417,14 @@ fn infeasible_solver_returns_sddp_infeasible_error() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1630,30 +1534,14 @@ fn cut_coefficients_and_intercept_match_dual_extraction_formula() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1744,30 +1632,14 @@ fn cut_gradient_sign_physically_correct() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1869,30 +1741,14 @@ fn cut_is_tight_at_trial_state() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -1984,30 +1840,14 @@ fn single_rank_backward_pass_with_local_backend_produces_correct_fcf() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -2110,30 +1950,14 @@ fn forward_pass_index_matches_global_scenario_index() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -2222,30 +2046,14 @@ fn warm_start_uses_prepopulated_forward_basis() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -2327,30 +2135,14 @@ fn multi_opening_subsequent_openings_use_internal_hotstart() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -2438,30 +2230,14 @@ fn backward_solver_error_propagates() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -2597,30 +2373,10 @@ fn test_backward_pass_parallel_cut_determinism() {
     }];
     let mut basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
     let state_boxes = permissive_state_boxes(n_state, n_stages);
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces_1,
@@ -3083,7 +2839,6 @@ fn backward_pass_load_patches_applied() {
     // load_balance_row_starts[successor=1]=10; load_bus_indices=[0]; 1 block/stage.
     let load_balance_row_starts = vec![10_usize; n_stages];
     let load_bus_indices = vec![0_usize];
-    let block_counts_per_stage = vec![1_usize; n_stages];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
@@ -3091,30 +2846,10 @@ fn backward_pass_load_patches_applied() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 1,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+            .load_balance_row_starts(&load_balance_row_starts)
+            .load_bus_indices(&load_bus_indices)
+            .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -3269,30 +3004,13 @@ fn backward_pass_no_load_buses_unchanged() {
     let _ = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1_usize; 2],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&[1_usize; 2]),
+        )
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -3445,7 +3163,6 @@ fn backward_pass_cut_coefficients_unaffected() {
 
     let load_balance_row_starts = vec![10_usize; n_stages];
     let load_bus_indices = vec![0_usize];
-    let block_counts_per_stage = vec![1_usize; n_stages];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
@@ -3453,30 +3170,10 @@ fn backward_pass_cut_coefficients_unaffected() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 1,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+            .load_balance_row_starts(&load_balance_row_starts)
+            .load_bus_indices(&load_bus_indices)
+            .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -3585,30 +3282,14 @@ fn per_stage_cut_sync_invariant_after_bug1_fix() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -3726,30 +3407,14 @@ fn metadata_sync_updates_active_count_and_last_active_iter() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -3921,30 +3586,14 @@ fn run_backward_pass_with_n_workers(n_workers: usize) -> FutureCostFunction {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -4289,30 +3938,14 @@ fn allgatherv_single_rank_two_workers_stage_stats_has_per_worker_entries() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -4520,30 +4153,14 @@ fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(templates.len()),
@@ -4621,8 +4238,6 @@ fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
 fn run_one_trial_state_with_stores(
     basis_store: &mut BasisStore,
 ) -> Result<Vec<SolverWorkspace<MockSolver>>, crate::SddpError> {
-    use crate::context::StageContext;
-
     let n_stages = 2_usize;
     let n_openings = 1_usize;
     let n_state = 1_usize;
@@ -4644,35 +4259,12 @@ fn run_one_trial_state_with_stores(
 
     let exchange = exchange_with_states(n_state, vec![vec![5.0]]);
 
-    let templates: &'static _ = Box::leak(Box::new(vec![
-        minimal_template_1_0(),
-        minimal_template_1_0(),
-    ]));
-    let state_boxes: &'static _ = Box::leak(Box::new(permissive_state_boxes(n_state, n_stages)));
-    let ctx: StageContext<'static> = StageContext {
-        state_boxes,
-        geometry_per_stage: &[],
-        templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: Box::leak(Box::new(vec![])),
-        load_bus_indices: Box::leak(Box::new(vec![])),
-        block_counts_per_stage: Box::leak(Box::new(vec![])),
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: Box::leak(Box::new(vec![])),
-        ncs_allow_curtailment: Box::leak(Box::new(vec![])),
-        discount_factors: Box::leak(Box::new(vec![])),
-        cumulative_discount_factors: Box::leak(Box::new(vec![])),
-        stage_lag_transitions: Box::leak(Box::new(vec![])),
-        noise_group_ids: Box::leak(Box::new(vec![])),
-        downstream_par_order: 0,
-    };
+    let templates = vec![minimal_template_1_0(), minimal_template_1_0()];
+    let state_boxes = permissive_state_boxes(n_state, n_stages);
+    let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -4793,32 +4385,11 @@ fn patch_opening_bounds_pins_transit_bucket_incoming_columns_per_stage_visit() {
     let stochastic = make_stochastic_context(1, 1);
     let template = test_support::transit_bucket_only_template(state.theta + 1, state.n_state);
 
-    let templates: &'static _ = Box::leak(Box::new(vec![template]));
-    let state_boxes: &'static _ = Box::leak(Box::new(permissive_state_boxes(state.n_state, 1)));
-    let ctx: StageContext<'static> = StageContext {
-        state_boxes,
-        geometry_per_stage: &[],
-        templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let templates = vec![template];
+    let state_boxes = permissive_state_boxes(state.n_state, 1);
+    let geometry = equipment_free_geometry(&[0]);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let study_dims = test_support::study_dims();
@@ -4897,30 +4468,9 @@ fn per_child_backward_isolates_column_basis_and_pool_metadata() {
 
     let templates = vec![minimal_template_1_0(); n_stages];
     let state_boxes = permissive_state_boxes(n_state, n_stages);
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+    let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+    let ctx = fixture.ctx();
 
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -5296,30 +4846,14 @@ fn handshake_passes_with_local_backend() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(n_stages),
@@ -5463,30 +4997,14 @@ fn handshake_rejects_nonuniform_workers() {
     let result = run_backward_pass(&mut BackwardPassInputs {
         workspaces: &mut workspaces,
         basis_store: &mut basis_store,
-        ctx: &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        ctx: &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&vec![0; templates.len()]),
+        )
+        .n_hydros_override(0)
+        .ctx(),
         frozen: &mut templates.clone(),
         fcf: &mut fcf,
         cut_batches: &mut empty_cut_batches(n_stages),
@@ -5747,30 +5265,10 @@ fn run_dcs_backward_trial_state_at(
     let mut basis_store = empty_basis_store(exchange.local_count(), 2);
     let state_boxes = permissive_state_boxes(n_state, n_stages);
 
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let study_dims = test_support::study_dims();
     let training_ctx = TrainingContext {
         node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -6268,30 +5766,10 @@ fn backward_dcs_frozen_cuts_present_no_duplicate_rows() {
     let mut basis_store = empty_basis_store(exchange.local_count(), 2);
     let state_boxes = permissive_state_boxes(n_state, n_stages);
 
-    let ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+    let fixture =
+        StageContextFixture::new(&state, &templates, &state_boxes, &geometry).n_hydros_override(0);
+    let ctx = fixture.ctx();
     let study_dims = test_support::study_dims();
     let training_ctx = TrainingContext {
         node_graph: &crate::test_support::chain_node_graph(&stochastic),

@@ -507,19 +507,21 @@ mod tests {
     use crate::{
         PrepareHydroModelsResult, ResolvedParameters, StageTemplates,
         build_stage_templates_resolving_layout,
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         error::SddpError,
         horizon_mode::HorizonMode,
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::{PatchBuffer, StateBox},
+        lp::builder::{PatchBuffer, StageGeometry, StateBox},
         lp::indexer::{BlockIdx, CutStateProjection, HydroSys, StateSpace, StudyDimensions},
         risk_measure::RiskMeasure,
         setup::node_graph::StageIdx,
         setup::{
             NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         },
-        test_support::{self, permissive_state_boxes},
+        test_support::{
+            self, StageContextFixture, equipment_free_geometry, permissive_state_boxes,
+        },
         workspace::{ScratchBuffers, WorkspaceSizing},
     };
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
@@ -958,6 +960,7 @@ mod tests {
     struct SimpleLbFixture {
         templates: Vec<StageTemplate>,
         state_boxes: Vec<StateBox>,
+        geometry_per_stage: Vec<StageGeometry>,
         n_hydros: usize,
         state: StateSpace,
         cut_state_layouts: Vec<CutStateProjection>,
@@ -985,6 +988,7 @@ mod tests {
             Self {
                 state_boxes: permissive_state_boxes(state.n_state, 1),
                 templates: vec![template],
+                geometry_per_stage: equipment_free_geometry(&[1]),
                 n_hydros,
                 cut_state_layouts,
                 study_dims: test_support::study_dims(),
@@ -997,31 +1001,14 @@ mod tests {
             }
         }
 
-        fn ctx(&self) -> StageContext<'_> {
-            StageContext {
-                state_boxes: &self.state_boxes,
-                templates: &self.templates,
-                geometry_per_stage: &[],
-                n_hydros: self.n_hydros,
-                cost_scale_factor: 1_000_000.0,
-                n_load_buses: 0,
-                load_balance_row_starts: &[],
-                load_bus_indices: &[],
-                block_counts_per_stage: &[1],
-                ncs_col_starts: &[],
-                n_ncs: 0,
-                ncs_stochastic_dense_col: &[],
-                ncs_stochastic_windows: &[],
-                anticipated_windows: &[],
-                study_stage_ids: &[],
-                ncs_max_gen: &[],
-                ncs_allow_curtailment: &[],
-                discount_factors: &[],
-                cumulative_discount_factors: &[],
-                stage_lag_transitions: &[],
-                noise_group_ids: &[],
-                downstream_par_order: 0,
-            }
+        fn ctx(&self) -> StageContextFixture<'_> {
+            StageContextFixture::new(
+                &self.state,
+                &self.templates,
+                &self.state_boxes,
+                &self.geometry_per_stage,
+            )
+            .n_hydros_override(self.n_hydros)
         }
 
         fn training_ctx(&self) -> TrainingContext<'_> {
@@ -1088,7 +1075,7 @@ mod tests {
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle,
@@ -1139,7 +1126,7 @@ mod tests {
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb,
@@ -1197,7 +1184,7 @@ mod tests {
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb,
@@ -1253,7 +1240,7 @@ mod tests {
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb,
@@ -1324,7 +1311,7 @@ mod tests {
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_result,
@@ -1374,7 +1361,7 @@ mod tests {
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_result,
@@ -1434,7 +1421,7 @@ mod tests {
             let result = evaluate_lower_bound(
                 &mut solver,
                 &fcf,
-                &fixture.ctx(),
+                &fixture.ctx().ctx(),
                 &fixture.training_ctx(),
                 &rm,
                 &mut bundle,
@@ -1486,7 +1473,7 @@ mod tests {
             let result = evaluate_lower_bound(
                 &mut solver,
                 &fcf,
-                &fixture.ctx(),
+                &fixture.ctx().ctx(),
                 &fixture.training_ctx(),
                 &rm,
                 &mut bundle,
@@ -1543,7 +1530,7 @@ mod tests {
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb,
@@ -1600,7 +1587,7 @@ mod tests {
         let lb1 = evaluate_lower_bound(
             &mut solver1,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb1,
@@ -1622,7 +1609,7 @@ mod tests {
         let lb2 = evaluate_lower_bound(
             &mut solver2,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb2,
@@ -1680,7 +1667,7 @@ mod tests {
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_lb,
@@ -1737,7 +1724,7 @@ mod tests {
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_result,
@@ -1787,7 +1774,7 @@ mod tests {
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
-            &fixture.ctx(),
+            &fixture.ctx().ctx(),
             &fixture.training_ctx(),
             &rm,
             &mut bundle_result,
@@ -1975,30 +1962,14 @@ mod tests {
         let ncs_col_starts = vec![0_usize];
         let state_boxes = permissive_state_boxes(state.n_state, 1);
 
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            templates: &templates,
-            geometry_per_stage: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[block_count],
-            ncs_col_starts: &ncs_col_starts,
-            n_ncs,
-            ncs_stochastic_dense_col: &ncs_stochastic_dense_col,
-            ncs_stochastic_windows: &ncs_stochastic_windows,
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &ncs_max_gen,
-            ncs_allow_curtailment: &ncs_allow_curtailment,
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[block_count]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry)
+            .ncs_col_starts(&ncs_col_starts)
+            .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)
+            .ncs_stochastic_windows(&ncs_stochastic_windows)
+            .ncs_max_gen(&ncs_max_gen)
+            .ncs_allow_curtailment(&ncs_allow_curtailment);
+        let ctx = fixture.ctx();
 
         let horizon = HorizonMode::Finite { num_stages: 1 };
         // `has_ncs = true`: the same production wiring gate
@@ -2113,7 +2084,7 @@ mod tests {
             evaluate_lower_bound(
                 &mut solver1,
                 &fcf,
-                &fixture.ctx(),
+                &fixture.ctx().ctx(),
                 &fixture.training_ctx(),
                 &rm,
                 &mut bundle,
@@ -2140,7 +2111,7 @@ mod tests {
             evaluate_lower_bound(
                 &mut solver2,
                 &fcf,
-                &fixture.ctx(),
+                &fixture.ctx().ctx(),
                 &fixture.training_ctx(),
                 &rm,
                 &mut bundle,
@@ -2792,30 +2763,13 @@ mod tests {
         let stochastic = wrap_opening_tree(opening_tree);
         let state_boxes = permissive_state_boxes(state.n_state, templates.templates.len());
 
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            templates: &templates.templates,
-            geometry_per_stage: &templates.geometry_per_stage,
-            n_hydros: 2,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let fixture = StageContextFixture::new(
+            &state,
+            &templates.templates,
+            &state_boxes,
+            &templates.geometry_per_stage,
+        );
+        let ctx = fixture.ctx();
         let horizon = HorizonMode::Finite {
             num_stages: templates.templates.len(),
         };
@@ -2900,30 +2854,9 @@ mod tests {
         let stochastic = wrap_opening_tree(opening_tree);
         let state_boxes = permissive_state_boxes(state.n_state, 1);
 
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            templates: &templates,
-            geometry_per_stage: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[0],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
@@ -3283,7 +3216,8 @@ mod tests {
 
         let mut solver = MockSolver::with_objectives(vec![0.0]);
         let mut lb_cut_batch = empty_row_batch();
-        let ctx = fixture.ctx();
+        let sc_fixture = fixture.ctx();
+        let ctx = sc_fixture.ctx();
         let training_ctx = fixture.training_ctx();
         lb_init_rank0(
             &mut solver,

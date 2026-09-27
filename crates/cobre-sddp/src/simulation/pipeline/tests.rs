@@ -28,7 +28,7 @@ use crate::{
         state::{SimulationInputs, SimulationState},
     },
     solve::solver_phase::Phase,
-    test_support::{self, permissive_state_boxes},
+    test_support::{self, StageContextFixture, equipment_free_geometry, permissive_state_boxes},
     workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
 };
 
@@ -806,7 +806,6 @@ fn simulation_load_patches_applied() {
     // load_bus_indices=[0] (bus position 0 in the block layout).
     let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
 
     let hprod = hydro_productivities_1hydro(n_stages);
@@ -814,30 +813,10 @@ fn simulation_load_patches_applied() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+            .load_balance_row_starts(&load_balance_row_starts)
+            .load_bus_indices(&load_bus_indices)
+            .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -987,30 +966,13 @@ fn simulation_no_load_buses_unchanged() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&[1]),
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1129,30 +1091,13 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate_with_profile(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&[1]),
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1276,7 +1221,6 @@ fn simulation_inflow_extraction_unaffected() {
 
     let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize];
     let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
 
     let hprod = hydro_productivities_1hydro(n_stages);
@@ -1284,30 +1228,10 @@ fn simulation_inflow_extraction_unaffected() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+            .load_balance_row_starts(&load_balance_row_starts)
+            .load_bus_indices(&load_bus_indices)
+            .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1633,30 +1557,13 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[n_stages],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&[n_stages]),
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1767,30 +1674,13 @@ fn simulation_none_method_produces_raw_negative_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[n_stages],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &state,
+            &templates,
+            &state_boxes,
+            &equipment_free_geometry(&[n_stages]),
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1883,13 +1773,14 @@ mod dcs_simulation {
     use super::super::{
         SimLookups, SimStageIds, SimStageLoadSpec, SimulationOutputSpec, solve_simulation_stage,
     };
-    use crate::context::{StageContext, TrainingContext};
+    use crate::context::TrainingContext;
     use crate::cut::FutureCostFunction;
     use crate::cut_selection::CutMetadata;
     use crate::dcs::DcsParams;
     use crate::energy_conversion::{EnergyConversion, EnergyConversionSet};
     use crate::horizon_mode::HorizonMode;
     use crate::setup::NodePos;
+    use crate::test_support::StageContextFixture;
 
     use crate::inflow_method::InflowNonNegativityMethod;
     use crate::lp::builder::{PatchBuffer, StageGeometry, StateBox};
@@ -2079,30 +1970,10 @@ mod dcs_simulation {
             lower: vec![f64::NEG_INFINITY; state.n_state],
             upper: vec![f64::INFINITY; state.n_state],
         }];
-        let ctx = StageContext {
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            state_boxes: &state_boxes,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let fixture =
+            StageContextFixture::new(&state, &templates, &state_boxes, &geometry_per_stage)
+                .block_counts_override(&[1usize]);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -2322,6 +2193,7 @@ mod anticipated_ring_matches_forward_propagation {
     use crate::setup::node_graph::StageIdx;
     use crate::simulation::extraction::EntityCounts;
     use crate::test_support;
+    use crate::test_support::{StageContextFixture, equipment_free_geometry};
     use crate::training::forward::{StageKey, run_forward_stage};
     use crate::trajectory::TrajectoryRecord;
     use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
@@ -2656,30 +2528,9 @@ mod anticipated_ring_matches_forward_propagation {
             };
             N_STAGES
         ];
-        let ctx = StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            state_boxes: &state_boxes,
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1, 1, 1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1, 1, 1]);
+        let fixture = StageContextFixture::new(&state, &templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
             horizon: &horizon,

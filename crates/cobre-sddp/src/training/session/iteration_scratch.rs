@@ -192,8 +192,9 @@ mod tests {
     use cobre_solver::StageTemplate;
 
     use super::IterationScratch;
-    use crate::context::StageContext;
+    use crate::lp::builder::StageGeometry;
     use crate::setup::node_graph::StageIdx;
+    use crate::test_support::{StageContextFixture, equipment_free_geometry, state_layout};
 
     fn minimal_template() -> StageTemplate {
         StageTemplate {
@@ -218,31 +219,12 @@ mod tests {
         }
     }
 
-    fn make_stage_ctx(templates: &[StageTemplate]) -> StageContext<'_> {
-        StageContext {
-            geometry_per_stage: &[],
-            templates,
-            state_boxes: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        }
+    fn make_stage_ctx<'a>(
+        templates: &'a [StageTemplate],
+        geometry_per_stage: &'a [StageGeometry],
+    ) -> StageContextFixture<'a> {
+        let state = state_layout(0, 0);
+        StageContextFixture::new(&state, templates, &[], geometry_per_stage)
     }
 
     #[test]
@@ -256,7 +238,9 @@ mod tests {
         let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
@@ -311,7 +295,9 @@ mod tests {
         let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
@@ -356,7 +342,9 @@ mod tests {
         let k_max = 2;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
@@ -415,7 +403,9 @@ mod tests {
         let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
@@ -456,7 +446,9 @@ mod tests {
         let n_buckets = 3;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,

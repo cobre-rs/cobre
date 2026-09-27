@@ -25,7 +25,7 @@ use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, BusSys, CutStateProjection, EvapLocal,
     FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys,
-    LineSys, NcsSys, PumpingSys, StateDim, StateRegion, anticipated_resolution_for,
+    LineSys, NcsSys, PumpingSys, StateDim, StateRegion, ThermalSys, anticipated_resolution_for,
 };
 use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 use crate::resolved_parameters::ResolvedParameters;
@@ -2293,7 +2293,6 @@ fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
     }
 
     let n_blks = layout.n_blks;
-    let grid = layout.block_grid();
     let geometry = layout.geometry(BlockMode::Parallel);
     let oper = &layout.slack.oper_violation;
 
@@ -2314,10 +2313,10 @@ fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
             |i, blk| layout.min_generation_row(HydroCell::new(i), blk),
         ),
         check(n_blks, &geometry.thermal, "thermal", |i, blk| {
-            grid.flat(geometry.thermal.start, i, blk)
+            layout.thermal_col(ThermalSys::new(i), blk)
         }),
         check(n_blks, &geometry.excess, "excess", |i, blk| {
-            grid.flat(geometry.excess.start, i, blk)
+            layout.excess_col(BusSys::new(i), blk)
         }),
     ]
 }

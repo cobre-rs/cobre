@@ -19,7 +19,7 @@ use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
     EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
     HydroCell, HydroCellIndex, HydroSys, LineSys, NcsSys, PumpingSys, RangeCursor, StateSpace,
-    StorageBoundaryGrid, anticipated_resolution_for, for_each_live_commitment_slot,
+    StorageBoundaryGrid, ThermalSys, anticipated_resolution_for, for_each_live_commitment_slot,
     is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
@@ -1861,6 +1861,16 @@ impl StageLayout<'_> {
     pub(crate) fn deficit_col(&self, b_idx: usize, seg_idx: usize, blk: BlockIdx) -> usize {
         self.block_grid()
             .deficit(self.equipment.deficit.start, b_idx, seg_idx, blk)
+    }
+
+    #[inline]
+    pub(crate) fn thermal_col(&self, t: ThermalSys, blk: BlockIdx) -> usize {
+        self.block_flat(self.equipment.thermal.start, t.get(), blk)
+    }
+
+    #[inline]
+    pub(crate) fn excess_col(&self, bus: BusSys, blk: BlockIdx) -> usize {
+        self.block_flat(self.equipment.excess.start, bus.get(), blk)
     }
 
     /// The [`StorageBoundaryGrid`] address primitive for this stage's LP,

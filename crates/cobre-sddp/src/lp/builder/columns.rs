@@ -5,9 +5,9 @@ use cobre_core::{
 
 use crate::hydro_models::{EvaporationModel, ResolvedProductionModel};
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal,
-    FphaLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, for_each_ring_residue,
-    is_anticipated_decision_active_for_delivery,
+    AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
+    FphaCellLocal, FphaLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, ThermalSys,
+    for_each_ring_residue, is_anticipated_decision_active_for_delivery,
 };
 
 use super::EVAPORATION_FLOW_SAFETY_MARGIN;
@@ -539,10 +539,7 @@ pub(super) fn fill_thermal_columns(
                 .resolved
                 .bounds
                 .thermal_bounds_at_block(t_idx, stage_idx, blk);
-            let col =
-                layout
-                    .block_grid()
-                    .flat(layout.equipment.thermal.start, t_idx, BlockIdx::new(blk));
+            let col = layout.thermal_col(ThermalSys::new(t_idx), BlockIdx::new(blk));
             if active {
                 bufs.col_lower[col] = tb.min_generation_mw;
                 bufs.col_upper[col] = tb.max_generation_mw;
@@ -739,10 +736,7 @@ fn fill_deficit_and_excess_columns(
             }
         }
         for blk in 0..layout.n_blks {
-            let col_exc =
-                layout
-                    .block_grid()
-                    .flat(layout.equipment.excess.start, b_idx, BlockIdx::new(blk));
+            let col_exc = layout.excess_col(BusSys::new(b_idx), BlockIdx::new(blk));
             let block_hours = stage.blocks[blk].duration_hours;
             bufs.col_upper[col_exc] = f64::INFINITY;
             bufs.objective[col_exc] = bp.excess_cost * block_hours;

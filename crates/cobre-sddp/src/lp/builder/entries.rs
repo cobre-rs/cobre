@@ -6,7 +6,7 @@ use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
-    FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace,
+    FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace, ThermalSys,
     for_each_ring_residue,
 };
 
@@ -53,7 +53,6 @@ pub(super) fn fill_anticipated_fishing_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let n_blks = layout.n_blks;
-    let grid = layout.block_grid();
     let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active = 0_usize;
     for local_idx in 0..ctx.n_anticipated {
@@ -70,11 +69,7 @@ pub(super) fn fill_anticipated_fishing_entries(
         let thermal_idx = ctx.anticipated_plants.thermal_of(local);
         let mut block_hours_total: f64 = 0.0;
         for blk in 0..n_blks {
-            let col_gen = grid.flat(
-                layout.equipment.thermal.start,
-                thermal_idx.get(),
-                BlockIdx::new(blk),
-            );
+            let col_gen = layout.thermal_col(thermal_idx, BlockIdx::new(blk));
             let block_hours = stage.blocks[blk].duration_hours;
             col_entries[col_gen].push((row, block_hours));
             block_hours_total += block_hours;
@@ -1035,7 +1030,7 @@ pub(super) fn fill_load_balance_entries(
         if let Some(&b_idx) = ctx.bus_pos.get(&thermal.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.load_balance_row(BusSys::new(b_idx), blk);
-                let col = grid.flat(layout.equipment.thermal.start, t_idx, blk);
+                let col = layout.thermal_col(ThermalSys::new(t_idx), blk);
                 col_entries[col].push((row, 1.0));
             }
         }
@@ -1096,7 +1091,7 @@ pub(super) fn fill_load_balance_entries(
                 let col_def = layout.deficit_col(b_idx, seg_idx, blk);
                 col_entries[col_def].push((row, 1.0));
             }
-            let col_exc = grid.flat(layout.equipment.excess.start, b_idx, blk);
+            let col_exc = layout.excess_col(BusSys::new(b_idx), blk);
             col_entries[col_exc].push((row, -1.0));
         }
     }

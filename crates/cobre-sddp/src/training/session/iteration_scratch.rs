@@ -172,70 +172,12 @@ mod tests {
     use cobre_solver::StageTemplate;
 
     use super::IterationScratch;
-    use crate::context::TrainingContext;
     use crate::lp::builder::StageGeometry;
-    use crate::lp::indexer::StateSpace;
     use crate::setup::node_graph::StageIdx;
     use crate::test_support::{
-        StageContextFixture, equipment_free_geometry, state_layout, state_layout_full,
-        state_layout_with_transit_buckets,
+        StageContextFixture, TrainingContextFixture, equipment_free_geometry, state_layout,
+        state_layout_full, state_layout_with_transit_buckets,
     };
-
-    /// Owns the pieces a [`TrainingContext`] borrows, so sizing tests can lend
-    /// one without threading a `stochastic`/`node_graph`/`study_dims` triple
-    /// through every call site.
-    struct TestTrainingCtx {
-        state: StateSpace,
-        stochastic: cobre_stochastic::StochasticContext,
-        node_graph: crate::setup::node_graph::NodeGraph,
-        study_dims: crate::lp::indexer::StudyDimensions,
-        cut_state_layouts: Vec<crate::lp::indexer::CutStateProjection>,
-        horizon: crate::horizon_mode::HorizonMode,
-        inflow_method: crate::InflowNonNegativityMethod,
-        initial_state: Vec<f64>,
-    }
-
-    impl TestTrainingCtx {
-        fn new(state: StateSpace) -> Self {
-            let stochastic = crate::test_support::hydro_free_stochastic_context(1, 1);
-            let node_graph = crate::test_support::chain_node_graph(&stochastic);
-            let cut_state_layouts = crate::test_support::all_enabled_cut_state_layouts(&state, 1);
-            Self {
-                stochastic,
-                node_graph,
-                study_dims: crate::test_support::study_dims(),
-                cut_state_layouts,
-                horizon: crate::horizon_mode::HorizonMode::Finite { num_stages: 1 },
-                inflow_method: crate::InflowNonNegativityMethod::None,
-                initial_state: Vec::new(),
-                state,
-            }
-        }
-
-        fn training_ctx(&self) -> TrainingContext<'_> {
-            TrainingContext {
-                horizon: &self.horizon,
-                state: &self.state,
-                cut_state_layouts: &self.cut_state_layouts,
-                study_dims: &self.study_dims,
-                inflow_method: &self.inflow_method,
-                stochastic: &self.stochastic,
-                initial_state: &self.initial_state,
-                inflow_scheme: cobre_core::scenario::SamplingScheme::InSample,
-                load_scheme: cobre_core::scenario::SamplingScheme::InSample,
-                ncs_scheme: cobre_core::scenario::SamplingScheme::InSample,
-                stages: &[],
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                lag_accum_seed: &[],
-                lag_weight_seed: &[],
-                dcs: None,
-                node_graph: &self.node_graph,
-            }
-        }
-    }
 
     fn minimal_template() -> StageTemplate {
         StageTemplate {
@@ -274,7 +216,7 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let training_fixture = TestTrainingCtx::new(state_layout(1, 1));
+        let training_fixture = TrainingContextFixture::new(state_layout(1, 1));
         let training_ctx = training_fixture.training_ctx();
         let n_state = training_ctx.state.n_state;
 
@@ -326,7 +268,7 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let training_fixture = TestTrainingCtx::new(state_layout(1, 1));
+        let training_fixture = TrainingContextFixture::new(state_layout(1, 1));
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
@@ -379,7 +321,7 @@ mod tests {
             state.k_max, k_max,
             "ring_size must resolve to k_max for uniform leads"
         );
-        let training_fixture = TestTrainingCtx::new(state);
+        let training_fixture = TrainingContextFixture::new(state);
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
@@ -436,7 +378,8 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let training_fixture = TestTrainingCtx::new(state_layout(hydro_count, max_par_order));
+        let training_fixture =
+            TrainingContextFixture::new(state_layout(hydro_count, max_par_order));
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
@@ -484,7 +427,7 @@ mod tests {
             0,
             vec![],
         );
-        let training_fixture = TestTrainingCtx::new(state);
+        let training_fixture = TrainingContextFixture::new(state);
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(

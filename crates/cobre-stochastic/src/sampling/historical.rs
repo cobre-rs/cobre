@@ -2142,4 +2142,76 @@ mod tests {
             "standardize_historical_windows must write a non-sentinel digest"
         );
     }
+
+    #[test]
+    #[ignore = "red: discovery must walk the season map"]
+    fn standardize_replays_the_window_year_for_a_single_season_study() {
+        let hydro = EntityId(1);
+        let stages = vec![make_monthly_stage(0, 0)];
+        let sm = monthly_season_map(MonthlyLabels::ZeroBased);
+
+        let models = vec![
+            InflowModel {
+                hydro_id: hydro,
+                stage_id: -1,
+                mean_m3s: 0.0,
+                std_m3s: 1.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+            InflowModel {
+                hydro_id: hydro,
+                stage_id: 0,
+                mean_m3s: 0.0,
+                std_m3s: 1.0,
+                ar_coefficients: vec![0.0],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+        let par = PrecomputedPar::build(&models, &stages, &[hydro], None).unwrap();
+
+        let mut history: Vec<InflowHistoryRow> = (1990..=1993)
+            .map(|y| make_row(hydro, y, 0, 1000.0 + f64::from(y - 1990)))
+            .collect();
+        history.extend((1989..=1992).map(|y| make_row(hydro, y, 11, 1.0)));
+
+        let windows = crate::sampling::discover_historical_windows(
+            &history,
+            &[hydro],
+            &stages,
+            1,
+            None,
+            Some(&sm),
+            10,
+        )
+        .unwrap();
+        assert_eq!(windows, vec![1990, 1991, 1992, 1993]);
+
+        let mut lib =
+            HistoricalScenarioLibrary::new(windows.len(), stages.len(), 1, 1, windows.clone());
+        standardize_historical_windows(
+            &mut lib,
+            &history,
+            &[hydro],
+            &stages,
+            &par,
+            &windows,
+            Some(&sm),
+            DerivedSeed {
+                lag_values: &[0.0],
+                l_state: 1,
+                accum: &[],
+                weight: &[],
+            },
+            &[],
+            0,
+        );
+
+        for (w, &year) in windows.iter().enumerate() {
+            let expected = 1000.0 + f64::from(year - 1990);
+            assert_eq!(lib.eta_slice(w, 0)[0], expected);
+        }
+    }
 }

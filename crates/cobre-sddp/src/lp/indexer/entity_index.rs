@@ -402,19 +402,19 @@ mod tests {
     }
 
     #[test]
-    fn bus_sys_round_trips_its_position() {
+    fn bus_sys_is_zero_cost_and_round_trips() {
         assert_eq!(std::mem::size_of::<BusSys>(), std::mem::size_of::<usize>());
         assert_eq!(BusSys::new(5).get(), 5);
     }
 
     #[test]
-    fn ncs_sys_round_trips_its_position() {
+    fn ncs_sys_is_zero_cost_and_round_trips() {
         assert_eq!(std::mem::size_of::<NcsSys>(), std::mem::size_of::<usize>());
         assert_eq!(NcsSys::new(6).get(), 6);
     }
 
     #[test]
-    fn pumping_sys_round_trips_its_position() {
+    fn pumping_sys_is_zero_cost_and_round_trips() {
         assert_eq!(
             std::mem::size_of::<PumpingSys>(),
             std::mem::size_of::<usize>()

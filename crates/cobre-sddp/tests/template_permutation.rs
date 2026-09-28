@@ -1,7 +1,7 @@
-//! Declaration-order permutation invariance of every committed deck's
-//! stage-LP template facts: permuting a deck's input entity declaration order
-//! leaves every stage-LP template fact group ([`template_fact_groups`])
-//! byte-identical.
+//! Declaration-order permutation invariance of every committed deck's and two
+//! in-code studies' stage-LP template facts: permuting the input entity
+//! declaration order leaves every stage-LP template fact group
+//! ([`template_fact_groups`]) byte-identical.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -30,22 +30,12 @@ fn every_deck_template_is_invariant_to_declaration_order() {
             continue;
         }
 
-        let base = template_fact_groups(&fresh_setup_with(&deck.dir, |_| {}));
+        let base_setup = fresh_setup_with(&deck.dir, |_| {});
         let permuted_dir = permute_case(&deck.dir, SEED);
-        let permuted = template_fact_groups(&fresh_setup_with(permuted_dir.path(), |_| {}));
+        let permuted_setup = fresh_setup_with(permuted_dir.path(), |_| {});
 
-        assert!(
-            base.keys().eq(permuted.keys()),
-            "deck {}: permuted fact-group key set differs from base (base={:?}, permuted={:?})",
-            deck.key,
-            base.keys().collect::<Vec<_>>(),
-            permuted.keys().collect::<Vec<_>>(),
-        );
-
-        for (group, base_bytes) in &base {
-            if permuted.get(group) != Some(base_bytes) {
-                mismatches.push((deck.key.clone(), (*group).to_string()));
-            }
+        for group in mismatched_groups(&base_setup, &permuted_setup, &deck.key) {
+            mismatches.push((deck.key.clone(), group));
         }
     }
 
@@ -60,12 +50,16 @@ fn every_deck_template_is_invariant_to_declaration_order() {
     );
 }
 
-fn mismatched_groups(base_setup: &StudySetup, reversed_setup: &StudySetup) -> Vec<String> {
+fn mismatched_groups(
+    base_setup: &StudySetup,
+    reversed_setup: &StudySetup,
+    label: &str,
+) -> Vec<String> {
     let base = template_fact_groups(base_setup);
     let reversed = template_fact_groups(reversed_setup);
     assert!(
         base.keys().eq(reversed.keys()),
-        "reversed fact-group key set differs from base (base={:?}, reversed={:?})",
+        "{label}: reversed fact-group key set differs from base (base={:?}, reversed={:?})",
         base.keys().collect::<Vec<_>>(),
         reversed.keys().collect::<Vec<_>>(),
     );
@@ -79,14 +73,16 @@ fn mismatched_groups(base_setup: &StudySetup, reversed_setup: &StudySetup) -> Ve
 fn every_in_code_study_template_is_invariant_to_declaration_order() {
     let mut mismatches: Vec<(String, String)> = Vec::new();
 
+    let mixed_lead_label = "in-code/mixed-lead-anticipated";
     let (system, config) = mixed_lead_anticipated_study(false);
     let base_setup = build_setup_in_code(system, &config);
     let (system, config) = mixed_lead_anticipated_study(true);
     let reversed_setup = build_setup_in_code(system, &config);
-    for group in mismatched_groups(&base_setup, &reversed_setup) {
-        mismatches.push(("in-code/mixed-lead-anticipated".to_string(), group));
+    for group in mismatched_groups(&base_setup, &reversed_setup, mixed_lead_label) {
+        mismatches.push((mixed_lead_label.to_string(), group));
     }
 
+    let chronological_pumping_label = "in-code/chronological-pumping";
     let (system, config) = chronological_noise_study(&ChronologicalNoiseSpec {
         pumping_station: true,
         ..ChronologicalNoiseSpec::default()
@@ -98,8 +94,8 @@ fn every_in_code_study_template_is_invariant_to_declaration_order() {
         ..ChronologicalNoiseSpec::default()
     });
     let reversed_setup = build_setup_in_code(system, &config);
-    for group in mismatched_groups(&base_setup, &reversed_setup) {
-        mismatches.push(("in-code/chronological-pumping".to_string(), group));
+    for group in mismatched_groups(&base_setup, &reversed_setup, chronological_pumping_label) {
+        mismatches.push((chronological_pumping_label.to_string(), group));
     }
 
     assert!(

@@ -2506,7 +2506,7 @@ fn extract_thermals_per_block_committed_none_for_non_anticipated() {
 /// K=1, `stage_index=1`, `n_stages=2` (delivery).
 /// Expects `anticipated_committed_mw == Some(0.0)`.
 #[test]
-fn extract_thermals_no_block_committed_at_delivery_is_zero() {
+fn extract_thermals_committed_at_delivery_is_zero_when_slot0_seeded() {
     // N=0, T=1, n_blks=1, n_anticipated=1, k_max=1, K_i=1
     let eq_counts = test_support::GeometryDims {
         hydro_count: 0,
@@ -2599,7 +2599,7 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
     assert_eq!(
         result.thermals[0].anticipated_committed_mw,
         Some(0.0),
-        "no-block delivery: expected Some(0.0)"
+        "delivery: expected Some(0.0)"
     );
 }
 
@@ -2608,7 +2608,7 @@ fn extract_thermals_no_block_committed_at_delivery_is_zero() {
 /// reads slot 0 of `commit_in` regardless. Expects `Some(0.0)`
 /// (zero-initialised slot 0).
 #[test]
-fn extract_thermals_no_block_committed_reads_slot0_when_seed_zero() {
+fn extract_thermals_committed_reads_slot0_when_seed_zero() {
     let eq_counts = test_support::GeometryDims {
         hydro_count: 0,
         max_par_order: 0,
@@ -2686,7 +2686,7 @@ fn extract_thermals_no_block_committed_reads_slot0_when_seed_zero() {
     assert_eq!(
         result.thermals[0].anticipated_committed_mw,
         Some(0.0),
-        "no-block always-active: reads slot 0 = 0.0 regardless of stage"
+        "always-active: reads slot 0 = 0.0 regardless of stage"
     );
 }
 

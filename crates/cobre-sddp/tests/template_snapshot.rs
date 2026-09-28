@@ -357,6 +357,34 @@ fn discounted_anticipated_fixture_decides_after_stage_zero() {
     );
 }
 
+/// The mixed-lead fixture's `LeadStages(3)` thermal has no in-study delivery
+/// target left at decision stages 2-4 (`n_stages == 5`), so each of those
+/// decision columns must be costed against the declared post-study calendar
+/// — the coverage the fixture's own doc comment claims, pinned as a fact
+/// rather than left as a doc-only claim.
+#[test]
+fn mixed_lead_long_lead_late_decisions_target_post_study_delivery() {
+    use cobre_sddp::indexer::AnticipatedLocal;
+
+    let (system, config) = common::in_code_studies::mixed_lead_anticipated_study(false);
+    let setup = common::build_setup_in_code(system, &config);
+
+    // Canonical anticipated-local order is ascending EntityId: the short lead
+    // (id 10) is local 0, the long lead (id 20) is local 1.
+    let long_lead_local = AnticipatedLocal::new(1);
+    for stage_idx in 2..5 {
+        let geometry = &setup.stage_data.stage_templates.geometry_per_stage[stage_idx];
+        let template = &setup.stage_data.stage_templates.templates[stage_idx];
+        let col = geometry.anticipated_decision_col(long_lead_local);
+        assert!(
+            template.objective[col] > 0.0,
+            "stage {stage_idx}'s long-lead decision must carry a nonzero costed \
+             objective coefficient (a post-study delivery target), got {}",
+            template.objective[col]
+        );
+    }
+}
+
 /// The parallel-multiblock-evaporation fixture's stage 0 is a 3-block
 /// parallel stage with active evaporation.
 #[test]

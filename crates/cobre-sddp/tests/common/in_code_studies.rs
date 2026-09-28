@@ -29,8 +29,9 @@ use cobre_core::{
     BusStagePenalties, ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph,
     HydroBlockBounds, HydroStageBounds, HydroStorage, InitialConditions, LineBlockBounds,
     LineStagePenalties, NcsStagePenalties, NonControllableSource, PenaltiesCountsSpec,
-    PenaltiesDefaults, PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedPenalties,
-    SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
+    PenaltiesDefaults, PostStudyStage, PostStudyStages, PostStudyThermalBound, PumpingBlockBounds,
+    PumpingStation, ResolvedBounds, ResolvedPenalties, SystemBuilder, ThermalBlockBounds,
+    ThermalStageBounds,
 };
 use cobre_io::config::{
     Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -352,6 +353,8 @@ const MIXED_LEAD_SHORT_LEAD: u32 = 1;
 const MIXED_LEAD_LONG_LEAD: u32 = 3;
 /// Actual calendar hours of 2025's Jan-May, one block per stage.
 const MIXED_LEAD_MONTH_HOURS: [f64; MIXED_LEAD_N_STAGES] = [744.0, 672.0, 744.0, 720.0, 744.0];
+/// Actual calendar hours of 2025's Jun-Aug, one per post-study stage.
+const MIXED_LEAD_POST_STUDY_MONTH_HOURS: [f64; 3] = [720.0, 744.0, 744.0];
 
 fn mixed_lead_stage_date(index: usize) -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 1 + index as u32, 1)
@@ -584,6 +587,50 @@ fn build_mixed_lead_system(reversed: bool) -> cobre_core::System {
         season_map: None,
     };
 
+    // Post-study calendar covering the long lead's post-horizon deliveries
+    // (decision stages 2-4 deliver at stages 5-7, i.e. post-study indices
+    // 0-2) and the short lead's own single one (decision stage 4 delivers
+    // at stage 5, post-study index 0).
+    let post_study_stages: Vec<PostStudyStage> = (MIXED_LEAD_N_STAGES..thermal_axis)
+        .map(|i| PostStudyStage {
+            start_date: mixed_lead_stage_date(i),
+            duration_hours: MIXED_LEAD_POST_STUDY_MONTH_HOURS[i - MIXED_LEAD_N_STAGES],
+        })
+        .collect();
+    let post_study = PostStudyStages {
+        stages: post_study_stages,
+        thermal_bounds: vec![
+            PostStudyThermalBound {
+                thermal_id: MIXED_LEAD_SHORT_THERMAL_ID,
+                post_study_stage_index: 0,
+                cost_per_mwh: 50.0,
+                min_mw: 0.0,
+                max_mw: 100.0,
+            },
+            PostStudyThermalBound {
+                thermal_id: MIXED_LEAD_LONG_THERMAL_ID,
+                post_study_stage_index: 0,
+                cost_per_mwh: 50.0,
+                min_mw: 0.0,
+                max_mw: 100.0,
+            },
+            PostStudyThermalBound {
+                thermal_id: MIXED_LEAD_LONG_THERMAL_ID,
+                post_study_stage_index: 1,
+                cost_per_mwh: 50.0,
+                min_mw: 0.0,
+                max_mw: 100.0,
+            },
+            PostStudyThermalBound {
+                thermal_id: MIXED_LEAD_LONG_THERMAL_ID,
+                post_study_stage_index: 2,
+                cost_per_mwh: 50.0,
+                min_mw: 0.0,
+                max_mw: 100.0,
+            },
+        ],
+    };
+
     let mut buses = vec![bus];
     let mut hydros = vec![hydro];
     let mut thermals = vec![thermal_short, thermal_long];
@@ -604,14 +651,17 @@ fn build_mixed_lead_system(reversed: bool) -> cobre_core::System {
         .penalties(penalties)
         .initial_conditions(initial_conditions)
         .policy_graph(policy_graph)
+        .post_study_stages(Some(post_study))
         .build()
         .expect("mixed_lead_anticipated_study: valid system")
 }
 
 /// 5 monthly stages (2025-01 to 2025-05, one block each) discounted at 6%/yr,
 /// with two anticipated thermals of different lead depths (`LeadStages(1)`
-/// and `LeadStages(3)`) so the long lead's last two decisions target a
-/// post-study delivery: a mixed-lead combination no committed deck exercises.
+/// and `LeadStages(3)`) over a declared 3-month post-study calendar: the
+/// long lead's decisions at stages 2-4 (and the short lead's at stage 4)
+/// have no in-study delivery target left and instead target a post-study
+/// delivery — a mixed-lead combination no committed deck exercises.
 /// `reversed == true` reverses every entity vector before `SystemBuilder::build`.
 #[must_use]
 pub fn mixed_lead_anticipated_study(reversed: bool) -> (cobre_core::System, Config) {

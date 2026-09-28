@@ -6,9 +6,9 @@
 use std::collections::HashSet;
 
 use cobre_core::{
-    EntityId, InflowHistoryRow, Stage, System,
-    scenario::{ExternalScenarioRow, HistoricalYears, LoadModel, NcsModel, SamplingScheme},
-    temporal::{SeasonMap, StageLagTransition},
+    EntityId, Stage, System,
+    scenario::{HistoricalYears, LoadModel, NcsModel, SamplingScheme},
+    temporal::StageLagTransition,
 };
 use cobre_io::StageIdResolver;
 use cobre_stochastic::{
@@ -21,37 +21,37 @@ use cobre_stochastic::{
 use crate::SddpError;
 use crate::lp::builder::models_from_normal;
 
+use super::StageData;
+
 /// Build and validate a [`HistoricalScenarioLibrary`] for inflow.
 ///
-/// `seed` ([`DerivedSeed`]) and `stage_lag_transitions` seed the rolling
-/// η-inversion chain (mirroring `build_external_inflow_library`). Pass the
-/// shared `StudySetup::derived_inflow_seeds` view and the pre-computed
-/// transitions so that every forward pass starting from the same derived
-/// seed exactly reconstructs the raw historical observations.
+/// `seed` ([`DerivedSeed`]) and `stage_data`'s `stage_lag_transitions` seed the
+/// rolling η-inversion chain (mirroring `build_external_inflow_library`), so
+/// every forward pass starting from the same derived seed exactly
+/// reconstructs the raw historical observations.
 ///
 /// # Errors
 ///
 /// Returns `SddpError::Stochastic` on window discovery or validation failure.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "it forwards the independent inputs of standardize_historical_windows"
-)]
 pub(crate) fn build_historical_inflow_library(
-    inflow_history: &[InflowHistoryRow],
-    hydro_ids: &[EntityId],
-    stages: &[Stage],
+    system: &System,
     par: &PrecomputedPar,
-    season_map: Option<&SeasonMap>,
+    stage_data: &StageData,
     seed: DerivedSeed<'_>,
-    stage_lag_transitions: &[StageLagTransition],
     user_pool: Option<&HistoricalYears>,
     forward_passes: u32,
-    downstream_par_order: usize,
 ) -> Result<HistoricalScenarioLibrary, SddpError> {
+    let inflow_history = system.inflow_history();
+    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+    let stages = &stage_data.stages;
+    let season_map = system.policy_graph().season_map.as_ref();
+    let stage_lag_transitions = &stage_data.stage_lag_transitions;
+    let downstream_par_order = stage_data.study_dims.downstream_par_order;
+
     let max_order = par.max_order();
     let window_years = discover_historical_windows(
         inflow_history,
-        hydro_ids,
+        &hydro_ids,
         stages,
         max_order,
         user_pool,
@@ -69,7 +69,7 @@ pub(crate) fn build_historical_inflow_library(
     standardize_historical_windows(
         &mut library,
         inflow_history,
-        hydro_ids,
+        &hydro_ids,
         stages,
         par,
         &window_years,
@@ -81,7 +81,7 @@ pub(crate) fn build_historical_inflow_library(
     validate_historical_library(
         &library,
         inflow_history,
-        hydro_ids,
+        &hydro_ids,
         stages,
         max_order,
         user_pool,
@@ -119,8 +119,7 @@ fn per_stage_scenario_counts(
 ///
 /// Returns `SddpError::Stochastic` on validation failure.
 pub(crate) fn build_external_inflow_library(
-    external_rows: &[ExternalScenarioRow],
-    hydro_ids: &[EntityId],
+    system: &System,
     stages: &[Stage],
     par: &PrecomputedPar,
     seed: DerivedSeed<'_>,
@@ -128,6 +127,8 @@ pub(crate) fn build_external_inflow_library(
     forward_passes: u32,
     downstream_par_order: usize,
 ) -> Result<ExternalScenarioLibrary, SddpError> {
+    let external_rows = system.external_scenarios();
+    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
     let n_stages = stages.len();
     let n_hydros = hydro_ids.len();
     let row_entity_ids: HashSet<EntityId> = external_rows.iter().map(|r| r.hydro_id).collect();
@@ -144,7 +145,7 @@ pub(crate) fn build_external_inflow_library(
     standardize_external_inflow(
         &mut library,
         external_rows,
-        hydro_ids,
+        &hydro_ids,
         stages,
         par,
         seed,
@@ -153,7 +154,7 @@ pub(crate) fn build_external_inflow_library(
     );
     validate_external_library(
         &library,
-        hydro_ids,
+        &hydro_ids,
         &row_entity_ids,
         &rows_per_stage,
         n_stages,
@@ -313,15 +314,15 @@ pub(crate) fn build_external_ncs_library(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        Block, BlockMode, ExternalLoadRow, InflowModel, NoiseMethod, ScenarioSourceConfig,
-        StageRiskConfig, StageStateConfig, SystemBuilder,
+        Block, BlockMode, ExternalLoadRow, ExternalScenarioRow, Hydro, HydroGenerationModel,
+        HydroPenalties, InflowModel, NoiseMethod, ScenarioSourceConfig, StageRiskConfig,
+        StageStateConfig, System, SystemBuilder,
     };
     use cobre_stochastic::{PrecomputedNormal, StochasticError, derive_external_sample_moments};
 
     use super::{
-        DerivedSeed, EntityId, ExternalScenarioRow, LoadModel, PrecomputedPar, SamplingScheme,
-        SddpError, Stage, StageLagTransition, build_external_inflow_library,
-        build_external_load_library,
+        DerivedSeed, EntityId, LoadModel, PrecomputedPar, SamplingScheme, SddpError, Stage,
+        StageLagTransition, build_external_inflow_library, build_external_load_library,
     };
 
     fn single_stage(id: i32) -> Stage {
@@ -362,6 +363,50 @@ mod tests {
         }
     }
 
+    fn minimal_hydro(id: EntityId) -> Hydro {
+        let mut hydro = Hydro {
+            id,
+            name: String::new(),
+            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            downstream_id: None,
+            travel_time_hours: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 0.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 0.0,
+            specific_productivity_mw_per_m3s_per_m: None,
+            min_generation_mw: 0.0,
+            max_generation_mw: 0.0,
+            unit_groups: Vec::new(),
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties::uniform(0.0),
+        };
+        hydro.declare_mirror_unit_group(EntityId(1));
+        hydro
+    }
+
+    /// A `System` holding one hydro and the given external inflow rows — the
+    /// production reader for [`build_external_inflow_library`]'s new
+    /// `system`-sourced inputs.
+    fn inflow_system(hydro_id: EntityId, external_rows: Vec<ExternalScenarioRow>) -> System {
+        SystemBuilder::new()
+            .hydros(vec![minimal_hydro(hydro_id)])
+            .external_scenarios(external_rows)
+            .build()
+            .expect("system must build")
+    }
+
     /// A `sigma=0` hydro (deterministic PAR) whose external row does not match
     /// the deterministic value trips `solve_par_noise`'s `NEG_INFINITY`
     /// sentinel. `build_external_inflow_library` must surface it as a V3.7
@@ -393,10 +438,10 @@ mod tests {
             value_m3s: 999.0,
         }];
         let transitions = vec![finalizing_transition()];
+        let system = inflow_system(hydro_id, rows);
 
         let result = build_external_inflow_library(
-            &rows,
-            &hydro_ids,
+            &system,
             &stages,
             &par,
             DerivedSeed {
@@ -448,10 +493,10 @@ mod tests {
             value_m3s: 100.0,
         }];
         let transitions = vec![finalizing_transition()];
+        let system = inflow_system(hydro_id, rows);
 
         let result = build_external_inflow_library(
-            &rows,
-            &hydro_ids,
+            &system,
             &stages,
             &par,
             DerivedSeed {
@@ -697,9 +742,9 @@ mod tests {
         );
 
         let transitions = vec![finalizing_transition(), finalizing_transition()];
+        let system = inflow_system(hydro_id, external_rows);
         let library = build_external_inflow_library(
-            &external_rows,
-            &hydro_ids,
+            &system,
             &stages,
             &par,
             DerivedSeed {
@@ -801,10 +846,10 @@ mod tests {
         ];
         let derived_lag_values = [0.0_f64];
         let transitions = vec![finalizing_transition(), finalizing_transition()];
+        let system = inflow_system(hydro_id, external_rows);
 
         let library = build_external_inflow_library(
-            &external_rows,
-            &hydro_ids,
+            &system,
             &stages,
             &par,
             DerivedSeed {
@@ -1005,9 +1050,9 @@ mod tests {
         assert!(par.sigma(1, 0).abs() < 1e-10);
 
         let transitions = vec![finalizing_transition(), finalizing_transition()];
+        let system = inflow_system(hydro_id, external_rows);
         let library = build_external_inflow_library(
-            &external_rows,
-            &hydro_ids,
+            &system,
             &stages,
             &par,
             DerivedSeed {

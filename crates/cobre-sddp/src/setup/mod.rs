@@ -379,17 +379,13 @@ impl StudySetup {
             .map(|s| (s.start_date, s.end_date))
             .collect();
 
-        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
         let scenario_libraries = build_scenario_libraries(
             system,
-            &stage_data.stages,
-            &hydro_ids,
+            &stage_data,
             &stochastic,
-            &stage_data.stage_lag_transitions,
             training_source,
             simulation_source,
             config.forward_passes,
-            stage_data.study_dims.downstream_par_order,
             initial.inflow_seeds.as_seed(stage_data.state.max_par_order),
         )?;
 
@@ -1831,20 +1827,13 @@ fn resolve_stage_data(
 ///
 /// Propagates [`SddpError`] from the individual library builders on validation
 /// or padding failure.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "it forwards the independent inputs of the scenario-library builders it calls"
-)]
 fn build_scenario_libraries(
     system: &System,
-    stages: &[Stage],
-    hydro_ids: &[EntityId],
+    stage_data: &StageData,
     stochastic: &StochasticContext,
-    stage_lag_transitions: &[StageLagTransition],
     training_source: &ScenarioSource,
     simulation_source: &ScenarioSource,
     forward_passes: u32,
-    downstream_par_order: usize,
     seed: DerivedSeed<'_>,
 ) -> Result<ScenarioLibraries, SddpError> {
     let inflow_scheme = training_source.inflow_scheme;
@@ -1860,16 +1849,12 @@ fn build_scenario_libraries(
     let training_historical: Option<HistoricalScenarioLibrary> =
         if inflow_scheme == SamplingScheme::Historical {
             Some(scenario_libraries::build_historical_inflow_library(
-                system.inflow_history(),
-                hydro_ids,
-                stages,
+                system,
                 stochastic.par(),
-                system.policy_graph().season_map.as_ref(),
+                stage_data,
                 seed,
-                stage_lag_transitions,
                 training_source.historical_years.as_ref(),
                 forward_passes,
-                downstream_par_order,
             )?)
         } else {
             None
@@ -1878,14 +1863,13 @@ fn build_scenario_libraries(
     let training_external_inflow: Option<ExternalScenarioLibrary> =
         if inflow_scheme == SamplingScheme::External {
             Some(scenario_libraries::build_external_inflow_library(
-                system.external_scenarios(),
-                hydro_ids,
-                stages,
+                system,
+                &stage_data.stages,
                 stochastic.par(),
                 seed,
-                stage_lag_transitions,
+                &stage_data.stage_lag_transitions,
                 forward_passes,
-                downstream_par_order,
+                stage_data.study_dims.downstream_par_order,
             )?)
         } else {
             None
@@ -1896,7 +1880,7 @@ fn build_scenario_libraries(
             Some(scenario_libraries::build_external_load_library(
                 system,
                 load_scheme,
-                stages,
+                &stage_data.stages,
                 forward_passes,
                 stochastic.normal(),
                 &normal_load_bus_ids,
@@ -1909,7 +1893,7 @@ fn build_scenario_libraries(
         if ncs_scheme == SamplingScheme::External {
             Some(scenario_libraries::build_external_ncs_library(
                 system,
-                stages,
+                &stage_data.stages,
                 forward_passes,
                 stochastic.ncs_normal(),
                 stochastic.ncs_entity_ids(),
@@ -1921,16 +1905,12 @@ fn build_scenario_libraries(
     let simulation_historical: Option<HistoricalScenarioLibrary> =
         if sim_inflow_scheme == SamplingScheme::Historical && sim_inflow_scheme != inflow_scheme {
             Some(scenario_libraries::build_historical_inflow_library(
-                system.inflow_history(),
-                hydro_ids,
-                stages,
+                system,
                 stochastic.par(),
-                system.policy_graph().season_map.as_ref(),
+                stage_data,
                 seed,
-                stage_lag_transitions,
                 simulation_source.historical_years.as_ref(),
                 forward_passes,
-                downstream_par_order,
             )?)
         } else {
             None
@@ -1939,14 +1919,13 @@ fn build_scenario_libraries(
     let simulation_external_inflow: Option<ExternalScenarioLibrary> =
         if sim_inflow_scheme == SamplingScheme::External && sim_inflow_scheme != inflow_scheme {
             Some(scenario_libraries::build_external_inflow_library(
-                system.external_scenarios(),
-                hydro_ids,
-                stages,
+                system,
+                &stage_data.stages,
                 stochastic.par(),
                 seed,
-                stage_lag_transitions,
+                &stage_data.stage_lag_transitions,
                 forward_passes,
-                downstream_par_order,
+                stage_data.study_dims.downstream_par_order,
             )?)
         } else {
             None
@@ -1957,7 +1936,7 @@ fn build_scenario_libraries(
             Some(scenario_libraries::build_external_load_library(
                 system,
                 sim_load_scheme,
-                stages,
+                &stage_data.stages,
                 forward_passes,
                 stochastic.normal(),
                 &normal_load_bus_ids,
@@ -1970,7 +1949,7 @@ fn build_scenario_libraries(
         if sim_ncs_scheme == SamplingScheme::External && sim_ncs_scheme != ncs_scheme {
             Some(scenario_libraries::build_external_ncs_library(
                 system,
-                stages,
+                &stage_data.stages,
                 forward_passes,
                 stochastic.ncs_normal(),
                 stochastic.ncs_entity_ids(),

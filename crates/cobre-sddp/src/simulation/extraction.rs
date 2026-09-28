@@ -139,7 +139,7 @@ fn read_filling_target_slack_primal(
         "filling-slack col {col} out of primal len {}",
         primal.len(),
     );
-    primal.get(col).copied().unwrap_or(0.0)
+    primal[col]
 }
 
 /// Read the primal of the sparse `σ^{v-}` operating-floor-slack column, or `0.0`
@@ -157,7 +157,7 @@ fn read_floor_slack_primal(
         "floor-slack col {col} out of primal len {}",
         primal.len(),
     );
-    primal.get(col).copied().unwrap_or(0.0)
+    primal[col]
 }
 
 /// Reverse lookup from system thermal index to anticipated-local index. Depends
@@ -633,15 +633,7 @@ fn water_value_per_hm3(
     h: usize,
     blk: BlockIdx,
 ) -> f64 {
-    if spec.geometry.water_balance.range().is_empty() {
-        // test harnesses pass the default geometry, which has no rows
-        return 0.0;
-    }
-    view.dual
-        .get(spec.geometry.water_balance_row(HydroSys::new(h), blk))
-        .copied()
-        .unwrap_or(0.0)
-        * spec.cost_scale_factor
+    view.dual[spec.geometry.water_balance_row(HydroSys::new(h), blk)] * spec.cost_scale_factor
 }
 
 /// Extraction parameters bundled for a single stage.
@@ -1296,7 +1288,7 @@ fn extract_buses(
                 let load_row = spec
                     .geometry
                     .load_balance_row(BusSys::new(bus_idx), BlockIdx::new(b));
-                let raw_dual = view.dual.get(load_row).copied().unwrap_or(0.0);
+                let raw_dual = view.dual[load_row];
                 let hrs = spec.block_hours.get(b).copied().unwrap_or(0.0);
                 #[allow(clippy::cast_possible_truncation)]
                 SimulationBusResult {

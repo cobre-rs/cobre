@@ -4569,8 +4569,8 @@ fn incremental_inflow_energy_uses_rho_acum() {
 /// With `with_integrated` giving `integrated_accumulated_productivity` a value
 /// distinct from `accumulated_productivity`, stored energy rides the integrated
 /// grid while `incremental_inflow_energy_mw` and the reported accumulated column
-/// stay on the reference-point grid — proven on both the no-turbine and the
-/// per-block extraction path.
+/// stay on the reference-point grid — proven on both the builder geometry and
+/// the hand-built Parallel geometry.
 #[test]
 fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
     let rho_acum = 4.0_f64;
@@ -4648,13 +4648,13 @@ fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
     assert_eq!(
         row.accumulated_productivity_mw_per_m3s.to_bits(),
         rho_acum.to_bits(),
-        "no-turbine path: reported accumulated column must stay on the reference-point grid"
+        "builder geometry: reported accumulated column must stay on the reference-point grid"
     );
     let expected_inflow_energy = rho_acum * incremental_inflow;
     assert_eq!(
         row.incremental_inflow_energy_mw.to_bits(),
         expected_inflow_energy.to_bits(),
-        "no-turbine path: inflow energy must stay on the reference-point grid"
+        "builder geometry: inflow energy must stay on the reference-point grid"
     );
     let expected_initial =
         (110.0_f64 - v_min) * rho_acum_integrated * super::ENERGY_FACTOR_MWH_PER_HM3_PER_MW_PER_M3S;
@@ -4663,12 +4663,12 @@ fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
     assert_eq!(
         row.stored_energy_initial_mwh.to_bits(),
         expected_initial.to_bits(),
-        "no-turbine path: stored energy must ride the integrated grid"
+        "builder geometry: stored energy must ride the integrated grid"
     );
     assert_eq!(
         row.stored_energy_final_mwh.to_bits(),
         expected_final.to_bits(),
-        "no-turbine path: stored energy must ride the integrated grid"
+        "builder geometry: stored energy must ride the integrated grid"
     );
 
     let k = 1_usize;
@@ -4724,29 +4724,29 @@ fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
     assert_eq!(
         pb_row.accumulated_productivity_mw_per_m3s.to_bits(),
         rho_acum.to_bits(),
-        "per-block path: reported accumulated column must stay on the reference-point grid"
+        "hand-built Parallel geometry: reported accumulated column must stay on the reference-point grid"
     );
     assert_eq!(
         pb_row.incremental_inflow_energy_mw.to_bits(),
         expected_inflow_energy.to_bits(),
-        "per-block path: inflow energy must stay on the reference-point grid"
+        "hand-built Parallel geometry: inflow energy must stay on the reference-point grid"
     );
     assert_eq!(
         pb_row.stored_energy_initial_mwh.to_bits(),
         expected_initial.to_bits(),
-        "per-block path: stored energy must ride the integrated grid"
+        "hand-built Parallel geometry: stored energy must ride the integrated grid"
     );
     assert_eq!(
         pb_row.stored_energy_final_mwh.to_bits(),
         expected_final.to_bits(),
-        "per-block path: stored energy must ride the integrated grid"
+        "hand-built Parallel geometry: stored energy must ride the integrated grid"
     );
 }
 
 /// `stored_energy_{initial,final}_mw` divide the corresponding `_mwh` value by
 /// the STAGE's total hours (`Σ block_hours`), never a per-block hours — proven
-/// on the no-turbine path and, under Parallel block mode (storage held constant
-/// across blocks), identical on every per-block row of the stage.
+/// on the builder geometry and, under Parallel block mode (storage held constant
+/// across blocks), identical on every row of the hand-built Parallel geometry.
 #[test]
 fn stored_energy_mw_divides_by_stage_total_hours() {
     let rho_acum_integrated = 2.0_f64;
@@ -4763,7 +4763,7 @@ fn stored_energy_mw_divides_by_stage_total_hours() {
         n_thermals: 0,
         n_lines: 0,
         n_buses: 1,
-        n_blks: 1,
+        n_blks: 3,
         has_inflow_penalty: false,
         max_deficit_segments: 1,
         n_anticipated: 0,
@@ -4820,20 +4820,21 @@ fn stored_energy_mw_divides_by_stage_total_hours() {
         0,
     );
 
-    assert_eq!(result.hydros.len(), 1);
-    let row = &result.hydros[0];
-    let expected_initial_mw = row.stored_energy_initial_mwh / stage_total_hours;
-    let expected_final_mw = row.stored_energy_final_mwh / stage_total_hours;
-    assert_eq!(
-        row.stored_energy_initial_mw.to_bits(),
-        expected_initial_mw.to_bits(),
-        "no-turbine path: stored_energy_initial_mw must equal _mwh / stage total hours"
-    );
-    assert_eq!(
-        row.stored_energy_final_mw.to_bits(),
-        expected_final_mw.to_bits(),
-        "no-turbine path: stored_energy_final_mw must equal _mwh / stage total hours"
-    );
+    assert_eq!(result.hydros.len(), 3);
+    let expected_initial_mw = result.hydros[0].stored_energy_initial_mwh / stage_total_hours;
+    let expected_final_mw = result.hydros[0].stored_energy_final_mwh / stage_total_hours;
+    for row in &result.hydros {
+        assert_eq!(
+            row.stored_energy_initial_mw.to_bits(),
+            (row.stored_energy_initial_mwh / stage_total_hours).to_bits(),
+            "builder geometry: stored_energy_initial_mw must equal _mwh / stage total hours"
+        );
+        assert_eq!(
+            row.stored_energy_final_mw.to_bits(),
+            (row.stored_energy_final_mwh / stage_total_hours).to_bits(),
+            "builder geometry: stored_energy_final_mw must equal _mwh / stage total hours"
+        );
+    }
 
     let k = 3_usize;
     let geom = single_hydro_block_geometry(BlockMode::Parallel, k);
@@ -4888,12 +4889,12 @@ fn stored_energy_mw_divides_by_stage_total_hours() {
         assert_eq!(
             pb_row.stored_energy_initial_mw.to_bits(),
             expected_initial_mw.to_bits(),
-            "per-block path: stored_energy_initial_mw must divide by stage, not per-block, hours"
+            "hand-built Parallel geometry: stored_energy_initial_mw must divide by stage, not per-block, hours"
         );
         assert_eq!(
             pb_row.stored_energy_final_mw.to_bits(),
             expected_final_mw.to_bits(),
-            "per-block path: stored_energy_final_mw must divide by stage, not per-block, hours"
+            "hand-built Parallel geometry: stored_energy_final_mw must divide by stage, not per-block, hours"
         );
     }
 }

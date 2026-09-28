@@ -9,6 +9,8 @@
 //! `#[cfg(any(test, feature = "test-support"))]` — reachable by plain `cargo test`
 //! and by downstream integration tests via the `test-support` feature.
 
+#![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -496,17 +498,14 @@ fn geometry_stage(n_blks: usize) -> Stage {
 /// describe and delegates to `StageLayout::new`/`StageLayout::geometry` — the
 /// single owner of the offset arithmetic.
 #[must_use]
-// Rationale: `fpha_hydro_indices`/`evap_hydro_indices` stay owned `Vec<usize>` —
-// the signature is a stability contract its call sites depend on — even
-// though the body only borrows them (`StageLayout::new` re-derives the
-// authoritative membership from `ctx.hydros`/`production_models`/
-// `evaporation_models`, not from the caller's raw list).
-#[allow(clippy::needless_pass_by_value)]
-// Rationale: clippy::similar_names flags `state` next to `stage`; both names
-// are established (the `StageLayout`/`StageData` field is `state`, the
-// per-stage input is `stage`), so renaming either would obscure intent rather
-// than clarify it — mirrors `build_single_stage_template`.
-#[allow(clippy::similar_names)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "fpha_hydro_indices/evap_hydro_indices stay owned Vec<usize> — the signature is a stability contract its call sites depend on — even though the body only borrows them (StageLayout::new re-derives the authoritative membership from ctx.hydros/production_models/evaporation_models, not from the caller's raw list)"
+)]
+#[expect(
+    clippy::similar_names,
+    reason = "state next to stage: both names are established (the StageLayout/StageData field is state, the per-stage input is stage), so renaming either would obscure intent rather than clarify it — mirrors build_single_stage_template"
+)]
 pub fn geometry(
     dims: &GeometryDims,
     fpha_hydro_indices: Vec<usize>,
@@ -1074,11 +1073,10 @@ pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: matching state_dimension/num_stages with an empty manifest on
-// both sides cannot hit validate_policy_load's error paths (state_dimension
-// and num_stages equality hold trivially; an empty manifest short-circuits
-// identity comparison with a warning, never an error).
+#[expect(
+    clippy::expect_used,
+    reason = "matching state_dimension/num_stages with an empty manifest on both sides cannot hit validate_policy_load's error paths (state_dimension and num_stages equality hold trivially; an empty manifest short-circuits identity comparison with a warning, never an error)"
+)]
 #[must_use]
 pub fn trivial_full_fcf_proof(state_dimension: u32, num_stages: u32) -> PolicyLoadProof<FullFcf> {
     let graph = cobre_io::GraphManifest::default();
@@ -1126,9 +1124,10 @@ pub fn checkpoint_metadata(
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a literal, calendar-valid date;
-// `from_ymd_opt` only returns `None` for an out-of-range one.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a literal, calendar-valid date; from_ymd_opt only returns None for an out-of-range one"
+)]
 #[must_use]
 pub fn ymd(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).expect("valid calendar date")
@@ -1144,9 +1143,10 @@ pub fn ymd(year: i32, month: u32, day: u32) -> NaiveDate {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a small pool count; `checked_add_months`
-// only overflows past `NaiveDate`'s year range.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a small pool count; checked_add_months only overflows past NaiveDate's year range"
+)]
 #[must_use]
 pub fn fixture_priced_date(base: NaiveDate, pool: u32) -> NaiveDate {
     base.checked_add_months(chrono::Months::new(pool))
@@ -1161,9 +1161,10 @@ pub fn fixture_priced_date(base: NaiveDate, pool: u32) -> NaiveDate {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a day-01 YYYYMMDD anchor in range; decoding
-// then re-encoding one only fails on a malformed or out-of-range stamp.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a day-01 YYYYMMDD anchor in range; decoding then re-encoding one only fails on a malformed or out-of-range stamp"
+)]
 #[must_use]
 pub fn next_month_anchor(month_anchor: i32) -> i32 {
     encode_slot_date(
@@ -1201,9 +1202,10 @@ pub fn producer_block() -> ProducerBlock {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a small stage count; the `u32`→`i32` casts
-// only fail past `i32::MAX` stages.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a small stage count; the u32->i32 casts only fail past i32::MAX stages"
+)]
 #[must_use]
 pub fn chain_graph_manifest(n_stages: u32) -> GraphManifest {
     let nodes = (0..n_stages)
@@ -1236,9 +1238,10 @@ pub fn chain_graph_manifest(n_stages: u32) -> GraphManifest {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: `write_policy_checkpoint` only fails on a write-path IO error,
-// never on this fixture's own well-formed payload.
+#[expect(
+    clippy::expect_used,
+    reason = "write_policy_checkpoint only fails on a write-path IO error, never on this fixture's own well-formed payload"
+)]
 pub fn write_synthetic_boundary(
     dir: &Path,
     state_dimension: u32,
@@ -1466,7 +1469,6 @@ pub struct CanonicalCutProbe {
 /// # Errors
 ///
 /// Propagates [`SddpError`] from the stage solve.
-#[allow(clippy::too_many_arguments)]
 pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
@@ -1668,14 +1670,18 @@ pub fn trial_state_records(states: &[Vec<f64>], n_stages: usize) -> Vec<Trajecto
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: build_node_graph only returns Err for a transition/node naming
-// an undeclared id; HorizonGraph::default() carries no nodes/transitions at
-// all, so that error path is unreachable here.
+#[expect(
+    clippy::expect_used,
+    reason = "build_node_graph only returns Err for a transition/node naming an undeclared id; HorizonGraph::default() carries no nodes/transitions at all, so that error path is unreachable here"
+)]
 #[must_use]
 pub fn chain_node_graph(stochastic: &StochasticContext) -> NodeGraph {
     let n_stages = stochastic.n_stages();
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let study_stage_ids: Vec<i32> = (0..n_stages as i32).collect();
     let resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
     build_node_graph(&HorizonGraph::default(), n_stages, &resolver, stochastic)
@@ -1740,7 +1746,10 @@ fn in_sample_class_schemes() -> ClassSchemes {
 ///
 /// Never in practice: the system and stochastic literals built here are
 /// fixed and internally consistent.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "the system and stochastic literals built here are fixed and internally consistent, so SystemBuilder::build/build_stochastic_context never return their error paths"
+)]
 #[must_use]
 pub fn hydro_free_stochastic_context(
     n_stages: usize,
@@ -1756,7 +1765,11 @@ pub fn hydro_free_stochastic_context(
         }],
         excess_cost: 0.0,
     };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "idx is a small fixture stage index, far below i32::MAX"
+    )]
     let make_stage = |idx: usize| Stage {
         index: idx,
         id: idx as i32,
@@ -1838,10 +1851,11 @@ fn finite_horizon_graph(nodes: Vec<PolicyNode>, transitions: Vec<Transition>) ->
 /// `num_nodes > n_pools` for every `k >= 2`, so a canonical-node-position-as-pool-id
 /// conflation bug would misroute or overflow a pool here, where it cannot on a
 /// chain (`node_index == pool_id` there hides the bug).
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k is a small fixture fan width, far below i32::MAX and below f64's exact-integer range"
 )]
 fn k_fan_policy_graph(k: usize, reversed: bool) -> HorizonGraph {
     debug_assert!(k >= 2, "k_fan_policy_graph: k must be >= 2 (DECOMP shape)");
@@ -1901,10 +1915,10 @@ const K_FAN_DEFAULT_STATE_CONFIG: StageStateConfig = StageStateConfig {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: the literal calendar dates below are valid by construction
-// (checked at write time); `from_ymd_opt` only returns `None` for an
-// out-of-range calendar date.
+#[expect(
+    clippy::expect_used,
+    reason = "the literal calendar dates below are valid by construction (checked at write time); from_ymd_opt only returns None for an out-of-range calendar date"
+)]
 fn k_fan_stage(index: usize, id: i32, state_config: StageStateConfig) -> Stage {
     Stage {
         index,
@@ -1940,10 +1954,6 @@ pub(crate) fn k_fan_system(k: usize, reversed: bool) -> System {
 /// degeneracy the enumerated engine's single-path (count-1) 2-rank stub needs.
 /// Every stage gets [`K_FAN_DEFAULT_STATE_CONFIG`] — see [`fan_or_chain_system_ext`]
 /// for a caller that varies it.
-// RATIONALE: one linear fixture that builds a self-consistent multi-stage
-// System; splitting it scatters the study across single-use helpers and hides
-// the whole-study shape a test reads at a glance.
-#[allow(clippy::too_many_lines, clippy::expect_used)]
 fn fan_or_chain_system(n_stages: usize, policy_graph: HorizonGraph) -> System {
     fan_or_chain_system_ext(
         n_stages,
@@ -1993,14 +2003,13 @@ impl StorageSpec {
 /// (empty leaves the PAR-free `vec![]`, byte-identical to every caller predating it);
 /// a non-empty slice with a near-zero `inflow_std` builds a deterministic PAR series,
 /// mirroring `d16_par1_lag_shift`.
-// Rationale: one linear entity/bounds/penalties assembly shared by every fan/chain
-// fixture in this file; splitting the newest knob into a struct would cost a
-// one-off type for a single call site, while every existing caller already reads
-// as a flat parameter list at its call site.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::too_many_arguments,
-    clippy::expect_used
+    reason = "one linear entity/bounds/penalties assembly shared by every fan/chain fixture in this file; splitting the newest knob into a struct would cost a one-off type for a single call site, while every existing caller already reads as a flat parameter list at its call site"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "the literal calendar dates and the fixed study built here are valid and internally consistent by construction"
 )]
 fn fan_or_chain_system_ext(
     n_stages: usize,
@@ -2079,7 +2088,11 @@ fn fan_or_chain_system_ext(
         "fan_or_chain_system_ext: stage_state_configs, when Some, must supply one \
          StageStateConfig per stage"
     );
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let stages: Vec<_> = (0..n_stages)
         .map(|i| {
             let config = stage_state_configs.map_or(K_FAN_DEFAULT_STATE_CONFIG, |cfgs| cfgs[i]);
@@ -2095,7 +2108,11 @@ fn fan_or_chain_system_ext(
         })
         .collect();
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let inflow_models: Vec<_> = (0..n_stages)
         .map(|i| InflowModel {
             hydro_id,
@@ -2108,7 +2125,11 @@ fn fan_or_chain_system_ext(
         })
         .collect();
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let load_models: Vec<_> = (0..n_stages)
         .map(|i| LoadModel {
             bus_id,
@@ -2365,7 +2386,10 @@ pub fn k_fan_setup_gap(
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn single_path_enumerated_setup(max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(2, HorizonGraph::default());
@@ -2396,9 +2420,14 @@ pub fn single_path_enumerated_setup(max_iterations: u32) -> StudySetup {
 /// on a malformed system or config, neither of which any caller here
 /// produces, and `enumerated_scenario_count` only errors on a `u64`
 /// path-product overflow, unreachable at this fixture's scale.
-// `config` is taken by value so callers pass an owned builder result inline; the
-// body only borrows it for `StudySetup::new`.
-#[allow(clippy::expect_used, clippy::needless_pass_by_value)]
+#[expect(
+    clippy::expect_used,
+    reason = "every literal in k_fan_system/k_fan_config is a hand-checked, internally-consistent fixture; StudySetup::new only errors on a malformed system or config, and enumerated_scenario_count only errors on a u64 path-product overflow, neither reachable at this fixture's scale"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "config is taken by value so callers pass an owned builder result inline; the body only borrows it for StudySetup::new"
+)]
 #[must_use]
 fn k_fan_fixture(k: usize, reversed: bool, config: Config) -> KFanFixture {
     let system = k_fan_system(k, reversed);
@@ -2493,7 +2522,10 @@ fn external_fan_config_enumerated(max_iterations: u32) -> Config {
 ///
 /// Never in practice: `build_stochastic_context` is infallible for this
 /// hand-checked fixture (only the `StudySetup::new` result is returned).
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context is infallible for this hand-checked fixture; only the StudySetup::new result is propagated via ?"
+)]
 pub fn try_k_fan_simulation_enumerated(k: usize) -> Result<StudySetup, SddpError> {
     let system = k_fan_system(k, false);
     let mut config = k_fan_config(1, 1);
@@ -2535,7 +2567,10 @@ impl SolverInterface for TemplateCaptureSolver {
 
     fn add_rows(&mut self, _rows: &RowBatch) {}
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_row_bounds, so template is always Some"
+    )]
     fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
         let t = self
             .template
@@ -2547,7 +2582,10 @@ impl SolverInterface for TemplateCaptureSolver {
         }
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_col_bounds, so template is always Some"
+    )]
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
         let t = self
             .template
@@ -2612,7 +2650,10 @@ impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
         self.inner.add_rows(rows);
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_row_bounds, so current is always Some"
+    )]
     fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
         let t = self
             .current
@@ -2625,7 +2666,10 @@ impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
         self.inner.set_row_bounds(indices, lower, upper);
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_col_bounds, so current is always Some"
+    )]
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
         let t = self
             .current
@@ -2638,7 +2682,10 @@ impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
         self.inner.set_col_bounds(indices, lower, upper);
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before solve, so current is always Some"
+    )]
     fn solve(&mut self, basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError> {
         let current = self
             .current
@@ -2787,7 +2834,10 @@ pub fn capture_patched_node_template_at(
 ///
 /// Panics if `opening >= node_pos`'s opening count, if (for an `External`
 /// node) `opening != 0`, or if [`fill_external_opening_noise`] fails.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "fill_external_opening_noise fails only on a malformed setup this fixture never produces"
+)]
 #[must_use]
 pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize) -> Vec<f64> {
     let stage = setup.node_graph.nodes[node_pos].stage;
@@ -2819,7 +2869,10 @@ pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize)
     }
 }
 
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "TemplateCaptureSolver::template is set before StageSolvePrep::run and only load_model/set_row_bounds/set_col_bounds touch it, so it is always Some after run"
+)]
 fn capture_patched_node_template_with_raw_noise(
     setup: &StudySetup,
     node_pos: NodePos,
@@ -2968,7 +3021,10 @@ const TERMINAL_FAN_STAGES: usize = 2;
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn oracle_chain_setup(max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(3, HorizonGraph::default());
@@ -2993,10 +3049,11 @@ pub fn oracle_chain_setup(max_iterations: u32) -> StudySetup {
 /// weights `i / Σj`, every node `Generated` (no `scenario_id`). The leaves are
 /// terminal, so [`build_node_graph`] assigns them ONE shared leaf pool: the fan's
 /// successors are interchangeable and today's engine prices the root correctly.
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k is a small fixture fan width, far below i32::MAX and below f64's exact-integer range"
 )]
 fn terminal_generated_fan_policy_graph(k: usize) -> HorizonGraph {
     debug_assert!(
@@ -3035,7 +3092,10 @@ fn terminal_generated_fan_policy_graph(k: usize) -> HorizonGraph {
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn terminal_generated_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(TERMINAL_FAN_STAGES, terminal_generated_fan_policy_graph(k));
@@ -3112,16 +3172,6 @@ const EXTERNAL_FAN_LOAD_STD: f64 = 20.0;
 ///
 /// Never in practice — every literal is a hand-checked, internally-consistent
 /// fixture.
-// RATIONALE: one linear fixture that builds a self-consistent external-distinct
-// fan study; splitting it scatters the study across single-use helpers and hides
-// the whole-study shape a test reads at a glance.
-#[allow(
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
-)]
 #[must_use]
 pub fn external_distinct_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
     build_external_distinct_fan_setup(k, max_iterations, None)
@@ -3155,16 +3205,15 @@ pub fn external_distinct_fan_setup_heterogeneous_cut_state(
     build_external_distinct_fan_setup(k, max_iterations, Some(1))
 }
 
-// Rationale (too_many_lines): one linear pass assembling a StudySetup fixture —
-// policy graph, per-node external inflow openings, and config — from literal deck
-// data; splitting it would scatter shared locals across helpers for no
-// test-readability gain.
-#[allow(
+#[expect(
     clippy::expect_used,
-    clippy::too_many_lines,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k and its derived scenario/node ids are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 fn build_external_distinct_fan_setup(
     k: usize,
@@ -3176,7 +3225,6 @@ fn build_external_distinct_fan_setup(
         "external fan k in 2..=3"
     );
 
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     let policy_graph = {
         let mut nodes = Vec::with_capacity(1 + k);
         let mut transitions = Vec::with_capacity(k);
@@ -3291,15 +3339,15 @@ fn build_external_distinct_fan_setup(
 ///
 /// Never in practice — every literal is a hand-checked, internally-consistent
 /// fixture.
-// RATIONALE: one linear fixture that builds a self-consistent external-root
-// fan study; splitting it scatters the study across single-use helpers and hides
-// the whole-study shape a test reads at a glance.
-#[allow(
+#[expect(
     clippy::expect_used,
-    clippy::too_many_lines,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k and its derived scenario/node ids are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 #[must_use]
 pub fn external_root_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
@@ -3313,7 +3361,6 @@ pub fn external_root_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
         "external fan k in 2..=3"
     );
 
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     let policy_graph = {
         let mut nodes = Vec::with_capacity(1 + k);
         let mut transitions = Vec::with_capacity(k);
@@ -3473,11 +3520,15 @@ pub fn water_binding_external_fan_setup_reversed(k: usize, max_iterations: u32) 
     build_water_binding_external_fan(k, max_iterations, true)
 }
 
-#[allow(
+#[expect(
     clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k and its derived scenario/node ids are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: bool) -> StudySetup {
     assert!(
@@ -3589,7 +3640,6 @@ const BRANCHING_TREE_RIGHT_WEIGHT: f64 = 0.65;
 /// leaf (branching at ONE level only). Node ids: `0` (root), `1`/`2` (fan,
 /// [`K_FAN_BRANCH_STAGE_ID`]), `3..=6` (leaves, [`K_FAN_LEAF_STAGE_ID`], `1`'s
 /// children first). All `Generated` (no `scenario_id`).
-#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 fn branching_tree_policy_graph(reversed: bool) -> HorizonGraph {
     let mut nodes = Vec::with_capacity(7);
     let mut transitions = Vec::with_capacity(6);
@@ -3728,7 +3778,10 @@ pub fn non_uniform_branching_setup_reversed(
     build_non_uniform_branching_setup(forward_passes, max_iterations, true)
 }
 
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 fn build_non_uniform_branching_setup(
     forward_passes: u32,
     max_iterations: u32,
@@ -3774,7 +3827,10 @@ fn build_non_uniform_branching_setup(
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn branching_tree_setup_enumerated(max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(3, branching_tree_policy_graph(false));
@@ -3857,11 +3913,15 @@ pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
 ///
 /// Panics if the extensive-form LP fails to build a solver or fails to solve —
 /// unreachable for a well-formed, feasible `setup`.
-#[allow(
+#[expect(
     clippy::expect_used,
+    reason = "the extensive-form LP fails to build a solver or to solve only for a malformed, infeasible setup, unreachable for this oracle's inputs"
+)]
+#[expect(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "node/row/column counts here are small fixture sizes, far below i32::MAX and always non-negative"
 )]
 #[must_use]
 pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
@@ -4065,10 +4125,11 @@ fn dual_folding_stage_configs(fold: LagFold) -> [StageStateConfig; 3] {
 /// terminal leaves (ids `2..=k+1`, stage [`K_FAN_LEAF_STAGE_ID`]) under
 /// non-uniform weights `i / Σj` (never uniform `1/k`). The two trunk nodes (root,
 /// mid) each own their own cut pool; the `k` leaves share one terminal pool.
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k is a small fixture fan width, far below i32::MAX and below f64's exact-integer range"
 )]
 fn dual_folding_policy_graph(k: usize) -> HorizonGraph {
     debug_assert!(k >= 2, "dual_folding_policy_graph: k must be >= 2");
@@ -4141,7 +4202,10 @@ fn dual_folding_system(fold: LagFold) -> System {
 /// Never in practice — every literal is a hand-checked, internally-consistent
 /// fixture (as [`k_fan_setup`]); `build_stochastic_context`/`StudySetup::new`
 /// only error on a malformed study.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn dual_folding_setup(fold: LagFold, forward_passes: u32, max_iterations: u32) -> StudySetup {
     let system = dual_folding_system(fold);
@@ -4210,10 +4274,11 @@ const TRUNK_FAN_STORAGE: StorageSpec = StorageSpec {
 /// [`k_fan_policy_graph`]/[`dual_folding_policy_graph`]: a uniform split would
 /// make every canonical-order reduction sum identical terms, defeating the
 /// canonical-order gate's power).
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "t_trunk and k are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 fn trunk_fan_policy_graph(t_trunk: usize, k: usize) -> HorizonGraph {
     debug_assert!(
@@ -4306,9 +4371,14 @@ pub struct TrunkFanFixture {
 /// the stochastic context and study for `config`, injects
 /// [`TRUNK_FAN_PRODUCTIVITY`] over `default_from_system`'s `0.0` placeholder,
 /// and derives `n_nonleaf_nodes` from the resolved graph.
-// `config` is taken by value so callers pass an owned builder result inline;
-// the body only borrows it for `StudySetup::new`.
-#[allow(clippy::expect_used, clippy::needless_pass_by_value)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context never errors on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "config is taken by value so callers pass an owned builder result inline; the body only borrows it for StudySetup::new"
+)]
 #[must_use]
 fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixture {
     let system = trunk_fan_system(t_trunk, k);

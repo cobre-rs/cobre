@@ -790,12 +790,12 @@ mod determinism {
         horizon_mode::HorizonMode,
         indexer::{CutStateProjection, StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::{PatchBuffer, StateBox},
+        lp::builder::{PatchBuffer, StageGeometry, StateBox},
         risk_measure::RiskMeasure,
         setup::node_graph::Traversal,
         simulate,
         simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
-        test_support::{StageContextFixture, equipment_free_geometry},
+        test_support::{GeometryDims, StageContextFixture, geometry},
         train,
         workspace::{SolverWorkspace, WorkspaceSizing},
     };
@@ -831,6 +831,23 @@ mod determinism {
         StudyDimensions::default()
     }
 
+    /// Build the [`StageGeometry`] `template_3h` addresses: N=3 hydros, 1 bus,
+    /// 1 block — the production layout `test_support::geometry` builds for
+    /// those dims.
+    fn three_hydro_one_bus_geometry() -> StageGeometry {
+        geometry(
+            &GeometryDims {
+                hydro_count: 3,
+                n_buses: 1,
+                n_blks: 1,
+                ..GeometryDims::default()
+            },
+            vec![],
+            &[],
+            vec![],
+        )
+    }
+
     // ===========================================================================
     // Mock solver for N=3 hydros, L=0 PAR
     //
@@ -840,18 +857,23 @@ mod determinism {
     //   z_inflow     = 3..6
     //   storage_in   = 6..9
     //   theta        = 9
-    //   num_cols     = 10
+    //   then the decoupled hydro+bus equipment padding `test_support::geometry`
+    //   addresses for N=3 hydros, 1 bus, 1 block (cols 10-38), so per-block
+    //   hydro/bus extraction addresses real columns instead of an empty family.
+    //   num_cols     = 39
     //
-    // The primal must have 10 entries so `view.primal[state.theta]` (index 9)
-    // is valid. The dual must have at least n_dual_relevant = 3 entries so the
-    // backward pass can extract dual values for the 3 storage-fixing rows.
+    // The primal must have 39 entries so simulation's per-block extraction can
+    // address every equipment column. The dual must have at least
+    // n_dual_relevant = 3 entries so the backward pass can extract dual values
+    // for the 3 storage-fixing rows, and at least 7 to cover the widened
+    // geometry's water-balance/load-balance row family.
     // ===========================================================================
 
-    const PRIMAL_3H: &[f64] = &[0.0; 10];
+    const PRIMAL_3H: &[f64] = &[0.0; 39];
     // The dual must cover: n_dual_relevant (3) + max cuts per stage (10 iterations × 1 pass = 10).
     // Use 64 to cover any reasonable iteration count without tight sizing.
     const DUAL_3H: &[f64] = &[0.0; 64];
-    const REDUCED_COSTS_3H: &[f64] = &[0.0; 10];
+    const REDUCED_COSTS_3H: &[f64] = &[0.0; 39];
 
     /// Mock solver returning a fixed objective on every solve, so any output
     /// variation across thread counts comes from the orchestration layer alone.
@@ -1101,58 +1123,64 @@ mod determinism {
     ///
     /// Column layout (N=3, L=0):
     /// ```text
-    /// 0..3  storage_out  (outgoing storage, N=3)
-    /// 3..6  z_inflow     (realized inflow variables, N=3, free)
-    /// 6..9  storage_in   (incoming storage, N=3, L=0 → no lag cols)
-    /// 9     theta
+    /// 0..3   storage_out  (outgoing storage, N=3)
+    /// 3..6   z_inflow     (realized inflow variables, N=3, free)
+    /// 6..9   storage_in   (incoming storage, N=3, L=0 → no lag cols)
+    /// 9      theta
+    /// 10..39 decoupled hydro+bus equipment padding `test_support::geometry`
+    ///        addresses for N=3 hydros, 1 bus, 1 block (zero cost, zero NZ):
+    ///        `MockSolver3H` never reads the coefficients.
     /// ```
     ///
     /// Row layout (N=3, L=0):
     /// ```text
     /// 0..3  z_inflow rows        (one per hydro, at StateSpace::z_inflow_rows())
     /// 3..6  storage-fixing rows  (one per hydro)
+    /// 6     the widened geometry's load-balance row (unused, no NZ)
     /// ```
     ///
     /// The matrix has one nonzero per z_inflow row (column = `z_inflow[h]`) and one
     /// per storage-fixing row (column = `storage_in[h]`), each coefficient 1.0, so
     /// the patch buffer has something to patch.
     fn template_3h() -> StageTemplate {
-        // CSC col_starts: 10 columns + 1 sentinel; z_inflow and storage_in cols
-        // each carry one NZ.
-        let col_starts = vec![
-            0_i32, // col 0 (storage_out[0])
-            0,     // col 1 (storage_out[1])
-            0,     // col 2 (storage_out[2])
-            0,     // col 3 (z_inflow[0]) — NZ starts here
-            1,     // col 4 (z_inflow[1])
-            2,     // col 5 (z_inflow[2])
-            3,     // col 6 (storage_in[0])
-            4,     // col 7 (storage_in[1])
-            5,     // col 8 (storage_in[2])
-            6,     // col 9 (theta)
-            6,     // sentinel
-        ];
+        let num_cols = 39;
+        let num_rows = 7;
+        // CSC col_starts: 39 columns + 1 sentinel; z_inflow and storage_in cols
+        // each carry one NZ, cols 9 (theta) onward carry none.
+        let col_starts = {
+            let mut v = vec![6_i32; num_cols + 1];
+            v[0] = 0; // col 0 (storage_out[0])
+            v[1] = 0; // col 1 (storage_out[1])
+            v[2] = 0; // col 2 (storage_out[2])
+            v[3] = 0; // col 3 (z_inflow[0]) — NZ starts here
+            v[4] = 1; // col 4 (z_inflow[1])
+            v[5] = 2; // col 5 (z_inflow[2])
+            v[6] = 3; // col 6 (storage_in[0])
+            v[7] = 4; // col 7 (storage_in[1])
+            v[8] = 5; // col 8 (storage_in[2])
+            v
+        };
         let row_indices = vec![0_i32, 1, 2, 3, 4, 5];
         let values = vec![1.0_f64, 1.0, 1.0, 1.0, 1.0, 1.0];
 
-        let mut objective = vec![0.0_f64; 10];
+        let mut objective = vec![0.0_f64; num_cols];
         objective[9] = 1.0; // theta at col 9
 
-        let mut col_lower = vec![0.0_f64; 10];
+        let mut col_lower = vec![0.0_f64; num_cols];
         col_lower[3..6].fill(f64::NEG_INFINITY); // z_inflow cols are free
 
         StageTemplate {
-            num_cols: 10,
-            num_rows: 6,
+            num_cols,
+            num_rows,
             num_nz: 6,
             col_starts,
             row_indices,
             values,
             col_lower,
-            col_upper: vec![f64::INFINITY; 10],
+            col_upper: vec![f64::INFINITY; num_cols],
             objective,
-            row_lower: vec![0.0; 6],
-            row_upper: vec![0.0; 6],
+            row_lower: vec![0.0; num_rows],
+            row_upper: vec![0.0; num_rows],
             n_state: 3,
             n_transfer: 0,
             n_dual_relevant: 3,
@@ -1279,7 +1307,7 @@ mod determinism {
             .unwrap();
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-        let geometry = equipment_free_geometry(&[1usize; 5]);
+        let geometry = vec![three_hydro_one_bus_geometry(); fx.n_stages];
         let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let stage_ctx = stage_ctx_fixture.ctx();
         let result = pool
@@ -1394,7 +1422,7 @@ mod determinism {
             .unwrap();
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-        let geometry = equipment_free_geometry(&[0usize; 5]);
+        let geometry = vec![three_hydro_one_bus_geometry(); fx.n_stages];
         let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let cost_buffer = pool
             .install(|| {
@@ -1428,7 +1456,7 @@ mod determinism {
                         result_tx: &result_tx,
                         zeta_per_stage: &[],
                         hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-                        block_hours_per_stage: &vec![Vec::new(); fx.n_stages],
+                        block_hours_per_stage: &vec![vec![744.0]; fx.n_stages],
                         entity_counts: &entity_counts,
                         generic_constraint_row_entries: &vec![Vec::new(); fx.n_stages],
                         n_ncs: 0,

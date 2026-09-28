@@ -44,7 +44,7 @@ use cobre_sddp::{
         StageIdx, Traversal,
     },
     simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
-    test_support::{StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry},
+    test_support::{StageContextFixture, all_enabled_cut_state_layouts, hydro_only_bus_geometry},
     workspace::{SolverWorkspace, WorkspaceSizing},
 };
 
@@ -236,30 +236,30 @@ impl SolverInterface for MockSolver {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Minimal valid stage template for N=1 hydro, L=0 PAR order.
-///
-/// Column layout (N=1, L=0):
-/// - col 0: `storage_out` (no NZ)
-/// - col 1: `z_inflow` (1 NZ: row 0, z-inflow definition row)
-/// - col 2: `storage_in` (1 NZ: row 1, storage-fixing row)
-/// - col 3: `theta` (no NZ)
-///
-/// Row layout:
-/// - row 0: `z_inflow` definition row
-/// - row 1: storage-fixing (`storage_out` fixed to incoming state)
+/// Stage template matching `hydro_only_bus_geometry`'s N=1 hydro, 1 bus,
+/// 1-block layout, so per-block hydro/load extraction addresses real columns
+/// and rows instead of an empty family. `MockSolver` never reads the
+/// coefficients, so every column past the state region (`storage_out`(0),
+/// `z_inflow`(1), `storage_in`(2), `theta`(3)) is free (zero cost, zero NZ).
 fn minimal_template_1_0() -> StageTemplate {
+    let num_cols = 15;
+    let num_rows = 7;
+    let mut col_lower = vec![0.0; num_cols];
+    col_lower[1] = f64::NEG_INFINITY;
+    let mut objective = vec![0.0; num_cols];
+    objective[3] = 1.0;
     StageTemplate {
-        num_cols: 4,
-        num_rows: 2,
-        num_nz: 2,
-        col_starts: vec![0_i32, 0, 1, 2, 2],
-        row_indices: vec![0_i32, 1],
-        values: vec![1.0, 1.0],
-        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 0.0],
-        row_upper: vec![0.0, 0.0],
+        num_cols,
+        num_rows,
+        num_nz: 0,
+        col_starts: vec![0_i32; num_cols + 1],
+        row_indices: Vec::new(),
+        values: Vec::new(),
+        col_lower,
+        col_upper: vec![f64::INFINITY; num_cols],
+        objective,
+        row_lower: vec![0.0; num_rows],
+        row_upper: vec![0.0; num_rows],
         n_state: 1,
         n_transfer: 0,
         n_dual_relevant: 1,
@@ -270,15 +270,15 @@ fn minimal_template_1_0() -> StageTemplate {
     }
 }
 
-/// Fixed `LpSolution` for the minimal N=1 L=0 template (theta at col 3).
+/// Fixed `LpSolution` for `minimal_template_1_0`'s layout; theta at col 3.
 fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-    let num_cols = 4;
+    let num_cols = 15;
     let mut primal = vec![0.0_f64; num_cols];
-    primal[3] = theta_val; // theta at col N*(3+L) = 3
+    primal[3] = theta_val;
     LpSolution {
         objective,
         primal,
-        dual: vec![0.0_f64; 2],
+        dual: vec![0.0_f64; 7],
         reduced_costs: vec![0.0_f64; num_cols],
         iterations: 0,
         solve_time_seconds: 0.0,
@@ -543,7 +543,7 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -575,7 +575,7 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -655,7 +655,7 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -687,7 +687,7 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -758,7 +758,7 @@ fn simulate_infeasible_at_scenario2_stage3() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -790,7 +790,7 @@ fn simulate_infeasible_at_scenario2_stage3() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 4],
+            block_hours_per_stage: &vec![vec![744.0]; 4],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 4],
             n_ncs: 0,
@@ -860,7 +860,7 @@ fn simulate_channel_closed_returns_error() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -892,7 +892,7 @@ fn simulate_channel_closed_returns_error() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -962,7 +962,7 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let run_result = cobre_sddp::simulate(
         &mut workspaces,
@@ -994,7 +994,7 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 3],
+            block_hours_per_stage: &vec![vec![744.0]; 3],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 3],
             n_ncs: 0,
@@ -1062,7 +1062,7 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let run_result = cobre_sddp::simulate(
         &mut workspaces,
@@ -1094,7 +1094,7 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -1163,7 +1163,7 @@ fn simulate_channel_receives_results_in_scenario_order() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
@@ -1195,7 +1195,7 @@ fn simulate_channel_receives_results_in_scenario_order() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -1260,7 +1260,7 @@ fn test_simulation_parallel_cost_determinism() {
     let (tx1, _rx1) = mpsc::sync_channel(64);
     let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result_1 = cobre_sddp::simulate(
         &mut workspaces_1,
@@ -1292,7 +1292,7 @@ fn test_simulation_parallel_cost_determinism() {
             result_tx: &tx1,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -1335,7 +1335,7 @@ fn test_simulation_parallel_cost_determinism() {
         })
         .collect();
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result_4 = cobre_sddp::simulate(
         &mut workspaces_4,
@@ -1367,7 +1367,7 @@ fn test_simulation_parallel_cost_determinism() {
             result_tx: &tx4,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -1461,7 +1461,7 @@ fn simulate_emits_progress_events() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -1493,7 +1493,7 @@ fn simulate_emits_progress_events() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -1583,7 +1583,7 @@ fn simulate_no_events_when_sender_is_none() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -1615,7 +1615,7 @@ fn simulate_no_events_when_sender_is_none() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -1690,7 +1690,7 @@ fn simulate_progress_events_received_before_return() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
@@ -1722,7 +1722,7 @@ fn simulate_progress_events_received_before_return() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -1808,7 +1808,7 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
@@ -1840,7 +1840,7 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -1924,7 +1924,7 @@ fn simulate_emits_simulation_finished_as_last_event() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
@@ -1956,7 +1956,7 @@ fn simulate_emits_simulation_finished_as_last_event() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -2051,7 +2051,7 @@ fn simulate_progress_scenario_cost_is_finite() {
     let ec = zero_energy_conversion(1, n_stages);
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     cobre_sddp::simulate(
         &mut workspaces,
@@ -2083,7 +2083,7 @@ fn simulate_progress_scenario_cost_is_finite() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -2162,7 +2162,7 @@ fn simulate_frozen_path_issues_zero_add_rows() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -2194,7 +2194,7 @@ fn simulate_frozen_path_issues_zero_add_rows() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -2266,7 +2266,7 @@ fn simulate_fallback_path_issues_expected_add_rows() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -2298,7 +2298,7 @@ fn simulate_fallback_path_issues_expected_add_rows() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -2372,7 +2372,7 @@ fn simulate_frozen_length_mismatch_returns_error() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -2404,7 +2404,7 @@ fn simulate_frozen_length_mismatch_returns_error() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 3],
+            block_hours_per_stage: &vec![vec![744.0]; 3],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 3],
             n_ncs: 0,
@@ -2483,15 +2483,20 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
     // node_id must match the chain's node_ids[0] == 0 (n_stages = 1 below) or the
     // new node-tag check drops this basis to cold, breaking the warm-start
     // assertions this test exists to pin.
-    let mut cb = CapturedBasis::new(4, 5, 2, 3, 1, NodeId(0));
+    let mut cb = CapturedBasis::new(15, 10, 7, 3, 1, NodeId(0));
     cb.basis.row_status = vec![
+        BASE_STATUS,
+        BASE_STATUS,
+        BASE_STATUS,
+        BASE_STATUS,
+        BASE_STATUS,
         BASE_STATUS,
         BASE_STATUS,
         CUT_STATUS_0,
         CUT_STATUS_1,
         CUT_STATUS_2,
     ];
-    cb.basis.col_status = vec![BasisStatus::Basic; 4];
+    cb.basis.col_status = vec![BasisStatus::Basic; 15];
     cb.cut_row_slots.extend_from_slice(&[10u32, 11, 12]);
     cb.state_at_capture.push(1.0);
 
@@ -2518,7 +2523,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -2550,7 +2555,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 1],
+            block_hours_per_stage: &vec![vec![744.0]; 1],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 1],
             n_ncs: 0,
@@ -2602,17 +2607,17 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
     let active_count = fcf.pools[0].active_count();
     assert_eq!(
         recorded.row_status.len(),
-        2 + active_count,
-        "reconstructed basis row_status must have length base_row_count(2) + \
+        7 + active_count,
+        "reconstructed basis row_status must have length base_row_count(7) + \
          active_count({active_count}) = {}, got {}",
-        2 + active_count,
+        7 + active_count,
         recorded.row_status.len()
     );
 
     // Active cuts are iterated in slot order (10, 11, 12), so slot 10 lands at
-    // active-cuts position 0 — LP row 2 (after the 2 base rows) — and the stored
+    // active-cuts position 0 — LP row 7 (after the 7 base rows) — and the stored
     // statuses must reappear there verbatim.
-    let preserved_offset = 2;
+    let preserved_offset = 7;
     assert_eq!(
         recorded.row_status[preserved_offset], CUT_STATUS_0,
         "slot 10 must preserve its stored cut status"
@@ -2663,7 +2668,7 @@ fn simulate_with_empty_stage_bases_cold_starts() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -2695,7 +2700,7 @@ fn simulate_with_empty_stage_bases_cold_starts() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,
@@ -2872,7 +2877,7 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let geometry = equipment_free_geometry(&vec![0usize; n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); n_stages];
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
     let result = cobre_sddp::simulate(
         &mut workspaces,
@@ -2904,7 +2909,7 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
             result_tx: &tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); 2],
+            block_hours_per_stage: &vec![vec![744.0]; 2],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); 2],
             n_ncs: 0,

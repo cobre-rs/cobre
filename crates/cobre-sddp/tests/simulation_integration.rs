@@ -72,10 +72,9 @@ use cobre_sddp::{
     },
     solver_stats::SolverStatsDelta,
     test_support::{
-        GeometryDims, StageContextFixture, branching_tree_setup_enumerated,
-        equipment_free_geometry, extensive_form_optimum, k_fan_setup_enumerated,
-        node_prefix_counts, node_scenario_count, single_path_enumerated_setup,
-        trunk_fan_setup_enumerated, water_binding_external_fan_setup,
+        StageContextFixture, branching_tree_setup_enumerated, extensive_form_optimum,
+        hydro_only_bus_geometry, k_fan_setup_enumerated, node_prefix_counts, node_scenario_count,
+        single_path_enumerated_setup, trunk_fan_setup_enumerated, water_binding_external_fan_setup,
     },
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
@@ -654,7 +653,7 @@ fn train_simulate_write_cycle() {
         },
     };
 
-    let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
+    let geometry = vec![hydro_only_bus_geometry(); fx.n_stages];
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
@@ -820,7 +819,7 @@ fn train_simulate_write_cycle() {
     let ec = zero_energy_conversion_set(fx.n_stages);
 
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let geometry_sim = equipment_free_geometry(&vec![0usize; fx.n_stages]);
+    let geometry_sim = vec![hydro_only_bus_geometry(); fx.n_stages];
     let stage_ctx_fixture_sim =
         StageContextFixture::new(&fx.templates, &state_boxes, &geometry_sim);
     simulate(
@@ -833,7 +832,7 @@ fn train_simulate_write_cycle() {
             result_tx: &result_tx,
             zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &vec![Vec::new(); fx.n_stages],
+            block_hours_per_stage: &vec![vec![744.0]; fx.n_stages],
             entity_counts: &entity_counts,
             generic_constraint_row_entries: &vec![Vec::new(); fx.n_stages],
             n_ncs: 0,
@@ -1517,21 +1516,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
     // `default_single_hydro_entity_counts` (used below) declares both a hydro
     // and a bus, so the geometry must address both families, matching
     // `minimal_template`'s N=1 hydro, 1 bus, 1-block layout.
-    let geometry: Vec<StageGeometry> = (0..fx.n_stages)
-        .map(|_| {
-            cobre_sddp::test_support::geometry(
-                &GeometryDims {
-                    hydro_count: 1,
-                    n_buses: 1,
-                    n_blks: 1,
-                    ..GeometryDims::default()
-                },
-                vec![],
-                &[],
-                vec![],
-            )
-        })
-        .collect();
+    let geometry: Vec<StageGeometry> = vec![hydro_only_bus_geometry(); fx.n_stages];
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();

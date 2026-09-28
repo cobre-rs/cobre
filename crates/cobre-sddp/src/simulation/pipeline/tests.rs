@@ -261,7 +261,7 @@ impl SolverInterface for MockSolver {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Stage template matching `hydro_only_bus_geometry`'s N=1 hydro, 1 bus,
+/// Stage template matching `test_support::hydro_only_bus_geometry`'s N=1 hydro, 1 bus,
 /// 1-block layout, so per-block hydro/load extraction addresses real columns
 /// and rows instead of an empty family. `MockSolver` never reads the
 /// coefficients, so every column past the state region (`storage_out`(0),
@@ -293,23 +293,6 @@ fn minimal_template_1_0() -> StageTemplate {
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
-}
-
-/// Build the [`StageGeometry`] `minimal_template_1_0` addresses: N=1 hydro, 1
-/// bus, 1 block — the production layout `test_support::geometry` builds for
-/// those dims.
-fn hydro_only_bus_geometry() -> crate::lp::builder::StageGeometry {
-    test_support::geometry(
-        &test_support::GeometryDims {
-            hydro_count: 1,
-            n_buses: 1,
-            n_blks: 1,
-            ..test_support::GeometryDims::default()
-        },
-        vec![],
-        &[],
-        vec![],
-    )
 }
 
 /// Build a fixed `LpSolution` for `minimal_template_1_0`'s layout; theta at
@@ -801,7 +784,7 @@ fn simulation_load_patches_applied() {
 
     // load_bus_indices=[0] (bus position 0 in the block layout).
     let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![hydro_only_bus_geometry()];
+    let geometry_per_stage = vec![test_support::hydro_only_bus_geometry()];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -957,7 +940,12 @@ fn simulation_no_load_buses_unchanged() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1073,7 +1061,12 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate_with_profile(
         &mut workspaces,
-        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1173,7 +1166,7 @@ fn simulation_inflow_extraction_unaffected() {
     let mut workspaces = single_workspace_with_load_buses(solver, n_load_buses);
 
     let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![hydro_only_bus_geometry()];
+    let geometry_per_stage = vec![test_support::hydro_only_bus_geometry()];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -1505,7 +1498,12 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1613,7 +1611,12 @@ fn simulation_none_method_produces_raw_negative_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),

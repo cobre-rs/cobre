@@ -644,6 +644,26 @@ pub fn equipment_free_geometry(block_counts: &[usize]) -> Vec<StageGeometry> {
         .collect()
 }
 
+/// Build the [`StageGeometry`] for N=1 hydro, 1 bus, 1 block — the production
+/// layout `geometry` builds for those dims. Shared by `pipeline/tests.rs`,
+/// `simulation_integration.rs`, and `simulation_pipeline_integration.rs`, each
+/// pairing it with a stage template whose per-block hydro/load extraction
+/// addresses real columns instead of an empty family.
+#[must_use]
+pub fn hydro_only_bus_geometry() -> StageGeometry {
+    geometry(
+        &GeometryDims {
+            hydro_count: 1,
+            n_buses: 1,
+            n_blks: 1,
+            ..GeometryDims::default()
+        },
+        vec![],
+        &[],
+        vec![],
+    )
+}
+
 /// Test-only [`StageContext`] builder. Slice fields default to `&[]`; a
 /// setter exists only for a field some literal in the crate sets away from
 /// that default.

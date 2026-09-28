@@ -381,12 +381,12 @@ impl StudySetup {
 
         let scenario_libraries = build_scenario_libraries(
             system,
-            &stage_data,
             &stochastic,
+            &stage_data,
+            &initial,
+            config.forward_passes,
             training_source,
             simulation_source,
-            config.forward_passes,
-            initial.inflow_seeds.as_seed(stage_data.state.max_par_order),
         )?;
 
         let node_graph = build_checked_node_graph(
@@ -1814,54 +1814,49 @@ fn resolve_stage_data(
     Ok((stage_data, initial, energy_conversion, resolved_parameters))
 }
 
-/// Build the training and simulation [`ScenarioLibraries`].
+/// Build one phase's per-class [`PhaseLibraries`].
 ///
-/// Each phase's per-class library (`historical`, `external_inflow`,
-/// `external_load`, `external_ncs`) is constructed only when that class uses
-/// the matching sampling scheme. Simulation-specific libraries are built only
-/// when the simulation scheme differs from the training scheme; when identical,
-/// the simulation phase stores `None` and `simulation_ctx()` falls back to the
-/// training library references.
+/// A class is built when `source`'s scheme for it matches the class's target
+/// scheme (`Historical` or `External`) and `training` is `None` (this call
+/// builds the training phase itself) or names a different scheme for that
+/// class than `source`'s own — the dedupe [`ScenarioLibraries`] documents.
 ///
 /// # Errors
 ///
 /// Propagates [`SddpError`] from the individual library builders on validation
 /// or padding failure.
-fn build_scenario_libraries(
+fn build_phase_libraries(
     system: &System,
-    stage_data: &StageData,
     stochastic: &StochasticContext,
-    training_source: &ScenarioSource,
-    simulation_source: &ScenarioSource,
-    forward_passes: u32,
+    stage_data: &StageData,
     seed: DerivedSeed<'_>,
-) -> Result<ScenarioLibraries, SddpError> {
-    let inflow_scheme = training_source.inflow_scheme;
-    let load_scheme = training_source.load_scheme;
-    let ncs_scheme = training_source.ncs_scheme;
-    let sim_inflow_scheme = simulation_source.inflow_scheme;
-    let sim_load_scheme = simulation_source.load_scheme;
-    let sim_ncs_scheme = simulation_source.ncs_scheme;
-    // Shared by every external LOAD call below, training and simulation alike
-    // — see `build_external_load_library`'s doc for why.
-    let normal_load_bus_ids = system.load_noise_member_bus_ids(load_scheme);
+    forward_passes: u32,
+    source: &ScenarioSource,
+    training: Option<&ScenarioSource>,
+) -> Result<PhaseLibraries, SddpError> {
+    let inflow_scheme = source.inflow_scheme;
+    let load_scheme = source.load_scheme;
+    let ncs_scheme = source.ncs_scheme;
+    let inflow_differs = training.is_none_or(|t| t.inflow_scheme != inflow_scheme);
+    let load_differs = training.is_none_or(|t| t.load_scheme != load_scheme);
+    let ncs_differs = training.is_none_or(|t| t.ncs_scheme != ncs_scheme);
 
-    let training_historical: Option<HistoricalScenarioLibrary> =
-        if inflow_scheme == SamplingScheme::Historical {
+    let historical: Option<HistoricalScenarioLibrary> =
+        if inflow_scheme == SamplingScheme::Historical && inflow_differs {
             Some(scenario_libraries::build_historical_inflow_library(
                 system,
                 stochastic.par(),
                 stage_data,
                 seed,
-                training_source.historical_years.as_ref(),
+                source.historical_years.as_ref(),
                 forward_passes,
             )?)
         } else {
             None
         };
 
-    let training_external_inflow: Option<ExternalScenarioLibrary> =
-        if inflow_scheme == SamplingScheme::External {
+    let external_inflow: Option<ExternalScenarioLibrary> =
+        if inflow_scheme == SamplingScheme::External && inflow_differs {
             Some(scenario_libraries::build_external_inflow_library(
                 system,
                 &stage_data.stages,
@@ -1875,8 +1870,13 @@ fn build_scenario_libraries(
             None
         };
 
-    let training_external_load: Option<ExternalScenarioLibrary> =
-        if load_scheme == SamplingScheme::External {
+    // Shared by training and a simulation phase whose own scheme diverges —
+    // see `build_external_load_library`'s doc for why.
+    let normal_load_bus_ids =
+        system.load_noise_member_bus_ids(training.unwrap_or(source).load_scheme);
+
+    let external_load: Option<ExternalScenarioLibrary> =
+        if load_scheme == SamplingScheme::External && load_differs {
             Some(scenario_libraries::build_external_load_library(
                 system,
                 load_scheme,
@@ -1889,8 +1889,8 @@ fn build_scenario_libraries(
             None
         };
 
-    let training_external_ncs: Option<ExternalScenarioLibrary> =
-        if ncs_scheme == SamplingScheme::External {
+    let external_ncs: Option<ExternalScenarioLibrary> =
+        if ncs_scheme == SamplingScheme::External && ncs_differs {
             Some(scenario_libraries::build_external_ncs_library(
                 system,
                 &stage_data.stages,
@@ -1902,83 +1902,55 @@ fn build_scenario_libraries(
             None
         };
 
-    let simulation_historical: Option<HistoricalScenarioLibrary> =
-        if sim_inflow_scheme == SamplingScheme::Historical && sim_inflow_scheme != inflow_scheme {
-            Some(scenario_libraries::build_historical_inflow_library(
-                system,
-                stochastic.par(),
-                stage_data,
-                seed,
-                simulation_source.historical_years.as_ref(),
-                forward_passes,
-            )?)
-        } else {
-            None
-        };
+    Ok(PhaseLibraries {
+        inflow_scheme,
+        load_scheme,
+        ncs_scheme,
+        historical,
+        external_inflow,
+        external_load,
+        external_ncs,
+    })
+}
 
-    let simulation_external_inflow: Option<ExternalScenarioLibrary> =
-        if sim_inflow_scheme == SamplingScheme::External && sim_inflow_scheme != inflow_scheme {
-            Some(scenario_libraries::build_external_inflow_library(
-                system,
-                &stage_data.stages,
-                stochastic.par(),
-                seed,
-                &stage_data.stage_lag_transitions,
-                forward_passes,
-                stage_data.study_dims.downstream_par_order,
-            )?)
-        } else {
-            None
-        };
-
-    let simulation_external_load: Option<ExternalScenarioLibrary> =
-        if sim_load_scheme == SamplingScheme::External && sim_load_scheme != load_scheme {
-            Some(scenario_libraries::build_external_load_library(
-                system,
-                sim_load_scheme,
-                &stage_data.stages,
-                forward_passes,
-                stochastic.normal(),
-                &normal_load_bus_ids,
-            )?)
-        } else {
-            None
-        };
-
-    let simulation_external_ncs: Option<ExternalScenarioLibrary> =
-        if sim_ncs_scheme == SamplingScheme::External && sim_ncs_scheme != ncs_scheme {
-            Some(scenario_libraries::build_external_ncs_library(
-                system,
-                &stage_data.stages,
-                forward_passes,
-                stochastic.ncs_normal(),
-                stochastic.ncs_entity_ids(),
-            )?)
-        } else {
-            None
-        };
-
+/// Build the training and simulation [`ScenarioLibraries`].
+///
+/// # Errors
+///
+/// Propagates [`SddpError`] from [`build_phase_libraries`] or from
+/// [`assert_external_library_widths`]'s width check.
+fn build_scenario_libraries(
+    system: &System,
+    stochastic: &StochasticContext,
+    stage_data: &StageData,
+    initial: &InitialConditions,
+    forward_passes: u32,
+    training_source: &ScenarioSource,
+    simulation_source: &ScenarioSource,
+) -> Result<ScenarioLibraries, SddpError> {
+    let seed = initial.inflow_seeds.as_seed(stage_data.state.max_par_order);
+    let training = build_phase_libraries(
+        system,
+        stochastic,
+        stage_data,
+        seed,
+        forward_passes,
+        training_source,
+        None,
+    )?;
+    let simulation = build_phase_libraries(
+        system,
+        stochastic,
+        stage_data,
+        seed,
+        forward_passes,
+        simulation_source,
+        Some(training_source),
+    )?;
     let libraries = ScenarioLibraries {
-        training: PhaseLibraries {
-            inflow_scheme,
-            load_scheme,
-            ncs_scheme,
-            historical: training_historical,
-            external_inflow: training_external_inflow,
-            external_load: training_external_load,
-            external_ncs: training_external_ncs,
-        },
-        simulation: PhaseLibraries {
-            inflow_scheme: sim_inflow_scheme,
-            load_scheme: sim_load_scheme,
-            ncs_scheme: sim_ncs_scheme,
-            historical: simulation_historical,
-            external_inflow: simulation_external_inflow,
-            external_load: simulation_external_load,
-            external_ncs: simulation_external_ncs,
-        },
+        training,
+        simulation,
     };
-
     assert_external_library_widths(system, &libraries, training_source)?;
     Ok(libraries)
 }

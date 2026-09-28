@@ -6023,6 +6023,312 @@ fn external_load_library_includes_zero_sigma_bus_when_scheme_is_external() {
         .expect("train: a sigma=0 External-scheme load bus must not block training");
 }
 
+/// A σ=0 load bus is a training-scheme noise member only under `External`
+/// (`LoadModel::is_noise_member`): training here stays `InSample`, so its
+/// `normal_load_bus_ids` excludes the σ=0 bus while a divergent simulation
+/// `External` scheme includes it via `external_load_scenarios`.
+/// `assert_external_library_widths` checks the SIMULATION library's width
+/// against the TRAINING-scheme-gated block, so the resulting narrower-vs-wider
+/// mismatch must reject setup rather than pass silently.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::cast_lossless,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture values widen with as to match the literal tables beside them"
+)]
+fn sim_external_load_with_sigma_zero_bus_rejects_width_mismatch() {
+    use chrono::NaiveDate;
+    use cobre_core::scenario::ExternalLoadRow;
+    use cobre_core::scenario::InflowModel as CoreInflowModel;
+
+    let bus = Bus {
+        id: EntityId(1),
+        name: "B1".to_string(),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 500.0,
+        }],
+        excess_cost: 0.0,
+    };
+    let deterministic_bus = Bus {
+        id: EntityId(4),
+        name: "B2".to_string(),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 500.0,
+        }],
+        excess_cost: 0.0,
+    };
+    let thermal = Thermal {
+        id: EntityId(2),
+        name: "T1".to_string(),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        bus_id: EntityId(1),
+        min_generation_mw: 0.0,
+        max_generation_mw: 100.0,
+        cost_per_mwh: 50.0,
+        anticipated_config: None,
+        entry_stage_id: None,
+        exit_stage_id: None,
+    };
+    let mut hydro = Hydro {
+        unit_groups: Vec::new(),
+        id: EntityId(3),
+        name: "H1".to_string(),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        downstream_id: None,
+        travel_time_hours: None,
+        entry_stage_id: None,
+        exit_stage_id: None,
+        min_storage_hm3: 0.0,
+        max_storage_hm3: 200.0,
+        min_outflow_m3s: 0.0,
+        max_outflow_m3s: None,
+        generation_model: HydroGenerationModel::ConstantProductivity,
+        min_turbined_m3s: 0.0,
+        max_turbined_m3s: 100.0,
+        specific_productivity_mw_per_m3s_per_m: None,
+        min_generation_mw: 0.0,
+        max_generation_mw: 250.0,
+        tailrace: None,
+        hydraulic_losses: None,
+        efficiency: None,
+        evaporation_coefficients_mm: None,
+        evaporation_reference_volumes_hm3: None,
+        diversion: None,
+        filling: None,
+        penalties: HydroPenalties {
+            spillage_cost: 0.01,
+            diversion_cost: 0.0,
+            turbined_cost: 0.0,
+            storage_violation_below_cost: 0.0,
+            filling_target_violation_cost: 0.0,
+            turbined_violation_below_cost: 0.0,
+            outflow_violation_below_cost: 0.0,
+            outflow_violation_above_cost: 0.0,
+            generation_violation_below_cost: 0.0,
+            evaporation_violation_cost: 0.0,
+            water_withdrawal_violation_cost: 0.0,
+            water_withdrawal_violation_pos_cost: 0.0,
+            water_withdrawal_violation_neg_cost: 0.0,
+            evaporation_violation_pos_cost: 0.0,
+            evaporation_violation_neg_cost: 0.0,
+            inflow_nonnegativity_cost: 1000.0,
+        },
+    };
+    hydro.declare_mirror_unit_group(EntityId(1));
+
+    let stages: Vec<Stage> = (0..2usize)
+        .map(|i| Stage {
+            index: i,
+            id: i as i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: None,
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        })
+        .collect();
+
+    let inflow_models: Vec<CoreInflowModel> = (0..2usize)
+        .map(|i| CoreInflowModel {
+            hydro_id: EntityId(3),
+            stage_id: i as i32,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+
+    let mut load_models: Vec<LoadModel> = Vec::new();
+    for i in 0i32..2 {
+        load_models.push(LoadModel {
+            bus_id: EntityId(1),
+            stage_id: i,
+            mean_mw: 100.0,
+            std_mw: 10.0,
+        });
+    }
+    for i in 0i32..2 {
+        load_models.push(LoadModel {
+            bus_id: EntityId(4),
+            stage_id: i,
+            mean_mw: 50.0,
+            std_mw: 0.0,
+        });
+    }
+
+    let mut external_load_rows: Vec<ExternalLoadRow> = Vec::new();
+    for stage_id in 0i32..2 {
+        for scenario_id in 0i32..3 {
+            external_load_rows.push(ExternalLoadRow {
+                stage_id,
+                scenario_id,
+                bus_id: EntityId(1),
+                value_mw: 90.0 + scenario_id as f64 * 10.0,
+            });
+            external_load_rows.push(ExternalLoadRow {
+                stage_id,
+                scenario_id,
+                bus_id: EntityId(4),
+                value_mw: 50.0,
+            });
+        }
+    }
+
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 1,
+            n_thermals: 1,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: 2,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds {
+                max_turbined_m3s: 100.0,
+                max_generation_mw: 250.0,
+                ..Default::default()
+            },
+            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 1,
+            n_buses: 2,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages: 2,
+        },
+        &PenaltiesDefaults {
+            hydro: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                turbined_cost: 0.0,
+                storage_violation_below_cost: 500.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    let system = SystemBuilder::new()
+        .buses(vec![bus, deterministic_bus])
+        .thermals(vec![thermal])
+        .hydros(vec![hydro])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .external_load_scenarios(external_load_rows)
+        .bounds(bounds)
+        .penalties(penalties)
+        .build()
+        .expect("system with external load incl. a zero-sigma bus: valid");
+
+    let mut config = minimal_config_with_schemes(1, 5, None, None, None);
+    config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+        seed: Some(42),
+        historical_years: None,
+        inflow: None,
+        load: Some(RawClassConfigEntry {
+            scheme: RawSamplingScheme::External,
+        }),
+        ncs: None,
+        openings: None,
+    });
+
+    let stochastic = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        OpeningTreeInputs::default(),
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("stochastic context");
+
+    let result = StudySetup::new(
+        &system,
+        &config,
+        stochastic,
+        PrepareHydroModelsResult::default_from_system(&system),
+        Vec::new(),
+    );
+
+    match result {
+        Err(SddpError::Validation(msg)) => {
+            assert!(
+                msg.contains("load") && msg.contains("width mismatch"),
+                "expected a load width-mismatch Validation error, got: {msg}"
+            );
+        }
+        other => panic!("expected a load width-mismatch Validation error, got {other:?}"),
+    }
+}
+
 #[test]
 #[expect(
     clippy::too_many_lines,

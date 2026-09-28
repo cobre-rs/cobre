@@ -998,7 +998,7 @@ mod tests {
     /// `system_2h_1ant`'s single anticipated plant (`LeadStages(2)`) resolved
     /// against its one-stage delivery axis (`n_decision = n_delivery = 1`) —
     /// `g = 0`, so attaching it is byte-neutral for every non-dating
-    /// assertion, but every ring slot's `reachable_delivery_target` needs a
+    /// assertion, but [`for_each_live_commitment_slot`]'s ring sweep needs a
     /// real per-plant [`PointResolution`] to index into.
     fn single_plant_lead2_one_stage_resolution() -> AnticipatedResolution {
         AnticipatedResolution::resolve(
@@ -1985,11 +1985,12 @@ mod tests {
             (2, 2, 0, 20240701),
         ];
 
+        let anticipated_plants = AnticipatedPlants::build(system.thermals());
         for stage_id in 0..4i32 {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &AnticipatedPlants::build(system.thermals()),
+                &anticipated_plants,
                 &projection,
                 stage_id,
             );
@@ -2299,11 +2300,12 @@ mod tests {
 
         let mut saw_in_study_live = false;
         let mut saw_post_study_live = false;
+        let anticipated_plants = AnticipatedPlants::build(system.thermals());
         for stage_id in 0..3i32 {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &AnticipatedPlants::build(system.thermals()),
+                &anticipated_plants,
                 &projection,
                 stage_id,
             );
@@ -2448,11 +2450,12 @@ mod tests {
         let n_delivery = global.delivery_stage_count(study_stages.len());
         let resolution = &global.anticipated_resolution.per_plant[0];
 
+        let anticipated_plants = AnticipatedPlants::build(system.thermals());
         for stage_id in 0..3i32 {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &AnticipatedPlants::build(system.thermals()),
+                &anticipated_plants,
                 &projection,
                 stage_id,
             );
@@ -2509,11 +2512,12 @@ mod tests {
         // (entity id 1); every other combination stays sentinel.
         let dated: [(i32, u32, i32); 2] = [(0, 1, 20240501), (1, 0, 20240601)];
 
+        let anticipated_plants = AnticipatedPlants::build(system.thermals());
         for stage_id in 0..3i32 {
             let manifest = build_stage_entity_manifest(
                 &system,
                 &global,
-                &AnticipatedPlants::build(system.thermals()),
+                &anticipated_plants,
                 &projection,
                 stage_id,
             );

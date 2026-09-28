@@ -208,14 +208,16 @@ fn empty_records(n: usize) -> Vec<TrajectoryRecord> {
         .collect()
 }
 
-/// Build a minimal `StochasticContext` for a single-hydro, 3-stage system.
+/// Build a minimal `StochasticContext` for a single-hydro, `n_stages`-stage
+/// system; a matching `default` self-correlation profile when `with_profile`,
+/// an empty profile map otherwise.
 ///
 /// Used by integration tests that call `run_forward_pass`. The `MockSolver`
 /// ignores the noise values produced by `sample_forward`, so the exact
 /// stochastic parameterisation does not affect correctness; it only needs
 /// to be structurally valid for the sampling API.
 #[allow(clippy::too_many_lines)]
-fn make_stochastic_context_1_hydro_3_stages() -> StochasticContext {
+fn make_stochastic_context_1_hydro(n_stages: usize, with_profile: bool) -> StochasticContext {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -294,7 +296,10 @@ fn make_stochastic_context_1_hydro_3_stages() -> StochasticContext {
             noise_method: NoiseMethod::Saa,
         },
     };
-    let stages = vec![make_stage(0, 0), make_stage(1, 1), make_stage(2, 2)];
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    let stages: Vec<Stage> = (0..n_stages)
+        .map(|idx| make_stage(idx, idx as i32))
+        .collect();
     let inflow = |stage_id: i32| InflowModel {
         hydro_id: EntityId(1),
         stage_id,
@@ -304,20 +309,24 @@ fn make_stochastic_context_1_hydro_3_stages() -> StochasticContext {
         residual_std_ratio: 1.0,
         annual: None,
     };
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    let inflow_models: Vec<InflowModel> = (0..n_stages).map(|s| inflow(s as i32)).collect();
     let mut profiles = BTreeMap::new();
-    profiles.insert(
-        "default".to_string(),
-        CorrelationProfile {
-            groups: vec![CorrelationGroup {
-                name: "g1".to_string(),
-                entities: vec![CorrelationEntity {
-                    entity_type: "inflow".to_string(),
-                    id: EntityId(1),
+    if with_profile {
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "g1".to_string(),
+                    entities: vec![CorrelationEntity {
+                        entity_type: "inflow".to_string(),
+                        id: EntityId(1),
+                    }],
+                    matrix: vec![vec![1.0]],
                 }],
-                matrix: vec![vec![1.0]],
-            }],
-        },
-    );
+            },
+        );
+    }
     let correlation = CorrelationModel {
         method: "spectral".to_string(),
         profiles,
@@ -327,7 +336,7 @@ fn make_stochastic_context_1_hydro_3_stages() -> StochasticContext {
         .buses(vec![bus])
         .hydros(vec![hydro])
         .stages(stages)
-        .inflow_models(vec![inflow(0), inflow(1), inflow(2)])
+        .inflow_models(inflow_models)
         .correlation(correlation)
         .build()
         .unwrap();
@@ -577,7 +586,7 @@ fn single_workspace(solver: MockSolver, state: &StateSpace) -> SolverWorkspace<M
     }
 }
 
-/// Build 3 minimal [`Stage`] values matching `make_stochastic_context_1_hydro_3_stages`.
+/// Build 3 minimal [`Stage`] values matching `make_stochastic_context_1_hydro(3, true)`.
 ///
 /// Provides the `stages` slice required by [`TrainingContext`] so that
 /// [`cobre_stochastic::build_forward_sampler`] can read per-stage noise methods.
@@ -652,7 +661,7 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
     ];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let mut ws = single_workspace(solver, &state);
     let mut basis_store =
@@ -761,7 +770,7 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
     ];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let mut ws = single_workspace(solver, &state);
     let mut basis_store =
@@ -874,7 +883,7 @@ fn cost_statistics_accumulated_correctly() {
     ];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let mut ws = single_workspace(solver, &state);
     let mut basis_store =
@@ -1462,7 +1471,7 @@ fn run_one_iteration(
     ];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(3);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
@@ -1591,7 +1600,7 @@ fn basis_invalidated_on_solver_error() {
 fn test_forward_pass_parallel_cost_agreement() {
     let state = test_support::state_layout(1, 0);
     let solution = fixed_solution(4, 100.0, state.theta, 30.0);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let fcf = FutureCostFunction::new(3, state.n_state, 2, 100, &[0; 3]);
     let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1725,7 +1734,7 @@ fn test_forward_pass_parallel_cost_agreement() {
 fn test_forward_pass_work_distribution() {
     let state = test_support::state_layout(1, 0);
     let solution = fixed_solution(4, 100.0, state.theta, 30.0);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let fcf = FutureCostFunction::new(3, state.n_state, 2, 100, &[0; 3]);
     let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2145,7 +2154,7 @@ fn none_method_unchanged_with_truncation_code_present() {
     ];
     let initial_state = vec![0.0_f64; state.n_state];
     let mut records = empty_records(2 * 3);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let mut ws = single_workspace(solver, &state);
     let mut basis_store =
@@ -2354,7 +2363,7 @@ fn make_stochastic_context_1_hydro_1_load_bus(mean_mw: f64, std_mw: f64) -> Stoc
 fn test_forward_pass_parallel_infeasibility() {
     let state = test_support::state_layout(1, 0);
     let solution = fixed_solution(4, 100.0, state.theta, 30.0);
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let fcf = FutureCostFunction::new(3, state.n_state, 2, 100, &[0; 3]);
     let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2733,7 +2742,7 @@ fn forward_pass_load_noise_clamped_to_zero() {
 
 #[test]
 fn forward_pass_no_load_buses_unchanged() {
-    let stochastic = make_stochastic_context_1_hydro_3_stages();
+    let stochastic = make_stochastic_context_1_hydro(3, true);
     let stages = make_stages_3();
     let state = test_support::state_layout(1, 0);
     let solution = fixed_solution(4, 100.0, state.theta, 30.0);
@@ -3151,22 +3160,8 @@ fn build_delta_cut_row_batch_into_skips_warm_start_slots() {
 // col2, and cuts constrain theta against col0), so the primal/objective are
 // determinate at the pinned state.
 mod dcs_forward {
-    use std::collections::BTreeMap;
-
-    use chrono::NaiveDate;
-    use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
-    use cobre_core::scenario::{
-        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
-        SamplingScheme,
-    };
-    use cobre_core::temporal::{
-        Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig,
-    };
-    use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+    use cobre_core::scenario::SamplingScheme;
     use cobre_solver::{ActiveSolver, SolverInterface, StageTemplate};
-    use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use super::super::{StageKey, run_forward_stage};
     use crate::context::TrainingContext;
@@ -3344,142 +3339,6 @@ mod dcs_forward {
         }
     }
 
-    /// A minimal `StochasticContext` for a single-hydro, 2-stage system with
-    /// branching factor 3 — `make_stochastic_context_1_hydro_3_stages`'s shape
-    /// at the 2-stage count `run_one_forward_stage` needs.
-    #[allow(clippy::too_many_lines)]
-    fn dcs_forward_stochastic_context() -> StochasticContext {
-        let bus = Bus {
-            id: EntityId(0),
-            name: "B0".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        let mut hydro = Hydro {
-            unit_groups: Vec::new(),
-            id: EntityId(1),
-            name: "H1".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            downstream_id: None,
-            travel_time_hours: None,
-            entry_stage_id: None,
-            exit_stage_id: None,
-            min_storage_hm3: 0.0,
-            max_storage_hm3: 100.0,
-            min_outflow_m3s: 0.0,
-            max_outflow_m3s: None,
-            generation_model: HydroGenerationModel::ConstantProductivity,
-            min_turbined_m3s: 0.0,
-            max_turbined_m3s: 100.0,
-            specific_productivity_mw_per_m3s_per_m: None,
-            min_generation_mw: 0.0,
-            max_generation_mw: 100.0,
-            tailrace: None,
-            hydraulic_losses: None,
-            efficiency: None,
-            evaporation_coefficients_mm: None,
-            evaporation_reference_volumes_hm3: None,
-            diversion: None,
-            filling: None,
-            penalties: HydroPenalties {
-                spillage_cost: 0.0,
-                diversion_cost: 0.0,
-                turbined_cost: 0.0,
-                storage_violation_below_cost: 0.0,
-                filling_target_violation_cost: 0.0,
-                turbined_violation_below_cost: 0.0,
-                outflow_violation_below_cost: 0.0,
-                outflow_violation_above_cost: 0.0,
-                generation_violation_below_cost: 0.0,
-                evaporation_violation_cost: 0.0,
-                water_withdrawal_violation_cost: 0.0,
-                water_withdrawal_violation_pos_cost: 0.0,
-                water_withdrawal_violation_neg_cost: 0.0,
-                evaporation_violation_pos_cost: 0.0,
-                evaporation_violation_neg_cost: 0.0,
-                inflow_nonnegativity_cost: 1000.0,
-            },
-        };
-        hydro.declare_mirror_unit_group(EntityId(0));
-        let make_stage = |idx: usize, id: i32| Stage {
-            index: idx,
-            id,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 3,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-        let stages = vec![make_stage(0, 0), make_stage(1, 1)];
-        let inflow = |stage_id: i32| InflowModel {
-            hydro_id: EntityId(1),
-            stage_id,
-            mean_m3s: 100.0,
-            std_m3s: 30.0,
-            ar_coefficients: vec![],
-            residual_std_ratio: 1.0,
-            annual: None,
-        };
-        let mut profiles = BTreeMap::new();
-        profiles.insert(
-            "default".to_string(),
-            CorrelationProfile {
-                groups: vec![CorrelationGroup {
-                    name: "g1".to_string(),
-                    entities: vec![CorrelationEntity {
-                        entity_type: "inflow".to_string(),
-                        id: EntityId(1),
-                    }],
-                    matrix: vec![vec![1.0]],
-                }],
-            },
-        );
-        let correlation = CorrelationModel {
-            method: "spectral".to_string(),
-            profiles,
-            schedule: vec![],
-        };
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .hydros(vec![hydro])
-            .stages(stages)
-            .inflow_models(vec![inflow(0), inflow(1)])
-            .correlation(correlation)
-            .build()
-            .unwrap();
-        build_stochastic_context(
-            &system,
-            42,
-            None,
-            &[],
-            &[],
-            OpeningTreeInputs::default(),
-            ClassSchemes {
-                inflow: Some(SamplingScheme::InSample),
-                load: Some(SamplingScheme::InSample),
-                ncs: Some(SamplingScheme::InSample),
-            },
-        )
-        .unwrap()
-    }
-
     /// Run one forward stage (stage 0 of a 2-stage horizon, so theta is not
     /// terminal-zeroed) with the given `dcs` option and `frozen` template,
     /// returning `(stage_cost, advanced_state, scoring_time_seconds)`. The
@@ -3508,7 +3367,7 @@ mod dcs_forward {
         let state = test_support::state_layout(1, 0);
         let core = fwd_core_template();
         let templates = vec![core.clone(), core.clone()];
-        let stochastic = dcs_forward_stochastic_context();
+        let stochastic = super::make_stochastic_context_1_hydro(2, true);
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let fcf = fwd_pool();
 
@@ -3774,138 +3633,6 @@ mod transit_bucket_copy_gap {
     const Z_INFLOW_COL: usize = 4;
     const Z_INFLOW_VALUE: f64 = 55.0;
 
-    /// A single-hydro `StochasticContext` matching this module's 1-hydro
-    /// `state`/template fixture.
-    fn one_hydro_stochastic_context() -> cobre_stochastic::StochasticContext {
-        use chrono::NaiveDate;
-        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
-        use cobre_core::scenario::{CorrelationModel, InflowModel};
-        use cobre_core::temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-            StageStateConfig,
-        };
-        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
-        };
-        use std::collections::BTreeMap;
-
-        let bus = Bus {
-            id: EntityId(0),
-            name: "B0".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 1000.0,
-            }],
-            excess_cost: 0.0,
-        };
-        let mut hydro = Hydro {
-            unit_groups: Vec::new(),
-            id: EntityId(1),
-            name: "H1".to_string(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            downstream_id: None,
-            travel_time_hours: None,
-            entry_stage_id: None,
-            exit_stage_id: None,
-            min_storage_hm3: 0.0,
-            max_storage_hm3: 100.0,
-            min_outflow_m3s: 0.0,
-            max_outflow_m3s: None,
-            generation_model: HydroGenerationModel::ConstantProductivity,
-            min_turbined_m3s: 0.0,
-            max_turbined_m3s: 100.0,
-            specific_productivity_mw_per_m3s_per_m: None,
-            min_generation_mw: 0.0,
-            max_generation_mw: 100.0,
-            tailrace: None,
-            hydraulic_losses: None,
-            efficiency: None,
-            evaporation_coefficients_mm: None,
-            evaporation_reference_volumes_hm3: None,
-            diversion: None,
-            filling: None,
-            penalties: HydroPenalties {
-                spillage_cost: 0.0,
-                diversion_cost: 0.0,
-                turbined_cost: 0.0,
-                storage_violation_below_cost: 0.0,
-                filling_target_violation_cost: 0.0,
-                turbined_violation_below_cost: 0.0,
-                outflow_violation_below_cost: 0.0,
-                outflow_violation_above_cost: 0.0,
-                generation_violation_below_cost: 0.0,
-                evaporation_violation_cost: 0.0,
-                water_withdrawal_violation_cost: 0.0,
-                water_withdrawal_violation_pos_cost: 0.0,
-                water_withdrawal_violation_neg_cost: 0.0,
-                evaporation_violation_pos_cost: 0.0,
-                evaporation_violation_neg_cost: 0.0,
-                inflow_nonnegativity_cost: 1000.0,
-            },
-        };
-        hydro.declare_mirror_unit_group(EntityId(0));
-        let stage = Stage {
-            index: 0,
-            id: 0,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "S".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 3,
-                noise_method: NoiseMethod::Saa,
-            },
-        };
-        let inflow_model = InflowModel {
-            hydro_id: EntityId(1),
-            stage_id: 0,
-            mean_m3s: 100.0,
-            std_m3s: 30.0,
-            ar_coefficients: vec![],
-            residual_std_ratio: 1.0,
-            annual: None,
-        };
-        let correlation = CorrelationModel {
-            method: "spectral".to_string(),
-            profiles: BTreeMap::new(),
-            schedule: vec![],
-        };
-        let system = SystemBuilder::new()
-            .buses(vec![bus])
-            .hydros(vec![hydro])
-            .stages(vec![stage])
-            .inflow_models(vec![inflow_model])
-            .correlation(correlation)
-            .build()
-            .unwrap();
-        build_stochastic_context(
-            &system,
-            42,
-            None,
-            &[],
-            &[],
-            OpeningTreeInputs::default(),
-            ClassSchemes {
-                inflow: Some(SamplingScheme::InSample),
-                load: Some(SamplingScheme::InSample),
-                ncs: Some(SamplingScheme::InSample),
-            },
-        )
-        .unwrap()
-    }
-
     fn transit_bucket_template() -> StageTemplate {
         StageTemplate {
             num_cols: NUM_COLS,
@@ -3955,7 +3682,7 @@ mod transit_bucket_copy_gap {
         };
         let state =
             test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
-        let stochastic = one_hydro_stochastic_context();
+        let stochastic = super::make_stochastic_context_1_hydro(1, false);
         let node_graph = crate::test_support::chain_node_graph(&stochastic);
         let study_dims = test_support::study_dims();
         let horizon = HorizonMode::Finite { num_stages: 1 };
@@ -4000,7 +3727,7 @@ mod transit_bucket_copy_gap {
             test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
         let template = transit_bucket_template();
         let templates = vec![template.clone()];
-        let stochastic = one_hydro_stochastic_context();
+        let stochastic = super::make_stochastic_context_1_hydro(1, false);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let fcf = FutureCostFunction::new(1, state.n_state, 1, 1, &[0]);
 

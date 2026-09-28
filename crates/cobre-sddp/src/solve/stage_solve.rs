@@ -349,13 +349,12 @@ mod tests {
     };
     use crate::{
         SddpError,
-        context::TrainingContext,
         cut::pool::CutPool,
         lp::builder::{PatchBuffer, StageGeometry, StateBox},
         noise::{DownstreamAccumState, LagAccumState, accumulate_and_shift_lag_state},
         setup::{NodeId, StageIdx},
         test_support::{
-            StageContextFixture, equipment_free_geometry, state_layout,
+            StageContextFixture, TrainingContextFixture, equipment_free_geometry, state_layout,
             state_layout_with_transit_buckets,
         },
         workspace::{CapturedBasis, SolverWorkspace, WorkspaceSizing},
@@ -414,40 +413,14 @@ mod tests {
     fn make_workspace(template: &StageTemplate) -> SolverWorkspace<ActiveSolver> {
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new()");
         solver.load_model(template);
-        let state = state_layout(0, 0);
-        let stochastic = crate::test_support::hydro_free_stochastic_context(1, 1);
-        let node_graph = crate::test_support::chain_node_graph(&stochastic);
-        let study_dims = crate::test_support::study_dims();
-        let horizon = crate::horizon_mode::HorizonMode::Finite { num_stages: 1 };
-        let cut_state_layouts = crate::test_support::all_enabled_cut_state_layouts(&state, 1);
-        let initial_state: Vec<f64> = Vec::new();
-        let training_ctx = TrainingContext {
-            node_graph: &node_graph,
-            horizon: &horizon,
-            state: &state,
-            cut_state_layouts: &cut_state_layouts,
-            study_dims: &study_dims,
-            inflow_method: &crate::InflowNonNegativityMethod::None,
-            stochastic: &stochastic,
-            initial_state: &initial_state,
-            inflow_scheme: cobre_core::scenario::SamplingScheme::InSample,
-            load_scheme: cobre_core::scenario::SamplingScheme::InSample,
-            ncs_scheme: cobre_core::scenario::SamplingScheme::InSample,
-            stages: &[],
-            historical_library: None,
-            external_inflow_library: None,
-            external_load_library: None,
-            external_ncs_library: None,
-            lag_accum_seed: &[],
-            lag_weight_seed: &[],
-            dcs: None,
-        };
+        let training_fixture = TrainingContextFixture::new(state_layout(0, 0));
+        let training_ctx = training_fixture.training_ctx();
         let stage_ctx_fixture = StageContextFixture::new(&[], &[], &[]);
         SolverWorkspace::new(
             0,
             0,
             solver,
-            PatchBuffer::new(&state, &[], &[]),
+            PatchBuffer::new(training_ctx.state, &[], &[]),
             &training_ctx,
             &stage_ctx_fixture.ctx(),
             WorkspaceSizing::default(),

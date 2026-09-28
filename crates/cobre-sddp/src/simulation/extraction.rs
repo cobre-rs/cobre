@@ -618,8 +618,7 @@ pub struct SolutionView<'a> {
 pub const ENERGY_FACTOR_MWH_PER_HM3_PER_MW_PER_M3S: f64 = 1.0e6 / 3600.0;
 
 /// `(storage - v_min) * rho_acum * ENERGY_FACTOR` — stored energy above the
-/// minimum operable volume, shared by the no-turbine and per-block hydro
-/// extraction sites.
+/// minimum operable volume, shared by the initial- and final-storage reads.
 #[inline]
 fn stored_energy_mwh(storage_hm3: f64, v_min_hm3: f64, rho_acum: f64) -> f64 {
     (storage_hm3 - v_min_hm3) * rho_acum * ENERGY_FACTOR_MWH_PER_HM3_PER_MW_PER_M3S
@@ -822,87 +821,6 @@ fn hydro_operational_slacks(
             b,
         ),
     )
-}
-
-/// Extract one hydro result for the no-turbine (stage-level aggregate) branch.
-fn extract_hydro_no_turbine(
-    view: &SolutionView<'_>,
-    spec: &StageExtractionSpec<'_>,
-    lookup: &HydroReverseLookup,
-    h: usize,
-    hydro_id: i32,
-    stage_id: u32,
-) -> SimulationHydroResult {
-    let ctx = HydroStageContext::new(view, spec, lookup, h);
-
-    let (turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack) =
-        if spec.study_dims.has_operational_violations {
-            let grid = spec.block_grid();
-            let n_blks = spec.n_blks;
-            let mut tb = 0.0_f64;
-            let mut ob = 0.0_f64;
-            let mut oa = 0.0_f64;
-            let mut gb = 0.0_f64;
-            for blk in 0..n_blks {
-                let w = spec.block_hours[blk] / ctx.stage_total_hours;
-                let (turb_slack, below_slack, above_slack, gen_slack) =
-                    hydro_operational_slacks(view, spec, grid, h, blk);
-                tb += turb_slack * w;
-                ob += below_slack * w;
-                oa += above_slack * w;
-                gb += gen_slack * w;
-            }
-            (tb, ob, oa, gb)
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        };
-
-    let stored_energy_initial_mwh =
-        stored_energy_mwh(ctx.storage_initial, ctx.v_min, ctx.rho_acum_integrated);
-    let stored_energy_final_mwh =
-        stored_energy_mwh(ctx.storage_final, ctx.v_min, ctx.rho_acum_integrated);
-
-    SimulationHydroResult {
-        stage_id,
-        block_id: None,
-        hydro_id,
-        turbined_m3s: 0.0,
-        spillage_m3s: 0.0,
-        evaporation_m3s: ctx.evaporation_m3s,
-        diverted_inflow_m3s: Some(0.0),
-        diverted_outflow_m3s: Some(0.0),
-        incremental_inflow_m3s: ctx.incremental_inflow,
-        inflow_m3s: ctx.incremental_inflow,
-        storage_initial_hm3: ctx.storage_initial,
-        storage_final_hm3: ctx.storage_final,
-        generation_mw: 0.0,
-        equivalent_productivity_mw_per_m3s: ctx.equivalent_productivity_mw_per_m3s,
-        accumulated_productivity_mw_per_m3s: ctx.accumulated_productivity_mw_per_m3s,
-        incremental_inflow_energy_mw: ctx.incremental_inflow_energy_mw,
-        stored_energy_initial_mwh,
-        stored_energy_final_mwh,
-        spillage_cost: 0.0,
-        water_value_per_hm3: water_value_per_hm3(view, spec, h, BlockIdx::new(0)),
-        storage_binding_code: 0,
-        operative_state_code: 1,
-        turbined_slack_m3s: turbined_slack,
-        outflow_slack_below_m3s: outflow_slack_below,
-        outflow_slack_above_m3s: outflow_slack_above,
-        generation_slack_mw: generation_slack,
-        storage_violation_below_hm3: ctx.storage_violation_below,
-        filling_target_violation_hm3: ctx.filling_target_violation,
-        evaporation_violation_pos_m3s: ctx.evaporation_violation_pos_m3s,
-        evaporation_violation_neg_m3s: ctx.evaporation_violation_neg_m3s,
-        inflow_nonnegativity_slack_m3s: ctx.inflow_slack,
-        water_withdrawal_violation_pos_m3s: ctx.withdrawal_pos,
-        water_withdrawal_violation_neg_m3s: ctx.withdrawal_neg,
-        integrated_equivalent_productivity_mw_per_m3s: ctx
-            .integrated_equivalent_productivity_mw_per_m3s,
-        integrated_accumulated_productivity_mw_per_m3s: ctx
-            .integrated_accumulated_productivity_mw_per_m3s,
-        stored_energy_initial_mw: stored_energy_initial_mwh / ctx.stage_total_hours,
-        stored_energy_final_mw: stored_energy_final_mwh / ctx.stage_total_hours,
-    }
 }
 
 /// Stage-level (non-per-block) data extracted for one hydro plant.
@@ -1222,22 +1140,17 @@ fn extract_hydros(
     stage_id: u32,
     lookup: &HydroReverseLookup,
 ) -> Vec<SimulationHydroResult> {
-    if spec.geometry.turbine.is_empty() || spec.n_blks == 0 {
+    let mut results = Vec::with_capacity(spec.entity_counts.hydro_ids.len() * spec.n_blks);
+    results.extend(
         spec.entity_counts
             .hydro_ids
             .iter()
             .enumerate()
-            .map(|(h, &hydro_id)| {
-                extract_hydro_no_turbine(view, spec, lookup, h, hydro_id, stage_id)
-            })
-            .collect()
-    } else {
-        let mut results = Vec::with_capacity(spec.entity_counts.hydro_ids.len() * spec.n_blks);
-        results.extend(spec.entity_counts.hydro_ids.iter().enumerate().flat_map(
-            |(h, &hydro_id)| extract_hydro_per_block(view, spec, lookup, h, hydro_id, stage_id),
-        ));
-        results
-    }
+            .flat_map(|(h, &hydro_id)| {
+                extract_hydro_per_block(view, spec, lookup, h, hydro_id, stage_id)
+            }),
+    );
+    results
 }
 
 /// Extract one row per `(hydro, block, cell)`, hydro-major/block-middle/
@@ -1252,56 +1165,39 @@ fn extract_hydro_bus_generation(
     lookup: &HydroReverseLookup,
 ) -> Vec<SimulationHydroBusResult> {
     let n_cells = spec.hydro_cell_index.n_cells();
-    if spec.geometry.turbine.is_empty() || spec.n_blks == 0 {
-        let mut results = Vec::with_capacity(n_cells);
-        for (h, &hydro_id) in spec.entity_counts.hydro_ids.iter().enumerate() {
-            for c in spec.hydro_cell_index.cells_of(HydroSys::new(h)) {
+    let grid = spec.block_grid();
+    let n_blks = spec.n_blks;
+    let mut results = Vec::with_capacity(n_cells * n_blks);
+    for (h, &hydro_id) in spec.entity_counts.hydro_ids.iter().enumerate() {
+        let cells = spec.hydro_cell_index.cells_of(HydroSys::new(h));
+        let fpha_local = lookup.fpha[h];
+        for b in 0..n_blks {
+            for c in cells.clone() {
+                let turbined_m3s =
+                    view.primal[grid.flat(spec.geometry.turbine.start, c, BlockIdx::new(b))];
+                let generation_mw = if let Some(local) = fpha_local {
+                    let cell_start = lookup.fpha_cell_local_start[local.get()];
+                    view.primal[grid.flat(
+                        spec.geometry.generation.start,
+                        cell_start + (c - cells.start),
+                        BlockIdx::new(b),
+                    )]
+                } else {
+                    turbined_m3s * spec.hydro_productivities[h]
+                };
+                #[allow(clippy::cast_possible_truncation)]
                 results.push(SimulationHydroBusResult {
                     stage_id,
-                    block_id: None,
+                    block_id: Some(b as u32),
                     hydro_id,
                     bus_id: i32::from(spec.hydro_cell_index.bus_of(HydroCell::new(c))),
-                    turbined_m3s: 0.0,
-                    generation_mw: 0.0,
+                    turbined_m3s,
+                    generation_mw,
                 });
             }
         }
-        results
-    } else {
-        let grid = spec.block_grid();
-        let n_blks = spec.n_blks;
-        let mut results = Vec::with_capacity(n_cells * n_blks);
-        for (h, &hydro_id) in spec.entity_counts.hydro_ids.iter().enumerate() {
-            let cells = spec.hydro_cell_index.cells_of(HydroSys::new(h));
-            let fpha_local = lookup.fpha[h];
-            for b in 0..n_blks {
-                for c in cells.clone() {
-                    let turbined_m3s =
-                        view.primal[grid.flat(spec.geometry.turbine.start, c, BlockIdx::new(b))];
-                    let generation_mw = if let Some(local) = fpha_local {
-                        let cell_start = lookup.fpha_cell_local_start[local.get()];
-                        view.primal[grid.flat(
-                            spec.geometry.generation.start,
-                            cell_start + (c - cells.start),
-                            BlockIdx::new(b),
-                        )]
-                    } else {
-                        turbined_m3s * spec.hydro_productivities[h]
-                    };
-                    #[allow(clippy::cast_possible_truncation)]
-                    results.push(SimulationHydroBusResult {
-                        stage_id,
-                        block_id: Some(b as u32),
-                        hydro_id,
-                        bus_id: i32::from(spec.hydro_cell_index.bus_of(HydroCell::new(c))),
-                        turbined_m3s,
-                        generation_mw,
-                    });
-                }
-            }
-        }
-        results
     }
+    results
 }
 
 /// Extract thermal results from a raw LP solution view.
@@ -1312,51 +1208,31 @@ fn extract_thermals(
     lookup: &ThermalReverseLookup,
 ) -> Vec<SimulationThermalResult> {
     let n_blks = spec.n_blks;
-    if spec.geometry.thermal.is_empty() || n_blks == 0 {
-        spec.entity_counts
-            .thermal_ids
-            .iter()
-            .enumerate()
-            .map(|(t, &thermal_id)| SimulationThermalResult {
+    let grid = spec.block_grid();
+    let mut results = Vec::with_capacity(spec.entity_counts.thermal_ids.len() * n_blks);
+    for (t, &thermal_id) in spec.entity_counts.thermal_ids.iter().enumerate() {
+        let is_anticipated = lookup.thermal_is_anticipated[t].is_some();
+        let anticipated_decision_mw = compute_anticipated_decision_mw(view, spec, lookup, t);
+        let anticipated_committed_mw = compute_anticipated_committed_mw(view, spec, lookup, t);
+        for b in 0..n_blks {
+            let col = grid.flat(spec.geometry.thermal.start, t, BlockIdx::new(b));
+            let gen_mw = view.primal[col];
+            #[allow(clippy::cast_possible_truncation)]
+            results.push(SimulationThermalResult {
                 stage_id,
-                block_id: None,
+                block_id: Some(b as u32),
                 thermal_id,
-                generation_mw: 0.0,
-                generation_cost: 0.0,
-                is_anticipated: lookup.thermal_is_anticipated[t].is_some(),
-                anticipated_committed_mw: compute_anticipated_committed_mw(view, spec, lookup, t),
-                anticipated_decision_mw: compute_anticipated_decision_mw(view, spec, lookup, t),
+                generation_mw: gen_mw,
+                generation_cost: gen_mw * view.objective_coeffs[col] / spec.col_scale_factor(col)
+                    * spec.cost_scale_factor,
+                is_anticipated,
+                anticipated_committed_mw,
+                anticipated_decision_mw,
                 operative_state_code: 1,
-            })
-            .collect()
-    } else {
-        let grid = spec.block_grid();
-        let mut results = Vec::with_capacity(spec.entity_counts.thermal_ids.len() * n_blks);
-        for (t, &thermal_id) in spec.entity_counts.thermal_ids.iter().enumerate() {
-            let is_anticipated = lookup.thermal_is_anticipated[t].is_some();
-            let anticipated_decision_mw = compute_anticipated_decision_mw(view, spec, lookup, t);
-            let anticipated_committed_mw = compute_anticipated_committed_mw(view, spec, lookup, t);
-            for b in 0..n_blks {
-                let col = grid.flat(spec.geometry.thermal.start, t, BlockIdx::new(b));
-                let gen_mw = view.primal[col];
-                #[allow(clippy::cast_possible_truncation)]
-                results.push(SimulationThermalResult {
-                    stage_id,
-                    block_id: Some(b as u32),
-                    thermal_id,
-                    generation_mw: gen_mw,
-                    generation_cost: gen_mw * view.objective_coeffs[col]
-                        / spec.col_scale_factor(col)
-                        * spec.cost_scale_factor,
-                    is_anticipated,
-                    anticipated_committed_mw,
-                    anticipated_decision_mw,
-                    operative_state_code: 1,
-                });
-            }
+            });
         }
-        results
     }
+    results
 }
 
 /// Extract exchange (line flow) results from a raw LP solution view.
@@ -1366,49 +1242,32 @@ fn extract_exchanges(
     stage_id: u32,
 ) -> Vec<SimulationExchangeResult> {
     let n_blks = spec.n_blks;
-    if spec.geometry.line_fwd.is_empty() || n_blks == 0 {
-        spec.entity_counts
-            .line_ids
-            .iter()
-            .map(|&line_id| SimulationExchangeResult {
-                stage_id,
-                block_id: None,
-                line_id,
-                direct_flow_mw: 0.0,
-                reverse_flow_mw: 0.0,
-                exchange_cost: 0.0,
-                operative_state_code: 1,
+    let grid = spec.block_grid();
+    let mut results = Vec::with_capacity(spec.entity_counts.line_ids.len() * n_blks);
+    results.extend(spec.entity_counts.line_ids.iter().enumerate().flat_map(
+        move |(l, &line_id)| {
+            (0..n_blks).map(move |b| {
+                let fwd_col = grid.flat(spec.geometry.line_fwd.start, l, BlockIdx::new(b));
+                let rev_col = grid.flat(spec.geometry.line_rev.start, l, BlockIdx::new(b));
+                let fwd = view.primal[fwd_col];
+                let rev = view.primal[rev_col];
+                #[allow(clippy::cast_possible_truncation)]
+                SimulationExchangeResult {
+                    stage_id,
+                    block_id: Some(b as u32),
+                    line_id,
+                    direct_flow_mw: fwd,
+                    reverse_flow_mw: rev,
+                    exchange_cost: (fwd * view.objective_coeffs[fwd_col]
+                        / spec.col_scale_factor(fwd_col)
+                        + rev * view.objective_coeffs[rev_col] / spec.col_scale_factor(rev_col))
+                        * spec.cost_scale_factor,
+                    operative_state_code: 2,
+                }
             })
-            .collect()
-    } else {
-        let grid = spec.block_grid();
-        let mut results = Vec::with_capacity(spec.entity_counts.line_ids.len() * n_blks);
-        results.extend(spec.entity_counts.line_ids.iter().enumerate().flat_map(
-            move |(l, &line_id)| {
-                (0..n_blks).map(move |b| {
-                    let fwd_col = grid.flat(spec.geometry.line_fwd.start, l, BlockIdx::new(b));
-                    let rev_col = grid.flat(spec.geometry.line_rev.start, l, BlockIdx::new(b));
-                    let fwd = view.primal[fwd_col];
-                    let rev = view.primal[rev_col];
-                    #[allow(clippy::cast_possible_truncation)]
-                    SimulationExchangeResult {
-                        stage_id,
-                        block_id: Some(b as u32),
-                        line_id,
-                        direct_flow_mw: fwd,
-                        reverse_flow_mw: rev,
-                        exchange_cost: (fwd * view.objective_coeffs[fwd_col]
-                            / spec.col_scale_factor(fwd_col)
-                            + rev * view.objective_coeffs[rev_col]
-                                / spec.col_scale_factor(rev_col))
-                            * spec.cost_scale_factor,
-                        operative_state_code: 2,
-                    }
-                })
-            },
-        ));
-        results
-    }
+        },
+    ));
+    results
 }
 
 /// Extract bus results from a raw LP solution view.
@@ -1418,66 +1277,45 @@ fn extract_buses(
     stage_id: u32,
 ) -> Vec<SimulationBusResult> {
     let n_blks = spec.n_blks;
-    if spec.geometry.deficit.is_empty() || n_blks == 0 {
-        spec.entity_counts
-            .bus_ids
-            .iter()
-            .map(|&bus_id| SimulationBusResult {
-                stage_id,
-                block_id: None,
-                bus_id,
-                load_mw: 0.0,
-                deficit_mw: 0.0,
-                excess_mw: 0.0,
-                spot_price: 0.0,
+    let grid = spec.block_grid();
+    let max_segs = spec.study_dims.max_deficit_segments;
+    let mut results = Vec::with_capacity(spec.entity_counts.bus_ids.len() * n_blks);
+    results.extend(spec.entity_counts.bus_ids.iter().enumerate().flat_map(
+        move |(bus_idx, &bus_id)| {
+            (0..n_blks).map(move |b| {
+                // Deficit is the 3-term bus-outer/segment-middle/block-inner
+                // shape, so address it with `deficit`, not `flat`.
+                let deficit_mw: f64 = (0..max_segs)
+                    .map(|s| {
+                        let col =
+                            grid.deficit(spec.geometry.deficit.start, bus_idx, s, BlockIdx::new(b));
+                        view.primal[col]
+                    })
+                    .sum();
+                let excess_col = grid.flat(spec.geometry.excess.start, bus_idx, BlockIdx::new(b));
+                let load_row = spec
+                    .geometry
+                    .load_balance_row(BusSys::new(bus_idx), BlockIdx::new(b));
+                let raw_dual = view.dual.get(load_row).copied().unwrap_or(0.0);
+                let hrs = spec.block_hours.get(b).copied().unwrap_or(0.0);
+                #[allow(clippy::cast_possible_truncation)]
+                SimulationBusResult {
+                    stage_id,
+                    block_id: Some(b as u32),
+                    bus_id,
+                    load_mw: view.row_lower[load_row],
+                    deficit_mw,
+                    excess_mw: view.primal[excess_col],
+                    spot_price: if hrs > 0.0 {
+                        raw_dual * spec.cost_scale_factor / hrs
+                    } else {
+                        0.0
+                    },
+                }
             })
-            .collect()
-    } else {
-        let grid = spec.block_grid();
-        let max_segs = spec.study_dims.max_deficit_segments;
-        let mut results = Vec::with_capacity(spec.entity_counts.bus_ids.len() * n_blks);
-        results.extend(spec.entity_counts.bus_ids.iter().enumerate().flat_map(
-            move |(bus_idx, &bus_id)| {
-                (0..n_blks).map(move |b| {
-                    // Deficit is the 3-term bus-outer/segment-middle/block-inner
-                    // shape, so address it with `deficit`, not `flat`.
-                    let deficit_mw: f64 = (0..max_segs)
-                        .map(|s| {
-                            let col = grid.deficit(
-                                spec.geometry.deficit.start,
-                                bus_idx,
-                                s,
-                                BlockIdx::new(b),
-                            );
-                            view.primal[col]
-                        })
-                        .sum();
-                    let excess_col =
-                        grid.flat(spec.geometry.excess.start, bus_idx, BlockIdx::new(b));
-                    let load_row = spec
-                        .geometry
-                        .load_balance_row(BusSys::new(bus_idx), BlockIdx::new(b));
-                    let raw_dual = view.dual.get(load_row).copied().unwrap_or(0.0);
-                    let hrs = spec.block_hours.get(b).copied().unwrap_or(0.0);
-                    #[allow(clippy::cast_possible_truncation)]
-                    SimulationBusResult {
-                        stage_id,
-                        block_id: Some(b as u32),
-                        bus_id,
-                        load_mw: view.row_lower[load_row],
-                        deficit_mw,
-                        excess_mw: view.primal[excess_col],
-                        spot_price: if hrs > 0.0 {
-                            raw_dual * spec.cost_scale_factor / hrs
-                        } else {
-                            0.0
-                        },
-                    }
-                })
-            },
-        ));
-        results
-    }
+        },
+    ));
+    results
 }
 
 /// Extract a [`SimulationStageResult`] from a raw LP solution at one stage.

@@ -823,8 +823,9 @@ Read: `cut/pool.rs` (`CutPool::has_warm_start_cuts`, the flag's only formula),
 per-stage `compute_cost_result` breakdown (`simulation/extraction.rs`), which
 reports `immediate_cost`/`future_cost` separately by design. Pinned by
 `terminal_boundary_fcf_training_gap_is_consistent`,
-`terminal_boundary_fcf_simulation_cost_includes_post_horizon`, and
-`terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds`
+`terminal_boundary_fcf_simulation_cost_includes_post_horizon`,
+`terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds`, and
+`terminal_boundary_records_all_inactive_leave_the_plain_fan_bounds`
 (`tests/branching_value_oracle.rs`), and
 `terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan`
 (`setup/tests.rs`).

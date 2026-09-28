@@ -1964,7 +1964,7 @@ mod tests {
         let geometry = vec![StageGeometry {
             ncs_generation: 0..n_ncs * block_count,
             n_blks: block_count,
-            ..StageGeometry::default()
+            ..test_support::equipment_free_geometry(&[block_count]).remove(0)
         }];
         let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry)
             .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)

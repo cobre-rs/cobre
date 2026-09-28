@@ -556,7 +556,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     let geometry = vec![StageGeometry {
         ncs_generation: 0..1,
         n_blks: 1,
-        ..StageGeometry::default()
+        ..crate::test_support::equipment_free_geometry(&[1]).remove(0)
     }];
     let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry)
         .ncs_stochastic_dense_col(&ncs_stochastic_dense_col)

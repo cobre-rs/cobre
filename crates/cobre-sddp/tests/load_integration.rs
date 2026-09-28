@@ -424,7 +424,7 @@ fn test_stochastic_load_training_completes() {
         StageGeometry {
             load_balance: BlockRowFamily::per_block(1..2),
             n_blks: 1,
-            ..StageGeometry::default()
+            ..equipment_free_geometry(&[1]).remove(0)
         };
         n_stages
     ];
@@ -639,7 +639,7 @@ fn test_stochastic_load_seed_determinism() {
             StageGeometry {
                 load_balance: BlockRowFamily::per_block(1..2),
                 n_blks: 1,
-                ..StageGeometry::default()
+                ..equipment_free_geometry(&[1]).remove(0)
             };
             n_stages
         ];

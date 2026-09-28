@@ -57,12 +57,12 @@ fn build_per_stage_resolves_stage_varying_fpha_membership() {
     let geom_stage0 = StageGeometry {
         fpha_hydro_indices: vec![HydroSys::new(0)],
         generation: 100..101,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
     };
     let geom_stage1 = StageGeometry {
         fpha_hydro_indices: vec![HydroSys::new(0), HydroSys::new(1)],
         generation: 200..202,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
     };
     let geometry_per_stage = vec![geom_stage0, geom_stage1];
     let hydro_cell_index = test_support::identity_hydro_cell_index(256);
@@ -109,7 +109,7 @@ fn filling_reverse_lookup_resolves_sparse_membership() {
         filling_target_col: 500..501,
         filled_min_storage_floor_hydro_indices: vec![HydroSys::new(0)],
         filled_min_storage_floor_col: 600..601,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
     };
 
     let hydro_cell_index = test_support::identity_hydro_cell_index(256);
@@ -143,7 +143,7 @@ fn filling_target_and_floor_slack_primal_present_and_absent() {
     let geometry = StageGeometry {
         filling_target_col: 2..4,
         filled_min_storage_floor_col: 2..4,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
     };
     // Slot 0 ⇒ column 2 ⇒ 7.5; slot 1 ⇒ column 3 ⇒ 11.0.
     assert_eq!(
@@ -517,7 +517,7 @@ fn geometry_row_capacity(geom: &StageGeometry) -> usize {
 fn extract_costs_has_one_entry_matching_stage_id() {
     // Acceptance criterion: costs contains exactly one entry whose stage_id
     // matches the input stage and whose future_cost == primal[state.theta].
-    let indexer = test_support::geom(2, 1);
+    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
@@ -575,7 +575,7 @@ fn extract_costs_has_one_entry_matching_stage_id() {
 #[test]
 fn extract_cost_splits_objective_correctly() {
     // objective = immediate_cost + future_cost
-    let indexer = test_support::geom(2, 1);
+    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let theta_val = 300.0;
@@ -715,7 +715,7 @@ fn extract_hydro_storage_values_from_primal() {
 #[test]
 fn extract_inflow_lag_values_from_primal() {
     // inflow_lags[2]=50.0 for hydro 0 lag 0, [3]=60.0 for hydro 1 lag 0
-    let indexer = test_support::geom(2, 1);
+    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
@@ -858,7 +858,7 @@ fn extract_no_lags_when_max_par_order_zero() {
 
 #[test]
 fn extract_stage_id_propagates_to_all_results() {
-    let indexer = test_support::geom(2, 1);
+    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 10.0);
@@ -1358,7 +1358,7 @@ fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decisio
 
     let geometry = StageGeometry {
         anticipated_decision: 6..7,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
     };
     let study_dims = StudyDimensions {
         anticipated_plants: anticipated_plants_at(&[0]),
@@ -2830,7 +2830,7 @@ fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
 
 #[test]
 fn extract_optional_entity_types_are_empty_when_absent() {
-    let indexer = test_support::geom(1, 0);
+    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 0);
     let primal = vec![50.0, 0.0, 40.0, 200.0]; // storage, z_inflow, storage_in, theta
@@ -5226,7 +5226,7 @@ fn extract_pumping_two_blocks_reads_per_block_flow_and_power() {
     let equipment = StageGeometry {
         n_blks: 2,
         pumping_flow: 4..6,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[2]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let spec = pumping_only_spec(
@@ -5285,7 +5285,7 @@ fn extract_pumping_zero_stations_is_empty() {
         row_lower: &[],
     };
 
-    let equipment = StageGeometry::default();
+    let equipment = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let spec = pumping_only_spec(
         &study_dims,
@@ -5320,7 +5320,7 @@ fn extract_pumping_zero_blocks_is_empty() {
         row_lower: &[],
     };
 
-    let equipment = StageGeometry::default();
+    let equipment = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let spec = pumping_only_spec(
         &study_dims,
@@ -5430,7 +5430,7 @@ fn extract_contract_import_reads_primal_and_cost() {
         n_blks: 1,
         contract_import: 4..5,
         contract_export: 5..5,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[1]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let block_hours = [730.0_f64];
@@ -5484,7 +5484,7 @@ fn extract_contract_export_yields_negative_cost() {
         n_blks: 1,
         contract_import: 4..4,
         contract_export: 4..5,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[1]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let block_hours = [730.0_f64];
@@ -5536,7 +5536,7 @@ fn extract_contract_dormant_zero_row_keeps_state_code_1() {
         n_blks: 1,
         contract_import: 4..5,
         contract_export: 5..5,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[1]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let block_hours = [730.0_f64];
@@ -5589,7 +5589,7 @@ fn test_contract_extraction_uses_per_block_price() {
         n_blks: 3,
         contract_import: 4..10,
         contract_export: 10..10,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[3]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let block_hours = [730.0_f64, 730.0, 730.0];
@@ -5661,7 +5661,7 @@ fn test_contract_price_stride_mismatch_asserts() {
         n_blks: 3,
         contract_import: 4..10,
         contract_export: 10..10,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[3]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let block_hours = [730.0_f64, 730.0, 730.0];
@@ -5703,7 +5703,7 @@ fn extract_stub_collections_contract_free_is_empty() {
     };
     let geometry = StageGeometry {
         n_blks: 1,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[1]).remove(0)
     };
     let study_dims = test_support::study_dims();
     let spec = contract_only_spec(
@@ -5785,7 +5785,7 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
         evap_indices,
         evap_hydro_indices: vec![HydroSys::new(0)],
         water_balance,
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[k]).remove(0)
     }
 }
 
@@ -6342,7 +6342,7 @@ fn make_transit_bucket_primal(transit_buckets_out: &[f64], transit_buckets_in: &
 /// only at `lag == 1`.
 #[test]
 fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
-    let geometry = test_support::geom(2, 1);
+    let geometry = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state =
         test_support::state_layout_with_transit_buckets(2, 1, 2, vec![(0, 1), (0, 2)], 0, vec![]);
@@ -6412,7 +6412,7 @@ fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
 /// the whole table off for a non-travel-time study.
 #[test]
 fn extract_transit_buckets_absent_when_n_buckets_zero() {
-    let geometry = test_support::geom(2, 1);
+    let geometry = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
     let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
@@ -6471,7 +6471,7 @@ fn extract_transit_buckets_absent_when_n_buckets_zero() {
 /// hydro input ordering.
 #[test]
 fn extract_transit_buckets_rows_follow_canonical_column_order() {
-    let geometry = test_support::geom(2, 1);
+    let geometry = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     // Plant 0 (hydro_id 10) depth 2, plant 1 (hydro_id 20) depth 1.
     let state = test_support::state_layout_with_transit_buckets(
@@ -6589,7 +6589,7 @@ fn split_plant_multi_bus_extraction_fixture() -> (StateSpace, StageGeometry, Hyd
         fpha_hydro_indices: vec![HydroSys::new(1)],
         n_blks: 2,
         water_balance: BlockRowFamily::one_per_entity(0..2),
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[2]).remove(0)
     };
     (state, geometry, hydro_cell_index)
 }
@@ -6758,7 +6758,7 @@ fn split_middle_plant_fixture() -> (StateSpace, StageGeometry, HydroCellIndex, V
         spillage: 18..24,
         n_blks: 2,
         water_balance: BlockRowFamily::one_per_entity(0..3),
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[2]).remove(0)
     };
     // theta = 3*(3+0) = 9, equipment starts at 10 (state_layout(3, 0)).
     let mut primal = vec![0.0_f64; 24];
@@ -7024,7 +7024,7 @@ fn order_sensitive_split_plant_fixture() -> (StateSpace, StageGeometry, HydroCel
         spillage: 11..13,
         n_blks: 1,
         water_balance: BlockRowFamily::one_per_entity(0..2),
-        ..StageGeometry::default()
+        ..test_support::equipment_free_geometry(&[1]).remove(0)
     };
     // theta = 2*(3+0) = 6, equipment starts at 7 (state_layout(2, 0)).
     let mut primal = vec![0.0_f64; 13];
@@ -7256,7 +7256,9 @@ fn generic_only_spec<'a>(
     // constructed to satisfy the spec's shape.
     let study_dims: &'a StudyDimensions = Box::leak(Box::new(test_support::study_dims()));
     let state: &'a StateSpace = Box::leak(Box::new(test_support::state_layout(0, 0)));
-    let geometry: &'a StageGeometry = Box::leak(Box::new(StageGeometry::default()));
+    let geometry: &'a StageGeometry = Box::leak(Box::new(
+        test_support::equipment_free_geometry(&[0]).remove(0),
+    ));
     let entity_counts: &'a EntityCounts = Box::leak(Box::new(EntityCounts {
         hydro_ids: vec![],
         hydro_productivities: vec![],

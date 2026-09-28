@@ -116,9 +116,9 @@ pub(crate) fn postprocess_templates(
 )]
 mod tests {
     use super::postprocess_templates;
-    use crate::lp::builder::{StageGeometry, StageTemplates};
+    use crate::lp::builder::StageTemplates;
     use crate::lp::indexer::{AnticipatedPlants, StateSpace};
-    use crate::test_support::state_layout_full;
+    use crate::test_support::{equipment_free_geometry, state_layout_full};
     use crate::time_value::{PostStudyResolved, TimeValue};
     use chrono::NaiveDate;
     use cobre_core::temporal::{
@@ -191,7 +191,7 @@ mod tests {
             .push(scaled_storage_template(PHYSICAL_UPPER));
         stage_templates
             .geometry_per_stage
-            .push(StageGeometry::default());
+            .extend(equipment_free_geometry(&[0]));
 
         let state_layout: StateSpace = state_layout_full(1, 0, 0, Vec::new());
         let system = SystemBuilder::new()

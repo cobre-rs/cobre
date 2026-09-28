@@ -1160,7 +1160,7 @@ mod tests {
 
     #[test]
     fn shift_lag_state_par0_is_noop() {
-        let _indexer = test_support::geom(2, 0);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 0);
         let mut state = vec![100.0, 200.0]; // storage only, no lags
         let incoming_lags: Vec<f64> = vec![];
@@ -1176,7 +1176,7 @@ mod tests {
     #[test]
     fn shift_lag_state_par1_single_hydro() {
         // N=1, L=1: state = [v_out, lag0], inflow_lags.start = 1
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![500.0, 99.0]; // v_out, stale lag
         let incoming_lags = vec![42.0]; // lag0 (lag-major: lag * n_h + h = 0*1+0 = 0)
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn shift_lag_state_par3_single_hydro() {
         // N=1, L=3: state = [v_out, lag0, lag1, lag2]
-        let _indexer = test_support::geom(1, 3);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 3);
         let mut state = vec![500.0, 0.0, 0.0, 0.0];
         // incoming_lags in lag-major: [lag0, lag1, lag2] = [10.0, 20.0, 30.0]
@@ -1208,7 +1208,7 @@ mod tests {
     fn shift_lag_state_par1_two_hydros() {
         // N=2, L=1: state = [v0, v1, lag0_h0, lag0_h1]
         // inflow_lags.start = 2, lag-major: lag0 * 2 + 0 = 0, lag0 * 2 + 1 = 1
-        let _indexer = test_support::geom(2, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 1);
         let mut state = vec![100.0, 200.0, 0.0, 0.0];
         let incoming_lags = vec![10.0, 20.0]; // lag0_h0=10, lag0_h1=20
@@ -1223,7 +1223,7 @@ mod tests {
     #[test]
     fn shift_lag_state_preserves_storage() {
         // Verify storage portion [0..N] is unchanged after shift.
-        let _indexer = test_support::geom(2, 2);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 2);
         let mut state = vec![100.0, 200.0, 0.0, 0.0, 0.0, 0.0];
         let incoming_lags = vec![1.0, 2.0, 3.0, 4.0];
@@ -1377,7 +1377,7 @@ mod tests {
     #[test]
     fn test_accumulate_monthly_identity() {
         // N=1 hydro, L=1 lag order.
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
 
         // Reference: shift_lag_state result.
@@ -1429,7 +1429,7 @@ mod tests {
     /// average: (500 + 480 + 520 + 510) / 4 = 502.5.
     #[test]
     fn test_accumulate_four_weeks_then_finalize() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![500.0, 0.0]; // storage, lag0
         let incoming_lags = vec![0.0]; // lag-major: lag0 for hydro 0
@@ -1490,7 +1490,7 @@ mod tests {
     /// Spillover seeds the next lag period with raw `z_inflow` * `spillover_weight`.
     #[test]
     fn test_accumulate_spillover_seeds_next_period() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![0.0, 0.0];
         let incoming_lags = vec![0.0];
@@ -1548,7 +1548,7 @@ mod tests {
     /// `max_par_order == 0`: function must return immediately, nothing modified.
     #[test]
     fn test_accumulate_noop_for_par0() {
-        let _indexer = test_support::geom(2, 0); // no lag order
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0); // no lag order
         let layout = test_support::state_layout(2, 0);
         let mut state = vec![100.0, 200.0];
         let incoming_lags: Vec<f64> = vec![];
@@ -1593,7 +1593,7 @@ mod tests {
     #[test]
     fn test_accumulate_preserves_storage() {
         // N=2 hydros, L=2 lag order: state = [v0, v1, lag0_h0, lag0_h1, lag1_h0, lag1_h1]
-        let _indexer = test_support::geom(2, 2);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 2);
         let mut state = vec![100.0, 200.0, 0.0, 0.0, 0.0, 0.0];
         let incoming_lags = vec![1.0, 2.0, 3.0, 4.0]; // lag-major: lag0 h0,h1; lag1 h0,h1
@@ -1695,7 +1695,7 @@ mod tests {
     #[test]
     fn test_downstream_par1_accumulation_and_rebuild() {
         // N=1 hydro, L=1 lag (primary monthly PAR(1) order).
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let lag_start = layout.inflow_lags.start;
 
@@ -1791,7 +1791,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn test_downstream_par2_two_quarters() {
-        let _indexer = test_support::geom(1, 2); // L=2 lag order
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0); // L=2 lag order
         let layout = test_support::state_layout(1, 2);
         let lag_start = layout.inflow_lags.start;
 
@@ -1908,7 +1908,7 @@ mod tests {
     /// with no downstream fields accessed.
     #[test]
     fn test_no_downstream_for_uniform_monthly() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state_ds = vec![500.0, 0.0]; // with empty downstream
         let mut state_ref = vec![500.0, 0.0]; // with noop downstream
@@ -1993,7 +1993,7 @@ mod tests {
     /// `downstream_weight_accum == 0.0`.
     #[test]
     fn test_rebuild_resets_downstream_state() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![0.0, 0.0];
         let incoming_lags = vec![0.0];
@@ -2047,7 +2047,7 @@ mod tests {
     /// (b) seed the next quarter's accumulator with `z_inflow * 0.1`.
     #[test]
     fn test_downstream_spillover_seeds_next_quarter() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![0.0, 0.0];
         let incoming_lags = vec![0.0];
@@ -2117,7 +2117,7 @@ mod tests {
     #[test]
     fn test_downstream_multi_hydro() {
         // N=2 hydros, L=1 lag order.
-        let _indexer = test_support::geom(2, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 1);
         let lag_start = layout.inflow_lags.start;
 
@@ -2225,7 +2225,7 @@ mod tests {
         let geometry = StageGeometry {
             ncs_generation: ncs_start..ncs_start + n_ncs * n_blks,
             n_blks,
-            ..StageGeometry::default()
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
         };
 
         let mut indices = Vec::new();
@@ -2267,7 +2267,7 @@ mod tests {
         let geometry = StageGeometry {
             ncs_generation: ncs_start..ncs_start + n_ncs * n_blks,
             n_blks,
-            ..StageGeometry::default()
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
         };
 
         let mut indices = Vec::new();
@@ -2310,7 +2310,7 @@ mod tests {
         let geometry_at = |ncs_start: usize| StageGeometry {
             ncs_generation: ncs_start..ncs_start + dense_col.len() * n_blks,
             n_blks,
-            ..StageGeometry::default()
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
         };
 
         // Reproduce the patch-site guard verbatim: rebuild iff the stored start
@@ -2472,7 +2472,7 @@ mod tests {
         let geometry = StageGeometry {
             ncs_generation: ncs_start..ncs_start + n_blks,
             n_blks,
-            ..StageGeometry::default()
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
         };
 
         // ---- reference: transform, then the pre-collapse gather+set called

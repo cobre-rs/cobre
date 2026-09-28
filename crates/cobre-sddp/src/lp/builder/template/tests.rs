@@ -4432,7 +4432,7 @@ fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks(
         water_balance: BlockRowFamily::one_per_entity(2..4),
         n_blks: 3,
         block_mode: BlockMode::Parallel,
-        ..StageGeometry::default()
+        ..crate::test_support::equipment_free_geometry(&[3]).remove(0)
     };
     assert_eq!(
         parallel.water_balance_row(HydroSys::new(1), BlockIdx::new(2)),
@@ -4443,7 +4443,7 @@ fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks(
         water_balance: BlockRowFamily::per_block(2..8),
         n_blks: 3,
         block_mode: BlockMode::Chronological,
-        ..StageGeometry::default()
+        ..crate::test_support::equipment_free_geometry(&[3]).remove(0)
     };
     assert_eq!(
         chronological.water_balance_row(HydroSys::new(1), BlockIdx::new(2)),
@@ -4469,7 +4469,7 @@ fn load_balance_row_strides_buses_by_the_block_count() {
         load_balance: BlockRowFamily::per_block(10..22),
         n_blks: 4,
         block_mode: BlockMode::Parallel,
-        ..StageGeometry::default()
+        ..crate::test_support::equipment_free_geometry(&[4]).remove(0)
     };
     for bus in 0..3 {
         for k in 0..4 {
@@ -4494,7 +4494,7 @@ fn stage_geometry_entity_col_accessors_match_hand_offsets() {
         withdrawal_slack_pos: 16..19,
         filling_target_col: 30..32,
         filled_min_storage_floor_col: 32..33,
-        ..StageGeometry::default()
+        ..crate::test_support::equipment_free_geometry(&[0]).remove(0)
     };
     assert_eq!(
         geometry.anticipated_decision_col(AnticipatedLocal::new(2)),
@@ -4522,7 +4522,7 @@ fn inflow_slack_col_rejects_a_hydro_past_the_family() {
 
     let geometry = StageGeometry {
         inflow_slack: 10..13,
-        ..StageGeometry::default()
+        ..crate::test_support::equipment_free_geometry(&[0]).remove(0)
     };
     let _ = geometry.inflow_slack_col(HydroSys::new(3));
 }

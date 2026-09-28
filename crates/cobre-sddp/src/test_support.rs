@@ -607,15 +607,6 @@ pub fn geometry(
     StageLayout::new(&ctx, &state, &stage, 0).geometry(BlockMode::Parallel)
 }
 
-/// Build the empty-equipment role-(b) [`StageGeometry`] (every range `0..0`).
-///
-/// The `_hydro_count` / `_max_par_order` arguments are ignored — accepted only for
-/// call-site symmetry with [`geometry`].
-#[must_use]
-pub fn geom(_hydro_count: usize, _max_par_order: usize) -> StageGeometry {
-    StageGeometry::default()
-}
-
 /// Build a [`StageGeometry`] carrying only a load-balance row family
 /// (`n_buses * n_blks` rows starting at `load_start`), for fixtures that need a
 /// non-empty `geometry_per_stage` entry to exercise the load patch.
@@ -628,19 +619,27 @@ pub fn geometry_with_load_balance(
     StageGeometry {
         load_balance: BlockRowFamily::per_block(load_start..load_start + n_buses * n_blks),
         n_blks,
-        ..StageGeometry::default()
+        ..equipment_free_geometry(&[n_blks]).remove(0)
     }
 }
 
-/// One [`StageGeometry`] per entry, `{ n_blks, ..StageGeometry::default() }` —
-/// every column/row family empty, addressing no equipment.
+/// One [`StageGeometry`] per entry, the production empty-stage layout
+/// (`geometry(&GeometryDims { n_blks, ..zeros }, ..)`) — every column/row
+/// family empty, addressing no equipment.
 #[must_use]
 pub fn equipment_free_geometry(block_counts: &[usize]) -> Vec<StageGeometry> {
     block_counts
         .iter()
-        .map(|&n_blks| StageGeometry {
-            n_blks,
-            ..StageGeometry::default()
+        .map(|&n_blks| {
+            geometry(
+                &GeometryDims {
+                    n_blks,
+                    ..GeometryDims::default()
+                },
+                vec![],
+                &[],
+                vec![],
+            )
         })
         .collect()
 }
@@ -4511,9 +4510,8 @@ mod trunk_fan_tests {
 #[cfg(test)]
 mod stage_context_fixture_tests {
     use super::{
-        GeometryDims, StageContextFixture, StageGeometry, equipment_free_geometry, geometry,
-        geometry_with_load_balance, permissive_state_boxes, state_layout,
-        transit_bucket_only_template,
+        StageContextFixture, equipment_free_geometry, geometry_with_load_balance,
+        permissive_state_boxes, state_layout, transit_bucket_only_template,
     };
     use crate::setup::node_graph::StageIdx;
 
@@ -4538,105 +4536,7 @@ mod stage_context_fixture_tests {
         let state = state_layout(1, 0);
         let templates = vec![transit_bucket_only_template(1, state.n_state); 2];
         let state_boxes = permissive_state_boxes(state.n_state, 2);
-        let geometry_per_stage = vec![StageGeometry::default()];
+        let geometry_per_stage = equipment_free_geometry(&[0]);
         let _ = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage);
-    }
-
-    #[test]
-    fn equipment_free_geometry_matches_production_layout_of_an_empty_stage() {
-        fn assert_equipment_free(g: StageGeometry, expected_n_blks: usize) {
-            let StageGeometry {
-                turbine,
-                spillage,
-                diversion,
-                thermal,
-                anticipated_decision,
-                line_fwd,
-                line_rev,
-                deficit,
-                excess,
-                generation,
-                ncs_generation,
-                pumping_flow,
-                evap_indices,
-                inflow_slack,
-                withdrawal_slack_neg,
-                withdrawal_slack_pos,
-                outflow_below_slack,
-                outflow_above_slack,
-                turbine_below_slack,
-                generation_below_slack,
-                contract_import,
-                contract_export,
-                water_balance,
-                load_balance,
-                fpha,
-                filling_target,
-                filling_target_col,
-                filled_min_storage_floor,
-                filled_min_storage_floor_col,
-                n_blks,
-                storage_boundary_grid: _,
-                block_mode: _,
-                fpha_hydro_indices,
-                evap_hydro_indices,
-                filling_target_hydro_indices,
-                filled_min_storage_floor_hydro_indices,
-            } = g;
-            for r in [
-                &turbine,
-                &spillage,
-                &diversion,
-                &thermal,
-                &anticipated_decision,
-                &line_fwd,
-                &line_rev,
-                &deficit,
-                &excess,
-                &generation,
-                &ncs_generation,
-                &pumping_flow,
-                &inflow_slack,
-                &withdrawal_slack_neg,
-                &withdrawal_slack_pos,
-                &outflow_below_slack,
-                &outflow_above_slack,
-                &turbine_below_slack,
-                &generation_below_slack,
-                &contract_import,
-                &contract_export,
-                &fpha,
-                &filling_target,
-                &filling_target_col,
-                &filled_min_storage_floor,
-                &filled_min_storage_floor_col,
-            ] {
-                assert!(r.is_empty(), "every column/row range must be empty");
-            }
-            for f in [&water_balance, &load_balance] {
-                assert!(f.range().is_empty(), "every row family must be empty");
-            }
-            assert!(evap_indices.is_empty());
-            assert!(fpha_hydro_indices.is_empty());
-            assert!(evap_hydro_indices.is_empty());
-            assert!(filling_target_hydro_indices.is_empty());
-            assert!(filled_min_storage_floor_hydro_indices.is_empty());
-            assert_eq!(n_blks, expected_n_blks);
-        }
-
-        for n_blks in [1_usize, 3] {
-            let free = equipment_free_geometry(&[n_blks])
-                .into_iter()
-                .next()
-                .unwrap();
-            assert_equipment_free(free, n_blks);
-
-            let dims = GeometryDims {
-                n_blks,
-                ..GeometryDims::default()
-            };
-            let production = geometry(&dims, vec![], &[], vec![]);
-            assert_equipment_free(production, n_blks);
-        }
     }
 }

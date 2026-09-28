@@ -86,8 +86,8 @@ fn put_range(buf: &mut Vec<u8>, range: &Range<usize>) {
 }
 
 /// Group keys [`encode_lp_facts`] writes, guaranteed present even for zero
-/// stages — the fixed schema [`encode_stage_templates_facts`]'s 24-key
-/// contract depends on.
+/// stages — the fixed key set [`encode_stage_templates_facts`]'s contract
+/// depends on.
 const LP_FACT_GROUP_KEYS: [&str; 7] = [
     "lp.dims",
     "lp.sparsity",

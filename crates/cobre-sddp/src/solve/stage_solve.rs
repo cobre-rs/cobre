@@ -445,12 +445,14 @@ mod tests {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let stage_ctx_fixture = StageContextFixture::new(&[], &[], &[]);
         SolverWorkspace::new(
             0,
             0,
             solver,
             PatchBuffer::new(&state, &[], &[]),
             &training_ctx,
+            &stage_ctx_fixture.ctx(),
             WorkspaceSizing::default(),
         )
     }

@@ -128,14 +128,8 @@ impl IterationScratch {
 
         let lb_scratch = LbEvalScratch::new();
 
-        // The LB path is always stage 0, so `n_load_buses`/`max_blocks`/pool-capacity
-        // sizing hints are irrelevant; `ScratchBuffers` fields grow on demand.
-        let lb_noise_scratch = ScratchBuffers::new(WorkspaceSizing {
-            hydro_count: training_ctx.state.hydro_count,
-            max_par_order: training_ctx.state.max_par_order,
-            downstream_par_order: stage_ctx.downstream_par_order,
-            ..WorkspaceSizing::default()
-        });
+        let lb_noise_scratch =
+            ScratchBuffers::new(training_ctx, stage_ctx, WorkspaceSizing::default());
 
         Self {
             patch_buf,

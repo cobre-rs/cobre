@@ -5067,7 +5067,7 @@ fn cut_coefficient_sign_convention_slot_zero_k2() {
 
 use crate::cut_selection::{CutMetadata, CutSelectionStrategy};
 use crate::dcs::DcsParams;
-use crate::workspace::WorkspaceSizing;
+use crate::workspace::{NoisePreallocation, WorkspaceSizing};
 use cobre_solver::ActiveSolver;
 
 /// Cut-free successor core for a 1-hydro, no-lag stage:
@@ -5134,19 +5134,10 @@ fn dcs_two_stage_fcf() -> FutureCostFunction {
 /// Single real-solver (`ActiveSolver`) workspace sized for `n_state = 1`.
 fn dcs_active_workspace() -> Vec<SolverWorkspace<ActiveSolver>> {
     let sizing = WorkspaceSizing {
-        hydro_count: 1,
-        max_par_order: 0,
-        n_load_buses: 0,
-        max_blocks: 0,
-        n_buckets: 0,
-        downstream_par_order: 0,
         max_openings: 1,
         initial_pool_capacity: 16,
-        n_state: 1,
         max_local_fwd: 1,
-        noise_dim: 1,
-        n_anticipated: 0,
-        k_max: 0,
+        noise: NoisePreallocation::StochasticDim,
     };
     let solver = ActiveSolver::new().expect("ActiveSolver::new()");
     let state = test_support::state_layout(1, 0);
@@ -5183,6 +5174,7 @@ fn dcs_active_workspace() -> Vec<SolverWorkspace<ActiveSolver>> {
         solver,
         PatchBuffer::new(&state, &[], &[]),
         &training_ctx,
+        &StageContextFixture::new(&[], &[], &[]).ctx(),
         sizing,
     )]
 }

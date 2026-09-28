@@ -417,7 +417,6 @@ fn ac_train_completes_with_iteration_limit() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -499,7 +498,6 @@ fn ac_train_returns_partial_on_infeasible() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -594,7 +592,6 @@ fn ac_train_emits_correct_event_sequence() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -773,7 +770,6 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 4,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(1),
         },
         cut_management: CutManagementConfig {
@@ -924,7 +920,6 @@ fn ac_train_result_fields_populated() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1006,7 +1001,6 @@ fn ac_train_with_no_event_sender() {
             max_iterations: 2,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -1085,7 +1079,6 @@ fn ac_total_time_ms_is_non_negative() {
             max_iterations: 1,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(1),
         },
         cut_management: CutManagementConfig {
@@ -1172,7 +1165,6 @@ fn cut_selection_none_skips_step() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1265,7 +1257,6 @@ fn cut_selection_level1_runs_at_frequency() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1370,7 +1361,6 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -1488,7 +1478,6 @@ fn existing_train_tests_pass_with_none() {
             max_iterations: 3,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(3),
         },
         cut_management: CutManagementConfig {
@@ -1572,7 +1561,6 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1677,7 +1665,6 @@ fn start_iteration_resumes_from_offset() {
             max_iterations: 5,
             start_iteration: 3,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1761,7 +1748,6 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
             max_iterations: 5,
             start_iteration: 5,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -2499,7 +2485,6 @@ fn template_freeze_event_emitted() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {

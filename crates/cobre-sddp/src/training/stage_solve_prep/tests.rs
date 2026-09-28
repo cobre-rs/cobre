@@ -36,7 +36,7 @@ use crate::{
         StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
         geometry_with_load_balance, state_layout, study_dims,
     },
-    workspace::{ScratchBuffers, WorkspaceSizing},
+    workspace::{NoisePreallocation, ScratchBuffers, WorkspaceSizing},
 };
 
 /// Single-hydro, single-stage [`StochasticContext`] with a real PAR(0) inflow
@@ -232,19 +232,10 @@ fn unbounded_state_box(n_state: usize) -> StateBox {
 
 fn minimal_sizing() -> WorkspaceSizing {
     WorkspaceSizing {
-        hydro_count: 1,
-        max_par_order: 0,
-        n_load_buses: 0,
-        max_blocks: 0,
-        n_buckets: 0,
-        downstream_par_order: 0,
         max_openings: 1,
         initial_pool_capacity: 1,
-        n_state: 1,
         max_local_fwd: 1,
-        noise_dim: 1,
-        n_anticipated: 0,
-        k_max: 0,
+        noise: NoisePreallocation::StochasticDim,
     }
 }
 
@@ -340,7 +331,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
 
     // ---- reference: the literal open-coded forward block for this fixture
     // (no load buses, no anticipated thermals, no NCS in scope) ----
-    let mut reference_scratch = ScratchBuffers::new(sizing);
+    let mut reference_scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     let mut reference_solver = RecordingSolver::default();
     let mut reference_patch_buf = PatchBuffer::new(&state, &[], &[]);
 
@@ -371,7 +362,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     );
 
     // ---- owner: StageSolvePrep::run configured the way forward would ----
-    let mut owner_scratch = ScratchBuffers::new(sizing);
+    let mut owner_scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     let mut owner_solver = RecordingSolver::default();
     let mut owner_patch_buf = PatchBuffer::new(&state, &[], &[]);
     let params = StageSolvePrepParams {
@@ -582,19 +573,10 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
 
     let raw_noise = vec![0.37_f64];
     let sizing = WorkspaceSizing {
-        hydro_count: 0,
-        max_par_order: 0,
-        n_load_buses: 0,
-        max_blocks: 0,
-        n_buckets: 0,
-        downstream_par_order: 0,
         max_openings: 1,
         initial_pool_capacity: 1,
-        n_state: 0,
         max_local_fwd: 1,
-        noise_dim: 1,
-        n_anticipated: 0,
-        k_max: 0,
+        noise: NoisePreallocation::StochasticDim,
     };
     let params = StageSolvePrepParams {
         state_source: StateSource(&[]),
@@ -605,7 +587,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     // ---- reference: transform_ncs_noise -> build indices -> gather -> set,
     // called directly (the pre-collapse inline pattern), independent of
     // StageSolvePrep::run's own wiring ----
-    let mut reference_scratch = ScratchBuffers::new(sizing);
+    let mut reference_scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     let mut reference_solver = RecordingSolver::default();
     transform_ncs_noise(
         &raw_noise,
@@ -638,7 +620,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     );
 
     // ---- owner: StageSolvePrep::run's internal NCS-patch wiring ----
-    let mut owner_scratch = ScratchBuffers::new(sizing);
+    let mut owner_scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     let mut owner_solver = RecordingSolver::default();
     let mut owner_patch_buf = PatchBuffer::new(&state, &[], &[]);
     StageSolvePrep::run(
@@ -716,21 +698,12 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     // [hydro eta (unread under PreBuilt) | load eta].
     let raw_noise = vec![0.3_f64, 0.4_f64];
     let sizing = WorkspaceSizing {
-        hydro_count: 1,
-        max_par_order: 0,
-        n_load_buses: 1,
-        max_blocks: 1,
-        n_buckets: 0,
-        downstream_par_order: 0,
         max_openings: 1,
         initial_pool_capacity: 1,
-        n_state: 1,
         max_local_fwd: 1,
-        noise_dim: 2,
-        n_anticipated: 0,
-        k_max: 0,
+        noise: NoisePreallocation::StochasticDim,
     };
-    let mut scratch = ScratchBuffers::new(sizing);
+    let mut scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     // Sentinel pre-fill: PreBuilt must leave this untouched, since
     // transform_inflow_noise clears its target buffer before refilling it.
     scratch.z_inflow_rhs_buf = vec![222.0];
@@ -766,7 +739,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     // Reference: transform_load_noise -> fill_load_patches, called directly —
     // the load patch is unconditional, so it must match this exactly even
     // under PreBuilt.
-    let mut reference_scratch = ScratchBuffers::new(sizing);
+    let mut reference_scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     transform_load_noise(
         &raw_noise,
         &stochastic,

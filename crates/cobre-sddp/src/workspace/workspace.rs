@@ -14,7 +14,7 @@ use crate::SddpError::Validation;
 use crate::backward::{OpeningOutcome, StagedCut};
 use crate::context::{StageContext, TrainingContext};
 use crate::dcs::DcsSolveScratch;
-use crate::lp::builder::PatchBuffer;
+use crate::lp::builder::{PatchBuffer, StageGeometry};
 use crate::risk_measure::{BackwardOutcome, RiskMeasureScratch};
 use crate::setup::{NodeId, NodePos};
 use crate::solve::partition;
@@ -322,55 +322,45 @@ impl CapturedBasis {
     }
 }
 
-/// Sizing parameters shared by [`SolverWorkspace`], [`WorkspacePool`], and
-/// `ScratchBuffers` constructors.
+/// Execution-count sizing hints shared by [`SolverWorkspace`], [`WorkspacePool`],
+/// and `ScratchBuffers` constructors.
 ///
 /// Grouping these dimensions into one struct keeps constructor argument counts
-/// within the clippy budget; every workspace allocates a [`PatchBuffer`],
-/// `ScratchBuffers`, and `BackwardAccumulators` from exactly these values.
+/// within the clippy budget. Every study-shape count these constructors need
+/// (hydro count, PAR order, load buses, block counts, bucket/anticipated
+/// counts, `n_state`, the downstream PAR order) is read from the
+/// `training_ctx`/`stage_ctx` owners each constructor also takes; this struct
+/// carries only counts with no other owner.
 ///
 /// Any dimension may be `0`: the corresponding buffer starts empty and grows
-/// on-demand via the growth-only resize semantics. Pass `0` for the backward
-/// fields (`max_openings`, `initial_pool_capacity`, `n_state`) on
-/// simulation-only workspaces, and for the forward fields (`max_local_fwd`,
-/// `noise_dim`) on backward-only or simulation-only workspaces.
+/// on-demand via the growth-only resize semantics. Pass `0` for
+/// `max_openings`/`initial_pool_capacity` on simulation-only workspaces, and
+/// for `max_local_fwd` on backward-only or simulation-only workspaces.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WorkspaceSizing {
-    /// Number of hydro plants in the study.
-    pub hydro_count: usize,
-    /// Maximum PAR order across all hydro plants.
-    pub max_par_order: usize,
-    /// Number of load buses (0 if no stochastic load).
-    pub n_load_buses: usize,
-    /// Maximum number of blocks per stage (0 if no stochastic load).
-    pub max_blocks: usize,
-    /// Global travel-time bucket count; pre-sizes the `PatchBuffer`
-    /// column-bound region's bucket slots. `0` when no arc is declared.
-    pub n_buckets: usize,
-    /// PAR order of the downstream (coarser) resolution; `0` for
-    /// uniform-resolution studies (no downstream transition).
-    pub downstream_par_order: usize,
     /// Maximum openings across all successor stages; pre-sizes
     /// `BackwardAccumulators::outcomes`.
     pub max_openings: usize,
     /// Initial cut pool capacity; pre-sizes
     /// `BackwardAccumulators::slot_increments`.
     pub initial_pool_capacity: usize,
-    /// State dimension `n_state`; pre-sizes
-    /// `BackwardAccumulators::agg_coefficients`.
-    pub n_state: usize,
     /// Maximum forward-pass scenarios assigned to this rank; pre-sizes
     /// `ScratchBuffers::trajectory_costs_buf`.
     pub max_local_fwd: usize,
-    /// Noise dimension for forward-pass sampling; pre-sizes
-    /// `ScratchBuffers::raw_noise_buf`.
-    pub noise_dim: usize,
-    /// Number of anticipated thermals (A); pre-sizes the `PatchBuffer`
-    /// anticipated region. `0` when there are no anticipated thermals.
-    pub n_anticipated: usize,
-    /// Maximum lead-time horizon across anticipated thermals (K); with
-    /// `n_anticipated`, sizes the anticipated-state ring buffer.
-    pub k_max: usize,
+    /// Whether `ScratchBuffers::raw_noise_buf`/`corr_scratch` pre-reserve to
+    /// the study's noise dimension, or start empty and grow on demand.
+    pub noise: NoisePreallocation,
+}
+
+/// [`WorkspaceSizing::noise`]'s two preallocation strategies for
+/// `ScratchBuffers::raw_noise_buf`/`corr_scratch`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NoisePreallocation {
+    /// Start empty; grow on first use.
+    #[default]
+    OnDemand,
+    /// Pre-reserve to `TrainingContext::stochastic`'s noise dimension.
+    StochasticDim,
 }
 
 /// Pre-allocated accumulators for the backward pass trial-point loop.
@@ -750,6 +740,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
         solver: S,
         patch_buf: PatchBuffer,
         training_ctx: &TrainingContext<'_>,
+        stage_ctx: &StageContext<'_>,
         sizing: WorkspaceSizing,
     ) -> Self {
         Self {
@@ -758,7 +749,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             solver: ProfiledSolver::new(solver),
             patch_buf,
             current_state: Vec::with_capacity(training_ctx.state.n_state),
-            scratch: ScratchBuffers::new(sizing),
+            scratch: ScratchBuffers::new(training_ctx, stage_ctx, sizing),
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::new(
                 sizing.max_openings,
@@ -771,23 +762,30 @@ impl<S: SolverInterface> SolverWorkspace<S> {
 }
 
 impl ScratchBuffers {
-    /// Allocate scratch buffers sized for the given per-worker parameters.
+    /// Allocate scratch buffers sized from the study owners `training_ctx`/
+    /// `stage_ctx` carry, plus the execution-count hints in `sizing`.
     #[must_use]
-    pub fn new(s: WorkspaceSizing) -> Self {
+    pub fn new(
+        training_ctx: &TrainingContext<'_>,
+        stage_ctx: &StageContext<'_>,
+        sizing: WorkspaceSizing,
+    ) -> Self {
+        let hydro_count = training_ctx.state.hydro_count;
+        let max_par_order = training_ctx.state.max_par_order;
+        let downstream_par_order = training_ctx.study_dims.downstream_par_order;
+        let load_row_capacity = stage_ctx.load_bus_indices.len()
+            * StageGeometry::max_blocks(stage_ctx.geometry_per_stage);
         let WorkspaceSizing {
-            hydro_count,
-            max_par_order,
-            n_load_buses,
-            max_blocks,
-            downstream_par_order,
             initial_pool_capacity,
             max_local_fwd,
-            noise_dim,
-            // `n_anticipated`/`k_max` size the `PatchBuffer` anticipated region
-            // (constructed separately); `n_state` and `max_openings` size
-            // CapturedBasis / BackwardAccumulators — none size `ScratchBuffers`.
+            noise,
+            // `max_openings` sizes `BackwardAccumulators`, not `ScratchBuffers`.
             ..
-        } = s;
+        } = sizing;
+        let noise_dim = match noise {
+            NoisePreallocation::StochasticDim => training_ctx.stochastic.dim(),
+            NoisePreallocation::OnDemand => 0,
+        };
         Self {
             inflow_m3s_buf: Vec::with_capacity(hydro_count),
             lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
@@ -801,7 +799,7 @@ impl ScratchBuffers {
             ncs_col_upper_active_buf: Vec::new(),
             last_ncs_col_start: usize::MAX,
             ncs_col_upper_extract_buf: Vec::new(),
-            load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+            load_rhs_buf: Vec::with_capacity(load_row_capacity),
             row_lower_buf: Vec::new(),
             z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
             effective_eta_buf: Vec::with_capacity(hydro_count),
@@ -860,7 +858,15 @@ impl<S: SolverInterface> WorkspacePool<S> {
             stage_ctx.load_bus_indices,
             stage_ctx.geometry_per_stage,
         );
-        SolverWorkspace::new(rank, worker_id, solver, patch_buf, training_ctx, sizing)
+        SolverWorkspace::new(
+            rank,
+            worker_id,
+            solver,
+            patch_buf,
+            training_ctx,
+            stage_ctx,
+            sizing,
+        )
     }
 
     /// Construct a pool of `n_threads` independently allocated workspaces, each
@@ -1135,8 +1141,8 @@ mod tests {
         BasisStore, ByNodeScratch, CapturedBasis, NodeId, NodePos, ScratchBuffers, SolverWorkspace,
         WorkspacePool, WorkspaceSizing,
     };
-    use crate::context::{StageContext, TrainingContext};
-    use crate::test_support::state_layout;
+    use crate::context::StageContext;
+    use crate::test_support::{TrainingContextFixture, state_layout};
     use cobre_solver::{
         Basis, BasisStatus, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
@@ -1185,65 +1191,8 @@ mod tests {
         assert_send::<SolverWorkspace<MockSolver>>();
     }
 
-    /// Owns the pieces a [`TrainingContext`] borrows, so pool-sizing tests can
-    /// lend one without threading a `stochastic`/`node_graph`/`study_dims`
-    /// triple through every call site.
-    struct TestTrainingCtx {
-        state: crate::lp::indexer::StateSpace,
-        stochastic: cobre_stochastic::StochasticContext,
-        node_graph: crate::setup::node_graph::NodeGraph,
-        study_dims: crate::lp::indexer::StudyDimensions,
-        cut_state_layouts: Vec<crate::lp::indexer::CutStateProjection>,
-        horizon: crate::horizon_mode::HorizonMode,
-        inflow_method: crate::InflowNonNegativityMethod,
-        initial_state: Vec<f64>,
-    }
-
-    impl TestTrainingCtx {
-        fn new(state: crate::lp::indexer::StateSpace) -> Self {
-            let stochastic = crate::test_support::hydro_free_stochastic_context(1, 1);
-            let node_graph = crate::test_support::chain_node_graph(&stochastic);
-            let cut_state_layouts = crate::test_support::all_enabled_cut_state_layouts(&state, 1);
-            Self {
-                stochastic,
-                node_graph,
-                study_dims: crate::test_support::study_dims(),
-                cut_state_layouts,
-                horizon: crate::horizon_mode::HorizonMode::Finite { num_stages: 1 },
-                inflow_method: crate::InflowNonNegativityMethod::None,
-                initial_state: Vec::new(),
-                state,
-            }
-        }
-
-        fn training_ctx(&self) -> TrainingContext<'_> {
-            TrainingContext {
-                horizon: &self.horizon,
-                state: &self.state,
-                cut_state_layouts: &self.cut_state_layouts,
-                study_dims: &self.study_dims,
-                inflow_method: &self.inflow_method,
-                stochastic: &self.stochastic,
-                initial_state: &self.initial_state,
-                inflow_scheme: cobre_core::scenario::SamplingScheme::InSample,
-                load_scheme: cobre_core::scenario::SamplingScheme::InSample,
-                ncs_scheme: cobre_core::scenario::SamplingScheme::InSample,
-                stages: &[],
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                lag_accum_seed: &[],
-                lag_weight_seed: &[],
-                dcs: None,
-                node_graph: &self.node_graph,
-            }
-        }
-    }
-
     /// A [`StageContext`] over empty slices, for pool-sizing tests that never
-    /// exercise load buses or geometry (every `sizing()` fixture below sets
-    /// `n_load_buses: 0`).
+    /// exercise load buses or geometry.
     fn empty_stage_ctx(downstream_par_order: usize) -> StageContext<'static> {
         StageContext {
             templates: &[],
@@ -1265,30 +1214,15 @@ mod tests {
         }
     }
 
-    fn sizing(
-        hydro_count: usize,
-        max_par_order: usize,
-        downstream_par_order: usize,
-    ) -> WorkspaceSizing {
-        WorkspaceSizing {
-            hydro_count,
-            max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order,
-            ..WorkspaceSizing::default()
-        }
-    }
-
     #[test]
     fn test_workspace_pool_size() {
-        let ctx = TestTrainingCtx::new(state_layout(3, 2));
+        let ctx = TrainingContextFixture::new(state_layout(3, 2));
         let pool = WorkspacePool::new(
             0,
             4,
             &ctx.training_ctx(),
             &empty_stage_ctx(0),
-            sizing(3, 2, 0),
+            WorkspaceSizing::default(),
             || MockSolver,
         );
         assert_eq!(pool.workspaces.len(), 4);
@@ -1298,13 +1232,13 @@ mod tests {
     fn test_workspace_buffer_dimensions() {
         // N=3, L=2, M=0, B=0 → patch_buf length = M*B + N = 0 + 3 = 3
         // n_state=9 → current_state capacity = 9
-        let ctx = TestTrainingCtx::new(state_layout(3, 2));
+        let ctx = TrainingContextFixture::new(state_layout(3, 2));
         let pool = WorkspacePool::new(
             0,
             4,
             &ctx.training_ctx(),
             &empty_stage_ctx(0),
-            sizing(3, 2, 0),
+            WorkspaceSizing::default(),
             || MockSolver,
         );
         for ws in &pool.workspaces {
@@ -1316,13 +1250,13 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_zero_threads() {
-        let ctx = TestTrainingCtx::new(state_layout(3, 2));
+        let ctx = TrainingContextFixture::new(state_layout(3, 2));
         let pool = WorkspacePool::new(
             0,
             0,
             &ctx.training_ctx(),
             &empty_stage_ctx(0),
-            sizing(3, 2, 0),
+            WorkspaceSizing::default(),
             || MockSolver,
         );
         assert_eq!(pool.workspaces.len(), 0);
@@ -1330,13 +1264,13 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_single_thread() {
-        let ctx = TestTrainingCtx::new(state_layout(0, 0));
+        let ctx = TrainingContextFixture::new(state_layout(0, 0));
         let pool = WorkspacePool::new(
             0,
             1,
             &ctx.training_ctx(),
             &empty_stage_ctx(0),
-            sizing(0, 0, 0),
+            WorkspaceSizing::default(),
             || MockSolver,
         );
         assert_eq!(pool.workspaces.len(), 1);
@@ -1348,13 +1282,13 @@ mod tests {
         // Factory is called n_threads times; each workspace gets its own instance.
         // Verify by checking pool size matches factory call expectation.
         let n = 6;
-        let ctx = TestTrainingCtx::new(state_layout(1, 0));
+        let ctx = TrainingContextFixture::new(state_layout(1, 0));
         let pool = WorkspacePool::new(
             0,
             n,
             &ctx.training_ctx(),
             &empty_stage_ctx(0),
-            sizing(1, 0, 0),
+            WorkspaceSizing::default(),
             || MockSolver,
         );
         assert_eq!(pool.workspaces.len(), n);
@@ -1364,7 +1298,7 @@ mod tests {
     fn test_backward_accumulators_opening_outcomes_buf_starts_empty() {
         // A nonzero max_openings must not eagerly build opening_outcomes_buf —
         // the default ByScenario scheduler never touches it (zero opening-block footprint).
-        let ctx = TestTrainingCtx::new(state_layout(3, 2));
+        let ctx = TrainingContextFixture::new(state_layout(3, 2));
         let pool = WorkspacePool::new(
             0,
             2,
@@ -1372,7 +1306,7 @@ mod tests {
             &empty_stage_ctx(0),
             WorkspaceSizing {
                 max_openings: 5,
-                ..sizing(3, 2, 0)
+                ..WorkspaceSizing::default()
             },
             || MockSolver,
         );
@@ -1386,14 +1320,12 @@ mod tests {
 
     #[test]
     fn test_scratch_buffers_zero_downstream_par_order_empty_buffers() {
-        let scratch = ScratchBuffers::new(WorkspaceSizing {
-            hydro_count: 5,
-            max_par_order: 2,
-            n_load_buses: 0,
-            max_blocks: 1,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        });
+        let ctx = TrainingContextFixture::new(state_layout(5, 2)).downstream_par_order(0);
+        let scratch = ScratchBuffers::new(
+            &ctx.training_ctx(),
+            &empty_stage_ctx(0),
+            WorkspaceSizing::default(),
+        );
         assert!(
             scratch.downstream_accumulator.is_empty(),
             "downstream_accumulator must be empty when downstream_par_order=0"
@@ -1414,14 +1346,12 @@ mod tests {
 
     #[test]
     fn test_scratch_buffers_nonzero_downstream_par_order_allocates_correctly() {
-        let scratch = ScratchBuffers::new(WorkspaceSizing {
-            hydro_count: 3,
-            max_par_order: 2,
-            n_load_buses: 0,
-            max_blocks: 1,
-            downstream_par_order: 2,
-            ..WorkspaceSizing::default()
-        });
+        let ctx = TrainingContextFixture::new(state_layout(3, 2)).downstream_par_order(2);
+        let scratch = ScratchBuffers::new(
+            &ctx.training_ctx(),
+            &empty_stage_ctx(0),
+            WorkspaceSizing::default(),
+        );
         assert_eq!(
             scratch.downstream_accumulator.len(),
             3,
@@ -1446,20 +1376,13 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_propagates_downstream_par_order() {
-        let ctx = TestTrainingCtx::new(state_layout(3, 2));
+        let ctx = TrainingContextFixture::new(state_layout(3, 2)).downstream_par_order(2);
         let pool = WorkspacePool::new(
             0,
             2,
             &ctx.training_ctx(),
-            &empty_stage_ctx(2),
-            WorkspaceSizing {
-                hydro_count: 3,
-                max_par_order: 2,
-                n_load_buses: 0,
-                max_blocks: 1,
-                downstream_par_order: 2,
-                ..WorkspaceSizing::default()
-            },
+            &empty_stage_ctx(0),
+            WorkspaceSizing::default(),
             || MockSolver,
         );
         for ws in &pool.workspaces {
@@ -1724,7 +1647,7 @@ mod tests {
 
     #[test]
     fn test_recon_slot_lookup_presized() {
-        let ctx = TestTrainingCtx::new(state_layout(0, 0));
+        let ctx = TrainingContextFixture::new(state_layout(0, 0));
         let pool = WorkspacePool::new(
             0,
             4,
@@ -1765,7 +1688,7 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_assigns_sequential_worker_ids() {
-        let ctx = TestTrainingCtx::new(state_layout(0, 0));
+        let ctx = TrainingContextFixture::new(state_layout(0, 0));
         let pool = WorkspacePool::new(
             /* rank = */ 3,
             /* n_workers = */ 5,
@@ -2770,7 +2693,7 @@ mod tests {
     fn workspace_solver_initialised_with_default_profile() {
         use cobre_solver::HighsProfile;
 
-        let ctx = TestTrainingCtx::new(state_layout(0, 0));
+        let ctx = TrainingContextFixture::new(state_layout(0, 0));
         let pool = WorkspacePool::new(
             0,
             2,
@@ -2794,6 +2717,7 @@ mod tests {
             MockSolver,
             PatchBuffer::new(ctx.training_ctx().state, &[], &[]),
             &ctx.training_ctx(),
+            &empty_stage_ctx(0),
             WorkspaceSizing::default(),
         );
         assert_eq!(

@@ -1718,7 +1718,7 @@ mod dcs_simulation {
     use crate::setup::node_graph::StageIdx;
     use crate::simulation::types::{SimulationCostResult, SimulationStageResult};
     use crate::test_support;
-    use crate::workspace::{SolverWorkspace, WorkspaceSizing};
+    use crate::workspace::{NoisePreallocation, SolverWorkspace, WorkspaceSizing};
 
     const X_HAT: f64 = 2.0;
 
@@ -1843,19 +1843,10 @@ mod dcs_simulation {
 
     fn sim_active_workspace() -> SolverWorkspace<ActiveSolver> {
         let sizing = WorkspaceSizing {
-            hydro_count: 1,
-            max_par_order: 0,
-            n_load_buses: 0,
-            max_blocks: 0,
-            n_buckets: 0,
-            downstream_par_order: 0,
             max_openings: 1,
             initial_pool_capacity: 16,
-            n_state: 1,
             max_local_fwd: 1,
-            noise_dim: 1,
-            n_anticipated: 0,
-            k_max: 0,
+            noise: NoisePreallocation::StochasticDim,
         };
         let solver = ActiveSolver::new().expect("ActiveSolver::new()");
         let state = test_support::state_layout(1, 0);
@@ -1886,12 +1877,14 @@ mod dcs_simulation {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let stage_ctx_fixture = StageContextFixture::new(&[], &[], &[]);
         SolverWorkspace::new(
             0,
             0,
             solver,
             PatchBuffer::new(&state, &[], &[]),
             &training_ctx,
+            &stage_ctx_fixture.ctx(),
             sizing,
         )
     }
@@ -2172,7 +2165,7 @@ mod anticipated_ring_matches_forward_propagation {
     use crate::test_support::{StageContextFixture, equipment_free_geometry};
     use crate::training::forward::{StageKey, run_forward_stage};
     use crate::trajectory::TrajectoryRecord;
-    use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
+    use crate::workspace::{BasisStore, NoisePreallocation, SolverWorkspace, WorkspaceSizing};
 
     const N_STAGES: usize = 3;
 
@@ -2291,21 +2284,12 @@ mod anticipated_ring_matches_forward_propagation {
         }
     }
 
-    fn ring_sizing(n_state: usize) -> WorkspaceSizing {
+    fn ring_sizing() -> WorkspaceSizing {
         WorkspaceSizing {
-            hydro_count: 0,
-            max_par_order: 0,
-            n_load_buses: 0,
-            max_blocks: 0,
-            n_buckets: 0,
-            downstream_par_order: 0,
             max_openings: 1,
             initial_pool_capacity: 16,
-            n_state,
             max_local_fwd: 1,
-            noise_dim: 0,
-            n_anticipated: 1,
-            k_max: 2,
+            noise: NoisePreallocation::OnDemand,
         }
     }
 
@@ -2325,7 +2309,8 @@ mod anticipated_ring_matches_forward_propagation {
             SequencedSolver::new(ring_sequence(num_cols)),
             PatchBuffer::new(state, &[], &[]),
             training_ctx,
-            ring_sizing(state.n_state),
+            ctx,
+            ring_sizing(),
         );
         ws.current_state.clear();
         ws.current_state.extend_from_slice(&[10.0, 20.0]);
@@ -2388,7 +2373,8 @@ mod anticipated_ring_matches_forward_propagation {
             SequencedSolver::new(ring_sequence(num_cols)),
             PatchBuffer::new(state, &[], &[]),
             training_ctx,
-            ring_sizing(state.n_state),
+            ctx,
+            ring_sizing(),
         );
         ws.current_state.clear();
         ws.current_state.extend_from_slice(&[10.0, 20.0]);

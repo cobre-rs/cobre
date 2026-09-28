@@ -1050,7 +1050,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![100.0]);
 
         let (mut row_batch, mut lb_scratch) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch,
@@ -1092,7 +1096,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![60.0, 80.0, 100.0]);
 
         let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb,
@@ -1141,7 +1149,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![50.0, 150.0]);
 
         let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb,
@@ -1188,7 +1200,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![50.0, 150.0]);
 
         let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb,
@@ -1250,7 +1266,11 @@ mod tests {
         let mut solver = MockSolver::infeasible_on_first();
 
         let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_result,
@@ -1291,7 +1311,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![100.0]);
 
         let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_result,
@@ -1342,7 +1366,11 @@ mod tests {
             let mut solver = MockSolver::infeasible_on_first();
 
             let (mut row_batch, mut lb_scratch) = make_lb_locals();
-            let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+            let mut noise_scratch = ScratchBuffers::new(
+                &fixture.training_ctx(),
+                &fixture.ctx().ctx(),
+                WorkspaceSizing::default(),
+            );
             let mut bundle = LbEvalScratchBundle::from_scratch_fields(
                 &mut patch_buf,
                 &mut row_batch,
@@ -1385,7 +1413,11 @@ mod tests {
             let mut solver = MockSolver::with_objectives(vec![100.0]);
 
             let (mut row_batch, mut lb_scratch) = make_lb_locals();
-            let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+            let mut noise_scratch = ScratchBuffers::new(
+                &fixture.training_ctx(),
+                &fixture.ctx().ctx(),
+                WorkspaceSizing::default(),
+            );
             let mut bundle = LbEvalScratchBundle::from_scratch_fields(
                 &mut patch_buf,
                 &mut row_batch,
@@ -1433,7 +1465,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![200.0, 300.0]);
 
         let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb,
@@ -1481,7 +1517,11 @@ mod tests {
         // First call: solver returns [50, 100] → LB = 75.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
         let (mut row_batch_lb1, mut lb_scratch_lb1) = make_lb_locals();
-        let mut noise_scratch1 = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch1 = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb1 = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb1,
@@ -1503,7 +1543,11 @@ mod tests {
         // Second call: solver returns [80, 120] → LB = 100 (tighter cuts raise obj).
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
         let (mut row_batch_lb2, mut lb_scratch_lb2) = make_lb_locals();
-        let mut noise_scratch2 = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch2 = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb2 = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb2,
@@ -1552,7 +1596,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![60.0, 80.0]);
 
         let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_lb,
@@ -1600,7 +1648,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![100.0]);
 
         let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_result,
@@ -1641,7 +1693,11 @@ mod tests {
         let mut solver = MockSolver::with_objectives(vec![100.0]);
 
         let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
         let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch_result,
@@ -1880,7 +1936,7 @@ mod tests {
         };
 
         let mut patch_buf = PatchBuffer::new(&state, ctx.load_bus_indices, ctx.geometry_per_stage);
-        let mut scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut scratch = ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
         let mut objectives_buf = Vec::new();
         let actual_n_openings = stoch.opening_tree().n_openings(0);
         let mut solver =
@@ -1937,7 +1993,11 @@ mod tests {
 
         let mut row_batch = empty_row_batch();
         let mut lb_scratch = LbEvalScratch::new();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch = ScratchBuffers::new(
+            &fixture.training_ctx(),
+            &fixture.ctx().ctx(),
+            WorkspaceSizing::default(),
+        );
 
         let mut solver1 = MockSolver::with_objectives(vec![10.0]);
         {
@@ -2666,7 +2726,8 @@ mod tests {
             dcs: None,
         };
         let (mut row_batch, mut lb_scratch) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch =
+            ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
         let mut bundle = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch,
@@ -2750,7 +2811,8 @@ mod tests {
             dcs: None,
         };
         let (mut row_batch, mut lb_scratch) = make_lb_locals();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch =
+            ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
         let mut bundle = LbEvalScratchBundle::from_scratch_fields(
             &mut patch_buf,
             &mut row_batch,

@@ -633,7 +633,6 @@ fn train_simulate_write_cycle() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
@@ -803,14 +802,8 @@ fn train_simulate_write_cycle() {
         sim_solver,
         PatchBuffer::new(&fx.state, &[], &[]),
         &training_context,
-        WorkspaceSizing {
-            hydro_count: fx.state.hydro_count,
-            max_par_order: fx.state.max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        },
+        &stage_ctx,
+        WorkspaceSizing::default(),
     )];
 
     let ec = zero_energy_conversion_set(fx.n_stages);
@@ -1326,7 +1319,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             max_iterations: 1,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(1),
         },
         cut_management: CutManagementConfig {
@@ -1402,14 +1394,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         sim_solver,
         PatchBuffer::new(&state, &[], &[]),
         &training_context,
-        WorkspaceSizing {
-            hydro_count: state.hydro_count,
-            max_par_order: state.max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        },
+        &stage_ctx,
+        WorkspaceSizing::default(),
     )];
 
     let ec2 = zero_energy_conversion_set(n_stages);
@@ -1490,7 +1476,6 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
             max_iterations: 3,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
@@ -1578,14 +1563,8 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
                 sim_solver,
                 PatchBuffer::new(&fx.state, &[], &[]),
                 &training_context,
-                WorkspaceSizing {
-                    hydro_count: fx.state.hydro_count,
-                    max_par_order: fx.state.max_par_order,
-                    n_load_buses: 0,
-                    max_blocks: 0,
-                    downstream_par_order: 0,
-                    ..WorkspaceSizing::default()
-                },
+                &stage_ctx,
+                WorkspaceSizing::default(),
             )];
             let (result_tx, result_rx) = mpsc::sync_channel(4);
             simulate(

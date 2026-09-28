@@ -517,10 +517,8 @@ fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         solver,
         PatchBuffer::new(&state, &[], &[]),
         &training_ctx,
-        WorkspaceSizing {
-            hydro_count: 1,
-            ..WorkspaceSizing::default()
-        },
+        &StageContextFixture::new(&[], &[], &[]).ctx(),
+        WorkspaceSizing::default(),
     )]
 }
 
@@ -1364,10 +1362,8 @@ fn test_simulation_parallel_cost_determinism() {
                 MockSolver::always_ok(solution.clone()),
                 PatchBuffer::new(&state, &[], &[]),
                 &workspace_4_training_ctx,
-                WorkspaceSizing {
-                    hydro_count: 1,
-                    ..WorkspaceSizing::default()
-                },
+                &stage_ctx_fixture.ctx(),
+                WorkspaceSizing::default(),
             )
         })
         .collect();

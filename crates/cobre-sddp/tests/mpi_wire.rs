@@ -1710,10 +1710,8 @@ mod by_node_scratch {
             &training_ctx,
             &ctx,
             WorkspaceSizing {
-                hydro_count: 1,
                 max_openings: n_openings,
                 initial_pool_capacity: 20,
-                n_state,
                 ..WorkspaceSizing::default()
             },
             || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
@@ -1830,10 +1828,8 @@ mod by_node_scratch {
             &training_ctx,
             &ctx,
             WorkspaceSizing {
-                hydro_count: 1,
                 max_openings: n_openings,
                 initial_pool_capacity: 20,
-                n_state,
                 ..WorkspaceSizing::default()
             },
             || MockSolver::always_ok(solution_1_0(100.0, -5.0)),

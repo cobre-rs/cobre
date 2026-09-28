@@ -396,7 +396,6 @@ fn test_stochastic_load_training_completes() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
@@ -529,7 +528,6 @@ fn test_deterministic_load_training_matches_baseline() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(3),
             },
             cut_management: CutManagementConfig {
@@ -613,7 +611,6 @@ fn test_stochastic_load_seed_determinism() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(3),
             },
             cut_management: CutManagementConfig {

@@ -624,7 +624,6 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
             max_iterations: 100,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
                 mode: StoppingMode::Any,
@@ -734,7 +733,6 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
             max_iterations: 100,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
                 mode: StoppingMode::Any,
@@ -848,7 +846,6 @@ fn cost_statistics_accumulated_correctly() {
             max_iterations: 100,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
                 mode: StoppingMode::Any,
@@ -1437,7 +1434,6 @@ fn run_one_iteration(
             max_iterations: 100,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
                 mode: StoppingMode::Any,
@@ -2122,7 +2118,6 @@ fn none_method_unchanged_with_truncation_code_present() {
             max_iterations: 100,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
                 mode: StoppingMode::Any,
@@ -3187,7 +3182,7 @@ mod dcs_forward {
     use crate::test_support;
     use crate::test_support::{StageContextFixture, equipment_free_geometry};
     use crate::trajectory::TrajectoryRecord;
-    use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
+    use crate::workspace::{BasisStore, NoisePreallocation, SolverWorkspace, WorkspaceSizing};
 
     const X_HAT: f64 = 2.0;
 
@@ -3292,19 +3287,10 @@ mod dcs_forward {
 
     fn fwd_active_workspace() -> SolverWorkspace<ActiveSolver> {
         let sizing = WorkspaceSizing {
-            hydro_count: 1,
-            max_par_order: 0,
-            n_load_buses: 0,
-            max_blocks: 0,
-            n_buckets: 0,
-            downstream_par_order: 0,
             max_openings: 1,
             initial_pool_capacity: 16,
-            n_state: 1,
             max_local_fwd: 1,
-            noise_dim: 1,
-            n_anticipated: 0,
-            k_max: 0,
+            noise: NoisePreallocation::StochasticDim,
         };
         let solver = ActiveSolver::new().expect("ActiveSolver::new()");
         let state = test_support::state_layout(1, 0);
@@ -3335,12 +3321,14 @@ mod dcs_forward {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let stage_ctx_fixture = StageContextFixture::new(&[], &[], &[]);
         SolverWorkspace::new(
             0,
             0,
             solver,
             PatchBuffer::new(&state, &[], &[]),
             &training_ctx,
+            &stage_ctx_fixture.ctx(),
             sizing,
         )
     }
@@ -3770,7 +3758,7 @@ mod transit_bucket_copy_gap {
     use crate::test_support;
     use crate::test_support::StageContextFixture;
     use crate::trajectory::TrajectoryRecord;
-    use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
+    use crate::workspace::{BasisStore, NoisePreallocation, SolverWorkspace, WorkspaceSizing};
 
     /// Column layout for `N=1, L=1, B=1, A=1, K_max=1`:
     /// `[storage(0), lag0(1), bucket_out(2), ant_slot0(3), z_inflow(4),
@@ -3962,19 +3950,10 @@ mod transit_bucket_copy_gap {
 
     fn transit_bucket_workspace() -> SolverWorkspace<MockSolver> {
         let sizing = WorkspaceSizing {
-            hydro_count: 1,
-            max_par_order: 1,
-            n_load_buses: 0,
-            max_blocks: 0,
-            n_buckets: 1,
-            downstream_par_order: 0,
             max_openings: 1,
             initial_pool_capacity: 16,
-            n_state: 4,
             max_local_fwd: 1,
-            noise_dim: 1,
-            n_anticipated: 1,
-            k_max: 1,
+            noise: NoisePreallocation::StochasticDim,
         };
         let state =
             test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
@@ -4011,6 +3990,7 @@ mod transit_bucket_copy_gap {
             MockSolver::always_ok(transit_bucket_solution()),
             PatchBuffer::new(&state, &[], &[]),
             &training_ctx,
+            &StageContextFixture::new(&[], &[], &[]).ctx(),
             sizing,
         )
     }

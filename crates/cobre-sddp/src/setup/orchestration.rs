@@ -22,7 +22,9 @@ use crate::{
     },
     solve::solver_phase::SolverProfiles,
     training::{TrainingOutcome, TrainingResult},
-    workspace::{CapturedBasis, SolverWorkspace, WorkspacePool, WorkspaceSizing},
+    workspace::{
+        CapturedBasis, NoisePreallocation, SolverWorkspace, WorkspacePool, WorkspaceSizing,
+    },
 };
 
 use super::node_graph::pool_fill_basis_cache;
@@ -126,7 +128,6 @@ impl StudySetup {
                 max_iterations: self.loop_params.max_iterations,
                 start_iteration: self.loop_params.start_iteration,
                 n_fwd_threads: n_threads,
-                max_blocks: self.loop_params.max_blocks,
                 stopping_rules: self.loop_params.stopping_rules.clone(),
             },
             cut_management: CutManagementConfig {
@@ -335,23 +336,14 @@ impl StudySetup {
             &self.training_ctx(),
             &self.stage_ctx(),
             WorkspaceSizing {
-                hydro_count: self.stage_data.state.hydro_count,
-                max_par_order: self.stage_data.state.max_par_order,
-                n_load_buses: self.stage_data.stage_templates.n_load_buses(),
-                max_blocks: self.loop_params.max_blocks,
-                n_buckets: self.stage_data.state.n_buckets,
-                downstream_par_order: self.stage_data.study_dims.downstream_par_order,
                 max_openings: (0..self.stage_data.stage_templates.templates.len())
                     .map(|t| self.stochastic.opening_tree().n_openings(t))
                     .max()
                     .unwrap_or(0),
                 initial_pool_capacity: 0,
-                n_state: self.stage_data.state.n_state,
                 // Simulation-only pool: forward-worker scratch fields unused.
                 max_local_fwd: 0,
-                noise_dim: 0,
-                n_anticipated: self.stage_data.state.n_anticipated,
-                k_max: self.stage_data.state.k_max,
+                noise: NoisePreallocation::OnDemand,
             },
             solver_factory,
         )?;

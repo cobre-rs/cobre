@@ -889,7 +889,8 @@ mod lb_conformance {
             row_upper: Vec::new(),
         };
         let mut lb_scratch = LbEvalScratch::new();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch =
+            ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
 
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75 (scaled).
         // After unscaling by COST_SCALE_FACTOR (1_000_000), LB = 75_000_000.

@@ -563,7 +563,6 @@ fn run_one_deterministic_pass(
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(limit),
             },
             cut_management: CutManagementConfig {
@@ -624,7 +623,6 @@ fn train_converges_with_mock_solver() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(10),
         },
         cut_management: CutManagementConfig {
@@ -722,7 +720,6 @@ fn train_lb_monotonically_nondecreasing() {
             max_iterations: 20,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(6),
         },
         cut_management: CutManagementConfig {
@@ -809,7 +806,6 @@ fn train_emits_correct_event_sequence() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
@@ -910,7 +906,6 @@ fn train_stops_at_iteration_limit() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(3),
             },
             cut_management: CutManagementConfig {
@@ -990,7 +985,6 @@ fn train_stops_on_graceful_shutdown() {
                 max_iterations: 20,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: rules,
             },
             cut_management: CutManagementConfig {
@@ -1060,7 +1054,6 @@ fn train_propagates_infeasible_error() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(10),
             },
             cut_management: CutManagementConfig {
@@ -1140,7 +1133,6 @@ fn d17_level1_cut_selection_convergence() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(10),
         },
         cut_management: CutManagementConfig {
@@ -1286,7 +1278,6 @@ fn d17_level1_cut_selection_reconstruction() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(10),
             },
             cut_management: CutManagementConfig {
@@ -1370,7 +1361,6 @@ fn d18_lml1_cut_selection_convergence() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(10),
         },
         cut_management: CutManagementConfig {
@@ -1561,7 +1551,6 @@ fn frozen_backward_pass_smoke_test() {
                 max_iterations: n_iter,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(n_iter),
             },
             cut_management: CutManagementConfig {

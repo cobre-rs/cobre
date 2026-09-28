@@ -6,6 +6,7 @@ use super::{
 use crate::SddpError;
 use crate::block_clock::M3S_TO_HM3;
 use crate::hydro_models::{PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel};
+use crate::lp::builder::StageGeometry;
 use crate::lp::indexer::{AnticipatedPlants, StateSpace, ThermalSys};
 use crate::test_support;
 use cobre_stochastic::ExternalScenarioLibrary;
@@ -672,7 +673,7 @@ fn accessor_methods_return_expected_values() {
         setup.stage_data.stage_templates.geometry_per_stage.len(),
         n_stages
     );
-    assert!(setup.loop_params.max_blocks > 0);
+    assert!(StageGeometry::max_blocks(&setup.stage_data.stage_templates.geometry_per_stage) > 0);
 
     assert_eq!(setup.horizon.num_stages(), n_stages);
 

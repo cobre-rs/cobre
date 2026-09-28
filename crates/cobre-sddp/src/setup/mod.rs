@@ -727,8 +727,6 @@ impl StudySetup {
             ncs_max_gen,
             ncs_allow_curtailment,
         } = build_ncs_entity_data(system, &stage_templates, &stochastic)?;
-        let max_blocks = StageGeometry::max_blocks(&stage_templates.geometry_per_stage);
-
         let pumping_consumption_mw_per_m3s = build_pumping_consumption(system);
         let contract_prices_per_stage =
             build_contract_prices_per_stage(system, &stage_templates.geometry_per_stage);
@@ -791,7 +789,6 @@ impl StudySetup {
                 training_enumerated,
                 max_iterations,
                 start_iteration: 0,
-                max_blocks,
                 stopping_rules: stopping_rule_set,
             },
             simulation_config: SimulationConfig {

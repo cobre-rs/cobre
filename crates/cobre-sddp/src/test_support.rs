@@ -48,6 +48,7 @@ use crate::StudySetup;
 use crate::context::{StageContext, TrainingContext};
 use crate::cut::pool::CutPool;
 use crate::error::SddpError;
+use crate::horizon_mode::HorizonMode;
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, FphaPlane, PrepareHydroModelsResult, ProductionModelSet,
     ResolvedProductionModel,
@@ -848,6 +849,74 @@ impl<'a> StageContextFixture<'a> {
             stage_lag_transitions: self.stage_lag_transitions,
             noise_group_ids: self.noise_group_ids,
             downstream_par_order: self.downstream_par_order,
+        }
+    }
+}
+
+/// Owns the pieces a [`TrainingContext`] borrows, so a test can lend one
+/// without threading a `stochastic`/`node_graph`/`study_dims` triple through
+/// every call site.
+pub struct TrainingContextFixture {
+    state: StateSpace,
+    stochastic: StochasticContext,
+    node_graph: NodeGraph,
+    study_dims: StudyDimensions,
+    cut_state_layouts: Vec<CutStateProjection>,
+    horizon: HorizonMode,
+    inflow_method: crate::InflowNonNegativityMethod,
+    initial_state: Vec<f64>,
+}
+
+impl TrainingContextFixture {
+    /// Single-stage, hydro-free stochastic context and chain node graph;
+    /// `state` supplies every state-defining dimension.
+    #[must_use]
+    pub fn new(state: StateSpace) -> Self {
+        let stochastic = hydro_free_stochastic_context(1, 1);
+        let node_graph = chain_node_graph(&stochastic);
+        let cut_state_layouts = all_enabled_cut_state_layouts(&state, 1);
+        Self {
+            stochastic,
+            node_graph,
+            study_dims: study_dims(),
+            cut_state_layouts,
+            horizon: HorizonMode::Finite { num_stages: 1 },
+            inflow_method: crate::InflowNonNegativityMethod::None,
+            initial_state: Vec::new(),
+            state,
+        }
+    }
+
+    /// Sets [`StudyDimensions::downstream_par_order`] on the lent context.
+    #[must_use]
+    pub fn downstream_par_order(mut self, v: usize) -> Self {
+        self.study_dims.downstream_par_order = v;
+        self
+    }
+
+    /// Lends a [`TrainingContext`] borrowing this fixture's fields.
+    #[must_use]
+    pub fn training_ctx(&self) -> TrainingContext<'_> {
+        TrainingContext {
+            horizon: &self.horizon,
+            state: &self.state,
+            cut_state_layouts: &self.cut_state_layouts,
+            study_dims: &self.study_dims,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+            node_graph: &self.node_graph,
         }
     }
 }
@@ -2764,27 +2833,10 @@ fn capture_patched_node_template_with_raw_noise(
     };
 
     let space = &setup.stage_data.state;
-    let n_load_buses = setup.stage_data.stage_templates.n_load_buses();
-    let max_blocks = setup.loop_params.max_blocks;
     let ctx = setup.stage_ctx();
     let mut patch_buf = PatchBuffer::new(space, ctx.load_bus_indices, ctx.geometry_per_stage);
-    let mut scratch = ScratchBuffers::new(WorkspaceSizing {
-        hydro_count: space.hydro_count,
-        max_par_order: space.max_par_order,
-        n_load_buses,
-        max_blocks,
-        n_buckets: space.n_buckets,
-        downstream_par_order: setup.stage_data.study_dims.downstream_par_order,
-        max_openings: 0,
-        initial_pool_capacity: 0,
-        n_state: space.n_state,
-        max_local_fwd: 0,
-        noise_dim: 0,
-        n_anticipated: space.n_anticipated,
-        k_max: space.k_max,
-    });
-
     let training_ctx = setup.training_ctx();
+    let mut scratch = ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
     let params = StageSolvePrepParams {
         state_source: StateSource(incoming_state),
         inflow_noise: InflowNoise::Transform,
@@ -2847,12 +2899,8 @@ pub fn no_cut_root_lower_bound<S: SolverInterface>(
         row_lower: Vec::new(),
         row_upper: Vec::new(),
     };
-    let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing {
-        hydro_count: state.hydro_count,
-        max_par_order: state.max_par_order,
-        downstream_par_order: stage_ctx.downstream_par_order,
-        ..WorkspaceSizing::default()
-    });
+    let mut noise_scratch =
+        ScratchBuffers::new(&training_ctx, &stage_ctx, WorkspaceSizing::default());
     let mut lb_scratch = LbEvalScratch::new();
     let mut bundle = LbEvalScratchBundle::from_scratch_fields(
         &mut patch_buf,

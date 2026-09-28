@@ -1279,7 +1279,6 @@ mod determinism {
                 max_iterations: n_iterations,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(n_iterations),
             },
             cut_management: CutManagementConfig {
@@ -1406,6 +1405,9 @@ mod determinism {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
+        let geometry = vec![three_hydro_one_bus_geometry(); fx.n_stages];
+        let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let mut workspaces: Vec<SolverWorkspace<MockSolver3H>> = (0..n_workspaces)
             .map(|idx| {
                 SolverWorkspace::new(
@@ -1414,14 +1416,8 @@ mod determinism {
                     MockSolver3H::new(100.0),
                     PatchBuffer::new(&fx.state, &[], &[]),
                     &sim_training_ctx,
-                    WorkspaceSizing {
-                        hydro_count: fx.state.hydro_count,
-                        max_par_order: fx.state.max_par_order,
-                        n_load_buses: 0,
-                        max_blocks: 0,
-                        downstream_par_order: 0,
-                        ..WorkspaceSizing::default()
-                    },
+                    &stage_ctx_fixture.ctx(),
+                    WorkspaceSizing::default(),
                 )
             })
             .collect();
@@ -1437,9 +1433,6 @@ mod determinism {
             .build()
             .unwrap();
 
-        let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-        let geometry = vec![three_hydro_one_bus_geometry(); fx.n_stages];
-        let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let cost_buffer = pool
             .install(|| {
                 simulate(

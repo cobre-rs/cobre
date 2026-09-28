@@ -59,7 +59,7 @@ use crate::{
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_GRACEFUL_SHUTDOWN,
     training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
-    workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    workspace::{BasisStore, NoisePreallocation, WorkspacePool, WorkspaceSizing},
 };
 
 // ---------------------------------------------------------------------------
@@ -199,19 +199,10 @@ where
             training_ctx,
             stage_ctx,
             WorkspaceSizing {
-                hydro_count: state.hydro_count,
-                max_par_order: state.max_par_order,
-                n_load_buses: stage_ctx.load_bus_indices.len(),
-                max_blocks: config.loop_config.max_blocks,
-                n_buckets: state.n_buckets,
-                downstream_par_order: stage_ctx.downstream_par_order,
                 max_openings,
                 initial_pool_capacity: max_pool_capacity,
-                n_state: ranks.n_state,
                 max_local_fwd: ranks.max_local_fwd,
-                noise_dim: training_ctx.stochastic.dim(),
-                n_anticipated: state.n_anticipated,
-                k_max: state.k_max,
+                noise: NoisePreallocation::StochasticDim,
             },
             solver_factory,
         )
@@ -1894,7 +1885,6 @@ mod tests {
                 max_iterations,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit_rules(limit),
             },
             cut_management: CutManagementConfig {

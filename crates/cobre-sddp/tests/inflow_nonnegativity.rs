@@ -502,14 +502,6 @@ fn train_fixture(
     let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
     let comm = StubComm;
 
-    let block_counts: Vec<usize> = fx
-        .stage_templates
-        .block_hours_per_stage
-        .iter()
-        .map(Vec::len)
-        .collect();
-    let max_blocks = block_counts.iter().copied().max().unwrap_or(1);
-
     let state_boxes = permissive_state_boxes(fx.state.n_state, n_stages);
     let stage_ctx_fixture = base_stage_context(fx, &state_boxes);
     let stage_ctx = stage_ctx_fixture.ctx();
@@ -522,7 +514,6 @@ fn train_fixture(
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks,
                 stopping_rules: StoppingRuleSet {
                     rules: vec![StoppingRule::IterationLimit { limit: iterations }],
                     mode: StoppingMode::Any,
@@ -606,20 +597,17 @@ fn simulate_fixture(
         lag_weight_seed: &[],
         dcs: None,
     };
+    let state_boxes_sim = permissive_state_boxes(fx.state.n_state, N_STAGES);
+    let stage_ctx_fixture_sim = base_stage_context(fx, &state_boxes_sim);
+    let stage_ctx_sim = stage_ctx_fixture_sim.ctx();
     let mut sim_workspaces = vec![SolverWorkspace::new(
         0,
         0,
         ActiveSolver::new().expect("ActiveSolver::new must succeed"),
         PatchBuffer::new(&fx.state, &[], &[]),
         &sim_training_ctx,
-        WorkspaceSizing {
-            hydro_count: fx.state.hydro_count,
-            max_par_order: fx.state.max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        },
+        &stage_ctx_sim,
+        WorkspaceSizing::default(),
     )];
     let comm = StubComm;
 
@@ -635,9 +623,6 @@ fn simulate_fixture(
         N_STAGES,
     );
 
-    let state_boxes_sim = permissive_state_boxes(fx.state.n_state, N_STAGES);
-    let stage_ctx_fixture_sim = base_stage_context(fx, &state_boxes_sim);
-    let stage_ctx_sim = stage_ctx_fixture_sim.ctx();
     simulate(
         &mut sim_workspaces,
         &stage_ctx_sim,

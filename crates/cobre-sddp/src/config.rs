@@ -60,9 +60,6 @@ pub struct LoopParams {
     pub max_iterations: u64,
     /// Starting iteration offset for resumed training runs.
     pub(crate) start_iteration: u64,
-    /// Maximum number of demand blocks across all stages, used for
-    /// LP column pre-sizing and workspace buffer allocation.
-    pub(crate) max_blocks: usize,
     /// Stopping rules controlling convergence.
     pub(crate) stopping_rules: StoppingRuleSet,
 }
@@ -98,9 +95,6 @@ pub struct LoopConfig {
     /// Number of rayon threads for forward-pass parallelism; `1` is single-threaded.
     pub n_fwd_threads: usize,
 
-    /// Maximum demand blocks across all stages; pre-sizes buffers and the LP column layout.
-    pub max_blocks: usize,
-
     /// Stopping rules evaluated after each iteration's lower-bound update.
     pub stopping_rules: StoppingRuleSet,
 }
@@ -113,7 +107,6 @@ impl Default for LoopConfig {
             max_iterations: 1,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 1 }],
                 mode: StoppingMode::Any,

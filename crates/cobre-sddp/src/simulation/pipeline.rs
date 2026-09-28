@@ -638,10 +638,7 @@ pub(crate) fn extract_sim_stage_result(
     inflow_m3s_buf.clear();
     inflow_m3s_buf.extend_from_slice(&unscaled_primal[state.z_inflow.clone()]);
     debug_assert_eq!(inflow_m3s_buf.len(), state.hydro_count);
-    let blk_hrs = output
-        .block_hours_per_stage
-        .get(t.0)
-        .map_or(&[][..], |v| v.as_slice());
+    let blk_hrs = output.block_hours_per_stage[t.0].as_slice();
     let (load_rows, load_n_blks) = resolve_load_rows(ctx, t);
     let row_lower_ref = build_row_lower_unscaled(
         &ctx.template(t).row_lower,
@@ -709,28 +706,16 @@ pub(crate) fn extract_sim_stage_result(
         entity_counts: output.entity_counts,
         inflow_m3s_per_hydro: inflow_m3s_buf,
         block_hours: blk_hrs,
-        generic_constraint_entries: output
-            .generic_constraint_row_entries
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
+        generic_constraint_entries: &output.generic_constraint_row_entries[t.0],
         n_ncs: ncs_n,
-        ncs_entity_ids: output
-            .ncs_entity_ids_per_stage
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
+        ncs_entity_ids: &output.ncs_entity_ids_per_stage[t.0],
         ncs_col_upper,
         n_pumping,
         pumping_consumption_mw_per_m3s: output.pumping_consumption_mw_per_m3s,
-        contract_prices: output
-            .contract_prices_per_stage
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
+        contract_prices: &output.contract_prices_per_stage[t.0],
         contract_is_import: output.contract_is_import,
         diversion_upstream: output.diversion_upstream,
-        hydro_productivities: output
-            .hydro_productivities_per_stage
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
+        hydro_productivities: &output.hydro_productivities_per_stage[t.0],
         col_scale: &ctx.template(t).col_scale,
         row_scale: &ctx.template(t).row_scale,
         cumulative_discount_factor: ctx.cumulative_discount_factor(t),

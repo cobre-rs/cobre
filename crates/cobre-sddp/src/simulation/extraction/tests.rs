@@ -240,7 +240,7 @@ fn extract_reads_binding_filling_target_slack() {
             n_blks: geom.n_blks,
             entity_counts: &make_entity_counts_2_hydros(),
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -677,7 +677,7 @@ fn extract_hydro_storage_values_from_primal() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_2_hydros(),
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -959,7 +959,7 @@ fn extract_equipment_zero_when_indexer_has_no_equipment_ranges() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_2_hydros(),
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -3144,7 +3144,7 @@ fn test_slack_extraction_with_penalty_active() {
             n_blks: indexer.n_blks,
             entity_counts: &counts,
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -3247,7 +3247,7 @@ fn test_slack_extraction_without_penalty_is_zero() {
             n_blks: indexer.n_blks,
             entity_counts: &counts,
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -4443,7 +4443,7 @@ fn stored_energy_initial_uses_v_min_offset() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -4533,7 +4533,7 @@ fn incremental_inflow_energy_uses_rho_acum() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &[50.0],
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -4618,7 +4618,7 @@ fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &[incremental_inflow],
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -4941,7 +4941,7 @@ fn stage_path_propagates_productivity_values() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &[10.0],
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],
@@ -5023,7 +5023,7 @@ fn integrated_productivity_columns_read_the_mean_evaluator_on_both_branches() {
         );
     };
 
-    // First independently-built call: zero turbine primal, empty block_hours.
+    // First independently-built call: zero turbine primal.
     let mut primal_a = make_primal_1_1(120.0, 110.0, 0.0);
     primal_a.resize(indexer.generation_below_slack.end, 0.0);
     let objective_coeffs_a = vec![0.0; primal_a.len()];
@@ -5043,7 +5043,7 @@ fn integrated_productivity_columns_read_the_mean_evaluator_on_both_branches() {
             n_blks: indexer.n_blks,
             entity_counts: &make_entity_counts_1_hydro(),
             inflow_m3s_per_hydro: &[10.0],
-            block_hours: &[],
+            block_hours: &[100.0],
             generic_constraint_entries: &[],
             n_ncs: 0,
             ncs_entity_ids: &[],

@@ -435,7 +435,7 @@ fn stage_release_rate_m3s(
         .filter(|h| h.hydro_id == hydro_id)
     {
         let Some(b) = hydro.block_id else { continue };
-        let hours = block_hours.get(b as usize).copied().unwrap_or(0.0);
+        let hours = block_hours[b as usize];
         weighted_sum += hours * (hydro.turbined_m3s + hydro.spillage_m3s);
         total_hours += hours;
     }
@@ -1283,7 +1283,7 @@ fn extract_buses(
                     .geometry
                     .load_balance_row(BusSys::new(bus_idx), BlockIdx::new(b));
                 let raw_dual = view.dual[load_row];
-                let hrs = spec.block_hours.get(b).copied().unwrap_or(0.0);
+                let hrs = spec.block_hours[b];
                 #[allow(clippy::cast_possible_truncation)]
                 SimulationBusResult {
                     stage_id,

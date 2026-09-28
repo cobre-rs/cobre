@@ -247,8 +247,7 @@ fn build_opening_tree_library(
         seasons: Vec::new(),
     };
     let effective_season_map: &SeasonMap = season_map_ref.unwrap_or(&noop_season_map);
-    let downstream_par_order =
-        derive_downstream_par_order(&study_stages, max_order, season_map_ref);
+    let downstream_par_order = derive_downstream_par_order(&study_stages, &par, season_map_ref);
     let stage_lag_transitions =
         precompute_stage_lag_transitions(&study_stages, effective_season_map, downstream_par_order);
     let derived_inflow_seeds = match study_stages.first() {
@@ -973,7 +972,7 @@ mod tests {
 
         let derived = derive_downstream_par_order(
             &fx.stages,
-            par.max_order(),
+            &par,
             fx.system.policy_graph().season_map.as_ref(),
         );
         assert_eq!(
@@ -1203,7 +1202,6 @@ mod tests {
     /// depth `3`), and only a `p >= 2` model with a mid-calendar-quarter
     /// transition can observe it.
     #[test]
-    #[ignore = "the opening tree sizes its downstream ring from the declared lag depth, not the PAR order"]
     fn opening_tree_ring_order_is_par_order_not_declared_depth() {
         let fx = build_nonaligned_ring_fixture();
         let training_source = ScenarioSource {
@@ -1238,7 +1236,7 @@ mod tests {
 
         let derived = derive_downstream_par_order(
             &fx.stages,
-            par.max_order(),
+            &par,
             fx.system.policy_graph().season_map.as_ref(),
         );
         assert_eq!(

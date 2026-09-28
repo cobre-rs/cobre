@@ -2416,14 +2416,14 @@ fn differential_lag_chain_negative_control_primary_only_advance_diverges_at_tran
 // Opening-tree ring-honoring regression (derive_downstream_par_order)
 // ---------------------------------------------------------------------------
 //
-// `build_opening_tree_library` (cobre-sddp) and the CLI's non-root rebuild
-// mirror it derive `downstream_par_order` via `derive_downstream_par_order`
-// and thread it into `standardize_historical_windows`; both used to pass a
-// literal `0` there instead. This drives the same DLC monthly->quarterly
-// fixture through `standardize_historical_windows` twice — once with the
-// derived value, once with the literal-`0` regression — and checks the
-// derived-value run against the independent forward-chain oracle while the
-// literal-`0` run reproduces the independently-computed primary-only advance.
+// `build_opening_tree_library` derives `downstream_par_order` via
+// `derive_downstream_par_order` and threads it into
+// `standardize_historical_windows`; it used to pass a literal `0` there
+// instead. This drives the same DLC monthly->quarterly fixture through
+// `standardize_historical_windows` twice — once with the derived value, once
+// with the literal-`0` regression — and checks the derived-value run against
+// the independent forward-chain oracle while the literal-`0` run reproduces
+// the independently-computed primary-only advance.
 
 #[test]
 fn opening_tree_historical_standardization_ring_aware_eta_requires_derived_downstream_par_order() {
@@ -2431,7 +2431,7 @@ fn opening_tree_historical_standardization_ring_aware_eta_requires_derived_downs
     let oracle_incoming = dlc_forward_oracle_incoming_lags(&fx);
     let naive_incoming = dlc_naive_primary_only_incoming_lags(&fx);
 
-    let derived = derive_downstream_par_order(&fx.stages, fx.par.max_order(), Some(&fx.season_map));
+    let derived = derive_downstream_par_order(&fx.stages, &fx.par, Some(&fx.season_map));
     assert_eq!(
         derived,
         fx.par.max_order(),

@@ -1794,11 +1794,9 @@ fn precompute_lag_data(
     stochastic: &StochasticContext,
     season_map_ref: &SeasonMap,
 ) -> LagData {
-    // Proxy: the global `max_par_order` stands in for the quarterly PAR order until a
-    // separate quarterly stochastic context exists.
     let downstream_par_order = derive_downstream_par_order(
         stages,
-        stochastic.par().max_order(),
+        stochastic.par(),
         system.policy_graph().season_map.as_ref(),
     );
     let stage_lag_transitions =

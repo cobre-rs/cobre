@@ -1177,8 +1177,9 @@ pub struct ChronologicalNoiseSpec {
     /// Stage scenario branching factor (root opening count).
     pub branching_factor: usize,
     /// Adds one pumping station from hydro id 2 (canonical position 1) to
-    /// hydro id 1 (canonical position 0), exercising the chronological
-    /// pumping defect no committed deck combines.
+    /// hydro id 1 (canonical position 0) -- a nonzero source position no
+    /// committed deck exercises, pinning `fill_pumping_water_entries`'s
+    /// per-hydro block-row addressing.
     pub pumping_station: bool,
     /// Reverses every entity vector before `SystemBuilder::build`.
     pub reverse_declaration_order: bool,
@@ -1411,9 +1412,8 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
             ..Default::default()
         },
     )];
-    // Source position 1 (hydro id 2) != 0 exercises the known chronological
-    // pumping defect, whose `row_water + s_idx` resolves onto another
-    // hydro's block row.
+    // Source position 1 (hydro id 2) != 0 pins fill_pumping_water_entries
+    // addressing each hydro's own block row rather than a fixed offset.
     let mut pumping_stations = if spec.pumping_station {
         vec![PumpingStation {
             id: EntityId(10),

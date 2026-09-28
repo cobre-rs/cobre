@@ -1765,7 +1765,8 @@ fn generic_constraint_chronological_specific_block_ramp_one_row() {
 // parameter coefficient / symbolic bound vs literals) and need different resolved
 // parameters per side, so `assert_lp_byte_identical` (which asserts flat-form
 // identity under one shared parameter table) does not apply — the identity lives
-// only at the built `StageTemplates`, compared by the full Debug digest below.
+// only at the built `StageTemplates`, compared field-by-field (bitwise) via
+// `test_support::assert_all_templates_byte_identical` below.
 
 /// Resolve `params` over a single stage with `n_blks` blocks through the real
 /// resolver (the path `scalar_parameters_declaration_order.rs` exercises).

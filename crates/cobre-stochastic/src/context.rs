@@ -109,8 +109,8 @@ impl NoiseEntityOrder {
 ///
 /// Single owner: every site sizing or slicing the noise vector calls this rather
 /// than re-deriving a class block — a second copy that omits the NCS block sizes
-/// the noise vector short, and [`ClassDimensions::ncs_range`] then indexes past
-/// the end of a row.
+/// the noise vector short, and a caller that re-derives the NCS offset instead
+/// of calling [`ClassDimensions::ncs_range`] indexes past the end of a row.
 /// An NCS with `std = 0` is included unconditionally: it contributes zero noise
 /// after the transform, and dropping it would shift the canonical entity order.
 ///

@@ -3,7 +3,10 @@
 //! an ignored regeneration test that rewrites the manifest.
 //!
 //! Temporary safety net for the stage-LP builder consolidation: this manifest
-//! and its two tests are deleted once the consolidation's last step lands.
+//! and its two tests are deleted once the consolidation's last step lands. A
+//! third test, `every_deck_workspace_pool_is_sized_from_its_owners`, shares
+//! this file but is unrelated to the manifest and is permanent — it is NOT
+//! deleted with it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

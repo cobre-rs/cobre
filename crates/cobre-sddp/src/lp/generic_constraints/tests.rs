@@ -2089,12 +2089,12 @@ fn line_exchange_unknown_id_returns_empty() {
 /// is anticipated (local anticipated index 0).
 ///
 /// N=0 hydros, T=2 thermals (pos 0 = regular, pos 1 = anticipated), Ln=0,
-/// B=1 bus, K=2 blocks, n_anticipated=1, k_max=2.
+/// B=1 bus, K=2 blocks, n_anticipated=1, lead_stages=2.
 ///
 /// Column layout (no hydros, no FPHA, no evap):
 ///   storage:               [0, 0)    empty
 ///   lags:                  [0, 0)    empty
-///   commit_out:            [0, 0 + 2*1) = [0, 2)  (k_max=2, n_anticipated=1, outgoing)
+///   commit_out:            [0, 0 + 2*1) = [0, 2)  (lead_stages=2, n_anticipated=1, outgoing)
 ///   z_inflow:              [2, 2)    empty
 ///   storage_in:            [2, 2)    empty
 ///   commit_in:             [2, 4)    (incoming, relocated)

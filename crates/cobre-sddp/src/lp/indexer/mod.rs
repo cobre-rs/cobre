@@ -80,9 +80,9 @@
 //!   stage's `StageStateConfig` enables (anticipated state always included),
 //!   delegating each column to [`StateSpace::state_to_lp_incoming_column`].
 //! - `entity_index` — entity system/local index vocabulary
-//!   ([`HydroSys`]/[`ThermalSys`]/[`LineSys`]/[`BusSys`], [`FphaLocal`]/
-//!   [`EvapLocal`]/[`FillingTargetLocal`]/[`FloorLocal`]/[`AnticipatedLocal`],
-//!   [`HydroCell`]/[`FphaCellLocal`]).
+//!   ([`HydroSys`]/[`ThermalSys`]/[`LineSys`]/[`BusSys`]/[`NcsSys`]/
+//!   [`PumpingSys`], [`FphaLocal`]/[`EvapLocal`]/[`FillingTargetLocal`]/
+//!   [`FloorLocal`]/[`AnticipatedLocal`], [`HydroCell`]/[`FphaCellLocal`]).
 //! - `hydro_cell` — the [`HydroCellIndex`] partition and [`HydroCell`] type.
 //!
 //! Every public symbol is re-exported here so the `cobre_sddp::indexer::Symbol`

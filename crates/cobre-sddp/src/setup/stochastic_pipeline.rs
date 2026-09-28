@@ -170,7 +170,6 @@ pub fn build_ncs_factor_entries(system: &System) -> Vec<(EntityId, i32, Vec<Bloc
                     let factor = system
                         .resolved_ncs_factors()
                         .factor(ncs_idx, stage_idx, block_idx);
-                    // block_idx is a small count (< 1000 in practice); fits in i32.
                     (block_idx as i32, factor)
                 })
                 .collect();

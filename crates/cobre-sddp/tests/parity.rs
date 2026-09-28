@@ -1433,7 +1433,6 @@ mod determinism {
                         generic_constraint_row_entries: &[],
                         n_ncs: 0,
                         n_pumping: 0,
-                        geometry_per_stage: &[],
                         pumping_consumption_mw_per_m3s: &[],
                         contract_prices_per_stage: &[],
                         contract_is_import: &[],

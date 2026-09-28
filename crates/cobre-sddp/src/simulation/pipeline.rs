@@ -113,13 +113,8 @@ pub struct SimulationOutputSpec<'a> {
     /// a commissioning-dormant station keeps its column (pinned to `[0, 0]`).
     pub n_pumping: usize,
 
-    /// Per-stage equipment geometry for extraction, from the per-stage
-    /// `StageLayout`. A single global stage-0 geometry carries `n_blks`-striped
-    /// bases that misread any stage with a differing block count.
-    pub geometry_per_stage: &'a [StageGeometry],
-
     /// Study-scope hydro-cell partition, threaded into every stage's
-    /// `StageExtractionSpec` the same way `geometry_per_stage` is.
+    /// `StageExtractionSpec`.
     pub hydro_cell_index: &'a HydroCellIndex,
 
     /// Per-station pumping power-consumption rate \[MW/(m³/s)\], ID-sorted
@@ -662,16 +657,7 @@ pub(crate) fn extract_sim_stage_result(
     let ncs_n = output.n_ncs;
     let stage_n_blks = ctx.block_count(t);
     let n_pumping = output.n_pumping;
-    debug_assert!(
-        output.geometry_per_stage.is_empty()
-            || output.geometry_per_stage.len() == ctx.templates.len(),
-        "geometry_per_stage must carry one entry per study stage when populated",
-    );
-    let geometry_default = StageGeometry::default();
-    let geometry = output
-        .geometry_per_stage
-        .get(t.0)
-        .unwrap_or(&geometry_default);
+    let geometry = &ctx.geometry_per_stage[t.0];
     // Start from the template `col_upper`, then overwrite each non-dormant
     // stochastic column with the per-scenario realized availability. A dormant slot
     // is skipped so its template `0` survives — copying its stochastic cap would
@@ -679,11 +665,7 @@ pub(crate) fn extract_sim_stage_result(
     let ncs_col_upper: &[f64] = if ncs_n > 0 && stage_n_blks > 0 {
         let ncs_cols = geometry.ncs_generation.clone();
         ncs_col_upper_extract_buf.clear();
-        if ncs_cols.end <= ctx.template(t).col_upper.len() {
-            ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[ncs_cols]);
-        } else {
-            ncs_col_upper_extract_buf.resize(ncs_n * stage_n_blks, 0.0);
-        }
+        ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[ncs_cols]);
         if n_stochastic_ncs > 0 && !ncs_col_upper_buf.is_empty() {
             let dense_col = ctx.ncs_stochastic_dense_col;
             let windows = ctx.ncs_stochastic_windows;
@@ -710,20 +692,7 @@ pub(crate) fn extract_sim_stage_result(
     } else {
         &[]
     };
-    // Per-stage hydro FPHA/evap lookup (membership is per-`(hydro, stage)`). The
-    // empty-table fallback is sized to `hydro_ids.len()` so `lookup.fpha[h]` stays
-    // in bounds; built only on that path, never on the production hot path.
-    let hydro_lookup_default;
-    let hydro_lookup = if let Some(l) = lookups.hydro_per_stage.get(t.0) {
-        l
-    } else {
-        hydro_lookup_default = HydroReverseLookup::build(
-            &StageGeometry::default(),
-            output.hydro_cell_index,
-            output.entity_counts.hydro_ids.len(),
-        );
-        &hydro_lookup_default
-    };
+    let hydro_lookup = &lookups.hydro_per_stage[t.0];
     let view = SolutionView {
         primal: unscaled_primal,
         dual: unscaled_dual,

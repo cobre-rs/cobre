@@ -566,7 +566,6 @@ mod tests {
                 .generic_constraint_row_entries,
             n_ncs: setup.stage_data.stage_templates.n_ncs,
             n_pumping: setup.stage_data.stage_templates.n_pumping,
-            geometry_per_stage: &setup.stage_data.stage_templates.geometry_per_stage,
             hydro_cell_index: &setup.stage_data.hydro_cell_index,
             pumping_consumption_mw_per_m3s: &setup.stage_data.pumping_consumption_mw_per_m3s,
             contract_prices_per_stage: &setup.stage_data.contract_prices_per_stage,

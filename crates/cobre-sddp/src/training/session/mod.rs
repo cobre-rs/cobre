@@ -1284,7 +1284,7 @@ where
     /// `skip_static_terminal` skips any pool whose base stage is the terminal
     /// stage (`pool_stage[p] == StageIdx(num_stages - 1)`): a terminal leaf never
     /// adds or removes a cut, so its template is baked once by
-    /// [`prime_frozen_templates`] (`false`) and left untouched by every
+    /// [`Self::prime_frozen_templates`] (`false`) and left untouched by every
     /// per-iteration refreeze (`true`). Skipping is deliberately confined to this
     /// flag, never a `pool_stage`-derived early return baked into the loop bounds,
     /// so the priming call still bakes the terminal pool.
@@ -1330,7 +1330,7 @@ where
     /// Seed the per-scenario basis store from a checkpoint's stored bases
     /// before the first training iteration runs.
     ///
-    /// `cache` carries one [`CapturedBasis`](crate::workspace::CapturedBasis)
+    /// `cache` carries one [`CapturedBasis`]
     /// per canonical node (built by
     /// [`build_basis_cache_from_checkpoint`](crate::build_basis_cache_from_checkpoint)).
     /// The checkpoint holds a single basis per node; the forward pass keeps one

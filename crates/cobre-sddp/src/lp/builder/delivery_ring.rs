@@ -7,13 +7,13 @@
 //! both differences live at each ring's own call site, never a second
 //! skeleton implementation.
 //!
-//! [`StateSpace`](crate::indexer::StateSpace) remains the sole owner of the
+//! [`StateSpace`] remains the sole owner of the
 //! out/in state-index ranges: a [`DeliveryRing`] borrows them for one
 //! construction and never re-derives or persists an independent copy. The
 //! block-mode-coupled per-lag deposit fill stays at each ring's own call
 //! site; this module owns only the shared skeleton — the anticipated ring's
 //! delivery-axis → ring-slot map is owned by
-//! [`crate::lp::indexer::anticipated_gate::for_each_ring_residue`].
+//! [`crate::lp::indexer::for_each_ring_residue`].
 
 use std::ops::Range;
 
@@ -25,7 +25,7 @@ use super::layout::position_table_row;
 /// A lagged-delivery ring over one dense, slot-major/lane-minor state-column
 /// grid: `n_lanes` parallel delivery lanes (plants), each `depth` slots deep.
 /// Borrows its outgoing/incoming column blocks from
-/// [`StateSpace`](crate::indexer::StateSpace) — never a private copy of the
+/// [`StateSpace`] — never a private copy of the
 /// ranges.
 #[derive(Debug, Clone)]
 pub struct DeliveryRing {

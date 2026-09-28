@@ -53,7 +53,7 @@ pub(super) fn fill_stage_rows(
 
 /// Fill water-balance row bounds: static RHS = `−(ζ · water_withdrawal_m3s_h)`.
 /// The realized inflow (deterministic base + noise) enters through the water
-/// row's own `z_h` coupling entry ([`super::entries::push_z_inflow_coupling`]),
+/// row's own `z_h` coupling entry (`entries::push_z_inflow_coupling`),
 /// never the RHS.
 ///
 /// A `PreFilling` hydro's row is the frozen identity `v_h − v_h_in = 0` (matrix
@@ -216,7 +216,7 @@ fn fill_transit_bucket_definition_rows(
 
 /// Fill the soft filling-target row bounds (`v_h + σ_fill ≥ V_target[t]`, in hm³):
 /// `row_lower = V_target[t]`, `row_upper = +∞`. LHS coefficients are emitted by
-/// [`super::entries::fill_filling_target_entries`].
+/// `entries::fill_filling_target_entries`.
 ///
 /// **Contract — the RHS is the per-stage `V_target[t]` (backward-anchored), NOT
 /// `min_storage` at every stage.** `V_target[t]` is the precomputed trajectory
@@ -262,7 +262,7 @@ fn fill_filling_target_rows(
 
 /// Fill the soft operating-floor row bounds (`v_h + σ^{v-} ≥ min_storage_hm3`, in
 /// hm³): `row_lower = min_storage_hm3`, `row_upper = +∞`. LHS coefficients are
-/// emitted by [`super::entries::fill_filled_min_storage_floor_entries`].
+/// emitted by `entries::fill_filled_min_storage_floor_entries`.
 ///
 /// `min_storage_hm3` is the RESOLVED per-stage dead volume
 /// (`hydro_bounds(h_idx, stage_idx).min_storage_hm3`); reading the raw
@@ -395,7 +395,7 @@ fn fill_evaporation_rows(
 ///
 /// The base is the deterministic PAR base inflow (before noise), NOT multiplied
 /// by ζ and NOT reduced by withdrawal. The noise component (sigma · eta) is added
-/// at solve time via [`PatchBuffer::fill_z_inflow_patches`].
+/// at solve time via [`super::PatchBuffer::fill_z_inflow_patches`].
 fn fill_z_inflow_rows(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,

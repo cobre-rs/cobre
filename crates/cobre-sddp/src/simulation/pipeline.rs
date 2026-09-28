@@ -335,7 +335,7 @@ impl SimLookups {
     }
 }
 
-/// Map a stage-solve [`SddpError`](crate::error::SddpError) to a
+/// Map a stage-solve [`SddpError`] to a
 /// [`SimulationError`], carrying the scenario/stage ids. Shared by the frozen
 /// `run_stage_solve` path and the DCS `lazy_solve_preloaded` path so both report
 /// failures identically.
@@ -784,7 +784,7 @@ pub(crate) fn reset_scenario_state<S: SolverInterface>(
 
 /// Advance `node` to the one this scenario visits at `t + 1` (chain-parity
 /// contract stated once at
-/// [`advance_sampled_node`](crate::setup::node_graph::advance_sampled_node)).
+/// [`advance_sampled_node`]).
 fn advance_simulation_node(
     training_ctx: &TrainingContext<'_>,
     node: NodePos,

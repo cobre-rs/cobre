@@ -23,7 +23,7 @@ pub(super) struct FphaVisit {
 /// LP row, in plant -> cell -> block -> plane nesting order.
 ///
 /// The single owner of the FPHA row-cursor arithmetic: both the bounds fill
-/// ([`super::rows::fill_fpha_rows`]) and the coefficient fill
+/// (`rows::fill_fpha_rows`) and the coefficient fill
 /// ([`super::entries::fill_fpha_entries`]) drive off this walker, so a one-sided
 /// edit that lands the bounds and the coefficients on different rows is impossible.
 ///

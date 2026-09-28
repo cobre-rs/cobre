@@ -144,7 +144,7 @@ pub(crate) fn anticipated_resolution_for(
 /// One anticipated ring-window visit: a plant's modular ring slot and its own
 /// physical delivery target for one ring-axis position. Bundled `Copy` struct
 /// rather than separate closure arguments, mirroring
-/// [`crate::lp::builder::fpha_cursor::FphaVisit`].
+/// `lp::builder::fpha_cursor::FphaVisit`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RingResidue {
     /// Modular ring slot `ring_index(target) mod k_max` this visit lands on.

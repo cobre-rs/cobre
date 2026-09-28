@@ -42,7 +42,7 @@ use std::ops::Range;
 /// [`crate::indexer::StateSpace::commitment_hold_in_study_offset`]).
 /// `stage_idx` is in-study by construction
 /// (`build_anticipated_fishing_row_pos` returns an empty mapping once
-/// `stage_idx >= n_stages`), where [`PointResolution::ring_index`] is the
+/// `stage_idx >= n_stages`), where [`crate::lead_time::PointResolution::ring_index`] is the
 /// identity — so this slot needs no excision; applying one here would
 /// double-shift a slot the plant already owns.
 pub(super) fn fill_anticipated_fishing_entries(
@@ -892,7 +892,7 @@ fn fill_prefilling_shortcircuit(
 /// Fill the LHS of the per-stage soft filling-target row `v_h + σ_fill ≥ V_target[t]`
 /// for each Filling-phase hydro: `+1.0` on the outgoing storage column `v_h` and `+1.0`
 /// on the `σ_fill` slack. The `≥` sense and RHS are set by
-/// [`super::rows::fill_filling_target_rows`].
+/// `rows::fill_filling_target_rows`.
 ///
 /// Cut validity: LP duality folds the `σ_fill` soft-row dual into the incoming-storage
 /// column's `rc / col_scale`. NEVER separately extract this row's dual and add it by hand
@@ -914,7 +914,7 @@ fn fill_filling_target_entries(layout: &StageLayout, col_entries: &mut [Vec<(usi
 
 /// Fill the LHS of the soft operating-floor row `v_h + σ^{v-} ≥ min_storage_hm3` for
 /// each Operating-phase filling hydro: `+1.0` on `v_h` and `+1.0` on the `σ^{v-}` slack.
-/// The `≥` sense and RHS are set by [`super::rows::fill_filled_min_storage_floor_rows`].
+/// The `≥` sense and RHS are set by `rows::fill_filled_min_storage_floor_rows`.
 ///
 /// Same cut-validity contract as [`fill_filling_target_entries`]: never hand-extract this
 /// row's dual. DISTINCT from that sibling — different slack, non-overlapping stage scope
@@ -1098,7 +1098,7 @@ pub(super) fn fill_load_balance_entries(
 
 /// Fill FPHA hyperplane constraint entries, one row per `(FPHA cell, block, plane)`,
 /// implementing `g_c − σ_c·γᵥ/2·v − σ_c·γᵥ/2·v_in − γ_q·q_c − σ_c·γ_s·s ≤ σ_c·γ₀`
-/// (`σ_c·γ₀` in the row upper bound set by [`super::rows::fill_fpha_rows`]). `σ_c`
+/// (`σ_c·γ₀` in the row upper bound set by `rows::fill_fpha_rows`). `σ_c`
 /// apportions the plane's flow-independent part by the cell's share of the plant's
 /// declared turbine capacity; `γ_q` stays unscaled on the cell's own flow `q_c`.
 ///
@@ -1111,7 +1111,7 @@ pub(super) fn fill_load_balance_entries(
 /// `(Sᵏ⁻¹, Sᵏ)`; `K = 1` resolves both back to `(S⁰, Sᴷ)`, byte-identical to parallel.
 ///
 /// Driven by [`for_each_fpha_plane`] so entries and the row bounds set by
-/// [`super::rows::fill_fpha_rows`] share one row cursor.
+/// `rows::fill_fpha_rows` share one row cursor.
 pub(super) fn fill_fpha_entries(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,

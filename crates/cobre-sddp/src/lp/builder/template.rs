@@ -370,7 +370,8 @@ pub(super) struct StageBuildOutput {
     /// Number of NCS entities at the stage — the full system count (dense).
     pub ncs_count: usize,
     /// Number of pumping stations ACTIVE (contributing columns) at the stage
-    /// (the commissioning-gated count, sourced from [`StageLayout::n_pumping`]).
+    /// (the commissioning-gated count, sourced from
+    /// [`super::layout::EquipmentColumns::n_pumping`]).
     pub n_pumping: usize,
     /// Stage-correct equipment column ranges for simulation extraction, computed
     /// from this stage's [`StageLayout`].

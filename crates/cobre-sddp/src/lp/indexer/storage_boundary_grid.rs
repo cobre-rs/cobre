@@ -6,7 +6,7 @@
 //! ](crate::lp::builder::StageGeometry), the generic-constraint resolver) delegates
 //! to [`StorageBoundaryGrid::col`] rather than re-deriving the endpoint/interior
 //! split — the wrong-but-compiling alternative is a hand-rolled copy of the match
-//! whose arm order silently drifts from the others. The [`Boundary`](super::Boundary)
+//! whose arm order silently drifts from the others. The [`Boundary`]
 //! operand's exhaustive match (no `_` arm) makes the endpoint/interior split
 //! structural rather than order-dependent.
 

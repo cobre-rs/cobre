@@ -1069,13 +1069,13 @@ impl NodeGraph {
 /// graph has no interior branching (a chain, or any trunk+terminal-fan
 /// shape).
 ///
-/// [`crate::training::forward::enumerated::run_enumerated_forward`] populates
+/// [`crate::training::forward::run_enumerated_forward`] populates
 /// a node's persisted outgoing state only on the ranks whose assigned paths
 /// visit it, leaving every other rank's slot zero-filled
 /// (`EnumeratedForwardScratch::ensure_sized`'s zero-fill); a trunk node sits
 /// on every path and so is replicated on every rank, but an interior branch
 /// node is not.
-/// [`crate::training::backward::replicated::run_backward_node_replicated`]
+/// [`crate::training::backward::run_backward_node_replicated`]
 /// partitions a cut-generating node's successor openings across ALL ranks
 /// regardless of whether a rank actually holds that node's true state — sound
 /// only when this predicate returns `None`; the caller hard-rejects otherwise.

@@ -2,7 +2,7 @@
 //! family: one row per entity, collapsing the block, or one row per
 //! `(entity, block)` pair, strided by the owner's `n_blks`.
 //!
-//! The family stores no block count of its own — every [`Self::row`] call
+//! The family stores no block count of its own — every [`BlockRowFamily::row`] call
 //! takes the owner's `n_blks` as an argument, so the stride lives in exactly
 //! one place, the family's owner (e.g.
 //! [`StageGeometry`](crate::lp::builder::StageGeometry)'s `n_blks`).

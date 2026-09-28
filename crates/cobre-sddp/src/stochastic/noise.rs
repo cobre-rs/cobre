@@ -179,7 +179,7 @@ pub(crate) use cobre_stochastic::par::lag_kernel::PrimaryLagAccum as LagAccumSta
 ///
 /// For the monthly identity case (`accumulate_weight=1.0, spillover_weight=0.0,
 /// finalize_period=true`) this produces bit-for-bit identical results to
-/// [`shift_lag_state`].
+/// the test-only `shift_lag_state`.
 ///
 /// Thin adapter: resolves the LP-`StateSpace` offsets into plain slices, then
 /// delegates the accumulate/finalize/shift/downstream-ring algorithm to

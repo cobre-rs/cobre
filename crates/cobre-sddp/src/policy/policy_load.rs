@@ -955,7 +955,7 @@ fn check_season_compatibility(
 /// a deck missing a plant is usually missing its lag block too. A source
 /// slot with no `current` counterpart is a superset drop, not examined here.
 ///
-/// `identity_index` is [`reconcile::build_identity_index`]'s output over the
+/// `identity_index` is [`super::reconcile::build_identity_index`]'s output over the
 /// source manifest, built once by the caller and shared with
 /// [`build_rebind`] so the source is hashed once, not per consumer; only
 /// probed, never iterated. The missing lists come from a positional walk of

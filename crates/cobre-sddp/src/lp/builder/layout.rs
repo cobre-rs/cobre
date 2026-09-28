@@ -548,7 +548,8 @@ struct GenericConstraintLayout {
 }
 
 /// For each entry of `column_order` (global bucket index `slot`, `(plant, lag)`),
-/// this stage's compact position within [`StageLayout::transit_bucket_definition`], or
+/// this stage's compact position within [`StageLayout::transit_bucket_definition_row`]'s
+/// row family, or
 /// `None` when `lag` exceeds `per_stage_mask[stage_idx]`'s max reachable lag
 /// for that plant. `column_order` groups contiguously by plant in the SAME
 /// discovery order `per_stage_mask` indexes
@@ -874,7 +875,7 @@ fn identify_filling_target_hydros(ctx: &TemplateBuildCtx<'_>, stage_id: i32) -> 
 ///
 /// The soft floor is scoped to filling hydros DELIBERATELY — a non-filling
 /// `Operating` hydro keeps its hard `min_storage` floor (same gate as the relax in
-/// [`super::columns::fill_storage_columns`]). The wrong-but-compiling alternative —
+/// `columns::fill_storage_columns`). The wrong-but-compiling alternative —
 /// a GLOBAL soft floor matching every Operating hydro regardless of `filling` —
 /// would let the optimizer cheaply violate dead volume system-wide. Empty for a
 /// non-filling build (parity-neutral).

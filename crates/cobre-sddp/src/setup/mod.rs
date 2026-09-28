@@ -1429,7 +1429,7 @@ fn build_extended_delivery_anchors(
 
 /// Declared travel-time arcs (upstream hydro id + travel time), one entry per
 /// hydro declaring `travel_time_hours > 0.0` and a `downstream_id` — the same
-/// predicate [`bucket_topology::declared_arcs`] uses, applied per upstream
+/// predicate `bucket_topology::declared_arcs` uses, applied per upstream
 /// hydro rather than grouped by downstream plant.
 fn build_transit_seed_arcs(system: &System) -> Vec<TransitSeedArc> {
     system
@@ -1523,7 +1523,7 @@ fn first_fanned_plant_id(
 /// consumers derive their own extended calendar from this one vector: the
 /// anticipated delivery axis ([`DeliveryAxis::stage_lengths_hours`], where it
 /// lets `n_delivery` span `n_stages + n_post`) and the water ring's arrival
-/// resolution ([`bucket_topology::extend_for_resolution`]'s base calendar).
+/// resolution (`bucket_topology::extend_for_resolution`'s base calendar).
 fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> Vec<f64> {
     if let Some(post_study) = system.post_study_stages() {
         study_durations.extend(post_study.stages.iter().map(|s| s.duration_hours));

@@ -48,7 +48,7 @@ use crate::block_clock::BlockClock;
 /// stage would cancel and deposit a whole month of evaporation on any stage,
 /// whereas dividing by the month makes it a monthly-average rate, so a stage
 /// deposits only its `stage_hours / month_hours` share.
-/// `month` is the 0-based calendar month [`month_of`](cobre_core::month_of)
+/// `month` is the 0-based calendar month [`month_of`]
 /// derives from `stage.start_date` — not `stage.season_id`, whose meaning is
 /// cycle-dependent (`Monthly`, `Weekly`, `Custom`) and only equals the calendar
 /// month under the `Monthly` convention.
@@ -122,7 +122,7 @@ pub fn resolve_evaporation_models_from_artifacts(
 }
 
 /// Hours in `date`'s calendar month, leap-aware. The evaporation-rate divisor
-/// (see [`resolve_evaporation_models`]): a stage deposits its
+/// (see [`resolve_evaporation_models_from_artifacts`]): a stage deposits its
 /// `stage_hours / month_hours` share of the month's evaporation.
 fn hours_in_calendar_month(date: NaiveDate) -> f64 {
     let days = match date.month() {
@@ -141,11 +141,11 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 /// Core evaporation linearization over pre-loaded data, split from
-/// [`resolve_evaporation_models`] so unit tests can run without disk I/O.
+/// [`resolve_evaporation_models_from_artifacts`] so unit tests can run without disk I/O.
 ///
 /// # Errors
 ///
-/// Same error conditions as [`resolve_evaporation_models`].
+/// Same error conditions as [`resolve_evaporation_models_from_artifacts`].
 // Rationale: a type alias would hide the three concrete output types; splitting
 // the per-stage loop would thread several computed intermediates across helper
 // boundaries.

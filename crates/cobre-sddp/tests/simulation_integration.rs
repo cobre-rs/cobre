@@ -59,7 +59,7 @@ use cobre_sddp::{
     horizon_mode::HorizonMode,
     indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
-    lp::builder::{PatchBuffer, StateBox},
+    lp::builder::{PatchBuffer, StageGeometry, StateBox},
     risk_measure::RiskMeasure,
     setup::{
         SimulationEnumeratedRequest, StudySetup,
@@ -72,9 +72,10 @@ use cobre_sddp::{
     },
     solver_stats::SolverStatsDelta,
     test_support::{
-        StageContextFixture, branching_tree_setup_enumerated, equipment_free_geometry,
-        extensive_form_optimum, k_fan_setup_enumerated, node_prefix_counts, node_scenario_count,
-        single_path_enumerated_setup, trunk_fan_setup_enumerated, water_binding_external_fan_setup,
+        GeometryDims, StageContextFixture, branching_tree_setup_enumerated,
+        equipment_free_geometry, extensive_form_optimum, k_fan_setup_enumerated,
+        node_prefix_counts, node_scenario_count, single_path_enumerated_setup,
+        trunk_fan_setup_enumerated, water_binding_external_fan_setup,
     },
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
@@ -198,9 +199,9 @@ impl SolverInterface for MockSolver {
         let obj = self.objectives[call % self.objectives.len()];
         Ok(cobre_solver::SolutionView {
             objective: obj,
-            primal: &[0.0, 0.0, 0.0, 0.0],
-            dual: &[0.0, 0.0],
-            reduced_costs: &[0.0, 0.0, 0.0, 0.0],
+            primal: &[0.0; 15],
+            dual: &[0.0; 7],
+            reduced_costs: &[0.0; 15],
             iterations: 0,
             solve_time_seconds: 0.0,
         })
@@ -346,20 +347,36 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
 }
 
 fn minimal_template() -> StageTemplate {
-    // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3)
-    //             rows: z_inflow(0), storage_fixing(1)
+    // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3), then
+    // the decoupled hydro+bus equipment padding `test_support::geometry`
+    // addresses for N=1 hydro, 1 bus, 1 block (turbine..generation_below_slack,
+    // cols 4-14); `MockSolver::solve` mirrors this column count.
+    //             rows: z_inflow(0), storage_fixing(1), then that same
+    //             layout's water_balance/load_balance/oper_violation rows (2-6)
+    let num_cols = 15;
+    let num_rows = 7;
+    let mut col_lower = vec![0.0; num_cols];
+    col_lower[1] = f64::NEG_INFINITY;
+    let mut objective = vec![0.0; num_cols];
+    objective[3] = 1.0;
     StageTemplate {
-        num_cols: 4,
-        num_rows: 2,
+        num_cols,
+        num_rows,
         num_nz: 2,
-        col_starts: vec![0, 0, 1, 2, 2],
+        col_starts: {
+            let mut v = vec![2_i32; num_cols + 1];
+            v[0] = 0;
+            v[1] = 0;
+            v[2] = 1;
+            v
+        },
         row_indices: vec![0, 1],
         values: vec![1.0, 1.0],
-        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0; 2],
-        row_upper: vec![0.0; 2],
+        col_lower,
+        col_upper: vec![f64::INFINITY; num_cols],
+        objective,
+        row_lower: vec![0.0; num_rows],
+        row_upper: vec![0.0; num_rows],
         n_state: 1,
         n_transfer: 0,
         n_dual_relevant: 1,
@@ -1304,9 +1321,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let mut fcf = make_fcf(n_stages);
 
-    let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &equipment_geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
 
     let training_config = TrainingConfig {
@@ -1500,7 +1516,24 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         },
     };
 
-    let geometry = equipment_free_geometry(&vec![1usize; fx.n_stages]);
+    // `default_single_hydro_entity_counts` (used below) declares both a hydro
+    // and a bus, so the geometry must address both families, matching
+    // `minimal_template`'s N=1 hydro, 1 bus, 1-block layout.
+    let geometry: Vec<StageGeometry> = (0..fx.n_stages)
+        .map(|_| {
+            cobre_sddp::test_support::geometry(
+                &GeometryDims {
+                    hydro_count: 1,
+                    n_buses: 1,
+                    n_blks: 1,
+                    ..GeometryDims::default()
+                },
+                vec![],
+                &[],
+                vec![],
+            )
+        })
+        .collect();
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();

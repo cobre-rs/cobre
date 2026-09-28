@@ -28,7 +28,7 @@ use crate::{
         state::{SimulationInputs, SimulationState},
     },
     solve::solver_phase::Phase,
-    test_support::{self, StageContextFixture, equipment_free_geometry, permissive_state_boxes},
+    test_support::{self, StageContextFixture, permissive_state_boxes},
     workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
 };
 
@@ -261,30 +261,30 @@ impl SolverInterface for MockSolver {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Minimal valid stage template for N=1 hydro, L=0 PAR order.
-///
-/// Column layout (N=1, L=0):
-/// - col 0: `storage_out` (no NZ in structural rows)
-/// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
-/// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
-/// - col 3: `theta` (no NZ)
-///
-/// Row layout:
-/// - row 0: storage-fixing (`storage_out` fixed to incoming state)
-/// - row 1: `z_inflow` definition row
+/// Stage template matching `hydro_only_bus_geometry`'s N=1 hydro, 1 bus,
+/// 1-block layout, so per-block hydro/load extraction addresses real columns
+/// and rows instead of an empty family. `MockSolver` never reads the
+/// coefficients, so every column past the state region (`storage_out`(0),
+/// `z_inflow`(1), `storage_in`(2), `theta`(3)) is free (zero cost, zero NZ).
 fn minimal_template_1_0() -> StageTemplate {
+    let num_cols = 15;
+    let num_rows = 7;
+    let mut col_lower = vec![0.0; num_cols];
+    col_lower[1] = f64::NEG_INFINITY;
+    let mut objective = vec![0.0; num_cols];
+    objective[3] = 1.0;
     StageTemplate {
-        num_cols: 4,
-        num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 0.0],
-        row_upper: vec![0.0, 0.0],
+        num_cols,
+        num_rows,
+        num_nz: 0,
+        col_starts: vec![0_i32; num_cols + 1],
+        row_indices: Vec::new(),
+        values: Vec::new(),
+        col_lower,
+        col_upper: vec![f64::INFINITY; num_cols],
+        objective,
+        row_lower: vec![0.0; num_rows],
+        row_upper: vec![0.0; num_rows],
         n_state: 1,
         n_transfer: 0,
         n_dual_relevant: 1,
@@ -295,17 +295,33 @@ fn minimal_template_1_0() -> StageTemplate {
     }
 }
 
-/// Build a fixed `LpSolution` for the minimal N=1 L=0 template.
-///
-/// N=1 L=0 column layout: `storage`(0), `z_inflow`(1), `storage_in`(2), `theta`(3).
+/// Build the [`StageGeometry`] `minimal_template_1_0` addresses: N=1 hydro, 1
+/// bus, 1 block — the production layout `test_support::geometry` builds for
+/// those dims.
+fn hydro_only_bus_geometry() -> crate::lp::builder::StageGeometry {
+    test_support::geometry(
+        &test_support::GeometryDims {
+            hydro_count: 1,
+            n_buses: 1,
+            n_blks: 1,
+            ..test_support::GeometryDims::default()
+        },
+        vec![],
+        &[],
+        vec![],
+    )
+}
+
+/// Build a fixed `LpSolution` for `minimal_template_1_0`'s layout; theta at
+/// col 3.
 fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-    let num_cols = 4;
+    let num_cols = 15;
     let mut primal = vec![0.0_f64; num_cols];
     primal[3] = theta_val;
     LpSolution {
         objective,
         primal,
-        dual: vec![0.0_f64; 2],
+        dual: vec![0.0_f64; 7],
         reduced_costs: vec![0.0_f64; num_cols],
         iterations: 0,
         solve_time_seconds: 0.0,
@@ -758,27 +774,7 @@ fn make_stochastic_context_1_hydro_1_load_bus_sim(mean_mw: f64, std_mw: f64) -> 
 #[test]
 fn simulation_load_patches_applied() {
     let n_stages = 1;
-    let template = StageTemplate {
-        num_cols: 3,
-        num_rows: 3,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 100.0, 300.0], // row 2 = load balance with mean=300
-        row_upper: vec![0.0, 100.0, 300.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 3,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    };
-    let templates = vec![template];
+    let templates = vec![minimal_template_1_0()];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -805,7 +801,7 @@ fn simulation_load_patches_applied() {
 
     // load_bus_indices=[0] (bus position 0 in the block layout).
     let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
+    let geometry_per_stage = vec![hydro_only_bus_geometry()];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -962,7 +958,7 @@ fn simulation_no_load_buses_unchanged() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(&templates, &state_boxes, &equipment_free_geometry(&[1])).ctx(),
+        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1079,7 +1075,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate_with_profile(
         &mut workspaces,
-        &StageContextFixture::new(&templates, &state_boxes, &equipment_free_geometry(&[1])).ctx(),
+        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1154,27 +1150,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
 #[test]
 fn simulation_inflow_extraction_unaffected() {
     let n_stages = 1;
-    let template = StageTemplate {
-        num_cols: 3,
-        num_rows: 3,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 100.0, 300.0],
-        row_upper: vec![0.0, 100.0, 300.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 3,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    };
-    let templates = vec![template];
+    let templates = vec![minimal_template_1_0()];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -1200,7 +1176,7 @@ fn simulation_inflow_extraction_unaffected() {
     let mut workspaces = single_workspace_with_load_buses(solver, n_load_buses);
 
     let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![test_support::geometry_with_load_balance(2, 1, 1)];
+    let geometry_per_stage = vec![hydro_only_bus_geometry()];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
@@ -1533,12 +1509,7 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(
-            &templates,
-            &state_boxes,
-            &equipment_free_geometry(&[n_stages]),
-        )
-        .ctx(),
+        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1647,12 +1618,7 @@ fn simulation_none_method_produces_raw_negative_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContextFixture::new(
-            &templates,
-            &state_boxes,
-            &equipment_free_geometry(&[n_stages]),
-        )
-        .ctx(),
+        &StageContextFixture::new(&templates, &state_boxes, &[hydro_only_bus_geometry()]).ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1753,7 +1719,8 @@ mod dcs_simulation {
     use crate::test_support::StageContextFixture;
 
     use crate::inflow_method::InflowNonNegativityMethod;
-    use crate::lp::builder::{PatchBuffer, StateBox};
+    use crate::lp::builder::{PatchBuffer, StageGeometry, StateBox};
+    use crate::lp::indexer::BlockRowFamily;
     use crate::setup::NodeId;
     use crate::setup::node_graph::StageIdx;
     use crate::simulation::types::{SimulationCostResult, SimulationStageResult};
@@ -1767,20 +1734,30 @@ mod dcs_simulation {
     /// production's `fill_z_inflow_patches` row, keeping `z_inflow` a defined
     /// column rather than a free one, and matching every built template's own
     /// invariant that the z-inflow rows lead the row space), row 1 the
-    /// coupling row `storage_out - storage_in = 0`, minimise `theta`.
+    /// coupling row `storage_out - storage_in = 0`, doubling as the water-balance
+    /// row `run_one_sim_stage`'s geometry addresses, minimise `theta`.
     /// `storage_in` is pinned to `x_hat`; cuts constrain `theta` against
-    /// `storage_out` (col 0).
+    /// `storage_out` (col 0). Cols 4-5 (turbine, spillage) are decoupled
+    /// padding — zero cost, zero NZ — so per-block hydro extraction addresses
+    /// real columns without perturbing the solved LP.
     fn sim_core_template() -> StageTemplate {
         StageTemplate {
-            num_cols: 4,
+            num_cols: 6,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0_i32, 1, 2, 3, 3],
+            col_starts: vec![0_i32, 1, 2, 3, 3, 3, 3],
             row_indices: vec![1_i32, 0, 1],
             values: vec![1.0, 1.0, -1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
-            objective: vec![0.0, 0.0, 0.0, 1.0],
+            col_lower: vec![0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0],
+            col_upper: vec![
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                1.0e6,
+                f64::INFINITY,
+                f64::INFINITY,
+            ],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0],
             row_upper: vec![0.0, 0.0],
             n_state: 1,
@@ -1795,18 +1772,27 @@ mod dcs_simulation {
 
     /// All-cuts frozen template: cut-free base + the three pool cuts frozen as
     /// structural rows 2..5 (slot order), with the z-inflow definition row
-    /// shifted to row 0 like every other fixture here. `num_rows = 5`.
+    /// shifted to row 0 like every other fixture here. `num_rows = 5`. Cols
+    /// 4-5 are the same decoupled turbine/spillage padding as
+    /// `sim_core_template`.
     fn sim_all_cuts_frozen() -> StageTemplate {
         StageTemplate {
-            num_cols: 4,
+            num_cols: 6,
             num_rows: 5,
             num_nz: 7,
-            col_starts: vec![0_i32, 2, 3, 4, 7],
+            col_starts: vec![0_i32, 2, 3, 4, 7, 7, 7],
             row_indices: vec![1_i32, 3, 0, 1, 2, 3, 4],
             values: vec![1.0, -2.0, 1.0, -1.0, 1.0, 1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
-            objective: vec![0.0, 0.0, 0.0, 1.0],
+            col_lower: vec![0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0],
+            col_upper: vec![
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                1.0e6,
+                f64::INFINITY,
+                f64::INFINITY,
+            ],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0, 1.0, 0.0, 3.0],
             row_upper: vec![0.0, 0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY],
             n_state: 1,
@@ -1821,18 +1807,27 @@ mod dcs_simulation {
 
     /// Frozen template carrying a single DOMINATING spurious cut
     /// (`-5*col0 + theta >= 0`, floor 10 at `x_hat = 2`, NOT in the pool), plus
-    /// the same leading z-inflow definition row as the other fixtures.
+    /// the same leading z-inflow definition row as the other fixtures. Cols
+    /// 4-5 are the same decoupled turbine/spillage padding as
+    /// `sim_core_template`.
     fn sim_frozen_dominating_cut() -> StageTemplate {
         StageTemplate {
-            num_cols: 4,
+            num_cols: 6,
             num_rows: 3,
             num_nz: 5,
-            col_starts: vec![0_i32, 2, 3, 4, 5],
+            col_starts: vec![0_i32, 2, 3, 4, 5, 5, 5],
             row_indices: vec![1_i32, 2, 0, 1, 2],
             values: vec![1.0, -5.0, 1.0, -1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
-            objective: vec![0.0, 0.0, 0.0, 1.0],
+            col_lower: vec![0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0],
+            col_upper: vec![
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                1.0e6,
+                f64::INFINITY,
+                f64::INFINITY,
+            ],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0, 0.0],
             row_upper: vec![0.0, 0.0, f64::INFINITY],
             n_state: 1,
@@ -1913,7 +1908,15 @@ mod dcs_simulation {
     ) -> (f64, SimulationStageResult) {
         let state = test_support::state_layout(1, 0);
         let core = sim_core_template();
-        let geometry_per_stage = test_support::equipment_free_geometry(&[1]);
+        // turbine/spillage address the two decoupled padding cols the templates
+        // above append; water_balance reuses the coupling row every fixture
+        // already carries at row 1 (see `sim_core_template`).
+        let geometry_per_stage = vec![StageGeometry {
+            turbine: 4..5,
+            spillage: 5..6,
+            water_balance: BlockRowFamily::one_per_entity(1..2),
+            ..test_support::equipment_free_geometry(&[1])[0].clone()
+        }];
         let templates = vec![core];
         let stochastic = super::make_stochastic_context(1);
         let horizon = HorizonMode::Finite { num_stages: 1 };
@@ -2004,7 +2007,7 @@ mod dcs_simulation {
         };
         let lookups = SimLookups::build(
             &study_dims,
-            &[],
+            ctx.geometry_per_stage,
             &test_support::identity_hydro_cell_index(256),
             0,
             1,
@@ -2431,7 +2434,7 @@ mod anticipated_ring_matches_forward_propagation {
         };
         let lookups = SimLookups::build(
             training_ctx.study_dims,
-            &[],
+            ctx.geometry_per_stage,
             &test_support::identity_hydro_cell_index(256),
             0,
             0,

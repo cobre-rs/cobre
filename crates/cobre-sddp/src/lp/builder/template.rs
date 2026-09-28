@@ -42,12 +42,6 @@ pub struct StageTemplates {
     /// Per-stage admissible box for every outgoing state dimension, populated by
     /// `postprocess_templates` after scaling. Length equals `templates.len()`.
     pub(crate) state_boxes: Vec<StateBox>,
-    /// Per-stage time-conversion factor `ζ = total_hours * M3S_TO_HM3`, length
-    /// `templates.len()`: converts an m³/s flow rate to hm³ over the stage
-    /// (`volume_hm3 = flow_m3s * zeta_per_stage[stage]`), the coefficient a
-    /// parallel-mode water row's `z_inflow` coupling applies
-    /// (`push_z_inflow_coupling` in `lp/builder/entries.rs`).
-    pub zeta_per_stage: Vec<f64>,
     /// Per-stage block durations in hours (`block_hours_per_stage[stage]` is length
     /// `n_blocks`). Converts load-balance duals $/MW → $/`MWh`:
     /// `spot_price = dual / block_hours`.
@@ -105,7 +99,6 @@ impl StageTemplates {
         Self {
             templates: Vec::new(),
             state_boxes: Vec::new(),
-            zeta_per_stage: Vec::new(),
             block_hours_per_stage: Vec::new(),
             cost_scale_factor,
             load_bus_indices: Vec::new(),
@@ -1108,7 +1101,7 @@ fn assemble_stage_templates_output(
         geometry_per_stage.push(out.equipment_geometry);
     }
 
-    let (zeta_per_stage, block_hours_per_stage) = scaling::compute_stage_hours(study_stages);
+    let block_hours_per_stage = scaling::compute_stage_hours(study_stages);
 
     let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
         .map(|s| {
@@ -1124,7 +1117,6 @@ fn assemble_stage_templates_output(
     StageTemplates {
         templates,
         state_boxes: Vec::new(),
-        zeta_per_stage,
         block_hours_per_stage,
         cost_scale_factor: ctx.resolved.resolved_parameters.cost_scale_factor,
         load_bus_indices,

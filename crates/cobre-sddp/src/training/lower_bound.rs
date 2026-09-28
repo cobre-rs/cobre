@@ -2646,7 +2646,8 @@ mod tests {
         let water_row_a = geom0.water_balance_row(HydroSys::new(h_a), BlockIdx::new(0));
         assert_eq!(
             raw_at(z_col_a, water_row_a),
-            -templates.zeta_per_stage[0],
+            -templates.block_hours_per_stage[0].iter().sum::<f64>()
+                * crate::block_clock::M3S_TO_HM3,
             "Filling hydro H_A's own z-inflow column must carry -zeta on its own water row"
         );
         for row in geom0.water_balance.range() {

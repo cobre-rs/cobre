@@ -255,7 +255,6 @@ impl StudySetup {
 
         let output = SimulationOutputSpec {
             result_tx,
-            zeta_per_stage: &self.stage_data.stage_templates.zeta_per_stage,
             block_hours_per_stage: &self.stage_data.stage_templates.block_hours_per_stage,
             entity_counts: &self.stage_data.entity_counts,
             generic_constraint_row_entries: &self

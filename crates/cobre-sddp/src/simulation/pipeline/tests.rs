@@ -815,7 +815,6 @@ fn simulation_load_patches_applied() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -967,7 +966,6 @@ fn simulation_no_load_buses_unchanged() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -1088,7 +1086,6 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -1197,7 +1194,6 @@ fn simulation_inflow_extraction_unaffected() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -1525,7 +1521,6 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -1638,7 +1633,6 @@ fn simulation_none_method_produces_raw_negative_noise() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -1953,7 +1947,6 @@ mod dcs_simulation {
         let diversion: HashMap<cobre_core::EntityId, Vec<usize>> = HashMap::new();
         let output = SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[1.0],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
@@ -2386,7 +2379,6 @@ mod anticipated_ring_matches_forward_propagation {
         let (tx, _rx) = mpsc::sync_channel(N_STAGES.max(1));
         let output = SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[1.0, 1.0, 1.0],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0], vec![1.0], vec![1.0]],
             entity_counts: &entity_counts,

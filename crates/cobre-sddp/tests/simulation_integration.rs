@@ -826,7 +826,6 @@ fn train_simulate_write_cycle() {
         &sim_config,
         SimulationOutputSpec {
             result_tx: &result_tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &vec![vec![744.0]; fx.n_stages],
             entity_counts: &entity_counts,
@@ -1386,7 +1385,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let entity_counts = default_single_hydro_entity_counts();
 
-    let zeta_per_stage = vec![zeta; n_stages];
     let block_hours_per_stage = vec![vec![total_hours]; n_stages];
     let hydro_productivities_per_stage = vec![vec![1.0]; n_stages];
 
@@ -1423,7 +1421,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         &sim_config,
         SimulationOutputSpec {
             result_tx: &result_tx,
-            zeta_per_stage: &zeta_per_stage,
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &block_hours_per_stage,
             entity_counts: &entity_counts,
@@ -1598,7 +1595,6 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
                 &sim_config,
                 SimulationOutputSpec {
                     result_tx: &result_tx,
-                    zeta_per_stage: &[],
                     hydro_cell_index: &hydro_cell_index,
                     block_hours_per_stage: &block_hours_per_stage,
                     entity_counts: &entity_counts,

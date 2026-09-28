@@ -557,7 +557,6 @@ mod tests {
         let (result_tx, _result_rx) = std::sync::mpsc::sync_channel(64);
         let output = SimulationOutputSpec {
             result_tx: &result_tx,
-            zeta_per_stage: &setup.stage_data.stage_templates.zeta_per_stage,
             block_hours_per_stage: &setup.stage_data.stage_templates.block_hours_per_stage,
             entity_counts: &setup.stage_data.entity_counts,
             generic_constraint_row_entries: &setup

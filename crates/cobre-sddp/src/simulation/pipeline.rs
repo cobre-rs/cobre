@@ -92,10 +92,6 @@ pub struct SimulationOutputSpec<'a> {
     /// Bounded channel used to stream completed scenario results to the caller.
     pub result_tx: &'a SyncSender<SimulationScenarioResult>,
 
-    /// Per-stage productivity factor (hm³/MWh) for converting LP water-balance
-    /// RHS values to volumetric inflow (m³/s) in output records.
-    pub zeta_per_stage: &'a [f64],
-
     /// Per-stage block hours used to compute hourly energy from block dispatch.
     pub block_hours_per_stage: &'a [Vec<f64>],
 

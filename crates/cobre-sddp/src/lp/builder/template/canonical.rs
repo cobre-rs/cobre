@@ -310,7 +310,6 @@ pub(crate) fn encode_stage_templates_facts(
     let StageTemplates {
         templates,
         state_boxes,
-        zeta_per_stage,
         block_hours_per_stage,
         cost_scale_factor,
         load_bus_indices,
@@ -360,7 +359,6 @@ pub(crate) fn encode_stage_templates_facts(
         group(groups, "reporting.cost_scale_factor"),
         *cost_scale_factor,
     );
-    put_f64_slice(group(groups, "reporting.zeta_per_stage"), zeta_per_stage);
 
     let block_hours_buf = group(groups, "reporting.block_hours_per_stage");
     for (stage, hours) in block_hours_per_stage.iter().enumerate() {
@@ -574,7 +572,6 @@ mod tests {
                 "reporting.diversion_upstream",
                 "reporting.generic_constraint_row_entries",
                 "reporting.hydro_productivities_per_stage",
-                "reporting.zeta_per_stage",
                 "state_boxes",
                 "stochastic.load_buses",
             ]

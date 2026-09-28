@@ -5,7 +5,6 @@
 use cobre_core::Stage;
 use cobre_solver::StageTemplate;
 
-use crate::block_clock::BlockClock;
 use crate::indexer::{HydroSys, StateSpace};
 
 /// Per-column geometric-mean scaling factors from a CSC matrix:
@@ -209,19 +208,12 @@ pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
     }
 }
 
-/// Pre-compute the per-stage clock tables `(zeta_per_stage, block_hours_per_stage)`.
-pub(super) fn compute_stage_hours(study_stages: &[&Stage]) -> (Vec<f64>, Vec<Vec<f64>>) {
-    let n = study_stages.len();
-    let mut zeta_per_stage = Vec::with_capacity(n);
-    let mut block_hours_per_stage = Vec::with_capacity(n);
-
-    for stage in study_stages {
-        let block_hours: Vec<f64> = stage.blocks.iter().map(|b| b.duration_hours).collect();
-        zeta_per_stage.push(BlockClock::new(stage).zeta());
-        block_hours_per_stage.push(block_hours);
-    }
-
-    (zeta_per_stage, block_hours_per_stage)
+/// Pre-compute the per-stage block-hours table.
+pub(super) fn compute_stage_hours(study_stages: &[&Stage]) -> Vec<Vec<f64>> {
+    study_stages
+        .iter()
+        .map(|stage| stage.blocks.iter().map(|b| b.duration_hours).collect())
+        .collect()
 }
 
 #[cfg(test)]

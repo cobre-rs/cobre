@@ -166,7 +166,7 @@ fn load_balance_rhs_matches_load_model_mean_mw() {
 }
 
 #[test]
-fn multiple_stages_produce_same_count_templates_and_zeta_per_stage() {
+fn multiple_stages_produce_same_count_templates_and_block_hours() {
     let system = one_hydro_system(3, 1);
     let result = build_stage_templates_resolving_layout(
         &system,
@@ -179,7 +179,7 @@ fn multiple_stages_produce_same_count_templates_and_zeta_per_stage() {
     )
     .expect("constant productivity ok");
     assert_eq!(result.templates.len(), 3);
-    assert_eq!(result.zeta_per_stage.len(), 3);
+    assert_eq!(result.block_hours_per_stage.len(), 3);
 }
 
 #[test]

@@ -2186,7 +2186,6 @@ fn stage_templates_empty_is_all_empty() {
     assert_eq!(empty.n_load_buses(), 0, "n_load_buses must be 0");
 
     assert!(empty.templates.is_empty(), "templates");
-    assert!(empty.zeta_per_stage.is_empty(), "zeta_per_stage");
     assert!(
         empty.block_hours_per_stage.is_empty(),
         "block_hours_per_stage"

@@ -1156,6 +1156,7 @@ fn evap_bound_prevents_dump_valve() {
 /// storage columns.
 #[test]
 fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
+    const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
     use cobre_sddp::indexer::Boundary;
     use cobre_sddp::indexer::HydroSys;
 
@@ -1183,7 +1184,7 @@ fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
             "stage {s}: a parallel stage must reserve exactly one evaporation slot"
         );
         let ei = g.evap_indices[0];
-        let zeta = templates.zeta_per_stage[s];
+        let zeta = templates.block_hours_per_stage[s].iter().sum::<f64>() * M3S_TO_HM3;
 
         let water_value = csc_entry(t, ei.evaporation_flow_col, g.water_balance.start())
             .expect("evaporation flow column must have an entry on the water row");

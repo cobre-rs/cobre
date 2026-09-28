@@ -16,7 +16,7 @@ fn empty_stages_returns_empty() {
     )
     .expect("constant productivity ok");
     assert!(result.templates.is_empty());
-    assert!(result.zeta_per_stage.is_empty());
+    assert!(result.block_hours_per_stage.is_empty());
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn one_stage_one_template() {
     )
     .expect("constant productivity ok");
     assert_eq!(result.templates.len(), 1);
-    assert_eq!(result.zeta_per_stage.len(), 1);
+    assert_eq!(result.block_hours_per_stage.len(), 1);
 }
 
 #[test]

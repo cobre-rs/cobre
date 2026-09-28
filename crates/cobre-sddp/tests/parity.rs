@@ -1449,7 +1449,6 @@ mod determinism {
                     &sim_config,
                     SimulationOutputSpec {
                         result_tx: &result_tx,
-                        zeta_per_stage: &[],
                         hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
                         block_hours_per_stage: &vec![vec![744.0]; fx.n_stages],
                         entity_counts: &entity_counts,

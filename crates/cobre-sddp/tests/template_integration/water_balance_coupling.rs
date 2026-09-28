@@ -23,6 +23,7 @@ fn row_nnz_counts(t: &StageTemplate) -> Vec<usize> {
 
 #[test]
 fn every_committed_deck_reads_z_inflow_on_its_water_rows() {
+    const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
     let slow_tests_enabled = cfg!(feature = "slow-tests");
 
     for deck in committed_decks() {
@@ -43,8 +44,8 @@ fn every_committed_deck_reads_z_inflow_on_its_water_rows() {
             let geom = &templates.geometry_per_stage[s];
             let water = geom.water_balance.range();
             let stride = water.len() / n_hydros;
-            let zeta = templates.zeta_per_stage[s];
             let block_hours = &templates.block_hours_per_stage[s];
+            let zeta = block_hours.iter().sum::<f64>() * M3S_TO_HM3;
             let nnz = row_nnz_counts(t);
             let is_frozen =
                 |d: usize| -> bool { (0..stride).all(|k| nnz[water.start + d * stride + k] == 2) };

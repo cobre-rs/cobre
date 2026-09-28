@@ -216,6 +216,29 @@ pub struct CheckpointParams {
     pub export_states: bool,
 }
 
+fn pool_entity_manifests(
+    setup: &StudySetup,
+    system: &System,
+    n_pools: usize,
+) -> Vec<Vec<EntitySlot>> {
+    let global_layout = setup.stage_state();
+    (0..n_pools)
+        .map(|p| {
+            // `p` is a pool ordinal; its owning stage resolves through
+            // `pool_stage` — indexing `study_stage_ids` by `p` is OOB once
+            // `n_pools > n_stages` on a branching graph (see `NodeGraph::pool_stage`).
+            let stage_id = setup.study_stage_ids[setup.node_graph.pool_stage[p].0];
+            build_stage_entity_manifest(
+                system,
+                global_layout,
+                &setup.stage_data.study_dims.anticipated_plants,
+                &setup.stage_data.cut_state_layouts[p],
+                stage_id,
+            )
+        })
+        .collect()
+}
+
 /// Write the trained policy (cuts, bases, visited states, metadata) to
 /// `policy_dir` as `FlatBuffers` files.
 ///
@@ -243,22 +266,7 @@ pub fn write_checkpoint(
     let n_pools = fcf.pools.len();
     let n_stages = setup.num_stages();
 
-    let global_layout = setup.stage_state();
-    let stage_manifests: Vec<Vec<EntitySlot>> = (0..n_pools)
-        .map(|p| {
-            // `p` is a pool ordinal; its owning stage resolves through
-            // `pool_stage` — indexing `study_stage_ids` by `p` is OOB once
-            // `n_pools > n_stages` on a branching graph (see `NodeGraph::pool_stage`).
-            let stage_id = setup.study_stage_ids[setup.node_graph.pool_stage[p].0];
-            build_stage_entity_manifest(
-                system,
-                global_layout,
-                &setup.stage_data.study_dims.anticipated_plants,
-                &setup.stage_data.cut_state_layouts[p],
-                stage_id,
-            )
-        })
-        .collect();
+    let stage_manifests = pool_entity_manifests(setup, system, n_pools);
 
     let cost_scale_factor = setup.stage_data.stage_templates.cost_scale_factor;
     let stage_records_internal = build_stage_cut_records(fcf);
@@ -329,7 +337,7 @@ pub fn write_checkpoint(
             }),
             training_block_mode,
             training_block_mode_per_stage,
-            cost_scale_factor: Some(setup.stage_data.stage_templates.cost_scale_factor),
+            cost_scale_factor: Some(cost_scale_factor),
         },
         season_manifest: build_season_manifest(system).to_season_manifest(),
     };

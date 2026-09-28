@@ -407,7 +407,10 @@ impl TimeValue {
     /// Test/fixture constructor: carries the literal delivery vectors over
     /// verbatim, with no post-study derivation.
     #[cfg(any(test, feature = "test-support"))]
-    #[allow(clippy::float_cmp)]
+    #[expect(
+        clippy::float_cmp,
+        reason = "the first cumulative discount is the literal 1.0, never a computed value"
+    )]
     pub(crate) fn from_parts(
         discount_factors: Vec<f64>,
         delivery_cumulative_discount_factors: Vec<f64>,

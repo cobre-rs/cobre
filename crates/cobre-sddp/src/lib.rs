@@ -1,9 +1,9 @@
 //! SDDP solver for hydrothermal dispatch.
 
-// Internal (unpublished) workspace crate: public items intra-doc-link their
-// pub(crate) collaborators as a maintainer aid (docs read with
-// --document-private-items); the public-only doc gate flags these intentional links.
-#![allow(rustdoc::private_intra_doc_links)]
+#![allow(
+    rustdoc::private_intra_doc_links,
+    reason = "public items link their pub(crate) collaborators for docs read with --document-private-items; an expect would be unfulfilled there"
+)]
 #![cfg_attr(
     test,
     allow(

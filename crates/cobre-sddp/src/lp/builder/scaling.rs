@@ -5,7 +5,7 @@
 use cobre_core::Stage;
 use cobre_solver::StageTemplate;
 
-use crate::indexer::{HydroSys, StateSpace};
+use crate::indexer::StateSpace;
 
 /// Per-column geometric-mean scaling factors from a CSC matrix:
 /// `1 / sqrt(max|A_ij| * min|A_ij|)` over nonzeros, `1.0` for an empty column.
@@ -66,40 +66,6 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
     {
         *lo /= d;
         *hi /= d;
-    }
-}
-
-/// Override the matrix-derived empty-column default (`1.0`) on travel-time
-/// bucket columns with the corresponding downstream plant's already-computed
-/// storage scale — buckets are volumes (hm³), the same unit as storage, and
-/// `transit_bucket_column_order[b] = (plant_canonical_idx, _lag)` IS that plant's
-/// `storage` column offset, so REUSE it rather than re-deriving a bucket scale
-/// from row/column entries the LP fill has not wired yet. Every lag for the
-/// same plant shares that one scale — they measure the same reservoir's
-/// incoming volume, not independent quantities. No-op when `n_buckets == 0`.
-///
-/// # Panics (debug builds only)
-///
-/// Panics if `col_scale` does not cover every state column including `theta` —
-/// the `col_scale.len() > theta_col` contract every render/patch call site
-/// relies on.
-// Voice 4: no production call site wires this in yet — `postprocess_templates`
-// activates it once the travel-time bucket LP fill gives bucket columns real
-// row/column entries. The `#[allow(dead_code)]` refires once that reader lands.
-#[allow(dead_code)]
-pub(crate) fn apply_bucket_col_scale(col_scale: &mut [f64], state_layout: &StateSpace) {
-    debug_assert!(
-        col_scale.len() > state_layout.theta,
-        "col_scale must cover every state column including theta ({}); got len {}",
-        state_layout.theta,
-        col_scale.len()
-    );
-    for (b, &(plant_idx, _lag)) in state_layout.transit_bucket_column_order.iter().enumerate() {
-        let d = col_scale[state_layout
-            .storage_outgoing_col(HydroSys::new(plant_idx))
-            .get()];
-        col_scale[state_layout.bucket_outgoing_col(b).get()] = d;
-        col_scale[state_layout.bucket_incoming_col(b).get()] = d;
     }
 }
 
@@ -410,64 +376,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Bucket column scale tests
-    // =========================================================================
-
     use crate::indexer::StateSpace;
-
-    /// `N=2` hydros, `L=0` (no lags), `B=3` buckets: hydro 0 feeds two lags
-    /// (depth 2), hydro 1 feeds one lag (depth 1). Each bucket's in/out scale
-    /// must equal ITS downstream plant's storage scale, and every lag of the
-    /// same plant must share that one value.
-    #[test]
-    fn apply_bucket_col_scale_reuses_storage_scale_per_plant() {
-        let state_layout =
-            StateSpace::new(2, 0, 3, vec![(0, 1), (0, 2), (1, 1)], 0, 0, vec![], &[0, 0]);
-
-        assert_eq!(state_layout.storage, 0..2);
-        assert_eq!(state_layout.transit_buckets_out, 2..5);
-        assert_eq!(state_layout.transit_buckets_in, 9..12);
-        assert_eq!(state_layout.theta, 12);
-
-        let mut col_scale = vec![1.0_f64; state_layout.theta + 1];
-        col_scale[state_layout.storage.start] = 2.0; // hydro 0
-        col_scale[state_layout.storage.start + 1] = 5.0; // hydro 1
-
-        super::apply_bucket_col_scale(&mut col_scale, &state_layout);
-
-        assert!(col_scale.len() > state_layout.theta);
-        for (b, &(plant_idx, _lag)) in state_layout.transit_bucket_column_order.iter().enumerate() {
-            let expected = col_scale[state_layout.storage.start + plant_idx];
-            let out = col_scale[state_layout.transit_buckets_out.start + b];
-            let in_ = col_scale[state_layout.transit_buckets_in.start + b];
-            assert!(out.is_finite() && out == expected, "bucket {b} out scale");
-            assert!(in_.is_finite() && in_ == expected, "bucket {b} in scale");
-        }
-        // Hydro 0's two lags (buckets 0, 1) share hydro 0's scale.
-        assert_eq!(col_scale[state_layout.transit_buckets_out.start], 2.0);
-        assert_eq!(col_scale[state_layout.transit_buckets_out.start + 1], 2.0);
-        // Hydro 1's one lag (bucket 2) gets hydro 1's scale.
-        assert_eq!(col_scale[state_layout.transit_buckets_out.start + 2], 5.0);
-    }
-
-    /// `B == 0`: `transit_bucket_column_order` is empty, so the override loop touches
-    /// no column — `col_scale` is left exactly as the generic computation
-    /// produced it.
-    #[test]
-    fn apply_bucket_col_scale_is_noop_when_b_zero() {
-        let state_layout = StateSpace::new(2, 0, 0, vec![], 0, 0, vec![], &[0, 0]);
-        let mut col_scale = vec![1.0_f64; state_layout.theta + 1];
-        col_scale[0] = 3.0;
-
-        let before = col_scale.clone();
-        super::apply_bucket_col_scale(&mut col_scale, &state_layout);
-
-        assert_eq!(
-            col_scale, before,
-            "n_buckets == 0 must leave col_scale untouched"
-        );
-    }
 
     // =========================================================================
     // Commitment-hold col_scale=1.0 override

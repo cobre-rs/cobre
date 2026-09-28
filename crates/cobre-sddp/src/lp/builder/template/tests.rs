@@ -2094,7 +2094,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             k_max: ctx_a.anticipated_resolution.k_max,
             max_fanout: ctx_a.anticipated_resolution.max_fanout,
         },
-        study_stage_ids: ctx_a.study_stage_ids.clone(),
         has_penalty: ctx_a.has_penalty,
         time_value: ctx_a.time_value,
         filling_v_target: ctx_a.filling_v_target.clone(),
@@ -2477,7 +2476,13 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         &time_value,
     );
 
-    assert_eq!(ctx.time_value.delivery_stage_ids(), ctx.study_stage_ids);
+    let study_stage_ids: Vec<i32> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ctx.time_value.delivery_stage_ids(), study_stage_ids);
 }
 
 /// Three study stages (ids `[0, 1, 2]`) plus two post-study stages continue
@@ -2523,7 +2528,13 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         &time_value,
     );
 
-    assert_eq!(ctx.study_stage_ids, vec![0, 1, 2]);
+    let study_stage_ids: Vec<i32> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(study_stage_ids, vec![0, 1, 2]);
     assert_eq!(ctx.time_value.delivery_stage_ids(), vec![0, 1, 2, 3, 4]);
     assert!(
         ctx.time_value
@@ -4012,8 +4023,8 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
     super::build_single_stage_template(&ctx, &state, stage, 0).template
 }
 
-/// `K = 1` chronological build collapses to the parallel LP: the
-/// `storage_internal` interior-column family is empty, there is one water row,
+/// `K = 1` chronological build collapses to the parallel LP: the interior
+/// storage-boundary column family is empty, there is one water row,
 /// and FPHA rides the single incoming/outgoing storage pair — so the two
 /// templates are byte-identical. This anchors the layout half of
 /// the chronological feature against any regression that perturbs the `K = 1`

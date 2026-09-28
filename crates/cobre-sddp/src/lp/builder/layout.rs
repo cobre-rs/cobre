@@ -129,13 +129,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// (`crate::setup::resolve_state_layout`) — the same resolution the role-(a)
     /// `StateSpace` this build receives already carries.
     pub(crate) anticipated_resolution: AnticipatedResolution,
-    /// `study_stage_ids[t] = stage.id`, length `n_study_stages`.
-    // Rationale: read only by the study-only-axis regression assertions in
-    // `template::tests` (`ctx.time_value.delivery_stage_ids() ==
-    // ctx.study_stage_ids`); the decision gate's window clause reads
-    // `ctx.time_value.delivery_stage_ids()` in production.
-    #[allow(dead_code)]
-    pub(crate) study_stage_ids: Vec<i32>,
     /// Whether any penalty method is active.
     pub(crate) has_penalty: bool,
     /// Present-value discounting and delivery hours/ids at each DELIVERY
@@ -257,17 +250,9 @@ pub(crate) struct AnticipatedLayout {
 /// deficit/excess/generation/evaporation/NCS/pumping/contracts), anchored at
 /// the handle's [`StateSpace::control_region_start`].
 pub(crate) struct EquipmentColumns {
-    /// Column range for the interior storage boundaries `S¹ … Sᴷ⁻¹` (one column
-    /// per `(hydro, interior boundary)`, block-minor); empty `0..0` in parallel
-    /// mode and when `K = 1`.
-    // The Range read site lands with the per-block water-balance fill (which iterates
-    // it to address interior columns); the bounds loop and accessor address interiors
-    // through `storage_internal_start`, not this field. Until then only the layout
-    // unit test reads the Range.
-    #[allow(dead_code)]
-    pub(crate) storage_internal: Range<usize>,
-    /// Control-region anchor for `storage_internal` (= `control_region_start()`),
-    /// read even when the family is empty. Within-family address is
+    /// Control-region anchor for the interior storage boundaries `S¹ … Sᴷ⁻¹`
+    /// (= `control_region_start()`), read even when the family reserves no
+    /// columns (parallel mode, or `K = 1`). Within-family address is
     /// `storage_internal_start + h * (n_blks − 1) + (k − 1)` for interior boundary
     /// `k ∈ 1..n_blks` — stride `n_blks − 1`, not `n_blks`.
     pub(crate) storage_internal_start: usize,
@@ -301,14 +286,6 @@ pub(crate) struct EquipmentColumns {
     /// Column-block cursor at which the evaporation block begins, even when empty
     /// (`generation_col_start + n_fpha_cells * n_blks`).
     pub(crate) evap_col_start: usize,
-    /// Shared post-equipment column cursor for empty-hydro fallbacks
-    /// (`evap_col_start`). The eight withdrawal/operational column families and
-    /// the NCS region collapse onto this single cursor when `n_h == 0`.
-    // Rationale: read only by the layout unit tests pinning the RangeCursor
-    // collapse invariant (no production accessor branches on `n_h` anymore, so a
-    // non-test build sees it as unread).
-    #[allow(dead_code)]
-    pub(crate) post_equipment_col_start: usize,
     /// Start of NCS generation columns (one per NCS per block, dense and
     /// system-indexed): `col_ncs_start + ncs_sys_idx * n_blks + blk`. A
     /// commissioning-dormant NCS keeps its column zeroed to `[0, 0]`, so the
@@ -448,14 +425,6 @@ pub(crate) struct ConstraintRows {
     /// Row cursor at which the evaporation row block begins (`fpha_rows_end`),
     /// even when the FPHA block is empty.
     pub(crate) fpha_rows_end: usize,
-    /// Shared post-equipment row cursor for empty-hydro fallbacks
-    /// (`fpha_rows_end + n_evap_hydros`). The four operational-violation row
-    /// families collapse onto this single cursor when `n_h == 0`.
-    // Rationale: read only by the layout unit tests pinning the RangeCursor
-    // collapse invariant (no production accessor branches on `n_h` anymore, so a
-    // non-test build sees it as unread).
-    #[allow(dead_code)]
-    pub(crate) post_equipment_row_start: usize,
     /// Start of generic constraint rows (one per active `(constraint, block)` pair),
     /// after operational-violation rows.
     pub(crate) row_generic_start: usize,
@@ -1253,8 +1222,7 @@ impl<'a> StageLayout<'a> {
             BlockMode::Parallel => 0,
         };
         let mut col = RangeCursor::new(state.control_region_start());
-        let storage_internal = col.alloc(n_h * n_interior);
-        let storage_internal_start = storage_internal.start;
+        let storage_internal_start = col.alloc(n_h * n_interior).start;
         let n_cells = ctx.hydro_cell_index.n_cells();
         let turbine = col.alloc(n_cells * n_blks);
         let spillage = col.alloc(n_h * n_blks);
@@ -1285,7 +1253,6 @@ impl<'a> StageLayout<'a> {
         let n_evap_slots = evaporation_slot_count(stage.block_mode, n_blks);
         let evap_col_start = col.pos();
         col.alloc(n_evap_hydros * n_evap_slots * EVAP_COLS_PER_HYDRO);
-        let post_equipment_col_start = evap_col_start;
 
         // ── Role-(b) constraint row ranges ───────────────────────────────────
         // The builder's own rows start immediately after `StateSpace::z_inflow_rows()`,
@@ -1323,7 +1290,6 @@ impl<'a> StageLayout<'a> {
         let evap_indices =
             build_evap_indices(n_evap_hydros, n_evap_slots, evap_col_start, fpha_rows_end);
         row.alloc(n_evap_hydros * n_evap_slots);
-        let post_equipment_row_start = row.pos();
 
         // Withdrawal slacks + the four operational-violation slack families (after
         // the evaporation columns) and their matching rows (after the evaporation
@@ -1440,7 +1406,6 @@ impl<'a> StageLayout<'a> {
             .collect();
 
         let equipment = EquipmentColumns {
-            storage_internal,
             storage_internal_start,
             turbine,
             spillage,
@@ -1454,7 +1419,6 @@ impl<'a> StageLayout<'a> {
             generation_col_start,
             generation,
             evap_col_start,
-            post_equipment_col_start,
             col_ncs_start,
             n_ncs,
             col_pumping_start,
@@ -1476,7 +1440,6 @@ impl<'a> StageLayout<'a> {
             transit_bucket_row_pos,
             load_balance,
             fpha_rows_end,
-            post_equipment_row_start,
             row_generic_start,
             num_rows,
             n_generic_rows: generic.n_generic_rows,

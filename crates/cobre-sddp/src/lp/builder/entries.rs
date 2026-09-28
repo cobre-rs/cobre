@@ -2361,11 +2361,10 @@ mod zero_cost_tests {
                 anticipated_lead_stages,
                 anticipated_plants: &self.anticipated_plants,
                 // Windowless: one `(None, None)` per plant, so the decision gate
-                // reduces to the strict horizon clause. `study_stage_ids` lists the
-                // study-stage ids so the in-range delivery lookup is safe.
+                // reduces to the strict horizon clause, which stays in range
+                // against `ctx.time_value.delivery_stage_ids()`.
                 anticipated_windows: vec![(None, None); n_anticipated],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0)).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 // No hydros ⇒ no filling targets.
@@ -4173,7 +4172,6 @@ mod pumping_water_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 // These single-stage fixtures decouple `stage.id` from

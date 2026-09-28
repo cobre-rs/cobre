@@ -302,18 +302,6 @@ pub struct StudySetup {
     /// the simulation pipeline for stored-energy calculations.
     pub(crate) hydro_min_storage_hm3: Vec<f64>,
 
-    /// Water travel-time in-transit bucket topology: canonical column order,
-    /// global bucket count, per-stage reachability mask, and the three
-    /// resolved arc tables (stage-clock weights, chronological spread,
-    /// arrival density) — the single derivation site for all of them. Empty
-    /// (`n_buckets == 0`) when the system declares no travel-time arc.
-    // Every field is consumed via the constructor's threaded LOCAL
-    // (state-layout sizing, the LP builder's arc-table threading, the bucket
-    // IC seed) before this STORED field is set below; no post-construction
-    // reader exists yet. `#[allow(dead_code)]` refires once one lands.
-    #[allow(dead_code)]
-    pub(crate) transit_bucket_topology: bucket_topology::TransitBucketTopology,
-
     /// Per-stage warm-start basis cache for warm-start / resume training.
     ///
     /// Populated by the CLI / Python paths via
@@ -481,9 +469,10 @@ impl StudySetup {
             .set_solve_order(&solve_order_keys)
             .map_err(|e| SddpError::Validation(e.to_string()))?;
 
-        // Computed here (not inside `build_energy_and_templates`) so the one
-        // `TransitBucketTopology` this constructor derives from `system` also seeds the
-        // `StudySetup.transit_bucket_topology` field below, with no second call.
+        // Computed here (not inside `build_energy_and_templates`) so this
+        // constructor's one `TransitBucketTopology` derivation threads into every
+        // downstream step below (state-layout sizing, the LP builder's arc-table
+        // threading, the bucket IC seed) with no second call.
         // `boundary.is_present()` gates the terminal deep-lag mask (the
         // Delivery-family right-boundary pricing contract) — every rank resolves it
         // identically from the broadcast config, before `inject_boundary_cuts` runs.
@@ -814,7 +803,6 @@ impl StudySetup {
             derived_inflow_seeds,
             energy_conversion,
             hydro_min_storage_hm3,
-            transit_bucket_topology,
             warm_start_basis_cache: None,
             boundary_requirements: boundary,
         })

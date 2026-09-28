@@ -581,7 +581,6 @@ pub fn geometry(
         anticipated_plants: &dims.anticipated_plants,
         anticipated_windows: vec![(None, None); dims.n_anticipated],
         anticipated_resolution: AnticipatedResolution::default(),
-        study_stage_ids: Vec::new(),
         has_penalty: dims.has_inflow_penalty,
         time_value: &TimeValue::from_parts(
             vec![],

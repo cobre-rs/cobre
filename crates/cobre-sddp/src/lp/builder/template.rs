@@ -1036,7 +1036,6 @@ fn build_template_build_ctx<'a>(
         anticipated_plants,
         anticipated_windows,
         anticipated_resolution,
-        study_stage_ids,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
         time_value,
         filling_v_target,

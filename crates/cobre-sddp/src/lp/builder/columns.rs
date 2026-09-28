@@ -1601,7 +1601,6 @@ mod interior_storage_bound_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -1625,17 +1624,18 @@ mod interior_storage_bound_tests {
             objective: &mut objective,
         };
         fill_storage_columns(&ctx, stage, STAGE_IDX, &layout, &mut bufs);
-        // The actual interior columns are the `storage_internal` range members
-        // (empty in parallel mode and at K = 1); `block_storage_col(0, k)` for
-        // interior `k` resolves into this range only in chronological K ≥ 2.
-        let interior: Vec<usize> = layout.equipment.storage_internal.clone().collect();
+        // The interior family is the range between its own anchor and the next
+        // family's start (`turbine`, allocated immediately after it); empty in
+        // parallel mode and at K = 1.
+        let interior: Vec<usize> =
+            (layout.equipment.storage_internal_start..layout.equipment.turbine.start).collect();
         RawFill {
             col_lower,
             col_upper,
             objective,
             endpoint: layout.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
+            storage_internal_empty: interior.is_empty(),
             interior,
-            storage_internal_empty: layout.equipment.storage_internal.is_empty(),
         }
     }
 
@@ -1723,7 +1723,7 @@ mod interior_storage_bound_tests {
         let parallel = run_fill(&fixtures, &stage_with_blocks(BlockMode::Parallel));
         assert!(
             parallel.storage_internal_empty,
-            "parallel storage_internal must be empty (no interior columns)"
+            "parallel interior storage-boundary family must be empty (no interior columns)"
         );
         assert_eq!(
             parallel.interior,
@@ -1782,7 +1782,7 @@ mod interior_storage_bound_tests {
             let l = StageLayout::new(&par_ctx, &par_state, &stage, STAGE_IDX);
             (
                 l.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
-                l.equipment.storage_internal.is_empty(),
+                l.equipment.storage_internal_start == l.equipment.turbine.start,
             )
         };
         assert!(
@@ -2111,7 +2111,6 @@ mod diversion_bound_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -2548,7 +2547,6 @@ mod filling_phase_gating_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -3568,11 +3566,10 @@ mod anticipated_objective_tests {
                 anticipated_lead_stages: vec![K_MAX],
                 anticipated_plants: &self.anticipated_plants,
                 // Windowless single plant: the decision gate reduces to the
-                // strict horizon clause. `study_stage_ids` lists the N_STAGES
-                // study-stage ids so the in-range delivery lookup is safe.
+                // strict horizon clause, which stays in range against
+                // `ctx.time_value.delivery_stage_ids()`.
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -3702,7 +3699,6 @@ mod anticipated_objective_tests {
         resolved_ncs_bounds: ResolvedNcsBounds,
         resolved_ncs_factors: ResolvedNcsFactors,
         resolved_parameters: ResolvedParameters,
-        n_stages: usize,
         k_max: usize,
         time_value: TimeValue,
         anticipated_plants: AnticipatedPlants,
@@ -3805,7 +3801,6 @@ mod anticipated_objective_tests {
                     id_to_slot: vec![],
                     cost_scale_factor: 1_000_000.0,
                 },
-                n_stages,
                 k_max,
                 time_value,
                 anticipated_plants,
@@ -3861,7 +3856,6 @@ mod anticipated_objective_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -4218,7 +4212,6 @@ mod anticipated_objective_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![(None, None)],
                 anticipated_resolution: self.resolution.clone(),
-                study_stage_ids: (0..i32::try_from(PSA_N_STAGES).unwrap()).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -4744,7 +4737,6 @@ mod block_family_slack_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -5202,7 +5194,6 @@ mod evaporation_slack_objective_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -5531,7 +5522,6 @@ mod contract_column_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: vec![],
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -5885,7 +5875,6 @@ mod thermal_block_bound_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -6456,7 +6445,6 @@ mod line_contract_pumping_block_bound_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -7210,7 +7198,6 @@ mod hydro_block_bound_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -8332,7 +8319,6 @@ mod cell_column_bound_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..self.n_stages as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),
@@ -9303,7 +9289,6 @@ mod ncs_objective_tests {
                 anticipated_plants: &self.anticipated_plants,
                 anticipated_windows: vec![],
                 anticipated_resolution: AnticipatedResolution::default(),
-                study_stage_ids: (0..N_STAGES as i32).collect(),
                 has_penalty: false,
                 time_value: &self.time_value,
                 filling_v_target: BTreeMap::new(),

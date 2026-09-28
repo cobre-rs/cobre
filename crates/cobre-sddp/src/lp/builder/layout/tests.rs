@@ -266,13 +266,10 @@ impl ZeroEntityFixtures {
             anticipated_lead_stages,
             // Windowless: one `(None, None)` per anticipated plant. With no
             // window the operation-window clause is identically true, so the
-            // decision gate reduces to the strict horizon clause — the
-            // behaviour these layout tests assert. `study_stage_ids` is sized
-            // to the bounds' study-stage count so the gate's in-range
-            // delivery-stage lookup never indexes out of bounds.
+            // decision gate reduces to the strict horizon clause, which stays
+            // in range against `ctx.time_value.delivery_stage_ids()`.
             anticipated_windows: vec![(None, None); n_anticipated],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: (0..i32::try_from(self.bounds.n_stages()).unwrap_or(0)).collect(),
             anticipated_plants: &self.anticipated_plants,
             has_penalty: false,
             time_value: &self.time_value,
@@ -707,7 +704,6 @@ impl UsefulVolumeFixtures {
     }
 
     fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let n_stages = self.bounds.n_stages();
         TemplateBuildCtx {
             hydros: &self.hydros,
             thermals: &[],
@@ -756,7 +752,6 @@ impl UsefulVolumeFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -1072,11 +1067,11 @@ fn useful_volume_fold_unresolvable_hydro_id_fires_debug_assert() {
     let _ = StageLayout::new(&ctx, &state, &stage, 0);
 }
 
-// ── storage_internal interior-boundary sizing ────────────────────────────
+// ── interior storage-boundary sizing ─────────────────────────────────────
 
 /// Owns a two-hydro, constant-productivity `TemplateBuildCtx` for the
-/// `storage_internal` sizing assertions. No FPHA/filling/evaporation, so only
-/// the block geometry (`n_blks`, `block_mode`) and `n_hydros` drive the family.
+/// interior storage-boundary sizing assertions. No FPHA/filling/evaporation, so
+/// only the block geometry (`n_blks`, `block_mode`) and `n_hydros` drive the family.
 struct TwoHydroFixtures {
     par_lp: PrecomputedPar,
     hydros: Vec<Hydro>,
@@ -1188,7 +1183,6 @@ impl TwoHydroFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: vec![],
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -1210,11 +1204,11 @@ fn stage_with_blocks(block_mode: BlockMode, n_blks: usize) -> Stage {
     stage
 }
 
-/// `storage_internal` spans the `K − 1` interior boundaries per hydro only in
-/// chronological mode with `K ≥ 2`: empty in parallel mode and at `K = 1`, with
-/// `turbine.start` re-anchored to `storage_internal.end`.
+/// The interior storage-boundary family spans the `K − 1` interior boundaries
+/// per hydro only in chronological mode with `K ≥ 2`: empty in parallel mode
+/// and at `K = 1`, with `turbine.start` re-anchored to the family's end.
 #[test]
-fn chronological_storage_internal_sizing() {
+fn chronological_interior_storage_boundary_sizing() {
     let fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
@@ -1223,8 +1217,8 @@ fn chronological_storage_internal_sizing() {
     let stage_parallel = stage_with_blocks(BlockMode::Parallel, 3);
     let parallel = StageLayout::new(&ctx, &state, &stage_parallel, 0);
     assert_eq!(
-        parallel.equipment.storage_internal.start, parallel.equipment.storage_internal.end,
-        "parallel K=3 storage_internal is empty"
+        parallel.equipment.storage_internal_start, parallel.equipment.turbine.start,
+        "parallel K=3 interior storage-boundary family is empty"
     );
     assert_eq!(
         parallel.equipment.storage_internal_start, anchor,
@@ -1238,8 +1232,8 @@ fn chronological_storage_internal_sizing() {
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
     let chrono_k1 = StageLayout::new(&ctx, &state, &stage_chrono_k1, 0);
     assert_eq!(
-        chrono_k1.equipment.storage_internal.start, chrono_k1.equipment.storage_internal.end,
-        "chronological K=1 storage_internal is empty"
+        chrono_k1.equipment.storage_internal_start, chrono_k1.equipment.turbine.start,
+        "chronological K=1 interior storage-boundary family is empty"
     );
     assert_eq!(
         chrono_k1.equipment.storage_internal_start, anchor,
@@ -1257,20 +1251,22 @@ fn chronological_storage_internal_sizing() {
         "chronological K=3 storage_internal_start anchors at control_region_start()"
     );
     assert_eq!(
-        chrono_k3.equipment.storage_internal.end - chrono_k3.equipment.storage_internal.start,
+        chrono_k3.equipment.turbine.start - chrono_k3.equipment.storage_internal_start,
         4,
-        "chronological K=3 storage_internal spans n_h * (K - 1) = 2 * 2 columns"
+        "chronological K=3 interior storage-boundary family spans n_h * (K - 1) = 2 * 2 columns"
     );
     assert_eq!(
-        chrono_k3.equipment.turbine.start, chrono_k3.equipment.storage_internal.end,
-        "chronological K=3 turbine.start re-anchors to storage_internal.end"
+        chrono_k3.equipment.turbine.start,
+        chrono_k3.equipment.storage_internal_start + 4,
+        "chronological K=3 turbine.start re-anchors 4 columns after storage_internal_start"
     );
 }
 
 /// `block_storage_col` resolves all `K + 1` boundaries: the two endpoints to the
 /// state columns (`k = 0 → storage_in[h]`, `k = K → storage[h] = h`) and the
-/// `K − 1` interiors into the `storage_internal` family at stride `n_blks − 1`. At
-/// `K = 1` only the two endpoints resolve (no interior column is addressed).
+/// `K − 1` interiors into the interior storage-boundary family at stride
+/// `n_blks − 1`. At `K = 1` only the two endpoints resolve (no interior column
+/// is addressed).
 #[test]
 fn block_storage_col_resolves_all_boundaries() {
     let fixtures = TwoHydroFixtures::new();
@@ -1302,16 +1298,17 @@ fn block_storage_col_resolves_all_boundaries() {
         chrono_k3.equipment.storage_internal_start + h * 2 + 1,
         "k = 2 resolves to storage_internal_start + h * (K - 1) + 1"
     );
+    let interior_range =
+        chrono_k3.equipment.storage_internal_start..chrono_k3.equipment.turbine.start;
     assert!(
-        chrono_k3.equipment.storage_internal.contains(&interior_1)
-            && chrono_k3.equipment.storage_internal.contains(&interior_2),
-        "both interior columns lie within the storage_internal range"
+        interior_range.contains(&interior_1) && interior_range.contains(&interior_2),
+        "both interior columns lie within the interior storage-boundary range"
     );
 
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
     let chrono_k1 = StageLayout::new(&ctx, &state, &stage_chrono_k1, 0);
-    assert!(
-        chrono_k1.equipment.storage_internal.is_empty(),
+    assert_eq!(
+        chrono_k1.equipment.storage_internal_start, chrono_k1.equipment.turbine.start,
         "K = 1 has no interior storage columns"
     );
     for h in 0..ctx.n_hydros {
@@ -1616,7 +1613,6 @@ impl FphaMixFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: vec![],
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -1800,7 +1796,6 @@ impl FillingMembershipFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: vec![],
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -3050,7 +3045,6 @@ impl AntFixturesWithNStages {
         anticipated_positions: &[usize],
     ) -> TemplateBuildCtx<'_> {
         self.anticipated_plants = anticipated_plants_at(anticipated_positions);
-        let n_stages = self.bounds.n_stages();
         TemplateBuildCtx {
             hydros: &[],
             thermals: &[],
@@ -3098,11 +3092,10 @@ impl AntFixturesWithNStages {
             anticipated_lead_stages,
             anticipated_plants: &self.anticipated_plants,
             // Windowless: one `(None, None)` per plant, so the decision gate
-            // reduces to the strict horizon clause. `study_stage_ids` covers
-            // the study-stage count so the in-range delivery lookup is safe.
+            // reduces to the strict horizon clause, which stays in range
+            // against `ctx.time_value.delivery_stage_ids()`.
             anticipated_windows: vec![(None, None); n_anticipated],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -3352,7 +3345,6 @@ impl PumpingFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: vec![],
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -3794,7 +3786,7 @@ fn column_accessors_match_open_coded_formulas() {
 /// hand-computed offset that reintroduces a `0..0` empty-range fallback would
 /// shift these starts off `col_evap_start` and fail here.
 #[test]
-fn post_equipment_col_start_matches_evap_col_start_when_no_hydros() {
+fn withdrawal_and_operational_columns_collapse_onto_evap_col_start_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(0, vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
@@ -3838,13 +3830,13 @@ fn post_equipment_col_start_matches_evap_col_start_when_no_hydros() {
 // ── post-equipment row cursor (no-hydro fork fallback) ──────────────────────
 
 /// With `n_hydros == 0` every operational-violation row block is empty, so
-/// `RangeCursor::alloc(0)` leaves all four row starts at the single
-/// post-equipment row cursor `fpha_rows_end() + n_evap_hydros`. A multi-block
-/// stage keeps that cursor non-trivial (not the degenerate one-row case), so a
-/// hand-computed offset that reintroduces a `0..0` empty-range fallback would
-/// shift these starts off the shared post-equipment row cursor and fail here.
+/// `RangeCursor::alloc(0)` leaves all four row starts at the shared
+/// post-equipment row cursor, which with zero evap hydros equals
+/// `row_evap_start()`. A multi-block stage keeps that cursor non-trivial (not
+/// the degenerate one-row case), so a hand-computed offset that reintroduces a
+/// `0..0` empty-range fallback would shift these starts off it and fail here.
 #[test]
-fn post_equipment_row_start_matches_evap_rows_end_when_no_hydros() {
+fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(0, vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
@@ -3854,7 +3846,7 @@ fn post_equipment_row_start_matches_evap_rows_end_when_no_hydros() {
     assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
     assert_eq!(layout.n_blks, 4, "fixture must build a 4-block layout");
 
-    let post_equipment = layout.rows.post_equipment_row_start;
+    let post_equipment = layout.row_evap_start();
     assert_eq!(
         layout.slack.oper_violation.min_outflow_rows.start, post_equipment,
         "row_min_outflow_start must collapse onto the post-equipment row cursor when n_hydros == 0"
@@ -3875,9 +3867,9 @@ fn post_equipment_row_start_matches_evap_rows_end_when_no_hydros() {
 
 // ── Group-2 accessors: hydro-free divergence guard ──────────────────────────
 
-/// With `n_hydros == 0`, every Group-2 accessor must return the post-equipment
-/// cursor — `post_equipment_col_start` for the eight column accessors,
-/// `post_equipment_row_start` for the five row accessors. Each accessor is a
+/// With `n_hydros == 0`, every Group-2 accessor must return the shared
+/// post-equipment cursor — `evap_col_start` for the eight column accessors,
+/// `row_evap_start()` for the five row accessors. Each accessor is a
 /// bare `self.<range>.start`/`.end`, correct only because `StageLayout::new`
 /// allocates every one of these families through `RangeCursor::alloc`:
 /// `alloc(0)` returns `pos..pos`, so an empty family's `.start` already equals
@@ -3886,10 +3878,10 @@ fn post_equipment_row_start_matches_evap_rows_end_when_no_hydros() {
 /// assertions.
 ///
 /// The column cursor is additionally asserted `!= 0`: the theta and state columns
-/// always precede the equipment/slack region, so `post_equipment_col_start` is
+/// always precede the equipment/slack region, so `evap_col_start` is
 /// provably positive and a spurious `0` is directly detectable. The row cursor is
 /// NOT asserted `!= 0`: with zero hydros AND zero buses no rows precede the
-/// operational-violation block, so `post_equipment_row_start` is legitimately `0`
+/// operational-violation block, so `row_evap_start()` is legitimately `0`
 /// here (asserting `!= 0` would test a false invariant). The non-zero-row
 /// divergence is covered end-to-end by the D01 hydro-free parity case, whose
 /// load-balance rows make the row cursor positive.
@@ -3904,10 +3896,10 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
     assert_eq!(layout.n_blks, 4, "fixture must build a 4-block layout");
 
-    // Column cursor: the eight column accessors collapse onto
-    // `post_equipment_col_start` (== `col_evap_start()`) with no hydros, and
-    // that cursor is provably positive (theta + state columns precede it).
-    let post_col = layout.equipment.post_equipment_col_start;
+    // Column cursor: the eight column accessors collapse onto `evap_col_start`
+    // with no hydros, and that cursor is provably positive (theta + state
+    // columns precede it).
+    let post_col = layout.equipment.evap_col_start;
     assert_ne!(post_col, 0, "post-equipment column cursor must not be 0");
     for (value, name) in [
         (
@@ -3942,15 +3934,14 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     ] {
         assert_eq!(
             value, post_col,
-            "{name} must equal post_equipment_col_start() (not 0) when n_hydros == 0"
+            "{name} must equal evap_col_start (not 0) when n_hydros == 0"
         );
     }
 
-    // Row cursor: `row_evap_start()` is `fpha_rows_end`, which equals
-    // `post_equipment_row_start` (= `fpha_rows_end + n_evap_hydros`) when
-    // `n_evap_hydros == 0`. The four operational-violation row accessors collapse
-    // onto that same cursor. Each must equal it, never a bare `.start`.
-    let post_row = layout.rows.post_equipment_row_start;
+    // Row cursor: `row_evap_start()` is `fpha_rows_end`. The four
+    // operational-violation row accessors collapse onto that same cursor when
+    // n_evap_hydros == 0. Each must equal it, never a bare `.start`.
+    let post_row = layout.row_evap_start();
     for (value, name) in [
         (layout.row_evap_start(), "row_evap_start"),
         (
@@ -3972,7 +3963,7 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     ] {
         assert_eq!(
             value, post_row,
-            "{name} must equal post_equipment_row_start() when n_hydros == 0"
+            "{name} must equal row_evap_start() when n_hydros == 0"
         );
     }
 }
@@ -4155,7 +4146,6 @@ impl TwoHydroMultiBusFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: vec![],
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),
@@ -4410,7 +4400,6 @@ impl FphaMultiBusFixtures {
             anticipated_plants: &self.anticipated_plants,
             anticipated_windows: vec![],
             anticipated_resolution: AnticipatedResolution::default(),
-            study_stage_ids: vec![],
             has_penalty: false,
             time_value: &self.time_value,
             filling_v_target: BTreeMap::new(),

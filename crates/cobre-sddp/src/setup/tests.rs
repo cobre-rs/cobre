@@ -10770,3 +10770,84 @@ fn study_horizon_end_ignores_pre_study_stages() {
 
     assert_eq!(study_horizon_end(&system), Some(day(2031, 12, 1)));
 }
+
+// ── Terminal boundary flag: S1 vs S2/S3 formula agreement ───────────────────
+
+/// The bake's `active_count() > 0` classification (S1, `training/session/mod.rs`)
+/// and the per-solve `warm_start_count > 0` read (S2/S3, the forward pass and
+/// the simulation pipeline) must classify the terminal pool identically, on a
+/// plain and on an injected terminal pool, on a chain and on a terminal fan.
+#[test]
+fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
+    fn boundary_record(state_dimension: usize) -> cobre_io::OwnedPolicyCutRecord {
+        cobre_io::OwnedPolicyCutRecord {
+            cut_id: 0,
+            slot_index: 0,
+            coefficients: vec![0.0; state_dimension],
+            intercept: 100.0,
+            is_active: true,
+            iteration: 0,
+            forward_pass_index: 0,
+        }
+    }
+
+    fn check(setup: &StudySetup, min_terminal_nodes: usize, injected: bool) {
+        let node_graph = &setup.node_graph;
+        let last = super::node_graph::StageIdx(setup.training_ctx().horizon.num_stages() - 1);
+        let terminal_pool_id = setup.fcf.pools.len() - 1;
+
+        let terminal_nodes: Vec<_> = node_graph
+            .nodes
+            .iter()
+            .filter(|n| n.stage == last)
+            .collect();
+        assert!(
+            terminal_nodes.len() >= min_terminal_nodes,
+            "expected at least {min_terminal_nodes} terminal-stage node(s), got {}",
+            terminal_nodes.len()
+        );
+        assert!(
+            terminal_nodes.iter().all(|n| n.pool_id == terminal_pool_id),
+            "every terminal-stage node must share the highest-id pool"
+        );
+
+        let s1_pool = (0..node_graph.n_pools)
+            .rfind(|&p| node_graph.pool_stage[p] == last)
+            .expect("a terminal stage owns at least one pool");
+        let s1 = setup.fcf.pools[s1_pool].active_count() > 0;
+
+        let s2s3_node = node_graph
+            .any_stage_node(last)
+            .expect("terminal stage carries an alive node");
+        let s2s3_pool = node_graph.nodes[s2s3_node].pool_id;
+        let s2s3 = setup.fcf.pools[s2s3_pool].warm_start_count > 0;
+
+        assert_eq!(s1, s2s3, "the S1 and S2/S3 formulas must agree");
+        assert_eq!(
+            s1, injected,
+            "both formulas must equal whether a boundary record was injected"
+        );
+    }
+
+    let chain_plain = test_support::oracle_chain_setup(1);
+    check(&chain_plain, 1, false);
+
+    let mut chain_injected = test_support::oracle_chain_setup(1);
+    let record = boundary_record(chain_injected.fcf.state_dimension);
+    crate::inject_boundary_cuts(
+        &mut chain_injected,
+        &crate::ValidatedBoundaryCuts::from_broadcast_records(vec![record]),
+    );
+    check(&chain_injected, 1, true);
+
+    let fan_plain = test_support::terminal_generated_fan_setup(2, 1);
+    check(&fan_plain, 2, false);
+
+    let mut fan_injected = test_support::terminal_generated_fan_setup(2, 1);
+    let record = boundary_record(fan_injected.fcf.state_dimension);
+    crate::inject_boundary_cuts(
+        &mut fan_injected,
+        &crate::ValidatedBoundaryCuts::from_broadcast_records(vec![record]),
+    );
+    check(&fan_injected, 2, true);
+}

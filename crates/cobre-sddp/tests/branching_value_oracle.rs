@@ -885,8 +885,9 @@ const TERMINAL_BOUNDARY_INTERCEPT: f64 = 100.0;
 /// nonzero post-horizon value-to-go — the terminal-boundary-policy shape no
 /// existing fixture exercised. Mirrors `inject_boundary_cuts`, building the fixed
 /// warm-start pool directly from a hand-constructed record (the validated
-/// file-load path is unnecessary for a synthetic fixture).
-fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64) {
+/// file-load path is unnecessary for a synthetic fixture). `is_active` selects
+/// the record's own `is_active` field.
+fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64, is_active: bool) {
     let state_dim = setup.fcf.state_dimension;
     let forward_passes = setup.fcf.forward_passes;
     let terminal = setup.fcf.pools.len() - 1;
@@ -897,7 +898,7 @@ fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64)
         intercept,
         iteration: 0,
         forward_pass_index: 0,
-        is_active: true,
+        is_active,
     };
     setup.fcf.pools[terminal] =
         CutPool::new_with_warm_start(state_dim, forward_passes, 0, &[record]);
@@ -920,7 +921,7 @@ fn terminal_boundary_fcf_training_gap_is_consistent() {
     );
 
     let mut boundary = oracle_chain_setup(30);
-    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT);
+    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT, true);
     let (lb_b, ub_b) = train_bounds(&mut boundary);
 
     assert!(
@@ -959,7 +960,7 @@ fn terminal_boundary_fcf_simulation_cost_includes_post_horizon() {
     let mean_plain = mean_scenario_total_cost(&run_simulation(&mut plain, 1));
 
     let mut boundary = try_k_fan_simulation_enumerated(2).expect("simulate-enabled fixture builds");
-    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT);
+    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT, true);
     let mean_boundary = mean_scenario_total_cost(&run_simulation(&mut boundary, 1));
 
     assert!(
@@ -971,6 +972,77 @@ fn terminal_boundary_fcf_simulation_cost_includes_post_horizon() {
         mean_boundary > mean_plain,
         "the post-horizon FCF (a positive value-to-go) must strictly raise the reported \
          simulation cost: boundary mean {mean_boundary} must exceed plain mean {mean_plain}"
+    );
+}
+
+/// The one input where the terminal-boundary flag's two formulas disagree
+/// (`CutPool::active_count() > 0` vs `warm_start_count > 0`): a terminal pool
+/// whose only boundary record is `is_active: false`. Both leave terminal θ at
+/// 0 — the inactive record contributes no active LP row either way, and θ's
+/// own lower bound is `0.0` — so training must close to the plain chain's
+/// bounds regardless of which formula the engine reads.
+#[test]
+fn terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds() {
+    let mut plain = oracle_chain_setup(30);
+    let (lb_plain, ub_plain) = train_bounds(&mut plain);
+
+    let mut inactive = oracle_chain_setup(30);
+    inject_constant_terminal_boundary_fcf(&mut inactive, TERMINAL_BOUNDARY_INTERCEPT, false);
+    let (lb_inactive, ub_inactive) = train_bounds(&mut inactive);
+
+    let terminal = inactive.fcf.pools.len() - 1;
+    assert_eq!(
+        inactive.fcf.pools[terminal].active_count(),
+        0,
+        "the injected record is inactive"
+    );
+    assert_eq!(
+        inactive.fcf.pools[terminal].warm_start_count, 1,
+        "the injected record still counts as a warm-started slot"
+    );
+
+    assert!(
+        close(lb_inactive, lb_plain),
+        "an inactive boundary record must not move the lower bound: {lb_inactive} vs {lb_plain}"
+    );
+    assert!(
+        close(ub_inactive, ub_plain),
+        "an inactive boundary record must not move the upper bound: {ub_inactive} vs {ub_plain}"
+    );
+}
+
+/// The chain disagreement case above, on a terminal fan — the branching
+/// topology [`terminal_boundary_fcf_training_gap_is_consistent`]'s chain
+/// control does not cover. No existing fan fixture in this file takes an
+/// injected boundary record through training, so this test builds its own
+/// small fan directly from `test_support::terminal_generated_fan_setup`.
+#[test]
+fn terminal_boundary_records_all_inactive_leave_the_plain_fan_bounds() {
+    let mut plain = terminal_generated_fan_setup(2, MAX_ITERATIONS);
+    let (lb_plain, ub_plain) = train_bounds(&mut plain);
+
+    let mut inactive = terminal_generated_fan_setup(2, MAX_ITERATIONS);
+    inject_constant_terminal_boundary_fcf(&mut inactive, TERMINAL_BOUNDARY_INTERCEPT, false);
+    let (lb_inactive, ub_inactive) = train_bounds(&mut inactive);
+
+    let terminal = inactive.fcf.pools.len() - 1;
+    assert_eq!(
+        inactive.fcf.pools[terminal].active_count(),
+        0,
+        "the injected record is inactive"
+    );
+    assert_eq!(
+        inactive.fcf.pools[terminal].warm_start_count, 1,
+        "the injected record still counts as a warm-started slot"
+    );
+
+    assert!(
+        close(lb_inactive, lb_plain),
+        "an inactive boundary record must not move the fan's lower bound: {lb_inactive} vs {lb_plain}"
+    );
+    assert!(
+        close(ub_inactive, ub_plain),
+        "an inactive boundary record must not move the fan's upper bound: {ub_inactive} vs {ub_plain}"
     );
 }
 

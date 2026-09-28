@@ -122,6 +122,7 @@ fn study_dims_for(
         has_operational_violations: hydro_count != 0,
         anticipated_plants: AnticipatedPlants::default(),
         n_pumping: 0,
+        downstream_par_order: 0,
     }
 }
 

@@ -995,6 +995,7 @@ pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
         has_operational_violations: dims.hydro_count != 0,
         anticipated_plants: dims.anticipated_plants.clone(),
         n_pumping: 0,
+        downstream_par_order: 0,
     }
 }
 
@@ -2780,7 +2781,7 @@ fn capture_patched_node_template_with_raw_noise(
         n_load_buses,
         max_blocks,
         n_buckets: space.n_buckets,
-        downstream_par_order: setup.downstream_par_order,
+        downstream_par_order: setup.stage_data.study_dims.downstream_par_order,
         max_openings: 0,
         initial_pool_capacity: 0,
         n_state: space.n_state,

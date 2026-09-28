@@ -258,6 +258,14 @@ pub struct StageGeometry {
 }
 
 impl StageGeometry {
+    /// Maximum block count across every stage's geometry; `0` for an empty slice.
+    /// The sole max-over-stages block count in the crate.
+    #[inline]
+    #[must_use]
+    pub(crate) fn max_blocks(per_stage: &[StageGeometry]) -> usize {
+        per_stage.iter().map(|g| g.n_blks).max().unwrap_or(0)
+    }
+
     /// Storage column at chronological `boundary` for hydro `h`, so the
     /// simulation read-path resolves per-block boundaries without a
     /// `StageLayout`; delegates to

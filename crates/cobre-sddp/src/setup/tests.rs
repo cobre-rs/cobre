@@ -1384,7 +1384,7 @@ fn simulation_pool_scratch_is_sized_from_the_study_owners() {
     assert_eq!(scratch.lag_accumulator.len(), state.hydro_count);
     assert_eq!(
         scratch.downstream_completed_lags.len(),
-        state.hydro_count * setup.downstream_par_order
+        state.hydro_count * setup.stage_data.study_dims.downstream_par_order
     );
     assert!(scratch.load_rhs_buf.capacity() >= n_load_buses * max_n_blks);
     assert_eq!(scratch.raw_noise_buf.capacity(), 0);

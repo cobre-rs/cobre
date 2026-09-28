@@ -48,4 +48,8 @@ pub struct StudyDimensions {
     pub anticipated_plants: AnticipatedPlants,
     /// Number of pumping stations.
     pub n_pumping: usize,
+    /// PAR order of the downstream (coarser) resolution model. Non-zero only when
+    /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
+    /// transition); zero for uniform-resolution studies.
+    pub downstream_par_order: usize,
 }

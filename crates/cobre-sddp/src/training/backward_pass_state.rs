@@ -4660,7 +4660,7 @@ mod tests {
         .cumulative_discount_factors(setup.stage_data.time_value.cumulative_discount_factors())
         .stage_lag_transitions(&setup.stage_data.stage_lag_transitions)
         .noise_group_ids(&setup.stage_data.noise_group_ids)
-        .downstream_par_order(setup.downstream_par_order);
+        .downstream_par_order(setup.stage_data.study_dims.downstream_par_order);
         let stage_ctx = fixture.ctx();
         let tr = &setup.scenario_libraries.training;
         let training_ctx = TrainingContext {

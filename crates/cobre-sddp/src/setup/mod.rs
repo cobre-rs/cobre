@@ -293,12 +293,6 @@ pub struct StudySetup {
     /// when the derivation has no resolvable data.
     pub(crate) derived_inflow_seeds: DerivedInflowSeeds,
 
-    /// PAR order of the downstream (coarser) resolution model. Non-zero only when
-    /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
-    /// transition); zero for uniform-resolution studies. Sizes the downstream
-    /// scratch buffers via `WorkspaceSizing`.
-    pub(crate) downstream_par_order: usize,
-
     /// Energy-conversion scalars (`ρ_eq`, `V_ref`, `Q_ref`, `ρ_acum`) per
     /// `(hydro, stage)`, consumed by the energy-balance LP constraints and
     /// inflow-/stored-energy extraction.
@@ -567,12 +561,26 @@ impl StudySetup {
             &hydro_cell_index,
         )?;
 
+        let stages: Vec<Stage> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect();
+
+        let LagData {
+            stage_lag_transitions,
+            noise_group_ids,
+            downstream_par_order,
+        } = precompute_lag_data(system, &stages, &stochastic, season_map_ref);
+
         let study_dims = build_study_dimensions(
             system,
             &stage_templates,
             inflow_method,
             hydro_count,
             anticipated_plants,
+            downstream_par_order,
         );
 
         let mut initial_state = build_initial_state(
@@ -595,21 +603,9 @@ impl StudySetup {
         let max_iterations = max_iterations_from_rules(&stopping_rule_set);
         let fcf_capacity_iterations = max_iterations.saturating_add(1);
 
-        let stages: Vec<Stage> = system
-            .stages()
-            .iter()
-            .filter(|s| s.id >= 0)
-            .cloned()
-            .collect();
         let study_stage_ids: Vec<i32> = stages.iter().map(|s| s.id).collect();
         let study_stage_dates: Vec<(NaiveDate, NaiveDate)> =
             stages.iter().map(|s| (s.start_date, s.end_date)).collect();
-
-        let LagData {
-            stage_lag_transitions,
-            noise_group_ids,
-            downstream_par_order,
-        } = precompute_lag_data(system, &stages, &stochastic, season_map_ref);
 
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
@@ -731,12 +727,7 @@ impl StudySetup {
             ncs_max_gen,
             ncs_allow_curtailment,
         } = build_ncs_entity_data(system, &stage_templates, &stochastic)?;
-        let blocks_per_stage: Vec<usize> = stage_templates
-            .geometry_per_stage
-            .iter()
-            .map(|g| g.n_blks)
-            .collect();
-        let max_blocks = blocks_per_stage.iter().copied().max().unwrap_or(0);
+        let max_blocks = StageGeometry::max_blocks(&stage_templates.geometry_per_stage);
 
         let pumping_consumption_mw_per_m3s = build_pumping_consumption(system);
         let contract_prices_per_stage =
@@ -824,7 +815,6 @@ impl StudySetup {
             horizon,
             inflow_method,
             derived_inflow_seeds,
-            downstream_par_order,
             energy_conversion,
             hydro_min_storage_hm3,
             transit_bucket_topology,
@@ -1484,6 +1474,7 @@ fn build_study_dimensions(
     inflow_method: crate::InflowNonNegativityMethod,
     hydro_count: usize,
     anticipated_plants: AnticipatedPlants,
+    downstream_par_order: usize,
 ) -> StudyDimensions {
     let has_inflow_penalty = inflow_method.has_slack_columns() && hydro_count > 0;
 
@@ -1510,6 +1501,7 @@ fn build_study_dimensions(
         has_operational_violations: hydro_count != 0,
         anticipated_plants,
         n_pumping: system.n_pumping_stations(),
+        downstream_par_order,
     }
 }
 

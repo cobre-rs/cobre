@@ -159,7 +159,7 @@ impl StudySetup {
             cumulative_discount_factors: self.stage_data.time_value.cumulative_discount_factors(),
             stage_lag_transitions: &self.stage_data.stage_lag_transitions,
             noise_group_ids: &self.stage_data.noise_group_ids,
-            downstream_par_order: self.downstream_par_order,
+            downstream_par_order: self.stage_data.study_dims.downstream_par_order,
         };
 
         let tr = &self.scenario_libraries.training;
@@ -339,7 +339,7 @@ impl StudySetup {
                 n_load_buses: self.stage_data.stage_templates.n_load_buses(),
                 max_blocks: self.loop_params.max_blocks,
                 n_buckets: self.stage_data.state.n_buckets,
-                downstream_par_order: self.downstream_par_order,
+                downstream_par_order: self.stage_data.study_dims.downstream_par_order,
                 max_openings: (0..self.stage_data.stage_templates.templates.len())
                     .map(|t| self.stochastic.opening_tree().n_openings(t))
                     .max()

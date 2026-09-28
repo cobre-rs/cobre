@@ -466,7 +466,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
 /// Minimal stage template for N=1 hydro, L=0 PAR.
 fn minimal_template() -> StageTemplate {
     // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3)
-    //             rows: z_inflow(0), storage_fixing(1)
+    //             rows: z_inflow(0), mock_pin(1)
     StageTemplate {
         num_cols: 4,
         num_rows: 2,

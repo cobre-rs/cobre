@@ -509,7 +509,7 @@ fn solution_1_0(objective: f64, dual_storage: f64) -> LpSolution {
     // For the N=1, L=0 state layout: storage_in.start = N*(2+L) = 1*(2+0) = 2.
     // state_to_lp_incoming_column(0) = storage_in.start + 0 = 2.
     // Cut subgradients are read from reduced_costs[storage_in_col], so
-    // reduced_costs[2] must hold the same value as the storage-fixing dual.
+    // reduced_costs[2] carries the incoming-storage column's reduced cost.
     let mut reduced_costs = vec![0.0; 3];
     reduced_costs[2] = dual_storage;
     LpSolution {
@@ -1597,8 +1597,8 @@ fn cut_coefficients_and_intercept_match_dual_extraction_formula() {
 #[allow(clippy::too_many_lines)]
 fn cut_gradient_sign_physically_correct() {
     // Physical invariant: more initial storage → lower future cost, so the
-    // storage-fixing dual π (negative) is kept as the cut coefficient, not
-    // negated (sddp.md Benders cut sign & subgradient extraction).
+    // incoming-storage column's reduced cost π (negative) is kept as the cut
+    // coefficient, not negated (sddp.md Benders cut sign & subgradient extraction).
     let n_stages = 2_usize;
     let stochastic = make_stochastic_context(n_stages, 1);
     let state = test_support::state_layout(1, 0);

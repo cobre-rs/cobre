@@ -409,7 +409,7 @@ pub(crate) struct BackwardAccumulators {
     pub(crate) block_pivot_sum: Vec<u64>,
     /// Per-block solved-opening count, parallel to `block_pivot_sum`.
     pub(crate) block_pivot_count: Vec<u64>,
-    /// Per-opening scratch for state-fixing-row duals; grows to `indexer.n_state`.
+    /// Per-opening scratch for the incoming-state columns' reduced costs; grows to `indexer.n_state`.
     pub(crate) state_duals_buf: Vec<f64>,
     /// Per-opening scratch for cut-row duals; grows to
     /// `succ.num_cuts_at_successor`.

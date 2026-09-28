@@ -195,8 +195,8 @@ impl Policy {
     ///
     /// ## Sign convention
     ///
-    /// Coefficients are returned **exactly as stored** — the raw `HiGHS` dual of
-    /// the state-fixing rows, used directly as the FCF gradient. They are **NOT**
+    /// Coefficients are returned **exactly as stored** — the raw solver reduced
+    /// costs of the incoming-state columns, used directly as the FCF gradient. They are **NOT**
     /// negated. A downstream consumer reconstructs each cut as
     /// `θ ≥ intercept + coeffs · state`, consistent with [`Policy::evaluate`].
     /// (The LP-assembly negation in `build_cut_row_batch` is an internal detail

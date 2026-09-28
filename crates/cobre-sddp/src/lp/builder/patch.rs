@@ -377,7 +377,7 @@ impl PatchBuffer {
         self.active_load_patches + self.active_z_inflow_patches
     }
 
-    /// Column-bound region capacity (`N*(1+L) + n_buckets + A*K` state-fixing slots).
+    /// Column-bound region capacity (`N*(1+L) + n_buckets + A*K` incoming-state pins).
     #[must_use]
     #[inline]
     pub fn state_col_patch_count(&self) -> usize {

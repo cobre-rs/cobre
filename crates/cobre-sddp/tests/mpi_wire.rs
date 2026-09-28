@@ -1437,9 +1437,9 @@ mod by_node_scratch {
     }
 
     /// N=1, L=0 template: `storage_out`(0), `z_inflow`(1, free), `storage_in`(2,
-    /// pinned by the storage-fixing row), `theta`(3, zero-cost) — a trivially
+    /// pinned by this mock's row 1), `theta`(3, zero-cost) — a trivially
     /// solvable LP any `SolverInterface` accepts unconditionally.
-    /// Row layout: `z_inflow`(0), storage-fixing(1).
+    /// Row layout: `z_inflow`(0), this mock's pin row(1).
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
             num_cols: 4,

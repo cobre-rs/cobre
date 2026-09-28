@@ -477,7 +477,7 @@ fn test_solver_highs_dual_normalization_cut_relevant_row() {
         .solve(None)
         .expect("solve() must succeed on feasible LP");
 
-    // dual[0] is the cut-relevant state-fixing row dual
+    // dual[0] is the dual of fixture row 0 (`x0 = 6`)
     let pi_0 = solution.dual[0];
     assert!(
         (pi_0 - (-100.0)).abs() < 1e-6,
@@ -502,7 +502,7 @@ fn test_solver_highs_dual_normalization_sensitivity_check() {
         "expected original objective = 100.0, got {z_original}"
     );
 
-    // Perturb the state-fixing RHS by +0.01 (the divisor below).
+    // Perturb row 0's RHS by +0.01 (the divisor below).
     solver.set_row_bounds(&[0], &[6.01], &[6.01]);
     let z_perturbed = solver
         .solve(None)

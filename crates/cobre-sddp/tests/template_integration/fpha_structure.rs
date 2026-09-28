@@ -183,7 +183,7 @@ fn fpha_ac5_mixed_system_load_balance_uses_generation_col() {
     );
     assert_eq!(
         tmpl.num_rows, 31,
-        "4-hydro mixed system: num_rows should be 31 (Phase 1: state-fixing rows removed)"
+        "4-hydro mixed system: num_rows should be 31 (no state-fixing rows)"
     );
 
     let row_lb = 8_usize; // N z_inflow(4) + N water balance(4) + bus_blk_idx(0)
@@ -344,7 +344,7 @@ fn fpha_solve_hyperplane_constraints_hold() {
     }
 }
 
-/// The storage-fixing dual (reduced cost of the pinned `storage_in` column)
+/// The reduced cost of the pinned `storage_in` column
 /// differs between FPHA and constant productivity. The `-gamma_v/2` FPHA entries
 /// on the `v_in` column propagate through the simplex dual to that reduced cost.
 ///
@@ -360,7 +360,7 @@ fn fpha_solve_hyperplane_constraints_hold() {
 /// lowers cost → FPHA dual < 0. Constant productivity gives `rho`=0
 /// (`default_from_system`), generation is `v_in`-independent → dual = 0.
 #[test]
-fn fpha_solve_storage_fixing_dual_differs_from_constant() {
+fn fpha_solve_incoming_storage_reduced_cost_differs_from_constant() {
     use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
 
     let (system, _) = one_fpha_hydro_system(1);
@@ -432,14 +432,14 @@ fn fpha_solve_storage_fixing_dual_differs_from_constant() {
 
     assert!(
         fpha_dual.abs() > 1e-6,
-        "FPHA storage-fixing dual must be non-zero (FPHA v_in contribution \
+        "FPHA incoming-storage reduced cost must be non-zero (FPHA v_in contribution \
          must be present), got {fpha_dual}"
     );
 
     assert_ne!(
         (fpha_dual * 1e6).round(),
         (const_dual * 1e6).round(),
-        "storage-fixing dual must differ between FPHA ({fpha_dual}) and \
+        "incoming-storage reduced cost must differ between FPHA ({fpha_dual}) and \
          constant-productivity ({const_dual})"
     );
 }

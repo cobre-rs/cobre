@@ -53,12 +53,12 @@ use crate::{
 /// Column layout (N=1, L=0):
 /// - col 0: `storage_out` (no NZ in structural rows)
 /// - col 1: `z_inflow` (1 NZ: row 0, z-inflow definition row)
-/// - col 2: `storage_in` (1 NZ: row 1, storage-fixing row)
+/// - col 2: `storage_in` (1 NZ: row 1, this mock's pin row)
 /// - col 3: `theta` (no NZ)
 ///
 /// Row layout:
 /// - row 0: `z_inflow` definition row
-/// - row 1: storage-fixing (`storage_out` fixed to incoming state)
+/// - row 1: this mock's pin row (`storage_in` at +1.0, not `storage_out`)
 fn minimal_template(_n_state: usize) -> StageTemplate {
     StageTemplate {
         num_cols: 4,

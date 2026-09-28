@@ -351,7 +351,7 @@ fn minimal_template() -> StageTemplate {
     // the decoupled hydro+bus equipment padding `test_support::geometry`
     // addresses for N=1 hydro, 1 bus, 1 block (turbine..generation_below_slack,
     // cols 4-14); `MockSolver::solve` mirrors this column count.
-    //             rows: z_inflow(0), storage_fixing(1), then that same
+    //             rows: z_inflow(0), mock_pin(1), then that same
     //             layout's water_balance/load_balance/oper_violation rows (2-6)
     let num_cols = 15;
     let num_rows = 7;

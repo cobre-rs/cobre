@@ -496,19 +496,22 @@ mod anticipated_backward_cut {
     /// commit_out.start = 0. The LP-builder divides every non-theta objective
     /// coefficient by COST_SCALE_FACTOR (call it K), so the stored cut lives in scaled units.
     ///
-    /// Stage-1 LP (the anticipated decision column d_ant carries scaled cost c_reg/K):
+    /// Stage-1 LP (the anticipated decision column `d_ant` is inactive at the
+    /// delivery stage, bounded `[0, 0]`):
     ///
     /// ```text
-    ///   min  (c_reg/K) gt_reg + (c_reg/K) d_ant + theta
+    ///   min  (c_reg/K) gt_reg + theta
     ///   s.t. gt_reg + gt_ant = D_1            (load balance)
     ///        gt_ant - x_state = 0             (fishing, K=1)
-    ///        x_state + d_ant = x_hat          (state-fixing, dual pi)
+    ///        x_state ∈ [x_hat, x_hat]         (pinned by column bounds)
     ///        theta >= 0
     /// ```
     ///
-    /// At the box optimum d_ant = 0, Q_scaled(x_hat) = (c_reg/K)(D_1 - x_hat), so the
-    /// state-fixing dual is pi = -c_reg/K. With coefficients = dual (no sign flip), the
-    /// coefficient is -c_reg/K and the intercept is Q_scaled(x_hat) - pi*x_hat = (c_reg/K)*D_1.
+    /// At the box optimum, fishing forces gt_ant = x_state = x_hat, so
+    /// gt_reg = D_1 - x_hat and Q_scaled(x_hat) = (c_reg/K)(D_1 - x_hat). The
+    /// incoming-state column's reduced cost is pi = -c_reg/K. With coefficients
+    /// = dual (no sign flip), the coefficient is -c_reg/K and the intercept is
+    /// Q_scaled(x_hat) - pi*x_hat = (c_reg/K)*D_1.
     #[test]
     fn two_stage_k1_anticipated_cut_coefficient_matches_analytical() {
         const K_MAX: usize = FIXTURE_K1.k_max;
@@ -1231,7 +1234,7 @@ mod hm_distribute_conservation {
     /// Runtime confirmation of the `÷H_M` distribute direction: the stage-0
     /// anticipated-state cut coefficient scales linearly with the delivery
     /// stage's own `block_hours_total` (the fishing-row `−H` coupling propagated
-    /// backward through the state-fixing dual), never the decision stage's. Two
+    /// backward through the incoming-state column's reduced cost), never the decision stage's. Two
     /// fixtures sharing the identical committed MW, fuel cost, and load, and
     /// differing ONLY in the delivery stage's declared hours (`H_M` = 744 vs
     /// `H_w` = 168), must produce coefficients in exactly the `H_w / H_M` ratio.
@@ -3334,7 +3337,8 @@ mod anticipated_closed_form_lb_k1_single_thermal {
     //! - `g_b_t` — per-block backup thermal generation at stage `t`.
     //! - `d_ant_0` — anticipated decision placed at stage 0 (delivery at stage 1).
     //! - `θ_0` — stage-0 future-cost approximation (`≥ 0`).
-    //! - `x_state_t` — anticipated-state slot 0 at stage `t` (free variable).
+    //! - `x_state_t` — anticipated-state slot 0 at stage `t`; its incoming value
+    //!   is pinned by column bounds.
     //!
     //! Stage 0 (always-active fishing; decision predicate `t + K_i < n_stages` is
     //! `0 + 1 < 2` — TRUE, so `d_ant_0` is active; fishing predicate now TRUE at
@@ -3345,17 +3349,17 @@ mod anticipated_closed_form_lb_k1_single_thermal {
     //!   min  0 · g_a_0 + c_b · g_b_0 + c_a · d_ant_0 + θ_0
     //!   s.t. g_a_0 + g_b_0 + deficit_0 − excess_0 = D       (load balance)
     //!        g_a_0 − x_state_0 = 0                          (fishing row, always-active)
-    //!        x_state_0 = past[0] = 0                        (state-fixing, slot 0; pure identity under Alt-A)
+    //!        x_state_0 ∈ [past[0], past[0]] = [0, 0]        (pinned by column bounds, slot 0)
     //!        state_out_0 − d_ant_0 = 0                      (state-out definition row; couples decision to next-stage delivery)
     //!        θ_0 ≥ 0                                        (no cuts initially)
     //!        g_a_0 ∈ [0, M], g_b_0 ∈ [0, B], d_ant_0 ∈ [0, M]
     //!        deficit_0 ≥ 0, excess_0 ≥ 0
     //! ```
     //!
-    //! Under the Alternative-A layout, the slot-0 state-fixing row is pure
-    //! identity (it pins `x_state_0` to `past[0] = 0` only; no `d_ant_0` coupling
-    //! on this row). The decision-vs-state coupling moves to the `state_out`
-    //! definition row, which lets `d_ant_0` be optimised freely. Fishing then
+    //! The slot-0 incoming state is pinned by column bounds only — to
+    //! `past[0] = 0` — with no `d_ant_0` coupling on it. The decision-vs-state
+    //! coupling lives on the `state_out` definition row, which lets `d_ant_0`
+    //! be optimised freely. Fishing then
     //! forces `g_a_0 = x_state_0 = 0`, so the load must be covered entirely by
     //! `g_b_0 = D` at cost `c_b · D = 5000`. `d_ant_0` is the new commitment;
     //! its objective coefficient `c_a` drives the trade-off between paying
@@ -3374,7 +3378,7 @@ mod anticipated_closed_form_lb_k1_single_thermal {
     //!   min  c_b · g_b_1 + 0 · g_a_1
     //!   s.t. g_a_1 + g_b_1 + deficit_1 − excess_1 = D       (load balance)
     //!        g_a_1 − x_state_1 = 0                          (fishing row)
-    //!        x_state_1 + 0 = d_ant_0                        (state-fixing; incoming = d_ant_0)
+    //!        x_state_1 ∈ [d_ant_0, d_ant_0]                 (pinned by column bounds; incoming = d_ant_0)
     //!        g_a_1 ∈ [0, M], g_b_1 ∈ [0, B]
     //!        deficit_1 ≥ 0, excess_1 ≥ 0
     //! ```

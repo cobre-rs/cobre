@@ -1750,7 +1750,7 @@ fn test_anticipated_thermals_lp_roundtrip_k0_baseline_parity() {
     );
     assert_eq!(
         result_baseline.templates[0].num_rows, 12,
-        "K=0 baseline: num_rows must be 12 (state-fixing rows removed in Phase 1)"
+        "K=0 baseline: num_rows must be 12 (no state-fixing rows)"
     );
 }
 

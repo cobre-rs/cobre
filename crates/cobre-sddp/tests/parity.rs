@@ -1134,12 +1134,12 @@ mod determinism {
     /// Row layout (N=3, L=0):
     /// ```text
     /// 0..3  z_inflow rows        (one per hydro, at StateSpace::z_inflow_rows())
-    /// 3..6  storage-fixing rows  (one per hydro)
+    /// 3..6  storage_in pin rows (one per hydro)
     /// 6     the widened geometry's load-balance row (unused, no NZ)
     /// ```
     ///
     /// The matrix has one nonzero per z_inflow row (column = `z_inflow[h]`) and one
-    /// per storage-fixing row (column = `storage_in[h]`), each coefficient 1.0, so
+    /// per storage_in pin row (column = `storage_in[h]`), each coefficient 1.0, so
     /// the patch buffer has something to patch.
     fn template_3h() -> StageTemplate {
         let num_cols = 39;

@@ -163,7 +163,7 @@ impl SolverInterface for MockSolver {
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /// Minimal N=1, L=0 template: `[storage_out, z_inflow, storage_in, theta]`.
-/// row 0: z-inflow definition (`z_inflow[0]` = rhs); row 1: storage-fixing.
+/// row 0: z-inflow definition (`z_inflow[0]` = rhs); row 1: pins `storage_in`.
 fn minimal_template_1_0() -> StageTemplate {
     StageTemplate {
         num_cols: 4,

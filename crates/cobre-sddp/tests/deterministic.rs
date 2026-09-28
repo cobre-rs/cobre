@@ -570,7 +570,7 @@ fn d05_fpha_constant_head() {
 /// ```
 ///
 /// This encodes the average forebay head over the stage interval.
-/// V_in is fixed by the Benders storage-fixing row at the reference point
+/// V_in is pinned by the `storage_in` column bounds at the reference point
 /// (previous iteration's trial value or the initial condition).
 ///
 /// ## Analytical derivation (κ = 730·3600/10⁶ = 657/250 = 2.628 hm3 per m3/s)

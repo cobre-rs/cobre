@@ -1013,7 +1013,7 @@ fn evap_violation_slacks_near_zero_feasible_constraint() {
 }
 
 #[test]
-fn evap_storage_fixing_dual_differs_from_no_evaporation() {
+fn evap_incoming_storage_reduced_cost_differs_from_no_evaporation() {
     use cobre_solver::SolverInterface;
 
     // System with evaporation violation cost (so slacks are penalised).
@@ -1066,7 +1066,7 @@ fn evap_storage_fixing_dual_differs_from_no_evaporation() {
     if evap_rounded != 0.0 || base_rounded != 0.0 {
         assert_ne!(
             evap_rounded, base_rounded,
-            "storage-fixing dual must differ between evaporation ({evap_dual}) and \
+            "incoming-storage reduced cost must differ between evaporation ({evap_dual}) and \
              no-evaporation ({base_dual}) configurations"
         );
     }

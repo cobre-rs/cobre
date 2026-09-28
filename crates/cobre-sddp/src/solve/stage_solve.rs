@@ -368,7 +368,7 @@ mod tests {
     /// Minimal LP: 3 columns, 2 rows (same fixture used in cobre-solver tests).
     ///
     ///   min  0*x0 + 1*x1 + 50*x2
-    ///   s.t. x0            = 6   (state-fixing)
+    ///   s.t. x0            = 6   (pins x0)
     ///        2*x0 + x2     = 14  (power balance)
     ///   x0 in [0, 10], x1 in [0, +inf), x2 in [0, 8]
     fn make_template() -> StageTemplate {

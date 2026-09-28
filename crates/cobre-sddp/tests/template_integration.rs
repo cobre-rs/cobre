@@ -3798,7 +3798,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 // for synthetic systems with one hydro + one anticipated thermal at K=1, K=2,
 // and K=3.  They verify all cross-cutting structural invariants simultaneously:
 // column count, row count, n_state, anticipated_decision bounds, NPV objective
-// coefficient, state-fixing CSC diagonal, decision-write CSC, and fishing-row
+// coefficient, decision-write CSC, and fishing-row
 // CSC pattern.
 //
 // System geometry (shared across K=1/2/3):
@@ -3826,19 +3826,13 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //   op_slacks (4*N*n_blks): 8 → cols 20+K..27+K
 //   num_cols = 28+K  (valid for K >= 1)
 //
-// Row layout derivation (K arbitrary, stage t):
-//   rows 0..1     = hydro storage-fixing (N=1)
-//   rows 1..1+K   = anticipated_state_fixing (K rows)
-//   row 1+K       = z_inflow def (N=1)
-//   row 2+K       = water_balance (N=1)
-//   rows 3+K..4+K = load_balance (B=1, n_blks=2 → 2 rows)
-//   rows 5+K..6+K = min_outflow (N*n_blks=2)
-//   rows 7+K..8+K = max_outflow
-//   rows 9+K..10+K = min_turbine
-//   rows 11+K..12+K = min_generation
-//   row 13+K      = anticipated_fishing (0 or 1 row; active iff K <= stage_idx)
-//   row/rows after fishing = anticipated_state_out_def (active iff stage_idx+K < n_stages)
-//   num_rows = 13+K + (1 if K <= stage_idx else 0) + (1 if stage_idx+K < n_stages else 0)
+// Row layout derivation (K arbitrary, stage t; state is pinned via column
+// bounds, so the row layout carries no K-dependent state row block): the
+// K-independent z_inflow/water_balance/load_balance/min_outflow/max_outflow/
+// min_turbine/min_generation rows total 12, so `anticipated_fishing` (always
+// active) starts at row 12 (`rt_row_ant_fishing_start`). The remaining rows —
+// `anticipated_state_out_def` and the interior ring-shift definition rows —
+// are counted by `rt_expected_num_rows`.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -545,12 +545,13 @@ fn run_root_exports(
         let mut provenance = build_provenance_report(
             path,
             root_estimation_report,
-            setup.stochastic.provenance(),
+            setup.inputs.stochastic.provenance(),
             system.hydros().len(),
             &setup.hydro_models.provenance,
         );
         // Stale-library detection compares this digest on later runs.
         provenance.inflow.historical_library_seed_digest = setup
+            .inputs
             .scenario_libraries
             .training
             .historical
@@ -578,7 +579,7 @@ fn run_root_exports(
         };
         export_stochastic_artifacts(
             &ctx.output_dir,
-            &setup.stochastic,
+            &setup.inputs.stochastic,
             system,
             root_estimation_report,
             &mut on_warning,
@@ -586,7 +587,7 @@ fn run_root_exports(
     }
 
     let scaling_path = ctx.output_dir.join("training/scaling_report.json");
-    write_scaling_report(&scaling_path, &setup.stage_data.scaling_report).map_err(|e| {
+    write_scaling_report(&scaling_path, &setup.inputs.stage_data.scaling_report).map_err(|e| {
         CliError::Internal {
             message: format!("failed to write scaling report: {e}"),
         }

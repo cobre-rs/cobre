@@ -694,7 +694,7 @@ mod opening_order_determinism {
         let case_dir = fixture_case_dir();
 
         let probe = fresh_setup(case_dir);
-        let tree_view = probe.stochastic.tree_view();
+        let tree_view = probe.inputs.stochastic.tree_view();
         let has_multi_opening_stage =
             (0..probe.num_stages()).any(|stage| tree_view.n_openings(stage) >= 3);
         assert!(
@@ -990,7 +990,7 @@ mod by_node_scheduler_determinism {
     /// stage's resolved block count must reach `>= 2`.
     fn assert_has_multi_block_stage(case_dir: &Path) {
         let probe = fresh_setup(case_dir, BackwardScheduler::ByNode { block_size: None });
-        let tree_view = probe.stochastic.tree_view();
+        let tree_view = probe.inputs.stochastic.tree_view();
         let has_multi_block_stage = (0..probe.num_stages())
             .any(|stage| resolved_block_count(tree_view.n_openings(stage)) >= 2);
         assert!(
@@ -1978,7 +1978,7 @@ mod k_fan_graph_invariance {
     /// instead of degenerating to one trial point per worker.
     fn assert_genuine_multi_node_level(max_threads_crossed: usize) {
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2138,7 +2138,7 @@ mod by_node_k_fan_branching {
     /// boundaries and the root backward genuinely fans over more than one child.
     fn assert_genuine_multi_node_level(max_crossed: usize) {
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2208,7 +2208,7 @@ mod by_node_k_fan_branching {
         // so at least one pool draws cuts from a strict subset of ranks — the genuine
         // multi-rank fan-branching the node-visit-offset slot base addresses.
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2359,9 +2359,9 @@ mod k_fan_enumerated_determinism {
     /// multi-worker shape genuinely splits node work across worker boundaries.
     fn assert_genuine_multi_node(max_threads: usize) {
         let probe = k_fan_setup_enumerated(K, MAX_ITERATIONS);
-        let fan_nodes = (0..probe.setup.node_graph.nodes.len())
+        let fan_nodes = (0..probe.setup.inputs.node_graph.nodes.len())
             .map(NodePos)
-            .filter(|&pos| !probe.setup.node_graph.successors[pos].is_empty())
+            .filter(|&pos| !probe.setup.inputs.node_graph.successors[pos].is_empty())
             .count()
             - 1;
         assert!(
@@ -2682,7 +2682,7 @@ mod k_fan_sampled_declaration_order_invariance {
     /// Power precondition: the fan carries `>= 2` cut-generating fan nodes beyond
     /// the root, mirroring `k_fan_graph_invariance::assert_genuine_multi_node_level`.
     fn assert_genuine_k_fan(setup: &StudySetup) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2809,7 +2809,7 @@ mod non_uniform_branching_projection {
     /// shrink-at-the-fan-level-then-regrow-at-the-leaf shape) — the fixture
     /// genuinely varies its projection, not merely declares the axis.
     fn assert_non_uniform_branching_power(setup: &StudySetup) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let fan_nodes = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| {

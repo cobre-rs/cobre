@@ -1158,7 +1158,7 @@ fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
     let (system, config, hydro_models) = parallel_multiblock_evaporation_study();
     let setup = build_setup_in_code_with_models(system, &config, hydro_models);
     let state = cobre_sddp::test_support::state_space(&setup);
-    let templates = &setup.stage_data.stage_templates;
+    let templates = &setup.inputs.stage_data.stage_templates;
     let total_stage_hours = 744.0_f64;
 
     let unscale = |t: &StageTemplate, r: usize, c: usize, v: f64| -> f64 {

@@ -148,7 +148,7 @@ mod deck_smoke {
             vec![Vec::new(); setup.fcf.pools.len()];
         let stage_cuts = build_stage_cuts_payloads(
             &setup.fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,

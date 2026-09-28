@@ -21,7 +21,7 @@
 //! let stochastic = build_stochastic_context(system, 42, None, &[], &[], OpeningTreeInputs::default(), ClassSchemes { inflow: None, load: None, ncs: None })?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models, Vec::new())?;
-//! assert!(!setup.stage_data.stage_templates.templates.is_empty());
+//! assert!(!setup.inputs.stage_data.stage_templates.templates.is_empty());
 //! # Ok(())
 //! # }
 //! ```
@@ -60,6 +60,7 @@ mod orchestration;
 pub mod params;
 pub(crate) mod scenario_libraries;
 pub mod scenario_library_set;
+mod solve_inputs;
 pub mod stage_data;
 pub mod stochastic_pipeline;
 pub(crate) mod template_postprocess;
@@ -73,6 +74,7 @@ pub use params::{
     DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, SimulationEnumeratedRequest, StudyParams,
 };
 pub use scenario_library_set::{PhaseLibraries, ScenarioLibraries};
+pub use solve_inputs::SolveInputs;
 pub use stage_data::StageData;
 pub use stochastic_pipeline::{
     PrepareStochasticResult, build_ncs_factor_entries, build_stochastic_context_for_study,
@@ -103,7 +105,6 @@ use crate::{
     error::SddpError,
     horizon_mode::HorizonMode,
     hydro_models::PrepareHydroModelsResult,
-    inflow_method::InflowNonNegativityMethod,
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution, SpreadResolution},
     lp::builder::{StageGeometry, StateBox, build_stage_templates},
     lp::indexer::{
@@ -137,39 +138,16 @@ use crate::{
 /// storage.
 #[derive(Debug)]
 pub struct StudySetup {
-    /// Stage-indexed data: LP templates, indexer, stages, entity counts, blocks,
-    /// lag transitions, noise groups, and scaling report.
-    pub stage_data: stage_data::StageData,
+    /// The resolved study inputs shared by the stage, training, and
+    /// simulation contexts, disjoint from [`Self::fcf`] so [`Self::train`]
+    /// can build a context while holding `&mut fcf`.
+    pub inputs: SolveInputs,
 
-    /// Stochastic context holding sampling distributions, libraries, and provenance.
-    pub stochastic: StochasticContext,
     /// Future cost function (cut pool) updated by the backward pass during training.
     pub fcf: FutureCostFunction,
-    /// Initial state vector and derived inflow-lag seeds ([`InitialConditions`]).
-    pub(crate) initial: InitialConditions,
 
     /// Pre-computed hydro production models (FPHA, turbine curves, etc.).
     pub hydro_models: PrepareHydroModelsResult,
-
-    /// Per-stage and per-slot NCS entity data ([`NcsEntityData`]).
-    pub(crate) ncs: NcsEntityData,
-
-    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per anticipated thermal,
-    /// in anticipated-local order matching
-    /// `stage_data.study_dims.anticipated_plants`.
-    ///
-    /// Threaded into the simulation
-    /// [`StageExtractionSpec`](crate::simulation::extraction::StageExtractionSpec)
-    /// so the anticipated-decision read gates on the same
-    /// `is_anticipated_decision_active` predicate the LP builder used,
-    /// keying its operation-window clause on the DELIVERY stage's `stage.id`. Empty
-    /// when there are no anticipated thermals.
-    pub(crate) anticipated_windows: Vec<(Option<i32>, Option<i32>)>,
-
-    /// `study_stage_ids[t] = stage.id` per study stage index; the simulation
-    /// context borrows it to map a delivery stage index to its commissioning id
-    /// for the `anticipated_windows` gate.
-    pub(crate) study_stage_ids: Vec<i32>,
 
     /// Extended delivery-stage anchors ([`build_extended_delivery_anchors`]):
     /// the `YYYYMM01` anchor of each delivery target stage, indexed by delivery
@@ -194,7 +172,7 @@ pub struct StudySetup {
     pub(crate) past_defluences: Vec<HydroPastDefluence>,
 
     /// `study_stage_dates[t] = (stage.start_date, stage.end_date)` per study
-    /// stage index, parallel to [`Self::study_stage_ids`]. Threaded into
+    /// stage index, parallel to `inputs.study_stage_ids`. Threaded into
     /// [`SimulationOutputSpec`](crate::simulation::SimulationOutputSpec) so the
     /// rolling-seed emitter's per-stage windows never re-derive the calendar.
     pub(crate) study_stage_dates: Vec<(NaiveDate, NaiveDate)>,
@@ -203,14 +181,6 @@ pub struct StudySetup {
     /// and the generic-constraint echo.
     pub(crate) resolved_parameters: ResolvedParameters,
 
-    /// Sampling schemes and pre-built libraries for training and simulation phases.
-    pub scenario_libraries: ScenarioLibraries,
-
-    /// The runtime node graph: node identity/order, the `node → pool`
-    /// map, and per-node Ω views/out-edges. Absent `nodes[]` this is the
-    /// byte-exact chain degeneracy. Reached through
-    /// [`crate::context::TrainingContext::node_graph`] on the hot path.
-    pub node_graph: node_graph::NodeGraph,
     /// Iteration-loop parameters projected from [`crate::config::LoopConfig`].
     ///
     /// `n_fwd_threads` is excluded (derived at runtime) and supplied as a per-call
@@ -231,9 +201,6 @@ pub struct StudySetup {
 
     /// Relative path to the policy output directory (e.g. `"training/policy"`).
     pub policy_path: String,
-
-    /// Two-stage cut management pipeline configuration.
-    pub(crate) cut_management: CutManagementConfig,
 
     /// Pure-data event flags (output-side).
     ///
@@ -262,11 +229,6 @@ pub struct StudySetup {
     /// seam; production always resolves `true` (see
     /// [`crate::solve::solver_phase::SolverProfiles::hardest_first_claim_order`]).
     pub(crate) hardest_first_claim_order: bool,
-
-    /// Study horizon mode (finite vs. infinite-horizon approximation).
-    pub(crate) horizon: HorizonMode,
-    /// Inflow non-negativity enforcement method.
-    pub(crate) inflow_method: InflowNonNegativityMethod,
 
     /// Energy-conversion scalars (`ρ_eq`, `V_ref`, `Q_ref`, `ρ_acum`) per
     /// `(hydro, stage)`, consumed by the energy-balance LP constraints and
@@ -667,7 +629,6 @@ impl StudySetup {
             state: state_layout,
             study_dims,
             hydro_cell_index,
-            cut_state_layouts,
             stages,
             entity_counts,
             pumping_consumption_mw_per_m3s,
@@ -690,21 +651,32 @@ impl StudySetup {
             system.hydros().iter().map(|h| h.min_storage_hm3).collect();
 
         Ok(Self {
-            stage_data,
-            stochastic,
+            inputs: SolveInputs {
+                stage_data,
+                stochastic,
+                scenario_libraries,
+                node_graph,
+                initial,
+                ncs,
+                anticipated_windows,
+                study_stage_ids,
+                horizon,
+                inflow_method,
+                cut_management: CutManagementConfig {
+                    cut_selection,
+                    budget,
+                    cut_activity_tolerance,
+                    risk_measures,
+                },
+                cut_state_layouts,
+            },
             fcf,
-            initial,
             hydro_models,
-            ncs,
-            anticipated_windows,
-            study_stage_ids,
             extended_delivery_anchors,
             transit_seed_arcs,
             past_defluences,
             study_stage_dates,
             resolved_parameters,
-            scenario_libraries,
-            node_graph,
             loop_params: LoopParams {
                 seed,
                 forward_passes,
@@ -720,19 +692,11 @@ impl StudySetup {
             },
             simulation_enumerated,
             policy_path,
-            cut_management: CutManagementConfig {
-                cut_selection,
-                budget,
-                cut_activity_tolerance,
-                risk_measures,
-            },
             events: EventParams { export_states },
             backward_profile,
             forward_profile,
             backward_scheduler,
             hardest_first_claim_order: true,
-            horizon,
-            inflow_method,
             energy_conversion,
             hydro_min_storage_hm3,
             warm_start_basis_cache: None,
@@ -799,7 +763,7 @@ mod run_phase_plan_tests {
 // from_broadcast_params sub-phase helpers
 // ---------------------------------------------------------------------------
 
-/// Grouped per-stage and per-slot NCS entity data, held on [`StudySetup::ncs`].
+/// Grouped per-stage and per-slot NCS entity data, held on [`SolveInputs::ncs`].
 #[derive(Debug)]
 pub(crate) struct NcsEntityData {
     pub(crate) entity_ids_per_stage: Vec<Vec<i32>>,
@@ -1771,7 +1735,7 @@ fn resolve_inflow_seeds(system: &System, max_par_order: usize) -> DerivedInflowS
 }
 
 /// Initial state vector and derived per-hydro PAR lag-slot/accumulator seeds,
-/// held on [`StudySetup::initial`].
+/// held on [`SolveInputs::initial`].
 #[derive(Debug)]
 pub(crate) struct InitialConditions {
     pub(crate) state: Vec<f64>,

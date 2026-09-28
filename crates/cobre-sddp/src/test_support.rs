@@ -2328,13 +2328,13 @@ pub(crate) fn k_fan_config(forward_passes: u32, max_iterations: u32) -> Config {
 
 /// The DECOMP K-fan [`StudySetup`], bundled with the fixture parameters
 /// callers need to derive their own expected values — never a magic literal,
-/// always re-derived from these fields or from `setup.node_graph` directly.
+/// always re-derived from these fields or from `setup.inputs.node_graph` directly.
 #[derive(Debug)]
 pub struct KFanFixture {
     /// The built study: a single-hydro, single-bus system over the declared
     /// K-fan graph, trained `sampled` with a fixed seed.
     pub setup: StudySetup,
-    /// Fan-out width: `setup.node_graph` has `k` nodes at
+    /// Fan-out width: `setup.inputs.node_graph` has `k` nodes at
     /// [`K_FAN_BRANCH_STAGE_ID`] and `k` leaves at [`K_FAN_LEAF_STAGE_ID`].
     pub k: usize,
     /// `forward_passes` this fixture was configured with (mirrors
@@ -2494,7 +2494,7 @@ fn k_fan_fixture(k: usize, reversed: bool, config: Config) -> KFanFixture {
 
     let setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
         .expect("k_fan_fixture: StudySetup::new must succeed");
-    let enumerated = enumerated_scenario_count(&setup.node_graph)
+    let enumerated = enumerated_scenario_count(&setup.inputs.node_graph)
         .expect("k_fan_fixture: enumerated_scenario_count must not overflow at this scale");
 
     KFanFixture {
@@ -2777,7 +2777,7 @@ impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
 /// `pub(crate)`; this is the test-support reach-through.
 #[must_use]
 pub fn state_space(setup: &StudySetup) -> &StateSpace {
-    &setup.stage_data.state
+    &setup.inputs.stage_data.state
 }
 
 /// The `[hydro | load-bus | NCS]` standardized noise draw for `node_pos`: an
@@ -2786,12 +2786,17 @@ pub fn state_space(setup: &StudySetup) -> &StateSpace {
 /// `std == 0` on every generated stage, so `transform_inflow_noise` recovers the
 /// mean regardless.
 fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
-    let stage = setup.node_graph.nodes[node_pos].stage;
-    let n_hydros = setup.stage_data.state.hydro_count;
-    let mut raw = vec![0.0_f64; setup.stochastic.dim()];
-    let openings = setup.node_graph.nodes[node_pos].openings;
+    let stage = setup.inputs.node_graph.nodes[node_pos].stage;
+    let n_hydros = setup.inputs.stage_data.state.hydro_count;
+    let mut raw = vec![0.0_f64; setup.inputs.stochastic.dim()];
+    let openings = setup.inputs.node_graph.nodes[node_pos].openings;
     if openings.source == OpeningSource::External
-        && let Some(lib) = setup.scenario_libraries.training.external_inflow.as_ref()
+        && let Some(lib) = setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_inflow
+            .as_ref()
     {
         let eta = lib.eta_slice(stage.0, openings.offset);
         let take = eta.len().min(n_hydros);
@@ -2804,7 +2809,7 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 /// — the base template for the node's stage with the incoming-state pin and the
 /// realized noise applied exactly as the training solve does (via the shared
 /// [`StageSolvePrep::run`] pipeline). The incoming-state columns land pinned to
-/// [`StudySetup::initial`]; the extensive-form composer frees and couples them for
+/// `SolveInputs::initial`; the extensive-form composer frees and couples them for
 /// non-root nodes.
 ///
 /// # Panics
@@ -2814,7 +2819,12 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 #[must_use]
 pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> StageTemplate {
     let raw_noise = oracle_raw_noise(setup, node_pos);
-    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial.state)
+    capture_patched_node_template_with_raw_noise(
+        setup,
+        node_pos,
+        &raw_noise,
+        &setup.inputs.initial.state,
+    )
 }
 
 /// [`capture_patched_node_template`] with a caller-chosen standardized inflow
@@ -2832,25 +2842,30 @@ pub fn capture_patched_node_template_with_inflow_noise(
     node_pos: NodePos,
     inflow_eta: &[f64],
 ) -> StageTemplate {
-    let hydro = setup.stochastic.class_dimensions().hydro_range();
+    let hydro = setup.inputs.stochastic.class_dimensions().hydro_range();
     assert_eq!(
         inflow_eta.len(),
         hydro.len(),
         "inflow_eta must hold one standardized draw per hydro"
     );
-    let mut raw_noise = vec![0.0_f64; setup.stochastic.dim()];
+    let mut raw_noise = vec![0.0_f64; setup.inputs.stochastic.dim()];
     raw_noise[hydro].copy_from_slice(inflow_eta);
-    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial.state)
+    capture_patched_node_template_with_raw_noise(
+        setup,
+        node_pos,
+        &raw_noise,
+        &setup.inputs.initial.state,
+    )
 }
 
 /// [`capture_patched_node_template`] at a caller-chosen raw noise vector and
 /// incoming state, in place of the node's own oracle draw and
-/// [`StudySetup::initial`].
+/// `SolveInputs::initial`.
 ///
 /// # Panics
 ///
-/// Panics if `raw_noise.len() != setup.stochastic.dim()`, if
-/// `incoming_state.len() != setup.stage_data.state.n_state`, if `node_pos`
+/// Panics if `raw_noise.len() != setup.inputs.stochastic.dim()`, if
+/// `incoming_state.len() != setup.inputs.stage_data.state.n_state`, if `node_pos`
 /// (or its resolved stage) is out of range, or if the template is absent
 /// after [`StageSolvePrep::run`].
 #[must_use]
@@ -2862,12 +2877,12 @@ pub fn capture_patched_node_template_at(
 ) -> StageTemplate {
     assert_eq!(
         raw_noise.len(),
-        setup.stochastic.dim(),
+        setup.inputs.stochastic.dim(),
         "raw_noise must be the `[hydro | load-bus | NCS]` raw-noise length"
     );
     assert_eq!(
         incoming_state.len(),
-        setup.stage_data.state.n_state,
+        setup.inputs.stage_data.state.n_state,
         "incoming_state must hold one entry per state dimension"
     );
     capture_patched_node_template_with_raw_noise(setup, node_pos, raw_noise, incoming_state)
@@ -2889,14 +2904,15 @@ pub fn capture_patched_node_template_at(
 )]
 #[must_use]
 pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize) -> Vec<f64> {
-    let stage = setup.node_graph.nodes[node_pos].stage;
-    let openings = setup.node_graph.nodes[node_pos].openings;
+    let stage = setup.inputs.node_graph.nodes[node_pos].stage;
+    let openings = setup.inputs.node_graph.nodes[node_pos].openings;
     assert!(
         opening < openings.len,
         "opening must be < node_pos's opening count"
     );
     match openings.source {
         OpeningSource::Generated => setup
+            .inputs
             .stochastic
             .opening_tree()
             .opening(stage.0, openings.offset + opening)
@@ -2909,7 +2925,7 @@ pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize)
                 &training_ctx,
                 stage,
                 openings.offset,
-                setup.node_graph.node_ids[node_pos],
+                setup.inputs.node_graph.node_ids[node_pos],
                 &mut buf,
             )
             .expect("node_opening_noise: fill_external_opening_noise must succeed");
@@ -2928,13 +2944,13 @@ fn capture_patched_node_template_with_raw_noise(
     raw_noise: &[f64],
     incoming_state: &[f64],
 ) -> StageTemplate {
-    let stage = setup.node_graph.nodes[node_pos].stage;
-    let base = setup.stage_data.stage_templates.templates[stage.0].clone();
+    let stage = setup.inputs.node_graph.nodes[node_pos].stage;
+    let base = setup.inputs.stage_data.stage_templates.templates[stage.0].clone();
     let mut solver = TemplateCaptureSolver {
         template: Some(base),
     };
 
-    let space = &setup.stage_data.state;
+    let space = &setup.inputs.stage_data.state;
     let ctx = setup.stage_ctx();
     let mut patch_buf = PatchBuffer::new(space, ctx.load_bus_indices, ctx.geometry_per_stage);
     let training_ctx = setup.training_ctx();
@@ -2964,7 +2980,7 @@ fn capture_patched_node_template_with_raw_noise(
 /// extensive-form root's incoming-state columns are pinned to.
 #[must_use]
 pub fn oracle_initial_state(setup: &StudySetup) -> Vec<f64> {
-    setup.initial.state.clone()
+    setup.inputs.initial.state.clone()
 }
 
 /// `stage`'s admissible box (per outgoing state dimension) as plain `(lower,
@@ -2972,7 +2988,7 @@ pub fn oracle_initial_state(setup: &StudySetup) -> Vec<f64> {
 /// this returns their data rather than naming either type in a `pub` signature.
 #[must_use]
 pub fn stage_state_box_bounds(setup: &StudySetup, stage: usize) -> (Vec<f64>, Vec<f64>) {
-    let state_box = &setup.stage_data.stage_templates.state_boxes[stage];
+    let state_box = &setup.inputs.stage_data.stage_templates.state_boxes[stage];
     (state_box.lower.clone(), state_box.upper.clone())
 }
 
@@ -3017,7 +3033,7 @@ pub fn no_cut_root_lower_bound<S: SolverInterface>(
         &setup.fcf,
         &stage_ctx,
         &training_ctx,
-        &setup.cut_management.risk_measures[0],
+        &setup.inputs.cut_management.risk_measures[0],
         &mut bundle,
         &LocalBackend,
     )
@@ -3902,13 +3918,13 @@ pub fn branching_tree_setup_enumerated(max_iterations: u32) -> StudySetup {
 /// Per-pool cut-state dimension (`CutStateProjection::n_slots`), pool-id-indexed
 /// — the branching-tree fixture's power self-check reads this to confirm the projection
 /// genuinely varies across pools (`build_cut_state_layouts` sizes each non-leaf
-/// pool from its successor's `state_config`). `StageData::cut_state_layouts`
+/// pool from its successor's `state_config`). `SolveInputs::cut_state_layouts`
 /// itself is `pub(crate)`, unreachable from an integration test without this
 /// accessor.
 #[must_use]
 pub fn pool_cut_state_dimensions(setup: &StudySetup) -> Vec<usize> {
     setup
-        .stage_data
+        .inputs
         .cut_state_layouts
         .iter()
         .map(CutStateProjection::n_slots)
@@ -3918,14 +3934,14 @@ pub fn pool_cut_state_dimensions(setup: &StudySetup) -> Vec<usize> {
 // ── Extensive-form oracle (shared by `branching_value_oracle.rs` and any other
 //    integration test that needs the graph's true first-stage value) ─────────
 
-/// Marginal visit probability of every node in `setup.node_graph`: `P(root) = 1`,
+/// Marginal visit probability of every node in `setup.inputs.node_graph`: `P(root) = 1`,
 /// propagated `P(child) += P(node)·prob(node→child)` in ascending-stage order. On
 /// a tree this is the product of edge probabilities on the unique root→node path
 /// — the weight each node copy's stage cost carries in
 /// [`extensive_form_optimum`]'s objective.
 #[must_use]
 pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let n = g.nodes.len();
     let mut has_pred = vec![false; n];
     for succs in &g.successors {
@@ -3948,7 +3964,7 @@ pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
     prob
 }
 
-/// The extensive-form LP optimum — `setup.node_graph`'s true first-stage value,
+/// The extensive-form LP optimum — `setup.inputs.node_graph`'s true first-stage value,
 /// computed independently of the node-native training algorithm: one column
 /// block per node (its engine-exact patched template via
 /// [`capture_patched_node_template`]), objective scaled by
@@ -3974,7 +3990,7 @@ pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
 )]
 #[must_use]
 pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let n = g.nodes.len();
     let state = setup.stage_state();
     let n_state = state.n_state;
@@ -4111,7 +4127,7 @@ pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
         .expect("extensive_form_optimum: extensive-form LP must solve");
     // The template objective carries the cost-scale divisor; rescale to the physical
     // cost units the engine reports `final_lb` in.
-    solution.objective * setup.stage_data.stage_templates.cost_scale_factor
+    solution.objective * setup.inputs.stage_data.stage_templates.cost_scale_factor
 }
 
 // ── Dual-folding trunk+fan fixture ────────────────────────────────────────────
@@ -4398,7 +4414,7 @@ fn trunk_fan_system(t_trunk: usize, k: usize) -> System {
 /// Fixture bundle for the deterministic-trunk + terminal-fan [`StudySetup`],
 /// carrying the parameters callers need to derive their own expected
 /// solves/cut counts — never a magic literal, always re-derived from these
-/// fields or from `setup.node_graph` directly.
+/// fields or from `setup.inputs.node_graph` directly.
 #[derive(Debug)]
 pub struct TrunkFanFixture {
     /// The built study: a single-hydro, single-bus system over the declared
@@ -4410,7 +4426,7 @@ pub struct TrunkFanFixture {
     /// Terminal fan width: `k` distinct leaves at stage `t_trunk`, reached
     /// from the last trunk node under non-uniform weights.
     pub k: usize,
-    /// Total non-leaf (cut-generating) node count in `setup.node_graph` —
+    /// Total non-leaf (cut-generating) node count in `setup.inputs.node_graph` —
     /// every trunk node, derived from the graph's own successor lists, never
     /// assumed equal to `t_trunk` by construction alone.
     pub n_nonleaf_nodes: usize,
@@ -4456,9 +4472,9 @@ fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixtur
     let setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
         .expect("trunk_fan_fixture: StudySetup::new must succeed");
 
-    let n_nonleaf_nodes = (0..setup.node_graph.nodes.len())
+    let n_nonleaf_nodes = (0..setup.inputs.node_graph.nodes.len())
         .map(NodePos)
-        .filter(|&pos| !setup.node_graph.successors[pos].is_empty())
+        .filter(|&pos| !setup.inputs.node_graph.successors[pos].is_empty())
         .count();
 
     TrunkFanFixture {
@@ -4516,11 +4532,11 @@ pub fn trunk_fan_setup(
 pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8>> {
     let mut groups = FactGroups::new();
     encode_stage_templates_facts(
-        &setup.stage_data.stage_templates,
-        &setup.stage_data.state,
+        &setup.inputs.stage_data.stage_templates,
+        &setup.inputs.stage_data.state,
         &mut groups,
     );
-    encode_time_value_facts(&setup.stage_data.time_value, &mut groups);
+    encode_time_value_facts(&setup.inputs.stage_data.time_value, &mut groups);
     groups
 }
 
@@ -4693,9 +4709,9 @@ mod trunk_fan_tests {
             n_nonleaf_nodes, t_trunk,
             "every trunk node must be non-leaf, got {n_nonleaf_nodes} for t_trunk={t_trunk}"
         );
-        let leaf_count = (0..setup.node_graph.nodes.len())
+        let leaf_count = (0..setup.inputs.node_graph.nodes.len())
             .map(NodePos)
-            .filter(|&pos| setup.node_graph.successors[pos].is_empty())
+            .filter(|&pos| setup.inputs.node_graph.successors[pos].is_empty())
             .count();
         assert_eq!(
             leaf_count, k,

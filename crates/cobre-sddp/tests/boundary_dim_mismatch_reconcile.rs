@@ -713,7 +713,11 @@ fn run_injected_decomp() -> f64 {
     }
 
     inject_boundary_cuts(&mut setup, &cuts).unwrap();
-    let terminal = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+    let terminal = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
     assert!(
         setup.fcf.pools[terminal].has_warm_start_cuts(),
         "injecting the boundary must make the terminal pool boundary-loaded"

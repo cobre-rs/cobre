@@ -1100,10 +1100,38 @@ fn build_resolved_penalties_with_ncs(
 }
 
 fn assert_no_external_libraries(setup: &StudySetup) {
-    assert!(setup.scenario_libraries.training.historical.is_none());
-    assert!(setup.scenario_libraries.training.external_inflow.is_none());
-    assert!(setup.scenario_libraries.training.external_load.is_none());
-    assert!(setup.scenario_libraries.training.external_ncs.is_none());
+    assert!(
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .historical
+            .is_none()
+    );
+    assert!(
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_inflow
+            .is_none()
+    );
+    assert!(
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_load
+            .is_none()
+    );
+    assert!(
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_ncs
+            .is_none()
+    );
 }
 
 /// Build a system for mixed-scheme testing (hydro + NCS + stochastic load).
@@ -1297,7 +1325,12 @@ fn forward_sampler_convergence_sweep() {
                 let (setup, result) =
                     run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
                 assert!(
-                    setup.scenario_libraries.training.historical.is_some(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .historical
+                        .is_some(),
                     "case_index = {idx}, desc = {desc}: historical_library must be Some for \
                      Historical scheme"
                 );
@@ -1312,7 +1345,12 @@ fn forward_sampler_convergence_sweep() {
                 let (setup, result) =
                     run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
                 assert!(
-                    setup.scenario_libraries.training.external_inflow.is_some(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_inflow
+                        .is_some(),
                     "case_index = {idx}, desc = {desc}: external_inflow_library must be Some for \
                      External scheme"
                 );
@@ -1736,17 +1774,32 @@ fn external_library_population_sweep() {
                 let (setup, result) =
                     run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
                 assert!(
-                    setup.scenario_libraries.training.external_load.is_some(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_load
+                        .is_some(),
                     "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
                      external_load_library must be Some when load_scheme is External"
                 );
                 assert!(
-                    setup.scenario_libraries.training.external_inflow.is_none(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_inflow
+                        .is_none(),
                     "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
                      external_inflow_library must be None when inflow_scheme is InSample"
                 );
                 assert!(
-                    setup.scenario_libraries.training.external_ncs.is_none(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_ncs
+                        .is_none(),
                     "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
                      external_ncs_library must be None when ncs_scheme is InSample"
                 );
@@ -1762,17 +1815,32 @@ fn external_library_population_sweep() {
                 let (setup, result) =
                     run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
                 assert!(
-                    setup.scenario_libraries.training.external_ncs.is_some(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_ncs
+                        .is_some(),
                     "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
                      external_ncs_library must be Some when ncs_scheme is External"
                 );
                 assert!(
-                    setup.scenario_libraries.training.external_inflow.is_none(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_inflow
+                        .is_none(),
                     "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
                      external_inflow_library must be None when inflow_scheme is InSample"
                 );
                 assert!(
-                    setup.scenario_libraries.training.external_load.is_none(),
+                    setup
+                        .inputs
+                        .scenario_libraries
+                        .training
+                        .external_load
+                        .is_none(),
                     "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
                      external_load_library must be None when load_scheme is InSample"
                 );

@@ -1,16 +1,16 @@
-//! Stage-indexed data sub-struct of [`super::StudySetup`].
+//! Stage-indexed data sub-struct of [`super::SolveInputs`].
 
 use cobre_core::{Stage, temporal::StageLagTransition};
 
 use crate::{
     lp::builder::StageTemplates,
-    lp::indexer::{CutStateProjection, HydroCellIndex, StateSpace, StudyDimensions},
+    lp::indexer::{HydroCellIndex, StateSpace, StudyDimensions},
     scaling_report::ScalingReport,
     simulation::EntityCounts,
     time_value::TimeValue,
 };
 
-/// All per-stage and stage-indexed data owned by [`super::StudySetup`],
+/// All per-stage and stage-indexed data owned by [`super::SolveInputs`],
 /// constructed once during [`super::StudySetup::from_broadcast_params`] and
 /// borrowed for hot-path context construction.
 #[derive(Debug)]
@@ -39,14 +39,6 @@ pub struct StageData {
     /// [`Self::study_dims`]. The partition is the identity map for every
     /// study without multi-bus groups (see [`HydroCellIndex`] module docs).
     pub(crate) hydro_cell_index: HydroCellIndex,
-
-    /// Per-pool cut-state projection, indexed by pool id, paired 1:1 with
-    /// [`crate::FutureCostFunction::pools`] (pool `p` sized by
-    /// `cut_state_layouts[p].n_slots()`) — the single owner of each pool's
-    /// cut-state dimension. `pool_id` is resolved from the node graph's
-    /// `node → pool` map (`NodeGraph::n_pools`); on the chain degeneracy
-    /// `pool_id == stage`.
-    pub(crate) cut_state_layouts: Vec<CutStateProjection>,
 
     /// Study stages (id >= 0) in index order.
     pub(crate) stages: Vec<Stage>,

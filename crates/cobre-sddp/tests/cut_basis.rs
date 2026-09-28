@@ -76,7 +76,7 @@ mod boundary_cuts {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -85,8 +85,13 @@ mod boundary_cuts {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -186,7 +191,7 @@ mod boundary_cuts {
         );
         cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records).unwrap();
 
-        let terminal_pool_id = setup_c.node_graph.terminal_pool(num_stages).unwrap();
+        let terminal_pool_id = setup_c.inputs.node_graph.terminal_pool(num_stages).unwrap();
         let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
         assert!(
             terminal_pool.has_warm_start_cuts(),
@@ -1615,7 +1620,7 @@ mod warm_start {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -1624,8 +1629,13 @@ mod warm_start {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -2770,7 +2780,7 @@ mod range_warm_start_determinism {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -2779,8 +2789,13 @@ mod range_warm_start_determinism {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,

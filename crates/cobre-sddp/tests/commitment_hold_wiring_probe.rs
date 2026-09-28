@@ -246,6 +246,7 @@ fn anticipated_ring_columns_carry_unit_col_scale() {
     );
 
     for (stage_idx, template) in setup
+        .inputs
         .stage_data
         .stage_templates
         .templates

@@ -263,7 +263,7 @@ fn reconcile_boundary(
             boundary_date,
             state_dim,
             &current_manifest,
-            setup.stage_data.stage_templates.cost_scale_factor,
+            setup.inputs.stage_data.stage_templates.cost_scale_factor,
         )
         .with_fixed_windows(&fixed_windows)
         .with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())

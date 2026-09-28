@@ -41,7 +41,7 @@ use common::in_code_studies::{
 const M3S_TO_HM3: f64 = 0.0036;
 
 fn root_node(setup: &StudySetup) -> NodePos {
-    let graph = &setup.node_graph;
+    let graph = &setup.inputs.node_graph;
     (0..graph.nodes.len())
         .map(NodePos)
         .find(|&pos| graph.nodes[pos].stage == StageIdx(0))
@@ -108,7 +108,7 @@ fn chronological_noise_lower_bound_is_the_mean_root_objective() {
     let (system, config) = chronological_noise_study(&spec);
     let setup = build_setup_in_code(system, &config);
     let root = root_node(&setup);
-    let n = setup.node_graph.nodes[root].openings.len;
+    let n = setup.inputs.node_graph.nodes[root].openings.len;
     let n_hydros = CHRONOLOGICAL_NOISE_INFLOW_STD_M3S.len();
 
     let etas: Vec<Vec<f64>> = (0..n)
@@ -144,7 +144,7 @@ fn chronological_noise_lower_bound_is_the_mean_root_objective() {
         .sum();
 
     let n_f64 = n as f64;
-    let cost_scale_factor = setup.stage_data.stage_templates.cost_scale_factor;
+    let cost_scale_factor = setup.inputs.stage_data.stage_templates.cost_scale_factor;
     let expected_from_solves = sum_objective / n_f64 * cost_scale_factor;
 
     let mut lb_solver = ActiveSolver::new().expect("ActiveSolver::new");

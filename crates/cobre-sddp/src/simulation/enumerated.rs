@@ -530,7 +530,7 @@ mod tests {
         let k = 3usize;
         let fixture = test_support::k_fan_setup_enumerated(k, 1);
         let setup = &fixture.setup;
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
 
         #[allow(clippy::cast_possible_truncation)]
         let traversal = Traversal::resolve(node_graph, true, k as u32);
@@ -557,21 +557,27 @@ mod tests {
         let (result_tx, _result_rx) = std::sync::mpsc::sync_channel(64);
         let output = SimulationOutputSpec {
             result_tx: &result_tx,
-            block_hours_per_stage: &setup.stage_data.stage_templates.block_hours_per_stage,
-            entity_counts: &setup.stage_data.entity_counts,
+            block_hours_per_stage: &setup
+                .inputs
+                .stage_data
+                .stage_templates
+                .block_hours_per_stage,
+            entity_counts: &setup.inputs.stage_data.entity_counts,
             generic_constraint_row_entries: &setup
+                .inputs
                 .stage_data
                 .stage_templates
                 .generic_constraint_row_entries,
-            n_ncs: setup.stage_data.stage_templates.n_ncs,
-            n_pumping: setup.stage_data.stage_templates.n_pumping,
-            hydro_cell_index: &setup.stage_data.hydro_cell_index,
-            pumping_consumption_mw_per_m3s: &setup.stage_data.pumping_consumption_mw_per_m3s,
-            contract_prices_per_stage: &setup.stage_data.contract_prices_per_stage,
-            contract_is_import: &setup.stage_data.contract_is_import,
-            ncs_entity_ids_per_stage: &setup.ncs.entity_ids_per_stage,
-            diversion_upstream: &setup.stage_data.stage_templates.diversion_upstream,
+            n_ncs: setup.inputs.stage_data.stage_templates.n_ncs,
+            n_pumping: setup.inputs.stage_data.stage_templates.n_pumping,
+            hydro_cell_index: &setup.inputs.stage_data.hydro_cell_index,
+            pumping_consumption_mw_per_m3s: &setup.inputs.stage_data.pumping_consumption_mw_per_m3s,
+            contract_prices_per_stage: &setup.inputs.stage_data.contract_prices_per_stage,
+            contract_is_import: &setup.inputs.stage_data.contract_is_import,
+            ncs_entity_ids_per_stage: &setup.inputs.ncs.entity_ids_per_stage,
+            diversion_upstream: &setup.inputs.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &setup
+                .inputs
                 .stage_data
                 .stage_templates
                 .hydro_productivities_per_stage,

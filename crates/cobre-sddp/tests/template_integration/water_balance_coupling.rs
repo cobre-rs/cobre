@@ -39,7 +39,7 @@ fn every_committed_deck_reads_z_inflow_on_its_water_rows() {
         }
         let z_inflow_start = setup.stage_state().z_inflow.start;
         let inflow_lags = setup.stage_state().inflow_lags.clone();
-        let templates = &setup.stage_data.stage_templates;
+        let templates = &setup.inputs.stage_data.stage_templates;
 
         for (s, t) in templates.templates.iter().enumerate() {
             let geom = &templates.geometry_per_stage[s];

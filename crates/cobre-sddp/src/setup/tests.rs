@@ -591,7 +591,7 @@ fn new_minimal_valid_system_returns_ok() {
     );
     assert!(result.is_ok(), "expected Ok, got {result:?}");
     let setup = result.unwrap();
-    assert!(!setup.stage_data.stage_templates.templates.is_empty());
+    assert!(!setup.inputs.stage_data.stage_templates.templates.is_empty());
 }
 
 #[test]
@@ -658,7 +658,10 @@ fn accessor_methods_return_expected_values() {
     )
     .expect("setup");
 
-    assert_eq!(setup.stage_data.stage_templates.templates.len(), n_stages);
+    assert_eq!(
+        setup.inputs.stage_data.stage_templates.templates.len(),
+        n_stages
+    );
 
     assert_eq!(setup.loop_params.seed, 42);
     assert_eq!(setup.loop_params.forward_passes, 2);
@@ -667,19 +670,26 @@ fn accessor_methods_return_expected_values() {
     assert_eq!(setup.policy_path, "./policy");
 
     assert_eq!(
-        setup.stage_data.stage_templates.geometry_per_stage.len(),
+        setup
+            .inputs
+            .stage_data
+            .stage_templates
+            .geometry_per_stage
+            .len(),
         n_stages
     );
-    assert!(StageGeometry::max_blocks(&setup.stage_data.stage_templates.geometry_per_stage) > 0);
+    assert!(
+        StageGeometry::max_blocks(&setup.inputs.stage_data.stage_templates.geometry_per_stage) > 0
+    );
 
-    assert_eq!(setup.horizon.num_stages(), n_stages);
+    assert_eq!(setup.inputs.horizon.num_stages(), n_stages);
 
-    assert_eq!(setup.cut_management.risk_measures.len(), n_stages);
+    assert_eq!(setup.inputs.cut_management.risk_measures.len(), n_stages);
 
     assert_eq!(setup.fcf.pools.len(), n_stages);
 
-    assert_eq!(setup.stage_data.entity_counts.hydro_ids.len(), 1);
-    assert_eq!(setup.stage_data.entity_counts.thermal_ids.len(), 1);
+    assert_eq!(setup.inputs.stage_data.entity_counts.hydro_ids.len(), 1);
+    assert_eq!(setup.inputs.stage_data.entity_counts.thermal_ids.len(), 1);
 }
 
 #[test]
@@ -710,7 +720,7 @@ fn fcf_mut_allows_cut_insertion() {
     )
     .expect("setup");
 
-    let n_state = setup.stage_data.state.n_state;
+    let n_state = setup.inputs.stage_data.state.n_state;
     let coefficients = vec![1.0_f64; n_state];
     setup.fcf.add_cut(NodeId(0), 0, 0, 0, 42.0, &coefficients);
     assert_eq!(setup.fcf.total_active_cuts(), 1);
@@ -747,7 +757,7 @@ fn inflow_method_reflects_config() {
     .expect("setup");
 
     assert!(
-        !matches!(setup.inflow_method, InflowNonNegativityMethod::None),
+        !matches!(setup.inputs.inflow_method, InflowNonNegativityMethod::None),
         "expected penalty or truncation method"
     );
 }
@@ -781,7 +791,7 @@ fn cut_selection_none_when_disabled() {
     .expect("setup");
 
     assert!(
-        setup.cut_management.cut_selection.is_none(),
+        setup.inputs.cut_management.cut_selection.is_none(),
         "cut_selection should be None when disabled"
     );
 }
@@ -818,12 +828,12 @@ fn stage_ctx_fields_match_study_setup() {
 
     assert_eq!(
         ctx.templates.len(),
-        setup.stage_data.stage_templates.templates.len(),
+        setup.inputs.stage_data.stage_templates.templates.len(),
         "templates length mismatch"
     );
     assert_eq!(
-        setup.stage_data.state.hydro_count,
-        setup.stage_data.entity_counts.hydro_ids.len(),
+        setup.inputs.stage_data.state.hydro_count,
+        setup.inputs.stage_data.entity_counts.hydro_ids.len(),
         "n_hydros mismatch"
     );
     assert_eq!(
@@ -865,16 +875,16 @@ fn training_ctx_fields_match_study_setup() {
 
     assert_eq!(
         ctx.horizon.num_stages(),
-        setup.horizon.num_stages(),
+        setup.inputs.horizon.num_stages(),
         "horizon num_stages mismatch"
     );
     assert_eq!(
-        ctx.state.n_state, setup.stage_data.state.n_state,
+        ctx.state.n_state, setup.inputs.stage_data.state.n_state,
         "indexer n_state mismatch"
     );
     assert_eq!(
         ctx.initial_state.len(),
-        setup.initial.state.len(),
+        setup.inputs.initial.state.len(),
         "initial_state length mismatch"
     );
 }
@@ -1170,37 +1180,37 @@ fn node_native_binary_tree_loads_and_constructs_node_graph() {
     // The runtime node graph mirrors the declared 7-node binary tree: nodes
     // 0/1/2 have successors and own their own pool; nodes 3/4/5/6 are leaves
     // and share exactly one pool.
-    assert_eq!(setup.node_graph.nodes.len(), 7);
+    assert_eq!(setup.inputs.node_graph.nodes.len(), 7);
     assert_eq!(
-        setup.node_graph.n_pools, 4,
+        setup.inputs.node_graph.n_pools, 4,
         "3 internal nodes each own a pool, 4 leaves share one"
     );
     // The FCF and its paired cut-state layouts are sized to the pool axis
     // (`n_pools`), NOT the node count or the stage count (3).
     assert_eq!(
         setup.fcf.pools.len(),
-        setup.node_graph.n_pools,
+        setup.inputs.node_graph.n_pools,
         "FutureCostFunction.pools is sized to n_pools, not node count or stage count"
     );
     assert_eq!(
-        setup.stage_data.cut_state_layouts.len(),
-        setup.node_graph.n_pools,
+        setup.inputs.cut_state_layouts.len(),
+        setup.inputs.node_graph.n_pools,
         "cut_state_layouts is sized to n_pools, paired 1:1 with fcf.pools"
     );
 
     // Canonical (ascending child node id) successor structure, matching the
     // declared transitions: 0->{1,2}, 1->{3,4}, 2->{5,6}; leaves have none.
     let child_ids = |pos: usize| -> Vec<NodeId> {
-        setup.node_graph.successors[NodePos(pos)]
+        setup.inputs.node_graph.successors[NodePos(pos)]
             .iter()
-            .map(|s| setup.node_graph.node_ids[s.child])
+            .map(|s| setup.inputs.node_graph.node_ids[s.child])
             .collect()
     };
     assert_eq!(child_ids(0), vec![NodeId(1), NodeId(2)]);
     assert_eq!(child_ids(1), vec![NodeId(3), NodeId(4)]);
     assert_eq!(child_ids(2), vec![NodeId(5), NodeId(6)]);
     for leaf_pos in 3..7 {
-        assert!(setup.node_graph.successors[NodePos(leaf_pos)].is_empty());
+        assert!(setup.inputs.node_graph.successors[NodePos(leaf_pos)].is_empty());
     }
 }
 
@@ -1237,12 +1247,12 @@ fn chain_fcf_pools_len_equals_num_stages_with_pool_id_identity() {
     )
     .expect("setup: chain must load end-to-end");
 
-    assert_eq!(setup.node_graph.n_pools, n_stages);
+    assert_eq!(setup.inputs.node_graph.n_pools, n_stages);
     assert_eq!(setup.fcf.pools.len(), n_stages);
-    assert_eq!(setup.stage_data.cut_state_layouts.len(), n_stages);
+    assert_eq!(setup.inputs.cut_state_layouts.len(), n_stages);
     for t in 0..n_stages {
         assert_eq!(
-            setup.node_graph.nodes[NodePos(t)].pool_id,
+            setup.inputs.node_graph.nodes[NodePos(t)].pool_id,
             t,
             "chain degeneracy: pool_id must equal stage index {t}"
         );
@@ -1367,8 +1377,9 @@ fn simulation_pool_scratch_is_sized_from_the_study_owners() {
         .create_workspace_pool(&comm, 1, ActiveSolver::new)
         .expect("workspace pool");
 
-    let state = &setup.stage_data.state;
+    let state = &setup.inputs.stage_data.state;
     let max_n_blks = setup
+        .inputs
         .stage_data
         .stage_templates
         .geometry_per_stage
@@ -1376,13 +1387,13 @@ fn simulation_pool_scratch_is_sized_from_the_study_owners() {
         .map(|g| g.n_blks)
         .max()
         .unwrap_or(0);
-    let n_load_buses = setup.stage_data.stage_templates.n_load_buses();
+    let n_load_buses = setup.inputs.stage_data.stage_templates.n_load_buses();
 
     let scratch = &pool.workspaces[0].scratch;
     assert_eq!(scratch.lag_accumulator.len(), state.hydro_count);
     assert_eq!(
         scratch.downstream_completed_lags.len(),
-        state.hydro_count * setup.stage_data.study_dims.downstream_par_order
+        state.hydro_count * setup.inputs.stage_data.study_dims.downstream_par_order
     );
     assert!(scratch.load_rhs_buf.capacity() >= n_load_buses * max_n_blks);
     assert_eq!(scratch.raw_noise_buf.capacity(), 0);
@@ -3546,7 +3557,7 @@ fn study_setup_initial_state_has_nonzero_lags_from_derived_inflow_history() {
     )
     .expect("setup with inflow_history");
 
-    let state = &setup.initial.state;
+    let state = &setup.inputs.initial.state;
 
     // With 2 hydros (N=2) and max_par_order=2 (L=2), lag slots start at N=2.
     // Lag-major layout: slot = lag_start + lag * N + h.
@@ -4827,19 +4838,39 @@ fn historical_library_none_for_insample() {
     .expect("setup");
 
     assert!(
-        setup.scenario_libraries.training.historical.is_none(),
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .historical
+            .is_none(),
         "historical_library must be None for InSample scheme"
     );
     assert!(
-        setup.scenario_libraries.training.external_inflow.is_none(),
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_inflow
+            .is_none(),
         "external_inflow_library must be None for InSample scheme"
     );
     assert!(
-        setup.scenario_libraries.training.external_load.is_none(),
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_load
+            .is_none(),
         "external_load_library must be None for InSample load scheme"
     );
     assert!(
-        setup.scenario_libraries.training.external_ncs.is_none(),
+        setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_ncs
+            .is_none(),
         "external_ncs_library must be None for InSample ncs scheme"
     );
 }
@@ -5121,6 +5152,7 @@ fn historical_library_built_when_scheme_is_historical() {
     .expect("setup");
 
     let lib = setup
+        .inputs
         .scenario_libraries
         .training
         .historical
@@ -5394,6 +5426,7 @@ fn external_inflow_library_built_when_scheme_is_external() {
     .expect("setup");
 
     let lib = setup
+        .inputs
         .scenario_libraries
         .training
         .external_inflow
@@ -5662,6 +5695,7 @@ fn external_load_library_built_when_scheme_is_external() {
     .expect("setup");
 
     let lib = setup
+        .inputs
         .scenario_libraries
         .training
         .external_load
@@ -5964,6 +5998,7 @@ fn external_load_library_includes_zero_sigma_bus_when_scheme_is_external() {
     .expect("setup must accept a sigma=0 External-scheme load bus");
 
     let lib = setup
+        .inputs
         .scenario_libraries
         .training
         .external_load
@@ -6269,6 +6304,7 @@ fn external_ncs_library_built_when_scheme_is_external() {
     .expect("setup");
 
     let lib = setup
+        .inputs
         .scenario_libraries
         .training
         .external_ncs
@@ -6955,12 +6991,15 @@ fn setup_wires_anticipated_metadata_into_indexer() {
     .expect("setup");
 
     assert_eq!(
-        setup.stage_data.state.n_anticipated, 1,
+        setup.inputs.stage_data.state.n_anticipated, 1,
         "expected n_anticipated == 1"
     );
-    assert_eq!(setup.stage_data.state.k_max, 2, "expected k_max == 2");
     assert_eq!(
-        setup.stage_data.state.anticipated_lead_stages,
+        setup.inputs.stage_data.state.k_max, 2,
+        "expected k_max == 2"
+    );
+    assert_eq!(
+        setup.inputs.stage_data.state.anticipated_lead_stages,
         vec![2],
         "expected anticipated_lead_stages == [2]"
     );
@@ -7013,14 +7052,15 @@ fn setup_leadstages_resolution_preserves_k_max_and_state_dimension() {
     )
     .expect("setup");
 
-    assert_eq!(setup.stage_data.state.k_max, 2, "k_max unchanged");
+    assert_eq!(setup.inputs.stage_data.state.k_max, 2, "k_max unchanged");
     // n_state = N*(1+L) + A*k_max = 1*(1+0) + 1*2 = 3 (no PAR lags, one hydro).
     assert_eq!(
-        setup.stage_data.state.n_state, 3,
+        setup.inputs.stage_data.state.n_state, 3,
         "state_dimension unchanged"
     );
     assert_eq!(
         setup
+            .inputs
             .stage_data
             .state
             .anticipated_resolution
@@ -7267,7 +7307,7 @@ fn stage_data_state_matches_indexer_role_a_uniform() {
     )
     .expect("setup");
 
-    assert_state_layout_finalized(&setup.stage_data.state);
+    assert_state_layout_finalized(&setup.inputs.stage_data.state);
 }
 
 /// Given a boundary-inferred depth (24) greater than the fitted AR order
@@ -7308,7 +7348,7 @@ fn resolve_state_layout_widens_dense_stride_and_mask_to_declared_depth() {
     )
     .expect("setup with a boundary depth exceeding the AR order");
 
-    let state = &setup.stage_data.state;
+    let state = &setup.inputs.stage_data.state;
     assert_eq!(
         state.max_par_order, 24,
         "dense stride must widen to the boundary-inferred depth (AR order is 2)"
@@ -7360,7 +7400,7 @@ fn resolve_state_layout_floors_declared_depth_at_ar_order() {
     )
     .expect("setup with a boundary depth below the AR order");
 
-    let state = &setup.stage_data.state;
+    let state = &setup.inputs.stage_data.state;
     assert_eq!(
         state.max_par_order, 2,
         "a boundary depth below the AR order must not shrink the dense stride"
@@ -7419,7 +7459,7 @@ fn cobre_io_seed_depth_matches_resolve_state_layout_depth() {
 
     let io_depth = cobre_io::seed_lag_state_depth(FIXTURE_AR_ORDER, false);
     assert_eq!(
-        setup.stage_data.state.max_par_order, io_depth,
+        setup.inputs.stage_data.state.max_par_order, io_depth,
         "cobre-io seed depth and resolve_state_layout dense stride must agree \
          (both the PAR-derived depth) without a loaded boundary"
     );
@@ -7466,8 +7506,11 @@ fn stage_id_resolver_agrees_with_study_stage_ids() {
         .collect();
     let resolver = cobre_io::StageIdResolver::from_study_stage_ids(&ids);
 
-    assert_eq!(resolver.study_stage_ids(), setup.study_stage_ids.as_slice());
-    for (i, &id) in setup.study_stage_ids.iter().enumerate() {
+    assert_eq!(
+        resolver.study_stage_ids(),
+        setup.inputs.study_stage_ids.as_slice()
+    );
+    for (i, &id) in setup.inputs.study_stage_ids.iter().enumerate() {
         assert_eq!(resolver.resolve(id), Some(i));
         assert_eq!(resolver.id_at(i), Some(id));
     }
@@ -7740,11 +7783,12 @@ fn setup_state_and_stage_template_agree_on_n_state_with_declared_arc() {
     let setup = setup_from_system(&system);
 
     assert!(
-        setup.stage_data.state.n_buckets > 0,
+        setup.inputs.stage_data.state.n_buckets > 0,
         "fixture must declare a real travel-time arc"
     );
     assert_eq!(
-        setup.stage_data.stage_templates.templates[0].n_state, setup.stage_data.state.n_state,
+        setup.inputs.stage_data.stage_templates.templates[0].n_state,
+        setup.inputs.stage_data.state.n_state,
         "the template's n_state must agree with StageData.state.n_state"
     );
 }
@@ -7781,8 +7825,8 @@ fn stage_data_geometry_role_b_matches_reference_build() {
     )
     .expect("setup");
 
-    let geometry = &setup.stage_data.stage_templates.geometry_per_stage[0];
-    let study_dims = &setup.stage_data.study_dims;
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[0];
+    let study_dims = &setup.inputs.stage_data.study_dims;
     let dims = test_support::GeometryDims {
         hydro_count: geometry.water_balance.range().len(),
         max_par_order: 0, // role-(b) ranges do not depend on L
@@ -7874,8 +7918,11 @@ fn stage_data_state_matches_indexer_role_a_anticipated() {
     )
     .expect("setup");
 
-    assert_eq!(setup.stage_data.state.n_anticipated, 1, "fixture sanity");
-    assert_state_layout_finalized(&setup.stage_data.state);
+    assert_eq!(
+        setup.inputs.stage_data.state.n_anticipated, 1,
+        "fixture sanity"
+    );
+    assert_state_layout_finalized(&setup.inputs.stage_data.state);
 }
 
 /// Cut-row byte-identity: the production `build_cut_row_batch` reading role-(a)
@@ -7914,7 +7961,7 @@ fn cut_row_from_state_matches_reference_loop() {
     )
     .expect("setup");
 
-    let state = &setup.stage_data.state;
+    let state = &setup.inputs.stage_data.state;
     let n_state = state.n_state;
     assert!(n_state > 0, "fixture must have a non-empty state vector");
 
@@ -8276,7 +8323,7 @@ fn cut_pool_sizing_t_plus_1_reduces_pool_zero_for_lagless_successor() {
     let system = par2_system_with_state_configs(&[lags, storage_only, lags, lags]);
     let setup = setup_from_system(&system);
 
-    let global_n_state = setup.stage_data.state.n_state;
+    let global_n_state = setup.inputs.stage_data.state.n_state;
     assert_eq!(global_n_state, 3, "N=1, L=2 → n_state = N*(1+L) = 3");
     assert_eq!(setup.fcf.pools.len(), 4);
 
@@ -8304,7 +8351,7 @@ fn cut_pool_sizing_all_enabled_matches_global_n_state() {
     let system = par2_system_with_state_configs(&[lags, lags, lags, lags]);
     let setup = setup_from_system(&system);
 
-    let global_n_state = setup.stage_data.state.n_state;
+    let global_n_state = setup.inputs.stage_data.state.n_state;
     assert_eq!(global_n_state, 3);
     assert_eq!(setup.fcf.pools.len(), 4);
     for (t, pool) in setup.fcf.pools.iter().enumerate() {
@@ -8333,11 +8380,11 @@ fn cut_state_layouts_stored_one_per_pool_and_reachable() {
     let setup = setup_from_system(&system);
 
     assert_eq!(
-        setup.stage_data.cut_state_layouts.len(),
+        setup.inputs.cut_state_layouts.len(),
         setup.fcf.pools.len(),
         "exactly one CutStateProjection per pool",
     );
-    for (t, layout) in setup.stage_data.cut_state_layouts.iter().enumerate() {
+    for (t, layout) in setup.inputs.cut_state_layouts.iter().enumerate() {
         assert_eq!(
             layout.n_slots(),
             setup.fcf.pools[t].state_dimension,
@@ -8349,7 +8396,7 @@ fn cut_state_layouts_stored_one_per_pool_and_reachable() {
     // at stage index 1, so it sizes pool 0: its cut dimension drops the AR lags
     // to exactly the hydro (storage) count N, while pool 1 (sized by stage 2's
     // lag-enabled config) carries storage + lags (N*(1+L) > N).
-    let n_hydros = setup.stage_data.state.hydro_count;
+    let n_hydros = setup.inputs.stage_data.state.hydro_count;
     assert_eq!(
         setup.fcf.pools[0].state_dimension, n_hydros,
         "storage-only pool 0 must have cut dimension N (lags dropped)",
@@ -10769,7 +10816,7 @@ fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
     }
 
     fn check(setup: &StudySetup, min_terminal_nodes: usize, injected: bool) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.training_ctx().horizon.num_stages();
         let last = super::node_graph::StageIdx(num_stages - 1);
         let terminal_pool_id = node_graph

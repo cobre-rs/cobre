@@ -686,7 +686,11 @@ mod left_right_symmetry {
         let tmp = tempfile::tempdir().expect("tempdir");
         inject_ring_boundary(&mut setup, &tmp.path().join("boundary"), BETA);
 
-        let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+        let terminal_pool_id = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let theta_at_v = terminal_theta(&setup, &template, pool, NodeId(1), &ring_pin(&setup, V));

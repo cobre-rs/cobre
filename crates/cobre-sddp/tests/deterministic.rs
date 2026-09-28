@@ -2022,6 +2022,7 @@ fn d33_per_stage_block_count_varies() {
     // stage), which equals `StageGeometry::n_blks` threaded through the
     // pipeline.
     let block_counts: Vec<usize> = setup
+        .inputs
         .stage_data
         .stage_templates
         .block_hours_per_stage
@@ -3232,9 +3233,10 @@ fn d56_external_load_reconstructs_external_value_not_seasonal_mean() {
 
     let (setup, _system, _result) = run_deterministic_with_setup(case_dir);
 
-    let mean = setup.stochastic.normal().mean(0, 0);
-    let std = setup.stochastic.normal().std(0, 0);
+    let mean = setup.inputs.stochastic.normal().mean(0, 0);
+    let std = setup.inputs.stochastic.normal().std(0, 0);
     let eta = setup
+        .inputs
         .scenario_libraries
         .training
         .external_load
@@ -3321,7 +3323,7 @@ fn d29_weekly_par_noise_sharing() {
     let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
         .expect("StudySetup must build");
 
-    let groups = &setup.stage_data.noise_group_ids;
+    let groups = &setup.inputs.stage_data.noise_group_ids;
     assert_eq!(groups.len(), 4, "expected 4 study stages");
     assert!(
         groups.iter().all(|&g| g == groups[0]),
@@ -6285,7 +6287,7 @@ mod chronological_telescoping {
     /// whose cuts were never routed through the canonical-currency export
     /// transform, e.g. `FutureCostFunction::new_with_warm_start` fed
     /// `checkpoint.stage_cuts` directly). `scale ==
-    /// setup.stage_data.stage_templates.cost_scale_factor` compares against a
+    /// setup.inputs.stage_data.stage_templates.cost_scale_factor` compares against a
     /// checkpoint written by [`write_checkpoint`] (`orchestration.rs`), which
     /// multiplies every value by that same factor at export — a single
     /// multiply, so the comparison is exact, not tolerance-based.
@@ -6347,7 +6349,11 @@ mod chronological_telescoping {
     /// intentionally not asserted.
     fn assert_cross_mode_load_preserves_cut_bytes(train_mode: BlockMode, load_mode: BlockMode) {
         let (trained_setup, checkpoint, _policy_dir) = train_and_checkpoint(train_mode);
-        let cost_scale_factor = trained_setup.stage_data.stage_templates.cost_scale_factor;
+        let cost_scale_factor = trained_setup
+            .inputs
+            .stage_data
+            .stage_templates
+            .cost_scale_factor;
         assert_cuts_bit_identical(&trained_setup.fcf, &checkpoint, cost_scale_factor);
 
         let config = build_config();
@@ -7162,7 +7168,7 @@ mod boundary_season_gate_round_trip {
                 boundary_date,
                 state_dim,
                 &current_manifest,
-                setup.stage_data.stage_templates.cost_scale_factor,
+                setup.inputs.stage_data.stage_templates.cost_scale_factor,
             )
             .with_study_seasons(&study_seasons),
         )
@@ -8009,8 +8015,8 @@ mod chronological_attribution {
         let parallel = build_setup(BlockMode::Parallel, single_block("B0", 720.0));
         let chronological = build_setup(BlockMode::Chronological, single_block("B0", 720.0));
 
-        let parallel_templates = &parallel.stage_data.stage_templates.templates;
-        let chrono_templates = &chronological.stage_data.stage_templates.templates;
+        let parallel_templates = &parallel.inputs.stage_data.stage_templates.templates;
+        let chrono_templates = &chronological.inputs.stage_data.stage_templates.templates;
         assert_all_templates_byte_identical(
             parallel_templates,
             chrono_templates,
@@ -8511,7 +8517,7 @@ mod k_fan_branching_sampled_coverage {
     #[test]
     fn k_fan_sampled_routing_sums_to_forward_passes_with_no_oob() {
         let (fixture, _outcome) = train_k_fan();
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
 
         let cut_generating: Vec<NodePos> = (0..node_graph.nodes.len())
             .map(NodePos)
@@ -8612,6 +8618,7 @@ mod k_fan_branching_sampled_coverage {
 
         let path_length = 1 + fixture
             .setup
+            .inputs
             .node_graph
             .nodes
             .iter()
@@ -8678,7 +8685,7 @@ mod k_fan_branching_sampled_coverage {
         // The frozen overlay is one template per POOL, and this fixture has
         // strictly more pools than stages (leaf sharing gives n_pools = K+2 over
         // 3 stages) — so a per-stage overlay could not have produced this length.
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
         let n_pools = node_graph.n_pools;
         let n_stages: usize = node_graph
             .nodes
@@ -8869,7 +8876,7 @@ mod k_fan_enumerated_exact_bound {
     #[test]
     fn enumerated_k_fan_forward_solves_equal_dedup_total_below_naive() {
         let (fixture, outcome) = train();
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
 
         // Σ forward_solve_counts on a |Ω|=1 tree == the node count (π(n) = 1).
         let dedup_total = node_graph.nodes.len() as u64;
@@ -8958,7 +8965,7 @@ mod visit_bound_overflow_guard {
         // stride sits STRICTLY below forward_passes, the realizable routed
         // ceiling — otherwise an overflow cannot occur on this fixture at
         // all and the test below would pass vacuously.
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
         let capped_pool = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -9117,12 +9124,12 @@ mod heterogeneous_visit_bound_resume {
         // sentinel.
         let pool_owner_node_id = |pool: usize| -> i32 {
             let mut owner: Option<i32> = None;
-            for (pos, node) in cold.setup.node_graph.nodes.iter_indexed() {
+            for (pos, node) in cold.setup.inputs.node_graph.nodes.iter_indexed() {
                 if node.pool_id == pool {
                     if owner.is_some() {
                         return STAGE_CUTS_NODE_ID_SENTINEL;
                     }
-                    owner = Some(cold.setup.node_graph.node_ids[pos].0);
+                    owner = Some(cold.setup.inputs.node_graph.node_ids[pos].0);
                 }
             }
             owner.unwrap_or(STAGE_CUTS_NODE_ID_SENTINEL)
@@ -9547,7 +9554,12 @@ mod enumerated_external {
         )
         .expect("StudySetup::from_broadcast_params must build");
         assert!(
-            setup.scenario_libraries.training.external_inflow.is_some(),
+            setup
+                .inputs
+                .scenario_libraries
+                .training
+                .external_inflow
+                .is_some(),
             "external inflow library must be present under the External scheme"
         );
 
@@ -9873,8 +9885,8 @@ mod dual_folding_f34 {
     /// Pool ids of the trunk nodes (nodes with a successor own their own pool).
     fn trunk_pool_ids(setup: &StudySetup) -> Vec<usize> {
         let mut ids = Vec::new();
-        for (pos, node) in setup.node_graph.nodes.iter_indexed() {
-            if !setup.node_graph.successors[pos].is_empty() && !ids.contains(&node.pool_id) {
+        for (pos, node) in setup.inputs.node_graph.nodes.iter_indexed() {
+            if !setup.inputs.node_graph.successors[pos].is_empty() && !ids.contains(&node.pool_id) {
                 ids.push(node.pool_id);
             }
         }
@@ -9885,10 +9897,11 @@ mod dual_folding_f34 {
     /// Widest successor count over all nodes — the terminal fan's width.
     fn fan_width(setup: &StudySetup) -> usize {
         setup
+            .inputs
             .node_graph
             .nodes
             .iter_indexed()
-            .map(|(pos, _)| setup.node_graph.successors[pos].len())
+            .map(|(pos, _)| setup.inputs.node_graph.successors[pos].len())
             .max()
             .unwrap_or(0)
     }
@@ -10191,7 +10204,7 @@ mod enumerated_checkpoint {
         let _training_output = fixture.setup.build_training_output(&result, &[]);
 
         // Partition pools into leaf (stride 0) and non-leaf (stride 1).
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
         let mut leaf_pools: HashSet<usize> = HashSet::new();
         let mut nonleaf_pools: HashSet<usize> = HashSet::new();
         for i in 0..node_graph.nodes.len() {
@@ -10744,7 +10757,11 @@ mod water_terminal_fcf_valuation {
         let tmp = tempfile::tempdir().expect("tempdir");
         inject_bucket_boundary(&mut setup, &tmp.path().join("boundary"), bucket_col);
 
-        let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+        let terminal_pool_id = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let terminal_node = NodeId(i32::try_from(setup.num_stages() - 1).expect("fits i32"));

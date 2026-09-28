@@ -1010,13 +1010,14 @@ pub(crate) fn build_study_setup(
     let mut provenance_report = build_provenance_report(
         estimation_path,
         estimation_report.as_ref(),
-        setup.stochastic.provenance(),
+        setup.inputs.stochastic.provenance(),
         system.hydros().len(),
         &setup.hydro_models.provenance,
     );
     // Fingerprint the derived lag seed (training-side library only) so
     // stale-library detection can compare against a fresh digest on later runs.
     provenance_report.inflow.historical_library_seed_digest = setup
+        .inputs
         .scenario_libraries
         .training
         .historical
@@ -1029,7 +1030,7 @@ pub(crate) fn build_study_setup(
         };
         export_stochastic_artifacts(
             output_dir,
-            &setup.stochastic,
+            &setup.inputs.stochastic,
             &system,
             estimation_report.as_ref(),
             &mut on_warning,
@@ -1037,7 +1038,7 @@ pub(crate) fn build_study_setup(
     }
 
     let scaling_path = output_dir.join("training/scaling_report.json");
-    write_scaling_report(&scaling_path, &setup.stage_data.scaling_report)
+    write_scaling_report(&scaling_path, &setup.inputs.stage_data.scaling_report)
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write scaling report: {e}"))?;
 
     let provenance_path = output_dir.join("training/model_provenance.json");
@@ -1046,7 +1047,7 @@ pub(crate) fn build_study_setup(
     })?;
 
     let stochastic_summary =
-        build_stochastic_summary(&system, &setup.stochastic, estimation_report.as_ref(), seed);
+        build_stochastic_summary(&system, &setup.inputs.stochastic, estimation_report.as_ref(), seed);
     let hydro_models_summary = build_hydro_model_summary(&setup.hydro_models, &system);
 
     let hydro_models_path = output_dir.join("training/hydro_models.json");
@@ -1095,7 +1096,7 @@ fn validate_loaded_policy(
     rescale_checkpoint_cuts_for_load(
         &mut checkpoint.stage_cuts,
         Some(source_cost_scale_factor),
-        setup.stage_data.stage_templates.cost_scale_factor,
+        setup.inputs.stage_data.stage_templates.cost_scale_factor,
     );
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1225,7 +1226,7 @@ pub(crate) fn reconcile_boundary_policy(
             boundary_date,
             state_dim,
             &current_manifest,
-            setup.stage_data.stage_templates.cost_scale_factor,
+            setup.inputs.stage_data.stage_templates.cost_scale_factor,
         )
         .with_fixed_windows(&fixed_windows)
         .with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())

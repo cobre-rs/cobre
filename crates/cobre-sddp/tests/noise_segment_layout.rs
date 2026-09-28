@@ -12,7 +12,7 @@ use cobre_sddp::hydro_models::PrepareHydroModelsResult;
 use cobre_sddp::test_support::decks::committed_decks;
 
 fn assert_noise_segments_match_lp(label: &str, system: &System, setup: &StudySetup) {
-    let stochastic = &setup.stochastic;
+    let stochastic = &setup.inputs.stochastic;
     let (n_h, n_l) = (stochastic.n_hydros(), stochastic.n_load_buses());
     let order = stochastic.entity_order();
     let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
@@ -61,15 +61,15 @@ fn noise_segments_match_lp_entity_sets_with_stochastic_load_and_ncs() {
         .expect("StudySetup::new");
 
     assert!(
-        setup.stochastic.n_hydros() > 0,
+        setup.inputs.stochastic.n_hydros() > 0,
         "stochastic_parallel_study must have stochastic hydro noise"
     );
     assert!(
-        setup.stochastic.n_load_buses() > 0,
+        setup.inputs.stochastic.n_load_buses() > 0,
         "stochastic_parallel_study must have stochastic load noise"
     );
     assert!(
-        setup.stochastic.n_stochastic_ncs() > 0,
+        setup.inputs.stochastic.n_stochastic_ncs() > 0,
         "stochastic_parallel_study must have stochastic NCS"
     );
 

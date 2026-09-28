@@ -1669,7 +1669,7 @@ fn train_census_fixture_to_convergence(mut setup: StudySetup) -> StudySetup {
 /// `node_graph` regardless, but `assign_scenarios`/`aggregate_simulation`
 /// read `simulation_config.n_scenarios` directly, so it must match `K`.
 fn as_enumerated_census(mut setup: StudySetup) -> StudySetup {
-    let derived_k: u32 = node_scenario_count(&setup.node_graph)
+    let derived_k: u32 = node_scenario_count(&setup.inputs.node_graph)
         .expect("node_scenario_count must not overflow on these fixtures")
         .try_into()
         .expect("K must fit u32 on these fixtures");
@@ -1724,7 +1724,7 @@ fn run_census<C: Communicator>(setup: &StudySetup, comm: &C, n_threads: usize) -
         .sum();
 
     let traversal = Traversal::resolve(
-        &setup.node_graph,
+        &setup.inputs.node_graph,
         true,
         setup.simulation_config().n_scenarios,
     );
@@ -1830,8 +1830,8 @@ fn enumerated_census_pool_fill_warms_previously_cold_leaves() {
 
     let setup = as_enumerated_census(setup);
 
-    let leaves: Vec<usize> = (0..setup.node_graph.successors.len())
-        .filter(|&i| setup.node_graph.successors[NodePos(i)].is_empty())
+    let leaves: Vec<usize> = (0..setup.inputs.node_graph.successors.len())
+        .filter(|&i| setup.inputs.node_graph.successors[NodePos(i)].is_empty())
         .collect();
     assert!(
         leaves.len() >= 2,
@@ -2087,7 +2087,7 @@ fn census_shared_trunk_rows_extract_once_and_solve_count_matches_dedup() {
     }
 
     let prefix_counts =
-        node_prefix_counts(&setup.node_graph).expect("node_prefix_counts must not overflow");
+        node_prefix_counts(&setup.inputs.node_graph).expect("node_prefix_counts must not overflow");
     assert!(
         prefix_counts.iter().all(|&c| c == 1),
         "every node on this admitted (single-predecessor, |Ω|=1) fixture must have exactly \

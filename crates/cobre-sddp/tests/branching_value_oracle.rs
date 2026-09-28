@@ -167,7 +167,7 @@ fn train_backward_basis_signal(setup: &mut StudySetup) -> (f64, u64, u64) {
 /// equals the graph's leaf count. A fixture that violated `|Ω| = 1` or introduced
 /// a recombination join would break these and make one-copy-per-node wrong.
 fn assert_expander_self_consistent(setup: &StudySetup) {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let n = g.nodes.len();
 
     let prefix_counts = node_prefix_counts(g).expect("node prefix counts must not overflow");
@@ -234,7 +234,7 @@ fn terminal_generated_fan_control_matches_extensive_form_and_ub() {
     let mut setup = terminal_generated_fan_setup(k, 30);
 
     // Power self-check: interchangeable leaves share ONE pool.
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let leaf_pools: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.successors[pos].is_empty())
@@ -275,7 +275,7 @@ fn interior_sibling_generated_fan_value_matches_oracle() {
     let mut fixture = k_fan_setup(k, 6, 25);
 
     // Power self-check: the fan children own DISTINCT pools.
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let fan_pools: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| !g.successors[pos].is_empty() && g.nodes[pos].stage == StageIdx(1))
@@ -310,7 +310,7 @@ fn dcs_arm_generated_fan_value_matches_oracle() {
     let mut fixture = dcs_k_fan_setup(k, 6, 25);
 
     // Power self-check: the target fan node has pool_id != stage.
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let mismatched = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| !g.successors[pos].is_empty())
@@ -361,7 +361,7 @@ fn dcs_arm_generated_fan_value_matches_oracle() {
 
 /// The fan's terminal leaves each pin a DISTINCT external scenario column.
 fn assert_distinct_external_leaf_columns(setup: &StudySetup) {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let mut cols: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.successors[pos].is_empty())
@@ -401,7 +401,7 @@ fn external_root_fan_trains_with_nonzero_root_column() {
     let mut setup = external_root_fan_setup(3, 30);
     assert_distinct_external_leaf_columns(&setup);
 
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let roots: Vec<NodePos> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.nodes[pos].stage == StageIdx(0))
@@ -586,7 +586,7 @@ fn interior_sibling_generated_fan_by_node_matches_oracle() {
 
     // Power self-check: the fan children own DISTINCT pools, so the by-node root
     // backward genuinely fans over more than one child LP.
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let fan_pools: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| !g.successors[pos].is_empty() && g.nodes[pos].stage == StageIdx(1))
@@ -671,7 +671,7 @@ fn external_distinct_fan_heterogeneous_cut_state_matches_extensive_form() {
     // Power self-check: this fixture's whole point is that a leaf's own
     // terminal pool and its cut-generating parent's pool project DIFFERENT
     // cut-state dimensions — the coverage gap the other fixtures above lack.
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let root_pool = (0..g.nodes.len())
         .map(NodePos)
         .find(|&pos| g.nodes[pos].stage == StageIdx(0))
@@ -829,7 +829,11 @@ fn assert_fixed_no_boundary_shape(shape: TerminalPoolShape) {
 #[ignore = "trains a wide terminal fan; run with `-- --ignored`"]
 fn terminal_generated_fan_pool_stays_fixed_and_single_materialized() {
     let mut setup = terminal_generated_fan_setup(WIDE_FAN_K, MAX_ITERATIONS);
-    let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+    let terminal_idx = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
 
     let before = TerminalPoolShape::capture(&setup.fcf.pools[terminal_idx]);
     assert_fixed_no_boundary_shape(before);
@@ -854,7 +858,11 @@ fn terminal_generated_fan_pool_stays_fixed_and_single_materialized() {
 #[ignore = "trains a wide terminal fan; run with `-- --ignored`"]
 fn external_distinct_fan_terminal_pool_stays_fixed_and_single_materialized() {
     let mut setup = external_distinct_fan_setup(DISTINCT_FAN_K, MAX_ITERATIONS);
-    let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+    let terminal_idx = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
 
     let before = TerminalPoolShape::capture(&setup.fcf.pools[terminal_idx]);
     assert_fixed_no_boundary_shape(before);
@@ -887,7 +895,11 @@ const TERMINAL_BOUNDARY_INTERCEPT: f64 = 100.0;
 /// warm-start pool directly from a hand-constructed record (the validated
 /// file-load path is unnecessary for a synthetic fixture).
 fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64, is_active: bool) {
-    let terminal = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+    let terminal = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
     let state_dim = setup.fcf.state_dimension;
     let forward_passes = setup.fcf.forward_passes;
     let record = cobre_io::OwnedPolicyCutRecord {
@@ -988,6 +1000,7 @@ fn assert_inactive_boundary_record_leaves_bounds_unchanged(
     topology: &str,
 ) {
     let terminal = inactive
+        .inputs
         .node_graph
         .terminal_pool(inactive.num_stages())
         .unwrap();
@@ -1201,7 +1214,7 @@ mod terminal_fusion {
         let out_col = state.lp_column_for_state(StateDim::new(0)).get();
         let in_col = state.state_to_lp_incoming_column(StateDim::new(0)).get();
 
-        let g = &setup.node_graph;
+        let g = &setup.inputs.node_graph;
         let root_pos = (0..g.nodes.len())
             .map(NodePos)
             .find(|&pos| g.nodes[pos].stage == StageIdx(0))

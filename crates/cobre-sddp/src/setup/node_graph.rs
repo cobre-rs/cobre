@@ -2076,7 +2076,7 @@ mod tests {
         let chain = crate::test_support::oracle_chain_setup(1);
         let chain_num_stages = chain.training_ctx().horizon.num_stages();
         assert_eq!(
-            chain.node_graph.terminal_pool(chain_num_stages),
+            chain.inputs.node_graph.terminal_pool(chain_num_stages),
             Some(chain.fcf.pools.len() - 1),
             "a chain's terminal pool is its last stage's identity pool"
         );
@@ -2084,6 +2084,7 @@ mod tests {
         let fan = crate::test_support::terminal_generated_fan_setup(2, 1);
         let fan_num_stages = fan.training_ctx().horizon.num_stages();
         let terminal = fan
+            .inputs
             .node_graph
             .terminal_pool(fan_num_stages)
             .expect("the fan's terminal stage carries alive nodes");
@@ -2094,7 +2095,8 @@ mod tests {
         );
         let last = StageIdx(fan_num_stages - 1);
         assert!(
-            fan.node_graph
+            fan.inputs
+                .node_graph
                 .nodes
                 .iter()
                 .filter(|n| n.stage == last)

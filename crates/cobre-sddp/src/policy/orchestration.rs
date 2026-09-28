@@ -227,12 +227,12 @@ fn pool_entity_manifests(
             // `p` is a pool ordinal; its owning stage resolves through
             // `pool_stage` — indexing `study_stage_ids` by `p` is OOB once
             // `n_pools > n_stages` on a branching graph (see `NodeGraph::pool_stage`).
-            let stage_id = setup.study_stage_ids[setup.node_graph.pool_stage[p].0];
+            let stage_id = setup.inputs.study_stage_ids[setup.inputs.node_graph.pool_stage[p].0];
             build_stage_entity_manifest(
                 system,
                 global_layout,
-                &setup.stage_data.study_dims.anticipated_plants,
-                &setup.stage_data.cut_state_layouts[p],
+                &setup.inputs.stage_data.study_dims.anticipated_plants,
+                &setup.inputs.cut_state_layouts[p],
                 stage_id,
             )
         })
@@ -268,7 +268,7 @@ pub fn write_checkpoint(
 
     let stage_manifests = pool_entity_manifests(setup, system, n_pools);
 
-    let cost_scale_factor = setup.stage_data.stage_templates.cost_scale_factor;
+    let cost_scale_factor = setup.inputs.stage_data.stage_templates.cost_scale_factor;
     let stage_records_internal = build_stage_cut_records(fcf);
     let stage_records_owned =
         scale_cut_records_for_export(&stage_records_internal, cost_scale_factor);
@@ -282,8 +282,8 @@ pub fn write_checkpoint(
         .collect();
     let stage_cuts = build_stage_cuts_payloads(
         fcf,
-        &setup.node_graph,
-        &setup.study_stage_ids,
+        &setup.inputs.node_graph,
+        &setup.inputs.study_stage_ids,
         &study_stage_end_dates,
         cost_scale_factor,
         &stage_records,
@@ -301,7 +301,7 @@ pub fn write_checkpoint(
     let stage_bases = build_stage_basis_records(
         fcf,
         training_result,
-        &setup.node_graph,
+        &setup.inputs.node_graph,
         &basis_col_u8,
         &basis_row_u8,
     );
@@ -346,7 +346,7 @@ pub fn write_checkpoint(
         build_stage_states_payloads(
             training_result.visited_archive.as_ref(),
             &stage_manifests,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
         )
     } else {
         Vec::new()

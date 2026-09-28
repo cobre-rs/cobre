@@ -954,7 +954,7 @@ mod tests {
         BasisStore,
         Vec<TrajectoryRecord>,
     ) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let total_forward_passes =
             usize::try_from(test_support::node_scenario_count(node_graph).expect("scenario count"))
                 .expect("fits usize");
@@ -989,7 +989,7 @@ mod tests {
         iteration: u64,
         event_sender: Option<&Sender<TrainingEvent>>,
     ) -> EnumeratedForwardResult {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let stage_ctx = setup.stage_ctx();
         let training_ctx = setup.training_ctx();
         let sampler = build_sampler_from_ctx(&training_ctx).expect("forward sampler");
@@ -1039,7 +1039,7 @@ mod tests {
     #[test]
     fn enumerated_forward_captures_fused_slice_only_for_eligible_external_terminal_leaves() {
         let setup = test_support::external_distinct_fan_setup(2, 1);
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.num_stages();
 
         let eligible: Vec<NodePos> = (0..node_graph.nodes.len())
@@ -1088,7 +1088,7 @@ mod tests {
             let pool_id = node_graph.nodes[node].pool_id;
             assert_eq!(
                 duals.len(),
-                setup.stage_data.cut_state_layouts[pool_id].n_slots(),
+                setup.inputs.cut_state_layouts[pool_id].n_slots(),
                 "captured duals must span the leaf's own cut-state projection"
             );
             let local_m = scratch.m_rep[node];
@@ -1132,7 +1132,7 @@ mod tests {
     #[test]
     fn enumerated_forward_fused_slice_projects_with_parent_pool_not_leaf_pool() {
         let setup = test_support::external_distinct_fan_setup_heterogeneous_cut_state(2, 1);
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.num_stages();
 
         let eligible: Vec<NodePos> = (0..node_graph.nodes.len())
@@ -1152,8 +1152,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("eligible leaf {node:?} must have a parent"));
             let parent_pool = node_graph.nodes[parent].pool_id;
             assert_ne!(
-                setup.stage_data.cut_state_layouts[leaf_pool].n_slots(),
-                setup.stage_data.cut_state_layouts[parent_pool].n_slots(),
+                setup.inputs.cut_state_layouts[leaf_pool].n_slots(),
+                setup.inputs.cut_state_layouts[parent_pool].n_slots(),
                 "fixture power check: leaf pool {leaf_pool} and parent pool {parent_pool} must \
                  project DIFFERENT dimensions, or this test cannot distinguish the fix from the bug"
             );
@@ -1180,13 +1180,13 @@ mod tests {
             let parent_pool = node_graph.nodes[parent].pool_id;
             assert_eq!(
                 duals.len(),
-                setup.stage_data.cut_state_layouts[parent_pool].n_slots(),
+                setup.inputs.cut_state_layouts[parent_pool].n_slots(),
                 "captured duals must span the CUT-GENERATING PARENT's cut-state projection \
                  (the backward's own `SuccessorSpec::cut_state`), not the leaf's own pool"
             );
             assert_ne!(
                 duals.len(),
-                setup.stage_data.cut_state_layouts[leaf_pool].n_slots(),
+                setup.inputs.cut_state_layouts[leaf_pool].n_slots(),
                 "power check: the leaf's own pool dimension must differ from the parent's, or \
                  this assertion cannot distinguish the fix from the wrong-projection bug"
             );
@@ -1198,7 +1198,7 @@ mod tests {
     #[test]
     fn enumerated_forward_generated_terminal_leaf_stays_uncaptured() {
         let setup = test_support::terminal_generated_fan_setup(2, 1);
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.num_stages();
 
         assert!(

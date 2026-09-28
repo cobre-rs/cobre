@@ -68,7 +68,7 @@ mod k_fan_branching_rank_invariance {
         // pools — so at least one pool draws cuts from a strict subset of ranks,
         // the genuine per-(rank, pool) divergence the fix addresses.
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .filter(|&pos| !node_graph.successors[NodePos(pos)].is_empty())
             .count();

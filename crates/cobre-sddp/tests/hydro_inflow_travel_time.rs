@@ -395,7 +395,7 @@ fn spillage_col(geom: &StageGeometry, hydro_pos: usize, block: usize) -> usize {
 /// `z_inflow`, hydro 1's turbine/spillage columns in every block, and every
 /// `transit_buckets_in` column the balance row actually reads.
 fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
-    let templates = &setup.stage_data.stage_templates;
+    let templates = &setup.inputs.stage_data.stage_templates;
     let tpl = &templates.templates[stage];
     let geom = &templates.geometry_per_stage[stage];
     let state_space = setup.stage_state();
@@ -447,7 +447,7 @@ fn hydro_inflow_rows_match_the_water_balance_inflow_side_without_travel_time() {
 #[ignore = "hydro_inflow counts the full upstream release in the same stage and omits the maturing transit water"]
 fn hydro_inflow_rows_match_the_water_balance_inflow_side_with_travel_time() {
     let setup = build_setup_in_code(build_system(Some(TRAVEL_TIME_HOURS)), &config());
-    let templates = &setup.stage_data.stage_templates;
+    let templates = &setup.inputs.stage_data.stage_templates;
     let tpl = &templates.templates[1];
     let geom = &templates.geometry_per_stage[1];
     let state = setup.stage_state();

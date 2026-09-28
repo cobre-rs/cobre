@@ -2185,7 +2185,7 @@ mod water_travel_time_no_arc_byte_identity {
         let system = build_system(block_mode);
         let config = build_config();
         let setup = build_setup_in_code(system, &config);
-        setup.stage_data.stage_templates.templates.clone()
+        setup.inputs.stage_data.stage_templates.templates.clone()
     }
 
     /// Shared pre-bucket-formula assertion: `n_buckets == 0`, `transit_buckets_out` /

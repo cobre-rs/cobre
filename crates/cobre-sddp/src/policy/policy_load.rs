@@ -390,19 +390,20 @@ pub fn build_basis_cache_from_checkpoint(
     setup: &StudySetup,
 ) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
     let node_dims: Vec<(usize, usize)> = setup
+        .inputs
         .node_graph
         .nodes
         .iter()
         .map(|n| {
-            let t = &setup.stage_data.stage_templates.templates[n.stage.0];
+            let t = &setup.inputs.stage_data.stage_templates.templates[n.stage.0];
             (t.num_cols, t.num_rows)
         })
         .collect();
     build_basis_cache_for_nodes(
         stage_bases,
         stage_cuts,
-        &setup.node_graph.node_ids,
-        &setup.node_graph.node_pool_ids(),
+        &setup.inputs.node_graph.node_ids,
+        &setup.inputs.node_graph.node_pool_ids(),
         &node_dims,
     )
 }
@@ -1368,6 +1369,7 @@ pub fn inject_boundary_cuts(
     boundary_cuts: &ValidatedBoundaryCuts,
 ) -> Result<(), SddpError> {
     let terminal_idx = setup
+        .inputs
         .node_graph
         .terminal_pool(setup.num_stages())
         .ok_or_else(|| {
@@ -4114,7 +4116,11 @@ mod tests {
     #[test]
     fn inject_boundary_cuts_produces_fixed_capacity_terminal_pool() {
         let mut setup = test_support::oracle_chain_setup(10);
-        let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+        let terminal_idx = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let state_dimension = setup.fcf.state_dimension;
         let records = vec![
             owned_cut(5.0, vec![1.0; state_dimension]),
@@ -4143,7 +4149,11 @@ mod tests {
     #[test]
     fn inject_boundary_cuts_active_cuts_matches_growable_construction() {
         let mut setup = test_support::oracle_chain_setup(10);
-        let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+        let terminal_idx = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let state_dimension = setup.fcf.state_dimension;
         let forward_passes = setup.fcf.forward_passes;
         let records = vec![
@@ -4208,6 +4218,7 @@ mod tests {
         inject_boundary_cuts(&mut setup_bcast, &broadcast).unwrap();
 
         let terminal_idx = setup_direct
+            .inputs
             .node_graph
             .terminal_pool(setup_direct.num_stages())
             .unwrap();

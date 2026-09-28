@@ -232,7 +232,7 @@ fn evaluate_point(
     let training_ctx = occ.setup.training_ctx();
     let successor_pool = &occ.setup.fcf.pools[s];
     let cut_state = &training_ctx.cut_state_layouts[t];
-    let node_id = occ.setup.node_graph.node_ids[NodePos(s)];
+    let node_id = occ.setup.inputs.node_graph.node_ids[NodePos(s)];
     let n_openings = occ.tree_view.n_openings(s);
 
     let mut canonical_x: Option<Vec<f64>> = None;
@@ -387,15 +387,15 @@ fn check_pool(
 /// deactivates a cut, or if a probe solve fails for a reason other than
 /// infeasibility.
 pub fn run_cut_oracles(label: &str, mut setup: StudySetup) -> CutOracleReport {
-    let n_stages = setup.stage_data.stage_templates.templates.len();
+    let n_stages = setup.inputs.stage_data.stage_templates.templates.len();
     assert_eq!(
-        setup.node_graph.nodes.len(),
+        setup.inputs.node_graph.nodes.len(),
         n_stages,
         "{label}: run_cut_oracles requires a chain graph (one node per stage)"
     );
     for pos in 0..n_stages {
         assert_eq!(
-            setup.node_graph.nodes[NodePos(pos)].stage.0,
+            setup.inputs.node_graph.nodes[NodePos(pos)].stage.0,
             pos,
             "{label}: node {pos} is not chain-ordered onto stage {pos}"
         );

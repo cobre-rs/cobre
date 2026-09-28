@@ -347,12 +347,12 @@ fn discounted_anticipated_fixture_decides_after_stage_zero() {
     let (system, config) = common::in_code_studies::discounted_anticipated_study();
     let setup = common::build_setup_in_code(system, &config);
 
-    let geometry = &setup.stage_data.stage_templates.geometry_per_stage[1];
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[1];
     assert!(
         !geometry.anticipated_decision.is_empty(),
         "stage 1 must have an active anticipated-decision column"
     );
-    let template = &setup.stage_data.stage_templates.templates[1];
+    let template = &setup.inputs.stage_data.stage_templates.templates[1];
     assert!(
         template.objective[geometry.anticipated_decision.start] > 0.0,
         "stage 1's anticipated decision must carry a nonzero costed objective coefficient"
@@ -375,8 +375,8 @@ fn mixed_lead_long_lead_late_decisions_target_post_study_delivery() {
     // (id 10) is local 0, the long lead (id 20) is local 1.
     let long_lead_local = AnticipatedLocal::new(1);
     for stage_idx in 2..5 {
-        let geometry = &setup.stage_data.stage_templates.geometry_per_stage[stage_idx];
-        let template = &setup.stage_data.stage_templates.templates[stage_idx];
+        let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[stage_idx];
+        let template = &setup.inputs.stage_data.stage_templates.templates[stage_idx];
         let col = geometry.anticipated_decision_col(long_lead_local);
         assert!(
             template.objective[col] > 0.0,
@@ -395,7 +395,7 @@ fn parallel_evaporation_fixture_evaporates_on_a_multiblock_parallel_stage() {
         common::in_code_studies::parallel_multiblock_evaporation_study();
     let setup = common::build_setup_in_code_with_models(system, &config, hydro_models);
 
-    let geometry = &setup.stage_data.stage_templates.geometry_per_stage[0];
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[0];
     assert_eq!(geometry.block_mode, cobre_core::BlockMode::Parallel);
     assert_eq!(geometry.n_blks, 3);
     assert!(

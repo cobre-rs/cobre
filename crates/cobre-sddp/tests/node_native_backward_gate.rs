@@ -194,7 +194,7 @@ fn trunk_fan_fixture_has_the_declared_shape() {
         "every trunk node must be non-leaf; the last one owns the terminal fan"
     );
 
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let leaf_count = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.successors[pos].is_empty())

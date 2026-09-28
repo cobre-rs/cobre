@@ -13,8 +13,6 @@ use cobre_solver::{SolverError, SolverInterface};
 
 use crate::{
     config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig},
-    context::{StageContext, TrainingContext},
-    dcs::DcsParams,
     error::SddpError,
     simulation::{
         SimulationOutputSpec, error::SimulationError, pipeline::SimulationRunResult,
@@ -125,10 +123,10 @@ impl StudySetup {
                 stopping_rules: self.loop_params.stopping_rules.clone(),
             },
             cut_management: CutManagementConfig {
-                cut_selection: self.cut_management.cut_selection.clone(),
-                budget: self.cut_management.budget,
-                cut_activity_tolerance: self.cut_management.cut_activity_tolerance,
-                risk_measures: self.cut_management.risk_measures.clone(),
+                cut_selection: self.inputs.cut_management.cut_selection.clone(),
+                budget: self.inputs.cut_management.budget,
+                cut_activity_tolerance: self.inputs.cut_management.cut_activity_tolerance,
+                risk_measures: self.inputs.cut_management.risk_measures.clone(),
             },
             events: EventConfig {
                 event_sender,
@@ -138,50 +136,8 @@ impl StudySetup {
             },
         };
 
-        let stage_ctx = StageContext {
-            templates: &self.stage_data.stage_templates.templates,
-            state_boxes: &self.stage_data.stage_templates.state_boxes,
-            geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
-            cost_scale_factor: self.stage_data.stage_templates.cost_scale_factor,
-            load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,
-            ncs_stochastic_dense_col: &self.ncs.stochastic_dense_col,
-            ncs_stochastic_windows: &self.ncs.stochastic_windows,
-            anticipated_windows: &self.anticipated_windows,
-            study_stage_ids: &self.study_stage_ids,
-            ncs_max_gen: &self.ncs.max_gen,
-            ncs_allow_curtailment: &self.ncs.allow_curtailment,
-            discount_factors: self.stage_data.time_value.discount_factors(),
-            cumulative_discount_factors: self.stage_data.time_value.cumulative_discount_factors(),
-            stage_lag_transitions: &self.stage_data.stage_lag_transitions,
-            noise_group_ids: &self.stage_data.noise_group_ids,
-        };
-
-        let tr = &self.scenario_libraries.training;
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            state: &self.stage_data.state,
-            cut_state_layouts: &self.stage_data.cut_state_layouts,
-            study_dims: &self.stage_data.study_dims,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial.state,
-            inflow_scheme: tr.inflow_scheme,
-            load_scheme: tr.load_scheme,
-            ncs_scheme: tr.ncs_scheme,
-            stages: &self.stage_data.stages,
-            historical_library: tr.historical.as_ref(),
-            external_inflow_library: tr.external_inflow.as_ref(),
-            external_load_library: tr.external_load.as_ref(),
-            external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &self.initial.inflow_seeds.accum,
-            lag_weight_seed: &self.initial.inflow_seeds.weight,
-            dcs: self
-                .cut_management
-                .cut_selection
-                .as_ref()
-                .and_then(DcsParams::from_strategy),
-            node_graph: &self.node_graph,
-        };
+        let stage_ctx = self.inputs.stage_ctx();
+        let training_ctx = self.inputs.training_ctx();
 
         let warm_start_basis_cache = self.warm_start_basis_cache.take();
 
@@ -228,7 +184,7 @@ impl StudySetup {
             SimulationEnumeratedRequest::Enumerated
         );
         let traversal = Traversal::resolve(
-            &self.node_graph,
+            &self.inputs.node_graph,
             is_enumerated,
             self.simulation_config().n_scenarios,
         );
@@ -240,8 +196,8 @@ impl StudySetup {
             let mut owned = stage_bases.to_vec();
             pool_fill_basis_cache(
                 &mut owned,
-                &self.node_graph.node_pool_ids(),
-                &self.node_graph.node_ids,
+                &self.inputs.node_graph.node_pool_ids(),
+                &self.inputs.node_graph.node_ids,
             );
             owned
         });
@@ -249,21 +205,23 @@ impl StudySetup {
 
         let output = SimulationOutputSpec {
             result_tx,
-            block_hours_per_stage: &self.stage_data.stage_templates.block_hours_per_stage,
-            entity_counts: &self.stage_data.entity_counts,
+            block_hours_per_stage: &self.inputs.stage_data.stage_templates.block_hours_per_stage,
+            entity_counts: &self.inputs.stage_data.entity_counts,
             generic_constraint_row_entries: &self
+                .inputs
                 .stage_data
                 .stage_templates
                 .generic_constraint_row_entries,
-            n_ncs: self.stage_data.stage_templates.n_ncs,
-            n_pumping: self.stage_data.stage_templates.n_pumping,
-            hydro_cell_index: &self.stage_data.hydro_cell_index,
-            pumping_consumption_mw_per_m3s: &self.stage_data.pumping_consumption_mw_per_m3s,
-            contract_prices_per_stage: &self.stage_data.contract_prices_per_stage,
-            contract_is_import: &self.stage_data.contract_is_import,
-            ncs_entity_ids_per_stage: &self.ncs.entity_ids_per_stage,
-            diversion_upstream: &self.stage_data.stage_templates.diversion_upstream,
+            n_ncs: self.inputs.stage_data.stage_templates.n_ncs,
+            n_pumping: self.inputs.stage_data.stage_templates.n_pumping,
+            hydro_cell_index: &self.inputs.stage_data.hydro_cell_index,
+            pumping_consumption_mw_per_m3s: &self.inputs.stage_data.pumping_consumption_mw_per_m3s,
+            contract_prices_per_stage: &self.inputs.stage_data.contract_prices_per_stage,
+            contract_is_import: &self.inputs.stage_data.contract_is_import,
+            ncs_entity_ids_per_stage: &self.inputs.ncs.entity_ids_per_stage,
+            diversion_upstream: &self.inputs.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &self
+                .inputs
                 .stage_data
                 .stage_templates
                 .hydro_productivities_per_stage,
@@ -332,8 +290,8 @@ impl StudySetup {
             &self.training_ctx(),
             &self.stage_ctx(),
             WorkspaceSizing {
-                max_openings: (0..self.stage_data.stage_templates.templates.len())
-                    .map(|t| self.stochastic.opening_tree().n_openings(t))
+                max_openings: (0..self.inputs.stage_data.stage_templates.templates.len())
+                    .map(|t| self.inputs.stochastic.opening_tree().n_openings(t))
                     .max()
                     .unwrap_or(0),
                 initial_pool_capacity: 0,
@@ -345,7 +303,7 @@ impl StudySetup {
         )?;
         // Always pre-size scratch bases — basis reconstruction runs
         // unconditionally on every forward/backward apply with a stored basis.
-        let templates = &self.stage_data.stage_templates.templates;
+        let templates = &self.inputs.stage_data.stage_templates.templates;
         let max_cols = templates.iter().map(|t| t.num_cols).max().unwrap_or(0);
         let max_rows = templates.iter().map(|t| t.num_rows).max().unwrap_or(0);
         pool.resize_scratch_bases(max_cols, max_rows);

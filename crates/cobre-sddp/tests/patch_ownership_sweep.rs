@@ -40,10 +40,10 @@ fn capture_at_initial_state_matches_node_capture() {
     let case_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/deterministic/d02-single-hydro");
     let setup = fresh_setup_with(&case_dir, |_| {});
-    let zero_noise = vec![0.0_f64; setup.stochastic.dim()];
+    let zero_noise = vec![0.0_f64; setup.inputs.stochastic.dim()];
     let initial_state = oracle_initial_state(&setup);
 
-    for pos in (0..setup.node_graph.nodes.len()).map(NodePos) {
+    for pos in (0..setup.inputs.node_graph.nodes.len()).map(NodePos) {
         let at = capture_patched_node_template_at(&setup, pos, &zero_noise, &initial_state);
         let node = capture_patched_node_template(&setup, pos);
 
@@ -58,10 +58,10 @@ fn capture_at_initial_state_matches_node_capture() {
 fn node_opening_noise_has_the_raw_noise_length() {
     let case_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/1dtoy");
     let setup = fresh_setup_with(&case_dir, |_| {});
-    let expected_len = setup.stochastic.dim();
+    let expected_len = setup.inputs.stochastic.dim();
 
-    for pos in (0..setup.node_graph.nodes.len()).map(NodePos) {
-        let openings = setup.node_graph.nodes[pos].openings;
+    for pos in (0..setup.inputs.node_graph.nodes.len()).map(NodePos) {
+        let openings = setup.inputs.node_graph.nodes[pos].openings;
         for opening in 0..openings.len {
             assert_eq!(node_opening_noise(&setup, pos, opening).len(), expected_len);
         }
@@ -95,7 +95,7 @@ fn ncs_chunk(geom: &StageGeometry, sys_idx: usize) -> Range<usize> {
         ..geom.ncs_generation_col(ncs, BlockIdx::new(geom.n_blks - 1)) + 1
 }
 
-/// Maps stochastic NCS slot `r` (`setup.stochastic.ncs_entity_ids()[r]`) to its
+/// Maps stochastic NCS slot `r` (`setup.inputs.stochastic.ncs_entity_ids()[r]`) to its
 /// dense system index — its position in `system_ncs_ids`, the deck's own
 /// `non_controllable_sources()` in canonical order — the same lookup
 /// `build_ncs_entity_data` uses to size the `pub(crate)`
@@ -107,6 +107,7 @@ fn ncs_chunk(geom: &StageGeometry, sys_idx: usize) -> Range<usize> {
 /// two orders diverge whenever the system's NCS entities disagree on start date.
 fn ncs_dense_col_map(system_ncs_ids: &[EntityId], setup: &StudySetup) -> Vec<usize> {
     setup
+        .inputs
         .stochastic
         .ncs_entity_ids()
         .iter()
@@ -236,14 +237,14 @@ fn sweep_setup(
     violations: &mut Vec<String>,
     vacuity: &mut BTreeMap<(&'static str, &'static str), usize>,
 ) {
-    let dims = setup.stochastic.class_dimensions();
+    let dims = setup.inputs.stochastic.class_dimensions();
     let n_dims = dims.total();
     let initial_state = oracle_initial_state(setup);
     let zero_noise = vec![0.0_f64; n_dims];
 
-    for pos in (0..setup.node_graph.nodes.len()).map(NodePos) {
-        let stage = setup.node_graph.nodes[pos].stage.0;
-        let geom = &setup.stage_data.stage_templates.geometry_per_stage[stage];
+    for pos in (0..setup.inputs.node_graph.nodes.len()).map(NodePos) {
+        let stage = setup.inputs.node_graph.nodes[pos].stage.0;
+        let geom = &setup.inputs.stage_data.stage_templates.geometry_per_stage[stage];
         let mode_tag = block_mode_tag(geom.block_mode);
 
         let (lo, hi) = stage_state_box_bounds(setup, stage.saturating_sub(1));
@@ -278,7 +279,7 @@ fn sweep_setup(
                 );
             } else if dims.load_bus_range().contains(&dim) {
                 *vacuity.entry((mode_tag, "load")).or_insert(0) += 1;
-                let bus_pos = setup.stage_data.stage_templates.load_bus_indices
+                let bus_pos = setup.inputs.stage_data.stage_templates.load_bus_indices
                     [dim - dims.load_bus_range().start];
                 check_load(deck_key, pos, dim, bus_pos, geom, &changed, violations);
             } else {
@@ -404,7 +405,7 @@ fn every_noise_dimension_patches_only_its_own_entity() {
 // ── Lower bound vs. forward root LP ──────────────────────────────────────────
 
 fn root_node(setup: &StudySetup) -> NodePos {
-    let graph = &setup.node_graph;
+    let graph = &setup.inputs.node_graph;
     (0..graph.nodes.len())
         .map(NodePos)
         .find(|&pos| graph.nodes[pos].stage == StageIdx(0))
@@ -445,7 +446,7 @@ fn compare_lower_bound_to_forward_root_lp(
     violations: &mut Vec<String>,
 ) -> usize {
     let root = root_node(setup);
-    let n_openings = setup.node_graph.nodes[root].openings.len;
+    let n_openings = setup.inputs.node_graph.nodes[root].openings.len;
     let initial_state = oracle_initial_state(setup);
 
     let recorded = lower_bound_root_templates(

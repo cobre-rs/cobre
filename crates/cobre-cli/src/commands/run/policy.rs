@@ -53,7 +53,7 @@ fn load_and_validate_checkpoint(
     rescale_checkpoint_cuts_for_load(
         &mut checkpoint.stage_cuts,
         Some(source_cost_scale_factor),
-        setup.stage_data.stage_templates.cost_scale_factor,
+        setup.inputs.stage_data.stage_templates.cost_scale_factor,
     );
 
     // Rationale: the cast cannot truncate — `n_stages` is the validated study
@@ -268,7 +268,7 @@ pub(super) fn apply_training_policy(
                     boundary_date,
                     state_dim,
                     &current_manifest,
-                    setup.stage_data.stage_templates.cost_scale_factor,
+                    setup.inputs.stage_data.stage_templates.cost_scale_factor,
                 )
                 .with_fixed_windows(&fixed_windows)
                 .with_inflow_lag_depth(effective_inflow_lag_depth)

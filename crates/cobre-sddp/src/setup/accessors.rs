@@ -4,7 +4,6 @@ use cobre_core::AnticipatedCommitmentHistory;
 use cobre_core::System;
 #[cfg(any(test, feature = "test-support"))]
 use cobre_core::commissioning::commissioning_active;
-use cobre_core::scenario::SamplingScheme;
 use cobre_io::EntitySlot;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -23,7 +22,6 @@ use crate::{
 
 use super::StudySetup;
 use super::study_horizon_end;
-use crate::dcs::DcsParams;
 use crate::policy_export::{build_graph_manifest, build_stage_entity_manifest};
 
 impl StudySetup {
@@ -65,7 +63,7 @@ impl StudySetup {
     /// `CVaR { alpha, lambda }` without a config file exposing it per case.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_risk_measures(&mut self, risk_measures: Vec<RiskMeasure>) {
-        self.cut_management.risk_measures = risk_measures;
+        self.inputs.cut_management.risk_measures = risk_measures;
     }
 
     /// Test-support hook: override the backward-pass scheduler
@@ -104,7 +102,7 @@ impl StudySetup {
     /// of per-stage block counts.
     #[must_use]
     pub fn stage_state(&self) -> &StateSpace {
-        &self.stage_data.state
+        &self.inputs.stage_data.state
     }
 
     /// Resolve the terminal cut pool's ordinal and its owning study stage id.
@@ -115,8 +113,9 @@ impl StudySetup {
     /// this resolution so [`Self::build_terminal_entity_manifest`] resolves the
     /// pool's stage once, consistently.
     fn terminal_pool_stage_id(&self) -> (usize, i32) {
-        let terminal_idx = self.stage_data.cut_state_layouts.len() - 1;
-        let stage_id = self.study_stage_ids[self.node_graph.pool_stage[terminal_idx].0];
+        let terminal_idx = self.inputs.cut_state_layouts.len() - 1;
+        let stage_id =
+            self.inputs.study_stage_ids[self.inputs.node_graph.pool_stage[terminal_idx].0];
         (terminal_idx, stage_id)
     }
 
@@ -139,9 +138,9 @@ impl StudySetup {
         let (terminal_idx, stage_id) = self.terminal_pool_stage_id();
         build_stage_entity_manifest(
             system,
-            &self.stage_data.state,
-            &self.stage_data.study_dims.anticipated_plants,
-            &self.stage_data.cut_state_layouts[terminal_idx],
+            &self.inputs.stage_data.state,
+            &self.inputs.stage_data.study_dims.anticipated_plants,
+            &self.inputs.cut_state_layouts[terminal_idx],
             stage_id,
         )
     }
@@ -172,7 +171,13 @@ impl StudySetup {
         let ic = system.initial_conditions();
         let thermals = system.thermals();
         let mut windows = Vec::new();
-        for t in self.stage_data.study_dims.anticipated_plants.thermals() {
+        for t in self
+            .inputs
+            .stage_data
+            .study_dims
+            .anticipated_plants
+            .thermals()
+        {
             let thermal = &thermals[t.get()];
             let mut plant_windows: Vec<AnticipatedCommitmentHistory> = ic
                 .past_anticipated_commitments
@@ -189,7 +194,7 @@ impl StudySetup {
     /// Number of stages in the planning horizon.
     #[must_use]
     pub fn num_stages(&self) -> usize {
-        self.horizon.num_stages()
+        self.inputs.horizon.num_stages()
     }
 
     /// Build the value-function artifact's graph manifest for the current study
@@ -200,7 +205,7 @@ impl StudySetup {
     /// the full-FCF load path validates against can never diverge.
     #[must_use]
     pub fn build_graph_manifest(&self) -> cobre_io::GraphManifest {
-        build_graph_manifest(&self.node_graph, &self.study_stage_ids)
+        build_graph_manifest(&self.inputs.node_graph, &self.inputs.study_stage_ids)
     }
 
     /// Per-stage stochastic-NCS dormancy mask, reconstructed for the out-of-crate
@@ -213,11 +218,13 @@ impl StudySetup {
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn ncs_stochastic_dormant_for_test(&self) -> Vec<Vec<bool>> {
-        self.stage_data
+        self.inputs
+            .stage_data
             .stages
             .iter()
             .map(|stage| {
-                self.ncs
+                self.inputs
+                    .ncs
                     .stochastic_windows
                     .iter()
                     .map(|&(entry, exit)| !commissioning_active(entry, exit, stage.id))
@@ -229,23 +236,7 @@ impl StudySetup {
     /// Construct a [`StageContext`] borrowing from this setup.
     #[must_use]
     pub fn stage_ctx(&self) -> StageContext<'_> {
-        StageContext {
-            templates: &self.stage_data.stage_templates.templates,
-            state_boxes: &self.stage_data.stage_templates.state_boxes,
-            geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
-            cost_scale_factor: self.stage_data.stage_templates.cost_scale_factor,
-            load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,
-            ncs_stochastic_dense_col: &self.ncs.stochastic_dense_col,
-            ncs_stochastic_windows: &self.ncs.stochastic_windows,
-            anticipated_windows: &self.anticipated_windows,
-            study_stage_ids: &self.study_stage_ids,
-            ncs_max_gen: &self.ncs.max_gen,
-            ncs_allow_curtailment: &self.ncs.allow_curtailment,
-            discount_factors: self.stage_data.time_value.discount_factors(),
-            cumulative_discount_factors: self.stage_data.time_value.cumulative_discount_factors(),
-            stage_lag_transitions: &self.stage_data.stage_lag_transitions,
-            noise_group_ids: &self.stage_data.noise_group_ids,
-        }
+        self.inputs.stage_ctx()
     }
 
     /// Construct a [`TrainingContext`] borrowing from this setup.
@@ -257,104 +248,12 @@ impl StudySetup {
     /// without duplicating this crate's private field layout.
     #[must_use]
     pub fn training_ctx(&self) -> TrainingContext<'_> {
-        let tr = &self.scenario_libraries.training;
-        TrainingContext {
-            horizon: &self.horizon,
-            state: &self.stage_data.state,
-            cut_state_layouts: &self.stage_data.cut_state_layouts,
-            study_dims: &self.stage_data.study_dims,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial.state,
-            inflow_scheme: tr.inflow_scheme,
-            load_scheme: tr.load_scheme,
-            ncs_scheme: tr.ncs_scheme,
-            stages: &self.stage_data.stages,
-            historical_library: tr.historical.as_ref(),
-            external_inflow_library: tr.external_inflow.as_ref(),
-            external_load_library: tr.external_load.as_ref(),
-            external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &self.initial.inflow_seeds.accum,
-            lag_weight_seed: &self.initial.inflow_seeds.weight,
-            dcs: self
-                .cut_management
-                .cut_selection
-                .as_ref()
-                .and_then(DcsParams::from_strategy),
-            node_graph: &self.node_graph,
-        }
+        self.inputs.training_ctx()
     }
 
     /// Build simulation [`TrainingContext`] with simulation-specific schemes and libraries.
     #[must_use]
     pub(crate) fn simulation_ctx(&self) -> TrainingContext<'_> {
-        fn sim_or_training<'a, T>(
-            sim_value: Option<&'a T>,
-            scheme: SamplingScheme,
-            matches_scheme: SamplingScheme,
-            training_value: Option<&'a T>,
-        ) -> Option<&'a T> {
-            sim_value.or(if scheme == matches_scheme {
-                training_value
-            } else {
-                None
-            })
-        }
-
-        let tr = &self.scenario_libraries.training;
-        let sim = &self.scenario_libraries.simulation;
-
-        let historical_library = sim_or_training(
-            sim.historical.as_ref(),
-            sim.inflow_scheme,
-            SamplingScheme::Historical,
-            tr.historical.as_ref(),
-        );
-        let external_inflow_library = sim_or_training(
-            sim.external_inflow.as_ref(),
-            sim.inflow_scheme,
-            SamplingScheme::External,
-            tr.external_inflow.as_ref(),
-        );
-        let external_load_library = sim_or_training(
-            sim.external_load.as_ref(),
-            sim.load_scheme,
-            SamplingScheme::External,
-            tr.external_load.as_ref(),
-        );
-        let external_ncs_library = sim_or_training(
-            sim.external_ncs.as_ref(),
-            sim.ncs_scheme,
-            SamplingScheme::External,
-            tr.external_ncs.as_ref(),
-        );
-
-        TrainingContext {
-            horizon: &self.horizon,
-            state: &self.stage_data.state,
-            // Simulation renders stored cuts into frozen templates and the DCS LP
-            // (it does not extract), so the per-pool projection threads through here.
-            cut_state_layouts: &self.stage_data.cut_state_layouts,
-            study_dims: &self.stage_data.study_dims,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial.state,
-            inflow_scheme: sim.inflow_scheme,
-            load_scheme: sim.load_scheme,
-            ncs_scheme: sim.ncs_scheme,
-            stages: &self.stage_data.stages,
-            historical_library,
-            external_inflow_library,
-            external_load_library,
-            external_ncs_library,
-            lag_accum_seed: &self.initial.inflow_seeds.accum,
-            lag_weight_seed: &self.initial.inflow_seeds.weight,
-            dcs: self
-                .cut_management
-                .cut_selection
-                .as_ref()
-                .and_then(DcsParams::from_strategy),
-            node_graph: &self.node_graph,
-        }
+        self.inputs.simulation_ctx()
     }
 }

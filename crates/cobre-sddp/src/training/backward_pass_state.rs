@@ -4645,8 +4645,8 @@ mod tests {
         use cobre_stochastic::ForwardNoiseTables;
 
         let comm = StubComm;
-        let num_stages = setup.stage_data.stages.len();
-        let node_graph = &setup.node_graph;
+        let num_stages = setup.inputs.stage_data.stages.len();
+        let node_graph = &setup.inputs.node_graph;
         let total_forward_passes = usize::try_from(
             crate::test_support::node_scenario_count(node_graph)
                 .expect("scenario count must not overflow"),
@@ -4668,41 +4668,47 @@ mod tests {
             .collect();
 
         let fixture = StageContextFixture::from_stage_templates(
-            &setup.stage_data.stage_templates,
-            &setup.stage_data.stage_templates.state_boxes,
+            &setup.inputs.stage_data.stage_templates,
+            &setup.inputs.stage_data.stage_templates.state_boxes,
         )
-        .ncs_stochastic_dense_col(&setup.ncs.stochastic_dense_col)
-        .ncs_stochastic_windows(&setup.ncs.stochastic_windows)
-        .anticipated_windows(&setup.anticipated_windows)
-        .study_stage_ids(&setup.study_stage_ids)
-        .ncs_max_gen(&setup.ncs.max_gen)
-        .ncs_allow_curtailment(&setup.ncs.allow_curtailment)
-        .discount_factors(setup.stage_data.time_value.discount_factors())
-        .cumulative_discount_factors(setup.stage_data.time_value.cumulative_discount_factors())
-        .stage_lag_transitions(&setup.stage_data.stage_lag_transitions)
-        .noise_group_ids(&setup.stage_data.noise_group_ids);
+        .ncs_stochastic_dense_col(&setup.inputs.ncs.stochastic_dense_col)
+        .ncs_stochastic_windows(&setup.inputs.ncs.stochastic_windows)
+        .anticipated_windows(&setup.inputs.anticipated_windows)
+        .study_stage_ids(&setup.inputs.study_stage_ids)
+        .ncs_max_gen(&setup.inputs.ncs.max_gen)
+        .ncs_allow_curtailment(&setup.inputs.ncs.allow_curtailment)
+        .discount_factors(setup.inputs.stage_data.time_value.discount_factors())
+        .cumulative_discount_factors(
+            setup
+                .inputs
+                .stage_data
+                .time_value
+                .cumulative_discount_factors(),
+        )
+        .stage_lag_transitions(&setup.inputs.stage_data.stage_lag_transitions)
+        .noise_group_ids(&setup.inputs.stage_data.noise_group_ids);
         let stage_ctx = fixture.ctx();
-        let tr = &setup.scenario_libraries.training;
+        let tr = &setup.inputs.scenario_libraries.training;
         let training_ctx = TrainingContext {
-            horizon: &setup.horizon,
-            state: &setup.stage_data.state,
-            cut_state_layouts: &setup.stage_data.cut_state_layouts,
-            study_dims: &setup.stage_data.study_dims,
-            inflow_method: &setup.inflow_method,
-            stochastic: &setup.stochastic,
-            initial_state: &setup.initial.state,
+            horizon: &setup.inputs.horizon,
+            state: &setup.inputs.stage_data.state,
+            cut_state_layouts: &setup.inputs.cut_state_layouts,
+            study_dims: &setup.inputs.stage_data.study_dims,
+            inflow_method: &setup.inputs.inflow_method,
+            stochastic: &setup.inputs.stochastic,
+            initial_state: &setup.inputs.initial.state,
             inflow_scheme: tr.inflow_scheme,
             load_scheme: tr.load_scheme,
             ncs_scheme: tr.ncs_scheme,
-            stages: &setup.stage_data.stages,
+            stages: &setup.inputs.stage_data.stages,
             historical_library: tr.historical.as_ref(),
             external_inflow_library: tr.external_inflow.as_ref(),
             external_load_library: tr.external_load.as_ref(),
             external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &setup.initial.inflow_seeds.accum,
-            lag_weight_seed: &setup.initial.inflow_seeds.weight,
+            lag_accum_seed: &setup.inputs.initial.inflow_seeds.accum,
+            lag_weight_seed: &setup.inputs.initial.inflow_seeds.weight,
             dcs: None,
-            node_graph: &setup.node_graph,
+            node_graph: &setup.inputs.node_graph,
         };
 
         let sampler =

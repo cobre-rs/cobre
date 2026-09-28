@@ -94,7 +94,7 @@ mod simulation_only {
         let original_active_cuts = setup.fcf.total_active_cuts();
         assert!(original_active_cuts > 0, "training should produce cuts");
 
-        let n_stages = setup.stage_data.stage_templates.templates.len();
+        let n_stages = setup.inputs.stage_data.stage_templates.templates.len();
         let state_dim = setup.fcf.state_dimension;
 
         let test_state: Vec<f64> = vec![50.0; state_dim];
@@ -114,7 +114,7 @@ mod simulation_only {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -127,7 +127,7 @@ mod simulation_only {
         let stage_bases = build_stage_basis_records(
             fcf,
             &training_result,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &basis_col_u8,
             &basis_row_u8,
         );
@@ -214,8 +214,8 @@ mod simulation_only {
 
         for (pos, cb) in loaded_basis_cache.iter().enumerate() {
             let Some(cb) = cb else { continue };
-            let stage = setup.node_graph.nodes[NodePos(pos)].stage;
-            let expected_rows = setup.stage_data.stage_templates.templates[stage.0].num_rows;
+            let stage = setup.inputs.node_graph.nodes[NodePos(pos)].stage;
+            let expected_rows = setup.inputs.stage_data.stage_templates.templates[stage.0].num_rows;
             assert_eq!(
                 cb.base_row_count, expected_rows,
                 "node {pos} base_row_count must equal the study's own template row count"
@@ -768,7 +768,7 @@ mod multi_resolution_integration {
 
         let mut setup = build_setup(&case_dir, &config);
 
-        let groups = &setup.stage_data.noise_group_ids;
+        let groups = &setup.inputs.stage_data.noise_group_ids;
         assert_eq!(
             groups.len(),
             10,
@@ -1038,7 +1038,7 @@ mod decomp_integration {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -1047,8 +1047,13 @@ mod decomp_integration {
             stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -1285,7 +1290,7 @@ mod decomp_integration {
         );
         cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records).unwrap();
 
-        let terminal_pool_id = setup_c.node_graph.terminal_pool(num_stages).unwrap();
+        let terminal_pool_id = setup_c.inputs.node_graph.terminal_pool(num_stages).unwrap();
         let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
         assert!(
             terminal_pool.has_warm_start_cuts(),
@@ -3434,7 +3439,11 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
             ant_slot,
         );
 
-        let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
+        let terminal_pool_id = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let node_id = NodeId(i32::try_from(setup.num_stages() - 1).unwrap_or(0));

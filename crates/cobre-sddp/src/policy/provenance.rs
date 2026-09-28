@@ -397,7 +397,7 @@ mod tests {
         assert!(
             report.inflow.historical_library_seed_digest.is_none(),
             "builder must leave historical_library_seed_digest unset; \
-             callers populate it from setup.scenario_libraries.training.historical \
+             callers populate it from setup.inputs.scenario_libraries.training.historical \
              when the historical scheme is active"
         );
     }

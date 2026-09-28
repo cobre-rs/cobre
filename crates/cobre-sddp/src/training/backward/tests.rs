@@ -25,8 +25,8 @@ where
         bwd_max_openings,
         real_states_capacity,
         inputs.local_work,
-        inputs.training_ctx.state.n_state,
-        num_stages,
+        inputs.training_ctx.state,
+        inputs.training_ctx.horizon,
     );
     bwd_state.run(inputs)
 }
@@ -698,7 +698,7 @@ fn exchange_and_records(
     use cobre_comm::LocalBackend;
 
     let records = test_support::trial_state_records(states, n_stages);
-    let mut bufs = ExchangeBuffers::new(n_state, states.len(), 1);
+    let mut bufs = ExchangeBuffers::new(&test_support::state_layout(n_state, 0), states.len(), 1);
     bufs.exchange(&records, StageIdx(0), n_stages, &LocalBackend)
         .unwrap();
     (bufs, records)
@@ -708,7 +708,7 @@ fn exchange_with_states(n_state: usize, states: Vec<Vec<f64>>) -> ExchangeBuffer
     use cobre_comm::LocalBackend;
 
     let local_count = states.len();
-    let mut bufs = ExchangeBuffers::new(n_state, local_count, 1);
+    let mut bufs = ExchangeBuffers::new(&test_support::state_layout(n_state, 0), local_count, 1);
     let records: Vec<TrajectoryRecord> = states
         .into_iter()
         .map(|state| TrajectoryRecord {
@@ -4523,7 +4523,7 @@ fn per_child_backward_isolates_column_basis_and_pool_metadata() {
 
     let trial_states = vec![vec![10.0_f64]];
     let records = test_support::trial_state_records(&trial_states, n_stages);
-    let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+    let mut exchange = ExchangeBuffers::new(&state, trial_states.len(), 1);
     exchange
         .exchange(&records, StageIdx(1), n_stages, &StubComm)
         .expect("exchange must succeed");

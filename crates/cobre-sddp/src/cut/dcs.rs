@@ -628,10 +628,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
         // run_stage_solve applies on the frozen path, mirrored here because
         // CLP accepts a shape-mismatched basis silently.
         if let Some(stored) = stored_basis.filter(|s| s.node_id == ctx.node_id) {
-            let target = ReconstructionTarget {
-                base_row_count: core.num_rows,
-                num_cols: core.num_cols,
-            };
+            let target = ReconstructionTarget::from_template(core);
             reconstruct_basis_uniform_basic(stored, target, cut_rows, &mut scratch.recon_basis);
             enforce_basic_count_invariant(
                 &mut scratch.recon_basis,

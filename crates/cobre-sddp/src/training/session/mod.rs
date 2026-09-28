@@ -236,7 +236,7 @@ where
 
         let actual_per_rank = per_rank_counts(total_forward_passes, ranks.num_ranks);
         let exchange_bufs = ExchangeBuffers::with_actual_counts(
-            ranks.n_state,
+            state,
             ranks.max_local_fwd,
             ranks.num_ranks,
             &actual_per_rank,
@@ -357,8 +357,8 @@ where
             max_openings,
             real_states_capacity,
             ranks.max_local_fwd,
-            ranks.n_state,
-            ranks.num_stages,
+            state,
+            horizon,
         );
         bwd_state.set_profile(solver_profiles.backward);
         bwd_state.set_scheduler(solver_profiles.backward_scheduler);

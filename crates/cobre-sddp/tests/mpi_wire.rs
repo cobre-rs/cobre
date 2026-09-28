@@ -1588,7 +1588,15 @@ mod by_node_scratch {
 
     #[test]
     fn by_node_scratch_empty_on_by_scenario_default() {
-        let mut state = BackwardPassState::new(1, 1, 4, 0, 3, 5, 2);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            4,
+            0,
+            3,
+            &state_layout(5, 0),
+            &HorizonMode::Finite { num_stages: 2 },
+        );
         state.set_scheduler(BackwardScheduler::ByScenario {});
         assert_eq!(
             state.by_node_scratch_arena_capacity(),
@@ -1611,8 +1619,8 @@ mod by_node_scratch {
             bwd_max_openings,
             0,
             max_local_fwd,
-            n_state,
-            num_stages,
+            &state_layout(n_state, 0),
+            &HorizonMode::Finite { num_stages },
         );
 
         state.set_scheduler(BackwardScheduler::ByNode { block_size: None });
@@ -1668,7 +1676,7 @@ mod by_node_scratch {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state_layout_fixture, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1718,8 +1726,15 @@ mod by_node_scratch {
         );
 
         let local_count = exchange.local_count();
-        let mut state =
-            BackwardPassState::new(1, 1, n_openings, n_state, local_count, n_state, n_stages);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            n_openings,
+            n_state,
+            local_count,
+            training_ctx.state,
+            training_ctx.horizon,
+        );
         state.set_scheduler(BackwardScheduler::ByNode {
             block_size: NonZeroUsize::new(1),
         });
@@ -1786,7 +1801,7 @@ mod by_node_scratch {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state_layout_fixture, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -1836,8 +1851,15 @@ mod by_node_scratch {
         );
 
         let local_count = exchange.local_count();
-        let mut state =
-            BackwardPassState::new(1, 1, n_openings, n_state, local_count, n_state, n_stages);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            n_openings,
+            n_state,
+            local_count,
+            training_ctx.state,
+            training_ctx.horizon,
+        );
         state.set_scheduler(BackwardScheduler::ByNode {
             block_size: NonZeroUsize::new(1),
         });

@@ -34,6 +34,8 @@ use crate::{
     cut_sync::CutSyncBuffers,
     error::SddpError,
     forward::EnumeratedForwardScratch,
+    horizon_mode::HorizonMode,
+    lp::indexer::StateSpace,
     rank_reconcile::reconcile_result,
     risk_measure::RiskMeasure,
     solver_phase::Phase,
@@ -381,10 +383,10 @@ impl BackwardPassState {
     /// - `real_states_capacity`: capacity hint for `real_states_buf`
     ///   (`real_total_scenarios * n_state`).
     /// - `max_local_fwd`: maximum local forward-pass count across the run.
-    /// - `n_state`: state dimension.
-    /// - `num_stages`: number of stages in the study.
+    /// - `state`: state-vector layout owner (`n_state` dimension).
+    /// - `horizon`: horizon owner (`num_stages` dimension).
     ///
-    /// `max_local_fwd`, `n_state`, and `num_stages`, together with
+    /// `max_local_fwd`, `state.n_state`, and `horizon.num_stages()`, together with
     /// `bwd_max_openings`, size `Self::by_node_scratch` once `set_scheduler`
     /// calls `Self::resize_by_node_scratch`; `by_node_scratch` starts empty.
     #[must_use]
@@ -394,9 +396,11 @@ impl BackwardPassState {
         bwd_max_openings: usize,
         real_states_capacity: usize,
         max_local_fwd: usize,
-        n_state: usize,
-        num_stages: usize,
+        state: &StateSpace,
+        horizon: &HorizonMode,
     ) -> Self {
+        let n_state = state.n_state;
+        let num_stages = horizon.num_stages();
         let send_stride = n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE;
         Self {
             probabilities_buf: Vec::new(),
@@ -2573,8 +2577,8 @@ mod tests {
             bwd_max_openings,
             real_states_capacity,
             7,
-            4,
-            3,
+            &state_layout(4, 0),
+            &HorizonMode::Finite { num_stages: 3 },
         );
 
         let send_stride = n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE;
@@ -2629,7 +2633,7 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2677,8 +2681,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            &state,
+            &horizon,
         );
 
         let mut inputs = BackwardPassInputs {
@@ -2783,7 +2787,7 @@ mod tests {
             10,
             &vec![0; node_graph.n_pools],
         );
-        let mut exchange = ExchangeBuffers::new(n_state, trial_count, 1);
+        let mut exchange = ExchangeBuffers::new(state, trial_count, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2832,8 +2836,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            state,
+            &horizon,
         );
 
         let mut inputs = BackwardPassInputs {
@@ -3170,7 +3174,7 @@ mod tests {
             10,
             &vec![0; node_graph.n_pools],
         );
-        let mut exchange = ExchangeBuffers::new(n_state, trial_count, 1);
+        let mut exchange = ExchangeBuffers::new(state, trial_count, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -3221,8 +3225,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            state,
+            &horizon,
         );
         state_machine.set_scheduler(scheduler);
 
@@ -3401,7 +3405,7 @@ mod tests {
             10,
             &vec![0; node_graph.n_pools],
         );
-        let mut exchange = ExchangeBuffers::new(n_state, 1, 1);
+        let mut exchange = ExchangeBuffers::new(&state, 1, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -3452,7 +3456,7 @@ mod tests {
             .unwrap_or(0)
             .max(1);
         let mut state_machine =
-            BackwardPassState::new(1, 1, bwd_max_openings, n_state, 1, n_state, n_stages);
+            BackwardPassState::new(1, 1, bwd_max_openings, n_state, 1, &state, &horizon);
 
         let mut inputs = BackwardPassInputs {
             workspaces: &mut workspaces,
@@ -3894,7 +3898,7 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state_layout_fixture, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -3941,8 +3945,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            &state_layout_fixture,
+            &horizon,
         );
         let resolved =
             Phase::Backward.resolve_profile(Some(&cobre_io::config::PhaseSolverProfileConfig {
@@ -4022,7 +4026,7 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -4069,8 +4073,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            &state,
+            &horizon,
         );
 
         let mut inputs = BackwardPassInputs {
@@ -4163,7 +4167,17 @@ mod tests {
         contrib[1] = 1;
 
         let comm = StubComm;
-        let mut state = BackwardPassState::new(1, 1, n_openings, n_state, 1, n_state, n_stages);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            n_openings,
+            n_state,
+            1,
+            &state_layout(n_state, 0),
+            &HorizonMode::Finite {
+                num_stages: n_stages,
+            },
+        );
 
         state
             .sync_stage_metadata(successor, 0, pop, i, &workspaces, &mut fcf, &comm)
@@ -4498,17 +4512,20 @@ mod tests {
     fn by_node_scratch_sizing_follows_configured_scheduler_only() {
         use cobre_io::config::BackwardScheduler;
 
+        let state = state_layout(3, 0);
+        let horizon = HorizonMode::Finite { num_stages: 5 };
+
         // No scheduler set ⇒ empty (the pre-existing ByScenario/sampled default).
-        let baseline = BackwardPassState::new(1, 1, 4, 0, 2, 3, 5);
+        let baseline = BackwardPassState::new(1, 1, 4, 0, 2, &state, &horizon);
         assert_eq!(baseline.by_node_scratch_arena_capacity(), 0);
 
         // set_scheduler(ByNode) sizes it.
-        let mut by_node_only = BackwardPassState::new(1, 1, 4, 0, 2, 3, 5);
+        let mut by_node_only = BackwardPassState::new(1, 1, 4, 0, 2, &state, &horizon);
         by_node_only.set_scheduler(BackwardScheduler::ByNode { block_size: None });
         assert!(by_node_only.by_node_scratch_arena_capacity() > 0);
 
         // set_scheduler(ByScenario) keeps it empty.
-        let mut by_scenario_only = BackwardPassState::new(1, 1, 4, 0, 2, 3, 5);
+        let mut by_scenario_only = BackwardPassState::new(1, 1, 4, 0, 2, &state, &horizon);
         by_scenario_only.set_scheduler(BackwardScheduler::ByScenario {});
         assert_eq!(by_scenario_only.by_node_scratch_arena_capacity(), 0);
     }
@@ -4741,7 +4758,7 @@ mod tests {
 
         let n_state = training_ctx.state.n_state;
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
-        let mut exchange = ExchangeBuffers::new(n_state, total_forward_passes.max(1), 1);
+        let mut exchange = ExchangeBuffers::new(training_ctx.state, total_forward_passes.max(1), 1);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, 1);
         let risk_measures = vec![RiskMeasure::Expectation; num_stages];
         let bwd_max_openings = node_graph
@@ -4762,8 +4779,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             total_forward_passes,
-            n_state,
-            num_stages,
+            training_ctx.state,
+            training_ctx.horizon,
         );
 
         let mut inputs = BackwardPassInputs {

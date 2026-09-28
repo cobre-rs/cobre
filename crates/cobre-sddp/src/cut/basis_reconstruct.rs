@@ -67,7 +67,7 @@
 //! assert_eq!(stats, ReconstructionStats::default());
 //! ```
 
-use cobre_solver::{Basis, BasisStatus};
+use cobre_solver::{Basis, BasisStatus, StageTemplate};
 
 use crate::error::SddpError;
 use crate::workspace::CapturedBasis;
@@ -83,6 +83,18 @@ pub struct ReconstructionTarget {
     pub base_row_count: usize,
     /// Total column count of the target LP.
     pub num_cols: usize,
+}
+
+impl ReconstructionTarget {
+    /// Build a [`ReconstructionTarget`] from a stage's structural LP shape.
+    #[must_use]
+    #[inline]
+    pub fn from_template(template: &StageTemplate) -> Self {
+        Self {
+            base_row_count: template.num_rows,
+            num_cols: template.num_cols,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

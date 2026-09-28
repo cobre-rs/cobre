@@ -74,10 +74,7 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         let template = inputs.stage_context.template(inputs.stage_index);
         // `base_row_count` is the non-frozen template row count so cut rows are
         // matched by slot identity, not positional copy from the stored basis.
-        let target = ReconstructionTarget {
-            base_row_count: template.num_rows,
-            num_cols: template.num_cols,
-        };
+        let target = ReconstructionTarget::from_template(template);
 
         let _ = reconstruct_basis(
             captured,

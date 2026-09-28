@@ -31,7 +31,10 @@
 
 use cobre_comm::Communicator;
 
-use crate::{error::SddpError, setup::node_graph::StageIdx, trajectory::TrajectoryRecord};
+use crate::{
+    error::SddpError, lp::indexer::StateSpace, setup::node_graph::StageIdx,
+    trajectory::TrajectoryRecord,
+};
 
 /// Pre-allocated buffers for gathering state vectors across all MPI ranks.
 ///
@@ -69,11 +72,13 @@ use crate::{error::SddpError, setup::node_graph::StageIdx, trajectory::Trajector
 /// use cobre_comm::LocalBackend;
 /// use cobre_sddp::ExchangeBuffers;
 /// use cobre_sddp::TrajectoryRecord;
+/// use cobre_sddp::indexer::StateSpace;
 /// use cobre_sddp::setup::NodeId;
 /// use cobre_sddp::setup::StageIdx;
 ///
 /// // Three scenarios, two-element state vectors, single rank.
-/// let mut bufs = ExchangeBuffers::new(2, 3, 1);
+/// let state = StateSpace::new(2, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0, 0]);
+/// let mut bufs = ExchangeBuffers::new(&state, 3, 1);
 ///
 /// let records: Vec<TrajectoryRecord> = vec![
 ///     TrajectoryRecord { primal: vec![], dual: vec![], stage_cost: 0.0, node_id: NodeId(0), state: vec![1.0, 2.0] },
@@ -134,15 +139,15 @@ impl ExchangeBuffers {
     ///
     /// # Arguments
     ///
-    /// - `n_state` — length of each state vector (`N * (1 + L)` from the
-    ///   stage indexer).
+    /// - `state` — state-vector layout owner; each state vector has length
+    ///   `state.n_state`.
     /// - `local_count` — number of local scenarios per rank (the maximum across
     ///   all ranks when the distribution is uneven).
     /// - `num_ranks` — total number of MPI ranks (`comm.size()`).
     #[must_use]
-    pub fn new(n_state: usize, local_count: usize, num_ranks: usize) -> Self {
+    pub fn new(state: &StateSpace, local_count: usize, num_ranks: usize) -> Self {
         let actual_per_rank = vec![local_count; num_ranks];
-        Self::with_actual_counts(n_state, local_count, num_ranks, &actual_per_rank)
+        Self::with_actual_counts(state, local_count, num_ranks, &actual_per_rank)
     }
 
     /// Construct pre-allocated exchange buffers with per-rank actual forward
@@ -160,7 +165,8 @@ impl ExchangeBuffers {
     ///
     /// # Arguments
     ///
-    /// - `n_state` — length of each state vector.
+    /// - `state` — state-vector layout owner; each state vector has length
+    ///   `state.n_state`.
     /// - `max_local_count` — maximum forward passes on any single rank (used
     ///   for uniform buffer sizing).
     /// - `num_ranks` — total number of MPI ranks.
@@ -174,11 +180,12 @@ impl ExchangeBuffers {
     /// is `≤ max_local_count`.
     #[must_use]
     pub fn with_actual_counts(
-        n_state: usize,
+        state: &StateSpace,
         max_local_count: usize,
         num_ranks: usize,
         actual_per_rank: &[usize],
     ) -> Self {
+        let n_state = state.n_state;
         debug_assert_eq!(
             actual_per_rank.len(),
             num_ranks,
@@ -374,8 +381,10 @@ mod tests {
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 
     use super::ExchangeBuffers;
+    use crate::lp::indexer::StateSpace;
     use crate::setup::NodeId;
     use crate::setup::node_graph::StageIdx;
+    use crate::test_support;
     use crate::trajectory::TrajectoryRecord;
 
     // ── Helper ────────────────────────────────────────────────────────────────
@@ -390,25 +399,31 @@ mod tests {
         }
     }
 
+    fn state_of(n_state: usize) -> StateSpace {
+        let state = test_support::state_layout(n_state, 0);
+        assert_eq!(state.n_state, n_state);
+        state
+    }
+
     // ── Unit tests ────────────────────────────────────────────────────────────
 
     #[test]
     fn new_allocates_correct_send_buf_length() {
-        let bufs = ExchangeBuffers::new(3, 4, 2);
+        let bufs = ExchangeBuffers::new(&state_of(3), 4, 2);
         // send_buf: local_count * n_state = 4 * 3 = 12
         assert_eq!(bufs.send_buf.len(), 12);
     }
 
     #[test]
     fn new_allocates_correct_recv_buf_length() {
-        let bufs = ExchangeBuffers::new(3, 4, 2);
+        let bufs = ExchangeBuffers::new(&state_of(3), 4, 2);
         // recv_buf: local_count * num_ranks * n_state = 4 * 2 * 3 = 24
         assert_eq!(bufs.recv_buf.len(), 24);
     }
 
     #[test]
     fn new_allocates_correct_counts_length_and_values() {
-        let bufs = ExchangeBuffers::new(3, 4, 2);
+        let bufs = ExchangeBuffers::new(&state_of(3), 4, 2);
         // counts: [local_count * n_state; num_ranks] = [12, 12]
         assert_eq!(bufs.counts.len(), 2);
         assert_eq!(bufs.counts[0], 12);
@@ -417,7 +432,7 @@ mod tests {
 
     #[test]
     fn new_allocates_correct_displs_length_and_values() {
-        let bufs = ExchangeBuffers::new(3, 4, 2);
+        let bufs = ExchangeBuffers::new(&state_of(3), 4, 2);
         // displs: [0, 12]
         assert_eq!(bufs.displs.len(), 2);
         assert_eq!(bufs.displs[0], 0);
@@ -427,20 +442,20 @@ mod tests {
     #[test]
     fn new_single_rank_counts_is_one_element() {
         // Acceptance criterion: counts = [local_count * n_state], displs = [0]
-        let bufs = ExchangeBuffers::new(2, 3, 1);
+        let bufs = ExchangeBuffers::new(&state_of(2), 3, 1);
         assert_eq!(bufs.counts, vec![6]); // 3 * 2
         assert_eq!(bufs.displs, vec![0]);
     }
 
     #[test]
     fn total_scenarios_returns_local_count_times_num_ranks() {
-        let bufs = ExchangeBuffers::new(2, 5, 4);
+        let bufs = ExchangeBuffers::new(&state_of(2), 5, 4);
         assert_eq!(bufs.total_scenarios(), 20); // 5 * 4
     }
 
     #[test]
     fn total_scenarios_single_rank() {
-        let bufs = ExchangeBuffers::new(2, 3, 1);
+        let bufs = ExchangeBuffers::new(&state_of(2), 3, 1);
         assert_eq!(bufs.total_scenarios(), 3);
     }
 
@@ -451,7 +466,7 @@ mod tests {
         let n_state = 3;
         let local_count = 2;
         let num_ranks = 3;
-        let mut bufs = ExchangeBuffers::new(n_state, local_count, num_ranks);
+        let mut bufs = ExchangeBuffers::new(&state_of(n_state), local_count, num_ranks);
 
         // Manually fill recv_buf with identifiable values.
         // Indices are small (r < 3, s < 2, i < 3): sum <= 212, exact in f64.
@@ -487,7 +502,7 @@ mod tests {
         // stage 0 of a 1-stage system. gathered_states = [1,2,3,4,5,6].
         use cobre_comm::LocalBackend;
 
-        let mut bufs = ExchangeBuffers::new(2, 3, 1);
+        let mut bufs = ExchangeBuffers::new(&state_of(2), 3, 1);
         let records = vec![
             make_record(vec![1.0, 2.0]),
             make_record(vec![3.0, 4.0]),
@@ -521,7 +536,7 @@ mod tests {
             make_record(vec![60.0, 61.0]), // m=1, stage=2
         ];
 
-        let mut bufs = ExchangeBuffers::new(2, 2, 1);
+        let mut bufs = ExchangeBuffers::new(&state_of(2), 2, 1);
         let comm = LocalBackend;
         bufs.exchange(&records, StageIdx(1), 3, &comm).unwrap();
 
@@ -544,7 +559,7 @@ mod tests {
             make_record(vec![4.0, 5.0, 6.0]), // m=1, stage=0
         ];
 
-        let mut bufs = ExchangeBuffers::new(3, 2, 1);
+        let mut bufs = ExchangeBuffers::new(&state_of(3), 2, 1);
         let comm = LocalBackend;
         bufs.exchange(&records, StageIdx(0), 1, &comm).unwrap();
 
@@ -610,7 +625,7 @@ mod tests {
             }
         }
 
-        let mut bufs = ExchangeBuffers::new(2, 1, 1);
+        let mut bufs = ExchangeBuffers::new(&state_of(2), 1, 1);
         let records = vec![make_record(vec![1.0, 2.0])];
 
         let result = bufs.exchange(&records, StageIdx(0), 1, &FailingComm);
@@ -626,7 +641,7 @@ mod tests {
     fn real_total_scenarios_uneven_distribution() {
         // AC: total_forward_passes=5, num_ranks=2, actual_per_rank=[3,2].
         // real_total_scenarios() must return 5, not 6.
-        let bufs = ExchangeBuffers::with_actual_counts(2, 3, 2, &[3, 2]);
+        let bufs = ExchangeBuffers::with_actual_counts(&state_of(2), 3, 2, &[3, 2]);
         assert_eq!(bufs.real_total_scenarios(), 5);
         assert_eq!(bufs.total_scenarios(), 6); // padded buffer size unchanged
     }
@@ -634,7 +649,7 @@ mod tests {
     #[test]
     fn real_total_scenarios_even_distribution() {
         // AC: even split, real_total_scenarios() == total_scenarios().
-        let bufs = ExchangeBuffers::with_actual_counts(2, 3, 2, &[3, 3]);
+        let bufs = ExchangeBuffers::with_actual_counts(&state_of(2), 3, 2, &[3, 3]);
         assert_eq!(bufs.real_total_scenarios(), 6);
         assert_eq!(bufs.total_scenarios(), 6);
     }
@@ -642,7 +657,7 @@ mod tests {
     #[test]
     fn real_total_scenarios_single_rank() {
         // AC: num_ranks==1, real_total_scenarios() == total_scenarios().
-        let bufs = ExchangeBuffers::with_actual_counts(2, 3, 1, &[3]);
+        let bufs = ExchangeBuffers::with_actual_counts(&state_of(2), 3, 1, &[3]);
         assert_eq!(bufs.real_total_scenarios(), 3);
         assert_eq!(bufs.total_scenarios(), 3);
     }
@@ -656,7 +671,8 @@ mod tests {
         let n_state = 2;
         let max_local = 3;
         let num_ranks = 2;
-        let mut bufs = ExchangeBuffers::with_actual_counts(n_state, max_local, num_ranks, &[3, 2]);
+        let mut bufs =
+            ExchangeBuffers::with_actual_counts(&state_of(n_state), max_local, num_ranks, &[3, 2]);
 
         // Manually fill recv_buf:
         // rank 0: slots [10,11], [20,21], [30,31]   (3 real)
@@ -691,7 +707,7 @@ mod tests {
         // same data as gathered_states (in the same order).
         use cobre_comm::LocalBackend;
 
-        let mut bufs = ExchangeBuffers::new(2, 3, 1);
+        let mut bufs = ExchangeBuffers::new(&state_of(2), 3, 1);
         let records = vec![
             make_record(vec![1.0, 2.0]),
             make_record(vec![3.0, 4.0]),
@@ -709,8 +725,7 @@ mod tests {
     fn pack_real_states_into_reuses_buffer_capacity() {
         // Calling pack_real_states_into twice must clear and refill the buffer
         // without changing its capacity (capacity is preserved after clear).
-        let n_state = 2;
-        let mut bufs = ExchangeBuffers::with_actual_counts(n_state, 3, 2, &[3, 2]);
+        let mut bufs = ExchangeBuffers::with_actual_counts(&state_of(2), 3, 2, &[3, 2]);
         // Fill all recv_buf slots with 1.0 for simplicity.
         bufs.recv_buf.fill(1.0);
 
@@ -776,7 +791,8 @@ mod tests {
     fn rank_with_zero_actual_forward_passes_still_contributes_its_gather_slot() {
         let n_state = 1;
         let max_local_fwd = 1;
-        let mut bufs = ExchangeBuffers::with_actual_counts(n_state, max_local_fwd, 2, &[1, 0]);
+        let mut bufs =
+            ExchangeBuffers::with_actual_counts(&state_of(n_state), max_local_fwd, 2, &[1, 0]);
 
         // Sized by `max_local_fwd`, as the backward pass receives it: rank 1's
         // slot is padding the forward pass never wrote.
@@ -797,8 +813,7 @@ mod tests {
     /// states regardless of which rank drew them.
     #[test]
     fn zero_work_rank_padding_is_excluded_from_the_packed_states() {
-        let n_state = 1;
-        let mut bufs = ExchangeBuffers::with_actual_counts(n_state, 1, 2, &[1, 0]);
+        let mut bufs = ExchangeBuffers::with_actual_counts(&state_of(1), 1, 2, &[1, 0]);
         let records = vec![make_record(vec![10.0]), make_record(vec![20.0])];
         bufs.exchange(&records, StageIdx(0), 2, &Rank1Of2).unwrap();
 

@@ -261,52 +261,6 @@ impl SolverInterface for MockSolver {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Stage template matching `test_support::hydro_only_bus_geometry`'s N=1 hydro, 1 bus,
-/// 1-block layout, so per-block hydro/load extraction addresses real columns
-/// and rows instead of an empty family. `MockSolver` never reads the
-/// coefficients, so every column past the state region (`storage_out`(0),
-/// `z_inflow`(1), `storage_in`(2), `theta`(3)) is free (zero cost, zero NZ).
-fn minimal_template_1_0() -> StageTemplate {
-    let num_cols = 15;
-    let num_rows = 7;
-    let mut col_lower = vec![0.0; num_cols];
-    col_lower[1] = f64::NEG_INFINITY;
-    let mut objective = vec![0.0; num_cols];
-    objective[3] = 1.0;
-    StageTemplate {
-        num_cols,
-        num_rows,
-        num_nz: 0,
-        col_starts: vec![0_i32; num_cols + 1],
-        row_indices: Vec::new(),
-        values: Vec::new(),
-        col_lower,
-        col_upper: vec![f64::INFINITY; num_cols],
-        objective,
-        row_lower: vec![0.0; num_rows],
-        row_upper: vec![0.0; num_rows],
-        n_state: 1,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }
-}
-
-/// Build a fixed `LpSolution` for `minimal_template_1_0`'s layout; theta at
-/// col 3.
-fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-    let num_cols = 15;
-    let mut primal = vec![0.0_f64; num_cols];
-    primal[3] = theta_val;
-    LpSolution {
-        objective,
-        primal,
-        dual: vec![0.0_f64; 7],
-        reduced_costs: vec![0.0_f64; num_cols],
-        iterations: 0,
-        solve_time_seconds: 0.0,
-    }
-}
-
 /// Build a minimal `EntityCounts` for 1 hydro, no other entities.
 fn entity_counts_1_hydro() -> EntityCounts {
     EntityCounts {
@@ -759,7 +713,7 @@ fn make_stochastic_context_1_hydro_1_load_bus_sim(mean_mw: f64, std_mw: f64) -> 
 #[test]
 fn simulation_load_patches_applied() {
     let n_stages = 1;
-    let templates = vec![minimal_template_1_0()];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -775,7 +729,7 @@ fn simulation_load_patches_applied() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -912,7 +866,7 @@ fn simulation_load_patches_applied() {
 #[test]
 fn simulation_no_load_buses_unchanged() {
     let n_stages = 1;
-    let templates = vec![minimal_template_1_0()];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let stochastic = make_stochastic_context(n_stages);
     let state = test_support::state_layout(1, 0);
@@ -927,7 +881,7 @@ fn simulation_no_load_buses_unchanged() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1016,7 +970,7 @@ fn simulation_no_load_buses_unchanged() {
 #[test]
 fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let n_stages = 1;
-    let templates = vec![minimal_template_1_0()];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let stochastic = make_stochastic_context(n_stages);
     let state = test_support::state_layout(1, 0);
@@ -1031,7 +985,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1139,7 +1093,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
 #[test]
 fn simulation_inflow_extraction_unaffected() {
     let n_stages = 1;
-    let templates = vec![minimal_template_1_0()];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -1155,7 +1109,7 @@ fn simulation_inflow_extraction_unaffected() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1469,7 +1423,7 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
 
     let n_stages = 1;
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
-    let templates = vec![minimal_template_1_0()];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let state = test_support::state_layout(1, 0);
     let fcf = FutureCostFunction::new(n_stages, state.n_state, 1, 10, &vec![0; n_stages]);
@@ -1483,7 +1437,7 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     };
     let initial_state = vec![0.0_f64];
 
-    let solution = fixed_solution(0.0, 0.0);
+    let solution = test_support::hydro_only_bus_solution(0.0, 0.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1581,7 +1535,7 @@ fn simulation_none_method_produces_raw_negative_noise() {
 
     let n_stages = 1;
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
-    let templates = vec![minimal_template_1_0()];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let state = test_support::state_layout(1, 0);
     let fcf = FutureCostFunction::new(n_stages, state.n_state, 1, 10, &vec![0; n_stages]);
@@ -1595,7 +1549,7 @@ fn simulation_none_method_produces_raw_negative_noise() {
     };
     let initial_state = vec![0.0_f64];
 
-    let solution = fixed_solution(0.0, 0.0);
+    let solution = test_support::hydro_only_bus_solution(0.0, 0.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();

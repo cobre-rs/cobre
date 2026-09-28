@@ -7579,7 +7579,7 @@ mod chronological_attribution {
         TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
     use cobre_sddp::lead_time::resolve_spread;
-    use cobre_sddp::test_support::assert_templates_byte_identical;
+    use cobre_sddp::test_support::assert_all_templates_byte_identical;
 
     use super::common::build_setup_in_code;
     use super::common::builders::{
@@ -8011,18 +8011,11 @@ mod chronological_attribution {
 
         let parallel_templates = &parallel.stage_data.stage_templates.templates;
         let chrono_templates = &chronological.stage_data.stage_templates.templates;
-        assert_eq!(
-            parallel_templates.len(),
-            chrono_templates.len(),
-            "stage count must match between block modes"
+        assert_all_templates_byte_identical(
+            parallel_templates,
+            chrono_templates,
+            "parallel vs chronological (travel time on)",
         );
-        for (stage, (p, c)) in parallel_templates
-            .iter()
-            .zip(chrono_templates.iter())
-            .enumerate()
-        {
-            assert_templates_byte_identical(p, c, &format!("stage {stage}"));
-        }
     }
 
     /// Mode-independent sizing: the bucket state is a pure function of stage

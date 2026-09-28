@@ -2,7 +2,7 @@
 
 use super::*;
 
-use cobre_sddp::test_support::assert_templates_byte_identical;
+use cobre_sddp::test_support::assert_all_templates_byte_identical;
 
 /// Parse `json` (a `generic_constraints.json` body) through the real
 /// `cobre_io::constraints::parse_generic_constraints` path — the same loader the
@@ -52,14 +52,7 @@ fn assert_lp_byte_identical(
         flat,
         bounds.clone(),
     ));
-    assert_eq!(
-        sugared_tpl.len(),
-        flat_tpl.len(),
-        "sugared and hand-flattened builds must have the same stage count"
-    );
-    for (stage, (s, f)) in sugared_tpl.iter().zip(flat_tpl.iter()).enumerate() {
-        assert_templates_byte_identical(s, f, &format!("sugared vs hand-flattened, stage {stage}"));
-    }
+    assert_all_templates_byte_identical(&sugared_tpl, &flat_tpl, "sugared vs hand-flattened");
 }
 
 /// Byte-identity twin: a single-column named-expression case (the `d13`/`d54`
@@ -150,18 +143,11 @@ fn declaration_order_permutation_is_invariant_in_lp() {
     let first = digest(&perms[0]);
     for perm in &perms[1..] {
         let templates = digest(perm);
-        assert_eq!(
-            templates.len(),
-            first.len(),
-            "declaration-order permutation {perm:?} changed the stage count"
+        assert_all_templates_byte_identical(
+            &templates,
+            &first,
+            &format!("declaration-order permutation {perm:?}"),
         );
-        for (stage, (t, f)) in templates.iter().zip(first.iter()).enumerate() {
-            assert_templates_byte_identical(
-                t,
-                f,
-                &format!("declaration-order permutation {perm:?}, stage {stage}"),
-            );
-        }
     }
 }
 
@@ -1850,14 +1836,7 @@ fn assert_desugaring_twin_builds_identical_lp(
         &one_bus_system_n_blks_with_generic(n_blks, flat_constraints, flat_bounds),
         flat_params,
     );
-    assert_eq!(
-        sugared_tpl.len(),
-        flat_tpl.len(),
-        "sugared and hand-flattened builds must have the same stage count"
-    );
-    for (stage, (s, f)) in sugared_tpl.iter().zip(flat_tpl.iter()).enumerate() {
-        assert_templates_byte_identical(s, f, &format!("sugared vs hand-flattened, stage {stage}"));
-    }
+    assert_all_templates_byte_identical(&sugared_tpl, &flat_tpl, "sugared vs hand-flattened");
 }
 
 /// A `PerStageBlock` parameter used as a coefficient resolves to its own block's
@@ -2484,16 +2463,5 @@ fn declaration_order_and_rhs_term_order_are_invariant_in_lp() {
 
     let tpl_a = build_templates_for(&one_bus_system_n_blks_with_generic(1, parsed_a, bounds_a));
     let tpl_b = build_templates_for(&one_bus_system_n_blks_with_generic(1, parsed_b, bounds_b));
-    assert_eq!(
-        tpl_a.len(),
-        tpl_b.len(),
-        "declaration order and commutative RHS term order must not affect the stage count"
-    );
-    for (stage, (a, b)) in tpl_a.iter().zip(tpl_b.iter()).enumerate() {
-        assert_templates_byte_identical(
-            a,
-            b,
-            &format!("declaration order and commutative RHS, stage {stage}"),
-        );
-    }
+    assert_all_templates_byte_identical(&tpl_a, &tpl_b, "declaration order and commutative RHS");
 }

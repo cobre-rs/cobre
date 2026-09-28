@@ -44,7 +44,10 @@ use cobre_sddp::{
         StageIdx, Traversal,
     },
     simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
-    test_support::{StageContextFixture, all_enabled_cut_state_layouts, hydro_only_bus_geometry},
+    test_support::{
+        StageContextFixture, all_enabled_cut_state_layouts, hydro_only_bus_geometry,
+        hydro_only_bus_solution, hydro_only_bus_template,
+    },
     workspace::{SolverWorkspace, WorkspaceSizing},
 };
 
@@ -235,51 +238,6 @@ impl SolverInterface for MockSolver {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-/// Stage template matching `hydro_only_bus_geometry`'s N=1 hydro, 1 bus,
-/// 1-block layout, so per-block hydro/load extraction addresses real columns
-/// and rows instead of an empty family. `MockSolver` never reads the
-/// coefficients, so every column past the state region (`storage_out`(0),
-/// `z_inflow`(1), `storage_in`(2), `theta`(3)) is free (zero cost, zero NZ).
-fn minimal_template_1_0() -> StageTemplate {
-    let num_cols = 15;
-    let num_rows = 7;
-    let mut col_lower = vec![0.0; num_cols];
-    col_lower[1] = f64::NEG_INFINITY;
-    let mut objective = vec![0.0; num_cols];
-    objective[3] = 1.0;
-    StageTemplate {
-        num_cols,
-        num_rows,
-        num_nz: 0,
-        col_starts: vec![0_i32; num_cols + 1],
-        row_indices: Vec::new(),
-        values: Vec::new(),
-        col_lower,
-        col_upper: vec![f64::INFINITY; num_cols],
-        objective,
-        row_lower: vec![0.0; num_rows],
-        row_upper: vec![0.0; num_rows],
-        n_state: 1,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }
-}
-
-/// Fixed `LpSolution` for `minimal_template_1_0`'s layout; theta at col 3.
-fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-    let num_cols = 15;
-    let mut primal = vec![0.0_f64; num_cols];
-    primal[3] = theta_val;
-    LpSolution {
-        objective,
-        primal,
-        dual: vec![0.0_f64; 7],
-        reduced_costs: vec![0.0_f64; num_cols],
-        iterations: 0,
-        solve_time_seconds: 0.0,
-    }
-}
 
 /// Build a minimal `EntityCounts` for 1 hydro, no other entities.
 fn entity_counts_1_hydro() -> EntityCounts {
@@ -539,7 +497,7 @@ fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
 #[test]
 fn simulate_single_rank_4_scenarios_produces_4_results() {
     let n_stages = 2;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
     let stochastic = make_stochastic_context(n_stages);
@@ -554,7 +512,7 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -650,7 +608,7 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
 #[test]
 fn simulate_infeasible_returns_lp_infeasible_error() {
     let n_stages = 2;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -665,7 +623,7 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::infeasible_on(solution, 5);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -752,7 +710,7 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
 #[test]
 fn simulate_infeasible_at_scenario2_stage3() {
     let n_stages = 4;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -767,7 +725,7 @@ fn simulate_infeasible_at_scenario2_stage3() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::infeasible_on(solution, 11);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -851,7 +809,7 @@ fn simulate_infeasible_at_scenario2_stage3() {
 #[test]
 fn simulate_channel_closed_returns_error() {
     let n_stages = 2;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -866,7 +824,7 @@ fn simulate_channel_closed_returns_error() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -949,7 +907,7 @@ fn simulate_channel_closed_returns_error() {
 #[test]
 fn simulate_total_cost_equals_sum_of_stage_costs() {
     let n_stages = 3;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
     let stochastic = make_stochastic_context(n_stages);
@@ -969,7 +927,7 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
     let expected_stage_cost = (objective - theta_val) * 1_000_000.0;
     let expected_total_cost = expected_stage_cost * n_stages as f64;
 
-    let solution = fixed_solution(objective, theta_val);
+    let solution = hydro_only_bus_solution(objective, theta_val);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1053,7 +1011,7 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
 #[test]
 fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
     let n_stages = 1;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1068,7 +1026,7 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(50.0, 10.0);
+    let solution = hydro_only_bus_solution(50.0, 10.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 2 };
     let entity_counts = entity_counts_1_hydro();
@@ -1153,7 +1111,7 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
 #[test]
 fn simulate_channel_receives_results_in_scenario_order() {
     let n_stages = 1;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1168,7 +1126,7 @@ fn simulate_channel_receives_results_in_scenario_order() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 20.0);
+    let solution = hydro_only_bus_solution(100.0, 20.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1248,7 +1206,7 @@ fn simulate_channel_receives_results_in_scenario_order() {
 fn test_simulation_parallel_cost_determinism() {
     let n_stages = 2;
     let n_scenarios = 20u32;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1265,7 +1223,7 @@ fn test_simulation_parallel_cost_determinism() {
 
     let objective = 100.0_f64;
     let theta_val = 30.0_f64;
-    let solution = fixed_solution(objective, theta_val);
+    let solution = hydro_only_bus_solution(objective, theta_val);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
 
@@ -1466,7 +1424,7 @@ fn simulate_emits_progress_events() {
     use cobre_core::TrainingEvent;
 
     let n_stages = 2;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1481,7 +1439,7 @@ fn simulate_emits_progress_events() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1588,7 +1546,7 @@ fn simulate_emits_progress_events() {
 #[test]
 fn simulate_no_events_when_sender_is_none() {
     let n_stages = 2;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1603,7 +1561,7 @@ fn simulate_no_events_when_sender_is_none() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1693,7 +1651,7 @@ fn simulate_progress_events_received_before_return() {
 
     let n_stages = 1;
     let n_scenarios = 10;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1708,7 +1666,7 @@ fn simulate_progress_events_received_before_return() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1807,7 +1765,7 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
 
     let n_stages = 1;
     let n_scenarios = 5_u32;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1823,7 +1781,7 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
     let initial_state = vec![50.0_f64];
 
     // objective=100, theta=30 → stage_cost = (100-30)*COST_SCALE_FACTOR = 70_000_000.0 every scenario.
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let expected_stage_cost = 70_000_000.0_f64;
 
     let solver = MockSolver::always_ok(solution);
@@ -1925,7 +1883,7 @@ fn simulate_emits_simulation_finished_as_last_event() {
 
     let n_stages = 1;
     let n_scenarios = 6_u32;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -1940,7 +1898,7 @@ fn simulate_emits_simulation_finished_as_last_event() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2051,7 +2009,7 @@ fn simulate_progress_scenario_cost_is_finite() {
     use cobre_core::TrainingEvent;
 
     let n_stages = 1;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2066,7 +2024,7 @@ fn simulate_progress_scenario_cost_is_finite() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2161,9 +2119,9 @@ fn simulate_progress_scenario_cost_is_finite() {
 fn simulate_frozen_path_issues_zero_add_rows() {
     let n_stages = 2;
     let n_scenarios = 3u32;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
     // For MockSolver the frozen content is irrelevant; reuse the minimal template.
-    let frozen: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let frozen: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2178,7 +2136,7 @@ fn simulate_frozen_path_issues_zero_add_rows() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2266,7 +2224,7 @@ fn simulate_frozen_path_issues_zero_add_rows() {
 fn simulate_fallback_path_issues_expected_add_rows() {
     let n_stages = 2;
     let n_scenarios = 3u32;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2281,7 +2239,7 @@ fn simulate_fallback_path_issues_expected_add_rows() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2368,7 +2326,7 @@ fn simulate_fallback_path_issues_expected_add_rows() {
 #[test]
 fn simulate_frozen_length_mismatch_returns_error() {
     let n_stages = 3;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2383,7 +2341,7 @@ fn simulate_frozen_length_mismatch_returns_error() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2391,8 +2349,9 @@ fn simulate_frozen_length_mismatch_returns_error() {
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
 
-    let wrong_frozen: Vec<StageTemplate> =
-        (0..n_stages - 1).map(|_| minimal_template_1_0()).collect();
+    let wrong_frozen: Vec<StageTemplate> = (0..n_stages - 1)
+        .map(|_| hydro_only_bus_template())
+        .collect();
 
     let mut workspaces = single_workspace(solver);
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
@@ -2479,7 +2438,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
 
     let n_stages = 1;
     let n_scenarios = 1u32;
-    let templates: Vec<StageTemplate> = vec![minimal_template_1_0()];
+    let templates: Vec<StageTemplate> = vec![hydro_only_bus_template()];
 
     let state = state_layout_for(1, 0);
 
@@ -2536,7 +2495,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2665,7 +2624,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
 fn simulate_with_empty_stage_bases_cold_starts() {
     let n_stages = 2;
     let n_scenarios = 3u32;
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
 
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
@@ -2680,7 +2639,7 @@ fn simulate_with_empty_stage_bases_cold_starts() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -2823,8 +2782,8 @@ fn two_leaf_fan_node_graph() -> NodeGraph {
     }
 }
 
-/// A `CapturedBasis` warm-startable against `minimal_template_1_0`
-/// (`num_cols=4`, `num_rows=2`, 0 cut rows): 2 BASIC columns + 0 BASIC rows
+/// A `CapturedBasis` warm-startable against a template shaped `num_cols=4`,
+/// `num_rows=2`, 0 cut rows: 2 BASIC columns + 0 BASIC rows
 /// satisfies `enforce_basic_count_invariant`'s `total_basic == num_row`
 /// requirement, mirroring `run_stage_solve_warm_start_frozen_path_succeeds`'s
 /// fixture.
@@ -2866,7 +2825,7 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
          otherwise this test cannot exercise the node-vs-stage divergence"
     );
 
-    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+    let templates: Vec<StageTemplate> = (0..n_stages).map(|_| hydro_only_bus_template()).collect();
     let state = state_layout_for(1, 0);
     let fcf = FutureCostFunction::new(node_graph.n_pools, 1, 1, 10, &vec![0; node_graph.n_pools]);
     let stochastic = make_stochastic_context(n_stages);
@@ -2880,7 +2839,7 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();

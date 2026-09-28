@@ -90,8 +90,8 @@ use crate::trajectory::TrajectoryRecord;
 use crate::workspace::{CapturedBasis, ScratchBuffers, SolverWorkspace, WorkspaceSizing};
 use cobre_core::scenario::{ExternalLoadRow, ExternalScenarioRow};
 use cobre_solver::{
-    ActiveSolver, Basis, BasisStatus, RowBatch, SolutionView, SolverError, SolverInterface,
-    SolverStatistics, StageTemplate,
+    ActiveSolver, Basis, BasisStatus, LpSolution, RowBatch, SolutionView, SolverError,
+    SolverInterface, SolverStatistics, StageTemplate,
 };
 
 /// Equipment dimensions for the [`geometry`] / [`study_dims_for`] test builders.
@@ -661,6 +661,53 @@ pub fn hydro_only_bus_geometry() -> StageGeometry {
         &[],
         vec![],
     )
+}
+
+/// Stage template matching [`hydro_only_bus_geometry`]'s N=1 hydro, 1 bus,
+/// 1-block layout, so per-block hydro/load extraction addresses real columns
+/// and rows instead of an empty family. A mock solver never reads the
+/// coefficients, so every column past the state region (`storage_out`(0),
+/// `z_inflow`(1), `storage_in`(2), `theta`(3)) is free (zero cost, zero NZ).
+#[must_use]
+pub fn hydro_only_bus_template() -> StageTemplate {
+    let num_cols = 15;
+    let num_rows = 7;
+    let mut col_lower = vec![0.0; num_cols];
+    col_lower[1] = f64::NEG_INFINITY;
+    let mut objective = vec![0.0; num_cols];
+    objective[3] = 1.0;
+    StageTemplate {
+        num_cols,
+        num_rows,
+        num_nz: 0,
+        col_starts: vec![0_i32; num_cols + 1],
+        row_indices: Vec::new(),
+        values: Vec::new(),
+        col_lower,
+        col_upper: vec![f64::INFINITY; num_cols],
+        objective,
+        row_lower: vec![0.0; num_rows],
+        row_upper: vec![0.0; num_rows],
+        n_state: 1,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
+    }
+}
+
+/// Fixed [`LpSolution`] for [`hydro_only_bus_template`]'s layout; theta at col 3.
+#[must_use]
+pub fn hydro_only_bus_solution(objective: f64, theta_val: f64) -> LpSolution {
+    let num_cols = 15;
+    let mut primal = vec![0.0_f64; num_cols];
+    primal[3] = theta_val;
+    LpSolution {
+        objective,
+        primal,
+        dual: vec![0.0_f64; 7],
+        reduced_costs: vec![0.0_f64; num_cols],
+        iterations: 0,
+        solve_time_seconds: 0.0,
+    }
 }
 
 /// Test-only [`StageContext`] builder. Slice fields default to `&[]`; a
@@ -4513,6 +4560,26 @@ pub fn assert_templates_byte_identical(a: &StageTemplate, b: &StageTemplate, lab
     assert_eq!(bits(row_upper), bits(&b.row_upper), "{label}: row_upper");
     assert_eq!(bits(col_scale), bits(&b.col_scale), "{label}: col_scale");
     assert_eq!(bits(row_scale), bits(&b.row_scale), "{label}: row_scale");
+}
+
+/// [`assert_templates_byte_identical`] over two multi-stage builds: asserts
+/// `a`/`b` have the same stage count, then compares each stage pair.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`, or at the first stage/field that differs
+/// (`"{label}: stage {n}: <field>"`).
+pub fn assert_all_templates_byte_identical(a: &[StageTemplate], b: &[StageTemplate], label: &str) {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "{label}: stage count must match ({} vs {})",
+        a.len(),
+        b.len()
+    );
+    for (stage, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+        assert_templates_byte_identical(x, y, &format!("{label}: stage {stage}"));
+    }
 }
 
 #[cfg(test)]

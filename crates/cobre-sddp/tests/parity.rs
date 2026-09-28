@@ -1957,7 +1957,7 @@ mod water_travel_time_no_arc_byte_identity {
     };
     use cobre_solver::StageTemplate;
 
-    use cobre_sddp::test_support::assert_templates_byte_identical;
+    use cobre_sddp::test_support::assert_all_templates_byte_identical;
 
     use super::common::build_setup_in_code;
     use super::common::builders::{
@@ -2255,14 +2255,11 @@ mod water_travel_time_no_arc_byte_identity {
         let parallel = build_templates(BlockMode::Parallel);
         let chronological = build_templates(BlockMode::Chronological);
 
-        assert_eq!(
-            parallel.len(),
-            chronological.len(),
-            "stage count must match between block modes"
+        assert_all_templates_byte_identical(
+            &parallel,
+            &chronological,
+            "parallel vs chronological (no arc declared)",
         );
-        for (stage, (p, c)) in parallel.iter().zip(chronological.iter()).enumerate() {
-            assert_templates_byte_identical(p, c, &format!("stage {stage}"));
-        }
     }
 
     /// D06 (`d06-fpha-variable-head`) is one of the pinned golden parity-hash

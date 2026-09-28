@@ -4725,13 +4725,11 @@ mod tests {
         };
 
         let fwd_params = crate::forward::EnumeratedParams {
-            num_stages,
             iteration: 1,
             fwd_offset: 0,
             local_forward_passes: total_forward_passes,
             total_forward_passes,
             terminal_has_boundary_cuts: false,
-            noise_dim: training_ctx.stochastic.dim(),
             initial_state: training_ctx.initial_state,
             lag_accum_seed: training_ctx.lag_accum_seed,
             lag_weight_seed: training_ctx.lag_weight_seed,

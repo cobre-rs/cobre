@@ -99,6 +99,7 @@ impl HorizonMode {
     /// assert_eq!(h.num_stages(), 12);
     /// ```
     #[must_use]
+    #[inline]
     pub fn num_stages(&self) -> usize {
         match self {
             HorizonMode::Finite { num_stages } => *num_stages,

@@ -119,8 +119,6 @@ pub(crate) struct SimWorkerParams<'w> {
     sampler: &'w ForwardSampler<'w>,
     /// Per-run scenario-invariant tables backing `sampler`'s `OutOfSample` draws.
     noise_tables: &'w ForwardNoiseTables,
-    /// Number of stages in the study horizon.
-    num_stages: usize,
     /// Number of MPI ranks, scaling rank-local progress to a global estimate.
     world_size: u32,
     /// The stage-0 root's canonical `NodeGraph` position — every scenario's
@@ -364,7 +362,6 @@ fn run_sampled_simulation<S: SolverInterface + Send, C: Communicator>(
     world_size: u32,
 ) -> Result<(WorkerCosts, WorkerStats), SimulationError> {
     let training_ctx = inputs.training_ctx;
-    let num_stages = training_ctx.horizon.num_stages();
     let rank = inputs.comm.rank();
     let scenarios_complete = AtomicU32::new(0);
 
@@ -399,7 +396,6 @@ fn run_sampled_simulation<S: SolverInterface + Send, C: Communicator>(
         scenario_start,
         sampler,
         noise_tables,
-        num_stages,
         world_size,
         root_node,
     };
@@ -482,7 +478,6 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
             &mut ScenarioIds {
                 scenario_id,
                 global_scenario: scenario_id,
-                num_stages: params.num_stages,
                 total_scenarios: params.config.n_scenarios,
                 raw_noise_buf: &mut raw_noise_buf,
                 corr_scratch: &mut corr_scratch,

@@ -76,7 +76,6 @@ impl IterationScratch {
     /// iteration 1 can use the frozen load path.
     pub(crate) fn new(
         max_local_fwd: usize,
-        num_stages: usize,
         pool_stage: &[StageIdx],
         lb_root_pool_capacity: usize,
         template_0_num_rows: usize,
@@ -85,6 +84,7 @@ impl IterationScratch {
     ) -> Self {
         let n_pools = pool_stage.len();
         let n_state = training_ctx.state.n_state;
+        let num_stages = training_ctx.horizon.num_stages();
         let records: Vec<TrajectoryRecord> = (0..max_local_fwd * num_stages)
             .map(|_| TrajectoryRecord {
                 primal: Vec::new(),
@@ -216,13 +216,13 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let training_fixture = TrainingContextFixture::new(state_layout(1, 1));
+        let training_fixture =
+            TrainingContextFixture::new(state_layout(1, 1)).num_stages(num_stages);
         let training_ctx = training_fixture.training_ctx();
         let n_state = training_ctx.state.n_state;
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
             lb_root_pool_capacity,
             template_0_num_rows,
@@ -268,12 +268,12 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let training_fixture = TrainingContextFixture::new(state_layout(1, 1));
+        let training_fixture =
+            TrainingContextFixture::new(state_layout(1, 1)).num_stages(num_stages);
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
             lb_root_pool_capacity,
             template_0_num_rows,
@@ -321,12 +321,11 @@ mod tests {
             state.k_max, k_max,
             "ring_size must resolve to k_max for uniform leads"
         );
-        let training_fixture = TrainingContextFixture::new(state);
+        let training_fixture = TrainingContextFixture::new(state).num_stages(num_stages);
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
             lb_root_pool_capacity,
             template_0_num_rows,
@@ -379,12 +378,12 @@ mod tests {
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
         let training_fixture =
-            TrainingContextFixture::new(state_layout(hydro_count, max_par_order));
+            TrainingContextFixture::new(state_layout(hydro_count, max_par_order))
+                .num_stages(num_stages);
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
             lb_root_pool_capacity,
             template_0_num_rows,
@@ -427,12 +426,11 @@ mod tests {
             0,
             vec![],
         );
-        let training_fixture = TrainingContextFixture::new(state);
+        let training_fixture = TrainingContextFixture::new(state).num_stages(num_stages);
         let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
             lb_root_pool_capacity,
             template_0_num_rows,

@@ -7,7 +7,6 @@ use cobre_comm::Communicator;
 /// the run.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct RankDistribution {
-    pub num_stages: usize,
     pub num_ranks: usize,
     // Rationale: read only by unit tests via `per_rank[rd.my_rank]`; MPI call
     // sites use the `i32` `fwd_rank` instead.
@@ -16,7 +15,6 @@ pub(crate) struct RankDistribution {
     pub my_actual_fwd: usize,
     pub my_fwd_offset: usize,
     pub max_local_fwd: usize,
-    pub n_state: usize,
     pub num_total_forward_passes: usize,
     pub fwd_rank: i32,
 }
@@ -28,12 +26,7 @@ impl RankDistribution {
     /// passes; the rest receive `base_fwd`.
     // Rationale: MPI rank integers fit in `i32`, so the `expect` cannot fire.
     #[allow(clippy::expect_used)]
-    pub(crate) fn new<C: Communicator>(
-        comm: &C,
-        num_stages: usize,
-        total_forward_passes: usize,
-        n_state: usize,
-    ) -> Self {
+    pub(crate) fn new<C: Communicator>(comm: &C, total_forward_passes: usize) -> Self {
         let num_ranks = comm.size();
         let my_rank = comm.rank();
         let base_fwd = total_forward_passes / num_ranks;
@@ -43,13 +36,11 @@ impl RankDistribution {
         let max_local_fwd = base_fwd + usize::from(remainder_fwd > 0);
         let fwd_rank = i32::try_from(my_rank).expect("MPI rank fits in i32");
         Self {
-            num_stages,
             num_ranks,
             my_rank,
             my_actual_fwd,
             my_fwd_offset,
             max_local_fwd,
-            n_state,
             num_total_forward_passes: total_forward_passes,
             fwd_rank,
         }
@@ -133,11 +124,9 @@ mod tests {
 
         for rank in 0..3 {
             let comm = StubCommN { rank, size: 3 };
-            let rd = RankDistribution::new(&comm, 5, 8, 10);
+            let rd = RankDistribution::new(&comm, 8);
 
             assert_eq!(rd.num_ranks, 3, "rank {rank}: num_ranks");
-            assert_eq!(rd.num_stages, 5, "rank {rank}: num_stages");
-            assert_eq!(rd.n_state, 10, "rank {rank}: n_state");
             assert_eq!(
                 rd.my_actual_fwd, expected_actual[rank],
                 "rank {rank}: my_actual_fwd"
@@ -169,8 +158,8 @@ mod tests {
                     rank,
                     size: num_ranks,
                 };
-                let rd = RankDistribution::new(&comm, num_stages, total_forward_passes, 2);
-                rd.max_local_fwd * rd.num_stages
+                let rd = RankDistribution::new(&comm, total_forward_passes);
+                rd.max_local_fwd * num_stages
             })
             .collect();
 
@@ -186,7 +175,7 @@ mod tests {
                     rank,
                     size: num_ranks,
                 };
-                RankDistribution::new(&comm, num_stages, total_forward_passes, 2).my_actual_fwd == 0
+                RankDistribution::new(&comm, total_forward_passes).my_actual_fwd == 0
             })
             .count();
         assert_eq!(
@@ -199,7 +188,7 @@ mod tests {
     fn rank_distribution_actual_per_rank_is_consistent_with_my_actual_fwd() {
         for rank in 0..3 {
             let comm = StubCommN { rank, size: 3 };
-            let rd = RankDistribution::new(&comm, 5, 8, 10);
+            let rd = RankDistribution::new(&comm, 8);
 
             let per_rank = per_rank_counts(8, rd.num_ranks);
             assert_eq!(per_rank, vec![3, 3, 2], "rank {rank}: per_rank vec");

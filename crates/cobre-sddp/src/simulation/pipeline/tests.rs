@@ -2334,7 +2334,6 @@ mod anticipated_ring_matches_forward_propagation {
                 t: StageIdx(t),
                 m: 0,
                 local_m: 0,
-                num_stages: N_STAGES,
                 iteration: 1,
                 raw_noise: &[],
                 basis_row_capacity: template.num_rows,

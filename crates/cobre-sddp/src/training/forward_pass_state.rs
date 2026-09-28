@@ -130,8 +130,6 @@ pub(crate) struct ForwardWorkerParams<'a> {
     pub forward_passes: usize,
     /// Total forward passes across all MPI ranks (for seed derivation).
     pub total_forward_passes: usize,
-    /// Number of stages in the study horizon.
-    pub num_stages: usize,
     /// Number of rayon worker threads on this rank.
     pub n_workers: usize,
     /// Current training iteration index (1-based).
@@ -143,8 +141,6 @@ pub(crate) struct ForwardWorkerParams<'a> {
     /// The stage-0 root's canonical `NodeGraph` position — every trajectory's
     /// walk starts here. A chain-degenerate graph's root is `nodes[0]`.
     pub root_node: NodePos,
-    /// Noise dimension for worker-local sampling buffers (`OutOfSample` path).
-    pub noise_dim: usize,
     /// Initial reservoir state shared across all workers.
     pub initial_state: &'a [f64],
     /// Lag-accumulator seed values at trajectory start (empty → zero-init).
@@ -189,8 +185,6 @@ pub(crate) struct ForwardWorkerResult {
 struct PostProcessContext {
     /// Total number of rayon workers used in the parallel region.
     n_workers: usize,
-    /// Number of stages in the study horizon.
-    num_stages: usize,
     /// Wall-clock duration of the parallel region in milliseconds.
     parallel_wall_ms: u64,
     /// `Instant` captured at the start of the entire `run()` call.
@@ -439,7 +433,6 @@ impl ForwardPassState {
         let TrainingContext {
             horizon,
             state,
-            stochastic,
             initial_state,
             lag_accum_seed,
             lag_weight_seed,
@@ -461,13 +454,8 @@ impl ForwardPassState {
         }
         let basis_slices = inputs.basis_store.split_workers_mut(n_workers);
 
-        let noise_dim = stochastic.dim();
-
-        let (root_node, terminal_has_boundary_cuts) = Self::resolve_root_and_terminal_cuts(
-            training_ctx,
-            num_stages,
-            inputs.terminal_has_boundary_cuts,
-        )?;
+        let (root_node, terminal_has_boundary_cuts) =
+            Self::resolve_root_and_terminal_cuts(training_ctx, inputs.terminal_has_boundary_cuts)?;
 
         // The worker count may differ from `new()` if the pool shrank.
         let shape_matches = self.worker_stage_stats.len() == n_workers
@@ -514,13 +502,11 @@ impl ForwardPassState {
         let params = ForwardWorkerParams {
             forward_passes,
             total_forward_passes: inputs.total_forward_passes,
-            num_stages,
             n_workers,
             iteration: inputs.iteration,
             fwd_offset: inputs.fwd_offset,
             terminal_has_boundary_cuts,
             root_node,
-            noise_dim,
             initial_state,
             lag_accum_seed,
             lag_weight_seed,
@@ -558,7 +544,6 @@ impl ForwardPassState {
 
         let ppc = PostProcessContext {
             n_workers,
-            num_stages,
             parallel_wall_ms,
             start,
         };
@@ -586,7 +571,6 @@ impl ForwardPassState {
     {
         let start = Instant::now();
         let training_ctx = inputs.training_ctx;
-        let num_stages = training_ctx.horizon.num_stages();
 
         let forward_profile = self.profile;
         for ws in inputs.workspaces.iter_mut() {
@@ -596,20 +580,17 @@ impl ForwardPassState {
 
         let terminal_has_boundary_cuts = Self::resolve_terminal_has_boundary_cuts(
             training_ctx,
-            num_stages,
             inputs.terminal_has_boundary_cuts,
         )?;
 
         let dcs_params = training_ctx.dcs.filter(|p| p.is_active(inputs.iteration));
 
         let params = EnumeratedParams {
-            num_stages,
             iteration: inputs.iteration,
             fwd_offset: inputs.fwd_offset,
             local_forward_passes: inputs.local_forward_passes,
             total_forward_passes: inputs.total_forward_passes,
             terminal_has_boundary_cuts,
-            noise_dim: training_ctx.stochastic.dim(),
             initial_state: training_ctx.initial_state,
             lag_accum_seed: training_ctx.lag_accum_seed,
             lag_weight_seed: training_ctx.lag_weight_seed,
@@ -659,9 +640,9 @@ impl ForwardPassState {
     /// Returns [`SddpError::Validation`] if the terminal stage carries no alive node.
     fn resolve_terminal_has_boundary_cuts(
         training_ctx: &TrainingContext<'_>,
-        num_stages: usize,
         terminal_has_boundary_cuts: bool,
     ) -> Result<bool, SddpError> {
+        let num_stages = training_ctx.horizon.num_stages();
         if num_stages == 0 {
             return Ok(false);
         }
@@ -685,7 +666,6 @@ impl ForwardPassState {
     /// carries no alive node.
     fn resolve_root_and_terminal_cuts(
         training_ctx: &TrainingContext<'_>,
-        num_stages: usize,
         terminal_has_boundary_cuts: bool,
     ) -> Result<(NodePos, bool), SddpError> {
         let root_node = training_ctx
@@ -694,11 +674,8 @@ impl ForwardPassState {
             .ok_or_else(|| {
                 SddpError::Validation("forward pass: stage 0 carries no alive node".to_string())
             })?;
-        let terminal_has_boundary_cuts = Self::resolve_terminal_has_boundary_cuts(
-            training_ctx,
-            num_stages,
-            terminal_has_boundary_cuts,
-        )?;
+        let terminal_has_boundary_cuts =
+            Self::resolve_terminal_has_boundary_cuts(training_ctx, terminal_has_boundary_cuts)?;
         Ok((root_node, terminal_has_boundary_cuts))
     }
 
@@ -715,10 +692,10 @@ impl ForwardPassState {
     ) -> Result<ForwardResult, SddpError> {
         let PostProcessContext {
             n_workers,
-            num_stages,
             parallel_wall_ms,
             start,
         } = *ppc;
+        let num_stages = inputs.training_ctx.horizon.num_stages();
 
         self.worker_stats_after.clear();
         self.worker_stats_after
@@ -859,6 +836,7 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
     let scoring_seconds_before = ws.backward_accum.dcs_solve.scoring_time_seconds;
     let (start_m, end_m) = partition(params.forward_passes, params.n_workers, w);
     let n_local = end_m - start_m;
+    let num_stages = params.training_ctx.horizon.num_stages();
 
     ws.scratch.trajectory_costs_buf.clear();
     ws.scratch.trajectory_costs_buf.resize(n_local, 0.0_f64);
@@ -866,9 +844,9 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
     // Sampling scratch taken out of ws so it can stay live while
     // run_forward_stage borrows ws (and so the allocation is reused).
     let mut raw_noise_buf = std::mem::take(&mut ws.scratch.raw_noise_buf);
-    raw_noise_buf.resize(params.noise_dim, 0.0_f64);
+    raw_noise_buf.resize(params.training_ctx.stochastic.dim(), 0.0_f64);
     let mut corr_scratch = std::mem::take(&mut ws.scratch.corr_scratch);
-    corr_scratch.resize(2 * params.noise_dim, 0.0_f64);
+    corr_scratch.resize(2 * params.training_ctx.stochastic.dim(), 0.0_f64);
 
     // Per-trajectory sampled-walk node carrier, root-initialized: each
     // trajectory advances its own entry by the transition draw at the end of
@@ -895,7 +873,7 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
     // `per_stage_stats`, so an iterator over `per_stage_stats` alone would not
     // eliminate the range index.
     #[allow(clippy::needless_range_loop)]
-    for t in (0..params.num_stages).map(StageIdx) {
+    for t in (0..num_stages).map(StageIdx) {
         let cum_d = params
             .ctx
             .cumulative_discount_factors
@@ -936,7 +914,7 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
             let src: &[f64] = if t.0 == 0 {
                 params.initial_state
             } else {
-                &worker_records[local_m * params.num_stages + (t.0 - 1)].state
+                &worker_records[local_m * num_stages + (t.0 - 1)].state
             };
             ws.current_state.extend_from_slice(src);
 
@@ -1000,7 +978,6 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
                 t,
                 m,
                 local_m,
-                num_stages: params.num_stages,
                 iteration: params.iteration,
                 raw_noise,
                 basis_row_capacity: params.frozen[pool_id].num_rows,
@@ -1025,7 +1002,7 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
 
             // Advance this trajectory to the node it will visit at t + 1
             // (chain-parity contract stated once at `advance_sampled_node`).
-            if t.next().0 < params.num_stages {
+            if t.next().0 < num_stages {
                 current_node_buf[local_m] = advance_sampled_node(node_graph, node, i32, s32, t32);
             }
         }
@@ -1652,13 +1629,11 @@ mod tests {
         let params = ForwardWorkerParams {
             forward_passes: fx.n_scenarios,
             total_forward_passes: fx.n_scenarios,
-            num_stages: fx.n_stages,
             n_workers: 1,
             iteration: 1,
             fwd_offset: 0,
             terminal_has_boundary_cuts: false,
             root_node: NodePos(0),
-            noise_dim: fx.stochastic.dim(),
             initial_state: &fx.initial_state,
             lag_accum_seed: &[],
             lag_weight_seed: &[],
@@ -2156,13 +2131,11 @@ mod tests {
         let params = ForwardWorkerParams {
             forward_passes: 1,
             total_forward_passes: 1,
-            num_stages: 1,
             n_workers: 1,
             iteration: 1,
             fwd_offset: 0,
             terminal_has_boundary_cuts: false,
             root_node: NodePos(0),
-            noise_dim: stochastic.dim(),
             initial_state: &initial_state,
             lag_accum_seed: &lag_accum_seed,
             lag_weight_seed: &lag_weight_seed,
@@ -2444,13 +2417,11 @@ mod tests {
         let params = ForwardWorkerParams {
             forward_passes,
             total_forward_passes: forward_passes,
-            num_stages: 2,
             n_workers: 1,
             iteration: pinned_iteration,
             fwd_offset: 0,
             terminal_has_boundary_cuts: false,
             root_node: root,
-            noise_dim: stochastic.dim(),
             initial_state: &initial_state,
             lag_accum_seed: &[],
             lag_weight_seed: &[],
@@ -2661,7 +2632,6 @@ mod tests {
 
         let resolved = ForwardPassState::resolve_terminal_has_boundary_cuts(
             &training_ctx,
-            2,
             captured_from_active_cuts,
         )
         .expect("terminal stage carries an alive node");
@@ -2700,7 +2670,6 @@ mod tests {
 
         let resolved = ForwardPassState::resolve_terminal_has_boundary_cuts(
             &training_ctx,
-            2,
             captured_from_active_cuts,
         )
         .expect("terminal stage carries an alive node");
@@ -2717,16 +2686,19 @@ mod tests {
         let stages = make_stages_2();
         let study_dims = study_dims();
         let initial_state = vec![0.0; state.n_state];
-        let training_ctx = terminal_boundary_test_ctx(
-            &stochastic,
-            &node_graph,
-            &state,
-            &stages,
-            &study_dims,
-            &initial_state,
-        );
+        let training_ctx = TrainingContext {
+            horizon: &HorizonMode::Finite { num_stages: 0 },
+            ..terminal_boundary_test_ctx(
+                &stochastic,
+                &node_graph,
+                &state,
+                &stages,
+                &study_dims,
+                &initial_state,
+            )
+        };
 
-        let resolved = ForwardPassState::resolve_terminal_has_boundary_cuts(&training_ctx, 0, true)
+        let resolved = ForwardPassState::resolve_terminal_has_boundary_cuts(&training_ctx, true)
             .expect("a zero-stage horizon never reaches the alive-node check");
         assert!(
             !resolved,

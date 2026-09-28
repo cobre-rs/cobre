@@ -884,6 +884,13 @@ impl TrainingContextFixture {
         self
     }
 
+    /// Sets the lent context's horizon to `HorizonMode::Finite { num_stages }`.
+    #[must_use]
+    pub fn num_stages(mut self, num_stages: usize) -> Self {
+        self.horizon = HorizonMode::Finite { num_stages };
+        self
+    }
+
     /// Lends a [`TrainingContext`] borrowing this fixture's fields.
     #[must_use]
     pub fn training_ctx(&self) -> TrainingContext<'_> {

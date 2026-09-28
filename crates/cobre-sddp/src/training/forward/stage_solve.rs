@@ -46,7 +46,6 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
         t,
         m,
         local_m,
-        num_stages,
         iteration,
         raw_noise,
         basis_row_capacity,
@@ -169,7 +168,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     } else {
         (view_objective - d_t * unscaled_primal[state.theta]) * ctx.cost_scale_factor
     };
-    let rec = &mut worker_records[local_m * num_stages + t.0];
+    let rec = &mut worker_records[local_m * training_ctx.horizon.num_stages() + t.0];
     // rec.primal/dual stay empty: only state and node_id feed downstream
     // consumers (the backward pass reads state; node_id tags the visit for
     // per-node output) — simulation reads primal/dual directly from the solver.

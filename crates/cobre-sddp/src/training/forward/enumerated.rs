@@ -180,13 +180,11 @@ impl EnumeratedForwardScratch {
 
 /// Read-only per-run captures the enumerated claim loop shares across workers.
 pub(crate) struct EnumeratedParams<'a> {
-    pub num_stages: usize,
     pub iteration: u64,
     pub fwd_offset: usize,
     pub local_forward_passes: usize,
     pub total_forward_passes: usize,
     pub terminal_has_boundary_cuts: bool,
-    pub noise_dim: usize,
     pub initial_state: &'a [f64],
     pub lag_accum_seed: &'a [f64],
     pub lag_weight_seed: &'a [f64],
@@ -288,7 +286,7 @@ fn solve_forward_node<S: SolverInterface + Send>(
     // loads (mirrors the `params.dcs.is_none()` basis-capture gate below). A
     // parentless leaf captures nothing → direct backward solve.
     let fusion_cut_state = (params.dcs.is_none()
-        && node_graph.is_external_terminal_leaf(node, params.num_stages))
+        && node_graph.is_external_terminal_leaf(node, horizon.num_stages()))
     .then_some(parent)
     .flatten()
     .map(|p| &training_ctx.cut_state_layouts[node_graph.nodes[p].pool_id]);
@@ -478,7 +476,7 @@ where
     S: SolverInterface + Send,
 {
     let node_graph = params.training_ctx.node_graph;
-    let num_stages = params.num_stages;
+    let num_stages = params.training_ctx.horizon.num_stages();
     let n_state = params.training_ctx.state.n_state;
     let n_workers = workspaces.len().max(1);
     let path_range = params.fwd_offset..params.fwd_offset + params.local_forward_passes;
@@ -726,10 +724,11 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
     let state_space = params.training_ctx.state;
     let n_state = state_space.n_state;
 
+    let noise_dim = params.training_ctx.stochastic.dim();
     let mut raw_noise_buf = std::mem::take(&mut ws.scratch.raw_noise_buf);
-    raw_noise_buf.resize(params.noise_dim, 0.0_f64);
+    raw_noise_buf.resize(noise_dim, 0.0_f64);
     let mut corr_scratch = std::mem::take(&mut ws.scratch.corr_scratch);
-    corr_scratch.resize(2 * params.noise_dim, 0.0_f64);
+    corr_scratch.resize(2 * noise_dim, 0.0_f64);
 
     #[allow(clippy::cast_possible_truncation)]
     let total_scenarios_u32 = params.total_forward_passes as u32;
@@ -1024,13 +1023,11 @@ mod tests {
             .expect("test fixture never exceeds the Sobol dimension cap");
 
         let params = EnumeratedParams {
-            num_stages: setup.num_stages(),
             iteration,
             fwd_offset: 0,
             local_forward_passes: total_forward_passes,
             total_forward_passes,
             terminal_has_boundary_cuts: false,
-            noise_dim: training_ctx.stochastic.dim(),
             initial_state: training_ctx.initial_state,
             lag_accum_seed: training_ctx.lag_accum_seed,
             lag_weight_seed: training_ctx.lag_weight_seed,

@@ -182,7 +182,6 @@ pub(crate) struct ScenarioIds<'a> {
     /// the transition draw — the scenario's own native id, mirroring how a
     /// training forward pass's global scenario index plays the same role.
     pub(crate) global_scenario: u32,
-    pub(crate) num_stages: usize,
     /// Total simulation scenario count, passed to `SampleRequest::total_scenarios`.
     pub(crate) total_scenarios: u32,
     /// Caller-owned buffer for raw noise output (reused across stages).
@@ -825,8 +824,12 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
     lookups: &SimLookups,
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
-        state, node_graph, ..
+        horizon,
+        state,
+        node_graph,
+        ..
     } = training_ctx;
+    let num_stages = horizon.num_stages();
     reset_scenario_state(
         ws,
         ids.sampler,
@@ -837,11 +840,11 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
         ids.root_node,
     );
     let mut total_cost = 0.0_f64;
-    let mut stage_results = Vec::with_capacity(ids.num_stages);
+    let mut stage_results = Vec::with_capacity(num_stages);
     let mut node = ids.root_node;
 
     #[allow(clippy::needless_range_loop)] // t indexes load_spec, ctx arrays, and SimStageIds
-    for t in (0..ids.num_stages).map(StageIdx) {
+    for t in (0..num_stages).map(StageIdx) {
         // Seeds key off the positional stage index `t` (unchanged — a re-key here
         // would perturb the noise/transition draws); the output stage_id is the
         // declared domain id, resolved by position from the ordered study ids.
@@ -892,7 +895,7 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
         total_cost += cum_d * cost;
         stage_results.push(result);
 
-        if t.next().0 < ids.num_stages {
+        if t.next().0 < num_stages {
             node = advance_simulation_node(training_ctx, node, stage_seed, ids.global_scenario);
         }
     }

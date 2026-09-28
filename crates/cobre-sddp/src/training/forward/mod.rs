@@ -141,8 +141,6 @@ pub(crate) struct StageKey<'a> {
     pub(crate) m: usize,
     /// Local scenario index within this worker's partition.
     pub(crate) local_m: usize,
-    /// Total number of stages in the horizon.
-    pub(crate) num_stages: usize,
     /// Current training iteration (used in error context).
     pub(crate) iteration: u64,
     /// Raw noise sample for this (stage, scenario) pair.

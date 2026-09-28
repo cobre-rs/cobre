@@ -585,6 +585,7 @@ mod tests {
         inflow_models: Vec<InflowModel>,
         inflow_history: Vec<InflowHistoryRow>,
         season_map: SeasonMap,
+        external_scenarios: Vec<ExternalScenarioRow>,
     ) -> System {
         let n_stages = stages.len();
 
@@ -748,6 +749,7 @@ mod tests {
             .inflow_models(inflow_models)
             .load_models(load_models)
             .inflow_history(inflow_history)
+            .external_scenarios(external_scenarios)
             .bounds(bounds)
             .penalties(penalties)
             .policy_graph(policy_graph)
@@ -847,7 +849,13 @@ mod tests {
             value_m3s: 999.0,
         });
 
-        let system = ring_system(&stages, inflow_models, inflow_history, ring_season_map());
+        let system = ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            ring_season_map(),
+            Vec::new(),
+        );
 
         RingFixture {
             system,
@@ -991,6 +999,312 @@ mod tests {
              (the literal downstream_par_order=0 regression value), got eta={eta_stage4} \
              vs naive={expected_naive_eta}"
         );
+    }
+
+    fn build_pool_divergence_system() -> System {
+        let stages = vec![
+            ring_stage(
+                0,
+                0,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                0,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                1,
+                1,
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                1,
+                28.0 * 24.0,
+            ),
+            ring_stage(
+                2,
+                2,
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                2,
+                31.0 * 24.0,
+            ),
+        ];
+
+        let mut inflow_models = Vec::with_capacity(4);
+        for stage_id in -1..3_i32 {
+            inflow_models.push(InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: if stage_id >= 0 { vec![0.5] } else { vec![] },
+                residual_std_ratio: 1.0,
+                annual: None,
+            });
+        }
+
+        let month_row = |year: i32, month: u32, value: f64| InflowHistoryRow {
+            hydro_id: RING_HYDRO_ID,
+            start_date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+            end_date: if month == 12 {
+                NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+            } else {
+                NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+            },
+            value_m3s: value,
+        };
+
+        let mut inflow_history = vec![month_row(1989, 3, 110.0)];
+        for m in 1..=3u32 {
+            inflow_history.push(month_row(1990, m, 200.0 + f64::from(m)));
+        }
+        for m in 10..=12u32 {
+            inflow_history.push(month_row(1990, m, 300.0 + f64::from(m)));
+        }
+        for m in 1..=3u32 {
+            inflow_history.push(month_row(1991, m, 400.0 + f64::from(m)));
+        }
+
+        ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            monthly_season_map(),
+            Vec::new(),
+        )
+    }
+
+    /// The opening tree's window pool and eta must equal the forward pass's:
+    /// both read the SAME applied PAR and the SAME derived seed, so the pool
+    /// (and every shared window's eta) can never diverge.
+    #[test]
+    #[ignore = "the opening tree discovers windows at the declared lag depth, so its \
+                year pool is smaller than the forward pass's"]
+    fn opening_tree_and_forward_libraries_share_windows_and_eta() {
+        let system = build_pool_divergence_system();
+        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+        let study_stages: Vec<Stage> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect();
+        let par = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, None)
+            .expect("par must build");
+        assert_eq!(par.max_order(), 1, "fixture precondition: p = 1");
+
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: Some(7),
+            historical_years: None,
+        };
+        let config = config_from_json(&format!(
+            r#"{{"training": {{{SAMPLED_TRAINING}, "scenario_source": {{"seed": 7, "inflow": {{"scheme": "historical"}}}}}}}}"#
+        ));
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+
+        let stochastic = build_stochastic_context_for_study(
+            &system,
+            tmp.path(),
+            42,
+            &training_source,
+            Some(3),
+            None,
+            None,
+        )
+        .expect("stochastic context must build");
+
+        let setup = crate::setup::StudySetup::new_with_boundary_requirements(
+            &system,
+            &config,
+            stochastic,
+            crate::hydro_models::PrepareHydroModelsResult::default_from_system(&system),
+            crate::setup::BoundaryStateRequirements::present(3),
+            Vec::new(),
+        )
+        .expect("StudySetup must build");
+
+        assert_eq!(
+            setup.inputs.stage_data.state.max_par_order, 3,
+            "precondition: the state layout widens to the declared boundary depth"
+        );
+        let fwd = setup
+            .inputs
+            .scenario_libraries
+            .training
+            .historical
+            .as_ref()
+            .expect("training scheme is Historical: a forward library must build");
+        let fwd_years: Vec<i32> = (0..fwd.n_windows()).map(|w| fwd.window_year(w)).collect();
+        assert_eq!(
+            fwd_years,
+            vec![1990, 1991],
+            "precondition: the forward pass discovers at the applied PAR's own coverage (p = 1)"
+        );
+
+        let tree = build_opening_tree_library(&system, &training_source, Some(3))
+            .expect("build_opening_tree_library must succeed")
+            .expect("HistoricalResiduals noise method must build a library");
+        let tree_years: Vec<i32> = (0..tree.n_windows()).map(|w| tree.window_year(w)).collect();
+
+        assert_eq!(
+            tree_years, fwd_years,
+            "the opening tree's window pool must equal the forward pass's"
+        );
+        assert_eq!(tree.max_order(), fwd.max_order());
+        assert_eq!(tree.seed_digest(), fwd.seed_digest());
+        for w in 0..fwd.n_windows() {
+            for t in 0..study_stages.len() {
+                assert_eq!(
+                    tree.eta_slice(w, t),
+                    fwd.eta_slice(w, t),
+                    "window {w} stage {t}: eta must match between the tree and the forward pass"
+                );
+            }
+        }
+    }
+
+    /// A two-stage (Jan-Feb 2026), one-AR(0)-hydro system with `External`
+    /// inflow scenarios (mean 400, std 100) that diverge sharply from the
+    /// fitted moments (mean 100, std 10) and a 1990 historical window the
+    /// opening tree draws its eta from.
+    fn build_external_ar0_system() -> System {
+        let stages = vec![
+            ring_stage(
+                0,
+                0,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                0,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                1,
+                1,
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                1,
+                28.0 * 24.0,
+            ),
+        ];
+
+        let mut inflow_models = Vec::with_capacity(3);
+        for stage_id in -1..2_i32 {
+            inflow_models.push(InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id,
+                mean_m3s: 100.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            });
+        }
+
+        let inflow_history = vec![
+            InflowHistoryRow {
+                hydro_id: RING_HYDRO_ID,
+                start_date: NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(1990, 2, 1).unwrap(),
+                value_m3s: 120.0,
+            },
+            InflowHistoryRow {
+                hydro_id: RING_HYDRO_ID,
+                start_date: NaiveDate::from_ymd_opt(1990, 2, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(1990, 3, 1).unwrap(),
+                value_m3s: 130.0,
+            },
+        ];
+
+        let external_scenarios = vec![
+            ExternalScenarioRow {
+                stage_id: 0,
+                scenario_id: 0,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 300.0,
+            },
+            ExternalScenarioRow {
+                stage_id: 0,
+                scenario_id: 1,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 500.0,
+            },
+            ExternalScenarioRow {
+                stage_id: 1,
+                scenario_id: 0,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 300.0,
+            },
+            ExternalScenarioRow {
+                stage_id: 1,
+                scenario_id: 1,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 500.0,
+            },
+        ];
+
+        ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            monthly_season_map(),
+            external_scenarios,
+        )
+    }
+
+    /// Under training `External`, the opening tree must invert eta with the
+    /// PAR the LP applies (the External-overridden moments), not the fitted
+    /// one — otherwise the reconstructed value diverges from the raw
+    /// historical observation the tree drew its window from.
+    #[test]
+    #[ignore = "the opening tree inverts eta with the fitted PAR, not the PAR the LP applies \
+                under External training"]
+    fn opening_tree_inverts_eta_with_the_applied_par_under_external_training() {
+        let system = build_external_ar0_system();
+        let raw = [120.0, 130.0];
+
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::External,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: Some(7),
+            historical_years: None,
+        };
+        let counts = compute_external_scenario_counts(&system, &training_source);
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let stochastic = build_stochastic_context_for_study(
+            &system,
+            tmp.path(),
+            42,
+            &training_source,
+            None,
+            None,
+            counts,
+        )
+        .expect("stochastic context must build");
+        let applied = stochastic.par();
+
+        assert_eq!(applied.max_order(), 0, "fixture precondition: AR(0)");
+        assert!(
+            (applied.deterministic_base(0, 0) - 100.0).abs() > 1.0,
+            "negative control: the External override must have moved the mean away from \
+             the fitted value (100.0)"
+        );
+
+        let tree = build_opening_tree_library(&system, &training_source, None)
+            .expect("build_opening_tree_library must succeed")
+            .expect("HistoricalResiduals noise method must build a library");
+
+        for (t, &raw_t) in raw.iter().enumerate() {
+            let reconstructed =
+                applied.deterministic_base(t, 0) + applied.sigma(t, 0) * tree.eta_slice(0, t)[0];
+            assert!(
+                (reconstructed - raw_t).abs() <= 1e-9 * raw_t.abs(),
+                "stage {t}: reconstructing with the applied PAR must reproduce the raw \
+                 historical observation ({raw_t}), got {reconstructed}"
+            );
+        }
     }
 
     /// Season definitions for the non-calendar-aligned ring fixture below:
@@ -1164,6 +1478,7 @@ mod tests {
             inflow_models,
             inflow_history,
             nonaligned_ring_season_map(),
+            Vec::new(),
         );
 
         RingFixture {

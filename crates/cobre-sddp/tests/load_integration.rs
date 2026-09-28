@@ -35,11 +35,11 @@ use cobre_sddp::{
     context::TrainingContext,
     cut::fcf::FutureCostFunction,
     horizon_mode::HorizonMode,
-    indexer::{BlockRowFamily, CutStateProjection, StateSpace, StudyDimensions},
+    indexer::{CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
-    lp::builder::{StageGeometry, StateBox},
+    lp::builder::StateBox,
     risk_measure::RiskMeasure,
-    test_support::{StageContextFixture, equipment_free_geometry},
+    test_support::{StageContextFixture, equipment_free_geometry, geometry_with_load_balance},
     train,
 };
 use cobre_solver::{
@@ -414,14 +414,7 @@ fn test_stochastic_load_training_completes() {
     // The mock solver ignores set_row_bounds, so only the slice length (n_stages)
     // matters here, not geometry_per_stage's load-balance row range.
     let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![
-        StageGeometry {
-            load_balance: BlockRowFamily::per_block(1..2),
-            n_blks: 1,
-            ..equipment_free_geometry(&[1]).remove(0)
-        };
-        n_stages
-    ];
+    let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1); n_stages];
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
     let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
@@ -627,14 +620,7 @@ fn test_stochastic_load_seed_determinism() {
         };
 
         let load_bus_indices = vec![0usize];
-        let geometry_per_stage = vec![
-            StageGeometry {
-                load_balance: BlockRowFamily::per_block(1..2),
-                n_blks: 1,
-                ..equipment_free_geometry(&[1]).remove(0)
-            };
-            n_stages
-        ];
+        let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1); n_stages];
 
         let state_boxes = permissive_state_boxes(state.n_state, n_stages);
         let stage_ctx_fixture =

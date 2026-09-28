@@ -808,13 +808,9 @@ fn train_simulate_write_cycle() {
 
     let ec = zero_energy_conversion_set(fx.n_stages);
 
-    let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let geometry_sim = vec![hydro_only_bus_geometry(); fx.n_stages];
-    let stage_ctx_fixture_sim =
-        StageContextFixture::new(&fx.templates, &state_boxes, &geometry_sim);
     simulate(
         &mut sim_workspaces,
-        &stage_ctx_fixture_sim.ctx(),
+        &stage_ctx,
         &fcf,
         &training_context,
         &sim_config,

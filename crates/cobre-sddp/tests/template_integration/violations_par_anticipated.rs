@@ -6,6 +6,7 @@ use super::common::in_code_studies::discounted_anticipated_study;
 use super::common::{build_setup_in_code, run_simulation};
 use cobre_io::Config;
 use cobre_io::config::{SimulationConfig as IoSimulationConfig, SimulationSelection};
+use cobre_sddp::test_support::equipment_free_geometry;
 
 #[test]
 fn min_outflow_active_col_bounds() {
@@ -325,31 +326,16 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     let b_max: usize = 3;
 
     // `load_bus_indices`/`geometry_per_stage` are owners `PatchBuffer::new` reads
-    // only through `.len()`/`StageGeometry::max_blocks`; their content need not
-    // correspond to a real M=2-load-bus, N=3-hydro system — a real single-load-bus,
-    // `b_max`-block geometry (built via the existing `one_bus_system_n_blks`
-    // fixture, the only public route to a `StageGeometry` outside the crate)
-    // supplies the block count, and an arbitrary `m`-long index slice supplies M.
+    // only through `.len()`/`StageGeometry::max_blocks` (i.e. only `n_blks`);
+    // their content need not correspond to a real M=2-load-bus, N=3-hydro
+    // system — an equipment-free, `b_max`-block geometry supplies the block
+    // count, and an arbitrary `m`-long index slice supplies M.
     let load_bus_indices: Vec<usize> = (0..m).collect();
-    let geometry_system = one_bus_system_n_blks(b_max);
-    let geometry_result = build_stage_templates_resolving_layout(
-        &geometry_system,
-        no_penalty_config(),
-        &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
-        &default_production(&geometry_system),
-        &default_evaporation(&geometry_system),
-        &ResolvedParameters::default(),
-    )
-    .expect("geometry fixture build ok");
+    let geometry_per_stage = equipment_free_geometry(&[b_max]);
     let state = StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]);
 
     let capacity_formula = m * b_max + n;
-    let mut buf = PatchBuffer::new(
-        &state,
-        &load_bus_indices,
-        &geometry_result.geometry_per_stage,
-    );
+    let mut buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
 
     assert_eq!(
         buf.indices.len(),

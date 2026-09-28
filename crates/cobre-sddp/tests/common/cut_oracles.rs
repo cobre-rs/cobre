@@ -133,6 +133,11 @@ struct PointEval {
     per_opening_coeffs: Vec<Vec<f64>>,
 }
 
+/// Mirrors `production::fpha_fitting::rng::SplitMix64`'s algorithm and constants
+/// byte-for-byte, hand-rolled here rather than reused: that generator is
+/// `pub(crate)` inside a private submodule with no re-export reaching this
+/// integration-test crate, and `box_random`'s sampled points must not move with
+/// a `rand` upgrade the way a `rand::rngs::StdRng`-seeded draw could.
 struct SplitMix64(u64);
 
 impl SplitMix64 {

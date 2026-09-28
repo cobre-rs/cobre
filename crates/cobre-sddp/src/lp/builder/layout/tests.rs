@@ -33,6 +33,7 @@ use crate::test_support::{
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 
+use super::super::DeliveryRing;
 use super::super::entries::{
     build_stage_matrix_entries, transit_bucket_plant_ranges, transit_bucket_ring,
 };
@@ -4747,6 +4748,14 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
     );
     counts[1] = state_out_def_rows.len();
 
+    let ring = DeliveryRing::anticipated(layout.state);
+    let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
+    ring.emit_carry_rows(
+        &anticipated.anticipated_slot_row_pos,
+        anticipated.row_anticipated_slot_definition_start,
+        &mut col_entries,
+    );
+
     let mut slot_definition_rows = Vec::new();
     for i in 0..anticipated.anticipated_slot_row_pos.len() {
         let expected = anticipated
@@ -4755,12 +4764,10 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
             .copied()
             .flatten()
             .map(|pos| anticipated.row_anticipated_slot_definition_start + pos);
-        let actual = anticipated
-            .anticipated_slot_row_pos
-            .get(i)
-            .copied()
-            .flatten()
-            .map(|pos| anticipated.row_anticipated_slot_definition_start + pos);
+        let (slot, lane) = ring.slot_lane_at(i);
+        let actual = col_entries[ring.out_col(slot, lane)]
+            .first()
+            .map(|&(row, _)| row);
         assert_eq!(
             actual, expected,
             "slot definition row disagreement at flat {i}"

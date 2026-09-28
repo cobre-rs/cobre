@@ -1044,32 +1044,27 @@ fn evap_incoming_storage_reduced_cost_differs_from_no_evaporation() {
     )
     .expect("baseline system template build must succeed");
 
-    let solve_and_get_storage_dual = |template: &cobre_solver::StageTemplate| -> f64 {
+    // Storage is pinned via column bounds: col 0 = storage_out, 1 = z_inflow, 2 = storage_in.
+    let col_storage_in = 2_usize;
+    let solve_and_get_storage_reduced_cost = |template: &cobre_solver::StageTemplate| -> f64 {
         let mut solver = load_template_with_no_cuts(template);
         let v_in = 1_000.0_f64;
-        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+        solver.set_col_bounds(&[col_storage_in], &[v_in], &[v_in]);
         let view = solver.solve(None).expect("LP must solve to optimal");
-        view.dual[0]
+        view.reduced_costs[col_storage_in]
     };
 
-    let evap_dual = solve_and_get_storage_dual(&evap_result.templates[0]);
-    let base_dual = solve_and_get_storage_dual(&base_result.templates[0]);
+    let evap_rc = solve_and_get_storage_reduced_cost(&evap_result.templates[0]);
+    let base_rc = solve_and_get_storage_reduced_cost(&base_result.templates[0]);
 
     // The evaporation constraint couples evaporation outflow to v and v_in via volume_slope_m3s_per_hm3,
     // so the marginal value of initial storage differs from the no-evaporation case.
-    // Note: with unused bidirectional withdrawal slack columns (pinned to zero),
-    // the solver may produce degenerate duals where both are -0.0 or 0.0.
-    // We compare the raw f64 values to account for this edge case.
-    let evap_rounded = (evap_dual * 1e6).round();
-    let base_rounded = (base_dual * 1e6).round();
-    // When both are zero (degenerate), the test is inconclusive but not a failure.
-    if evap_rounded != 0.0 || base_rounded != 0.0 {
-        assert_ne!(
-            evap_rounded, base_rounded,
-            "incoming-storage reduced cost must differ between evaporation ({evap_dual}) and \
-             no-evaporation ({base_dual}) configurations"
-        );
-    }
+    assert_ne!(
+        (evap_rc * 1e6).round(),
+        (base_rc * 1e6).round(),
+        "incoming-storage reduced cost must differ between evaporation ({evap_rc}) and \
+         no-evaporation ({base_rc}) configurations"
+    );
 }
 
 #[test]

@@ -209,7 +209,6 @@ fn build_row_lower_unscaled<'a>(
     n_blks: usize,
     load_bus_indices: &[usize],
 ) -> &'a [f64] {
-    let n_load_buses = load_bus_indices.len();
     scratch_buf.clear();
     scratch_buf.reserve(template_row_lower.len());
 
@@ -227,7 +226,7 @@ fn build_row_lower_unscaled<'a>(
     }
 
     // load_rhs_buf is already in unscaled MW.
-    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
+    if !load_bus_indices.is_empty() && !load_rhs_buf.is_empty() {
         let mut rhs_idx = 0;
         for &bus_pos in load_bus_indices {
             for blk in 0..n_blks {
@@ -436,8 +435,7 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     let col_scale = &ctx.template(t).col_scale;
     let row_scale = &ctx.template(t).row_scale;
 
-    let node = ids.node;
-    let pool_id = training_ctx.node_graph.nodes[node].pool_id;
+    let pool_id = training_ctx.node_graph.nodes[ids.node].pool_id;
 
     let view_objective: f64 = if let Some(params) = dcs {
         // Simulation has no iteration counter; seed with `current_iteration = 0`.

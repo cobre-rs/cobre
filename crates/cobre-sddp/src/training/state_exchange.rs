@@ -378,7 +378,7 @@ impl ExchangeBuffers {
 
 #[cfg(test)]
 mod tests {
-    use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+    use cobre_comm::{CommData, CommError, Communicator, LocalBackend, ReduceOp};
 
     use super::ExchangeBuffers;
     use crate::lp::indexer::StateSpace;
@@ -500,8 +500,6 @@ mod tests {
     fn exchange_single_rank_three_scenarios_two_state() {
         // Acceptance criterion AC1: n_state=2, local_count=3, num_ranks=1,
         // stage 0 of a 1-stage system. gathered_states = [1,2,3,4,5,6].
-        use cobre_comm::LocalBackend;
-
         let mut bufs = ExchangeBuffers::new(&state_of(2), 3, 1);
         let records = vec![
             make_record(vec![1.0, 2.0]),
@@ -520,8 +518,6 @@ mod tests {
     fn exchange_selects_correct_stage_in_multi_stage_records() {
         // Acceptance criterion AC2: verify that stage 1 is selected from a
         // 3-stage system (records indexed at scenario * 3 + stage).
-        use cobre_comm::LocalBackend;
-
         // 2 scenarios, 3 stages, n_state=2
         // records[m * 3 + stage]:
         //   stage 0: [10, 11], [20, 21]
@@ -551,8 +547,6 @@ mod tests {
     #[test]
     fn state_at_matches_record_state_after_exchange() {
         // Acceptance criterion AC3: state_at(0, 1) matches records[1 * num_stages + stage].state
-        use cobre_comm::LocalBackend;
-
         // 2 scenarios, 1 stage, n_state=3
         let records = vec![
             make_record(vec![1.0, 2.0, 3.0]), // m=0, stage=0
@@ -705,8 +699,6 @@ mod tests {
     fn pack_real_states_into_even_distribution_matches_gathered_states() {
         // When distribution is even, pack_real_states_into must return the
         // same data as gathered_states (in the same order).
-        use cobre_comm::LocalBackend;
-
         let mut bufs = ExchangeBuffers::new(&state_of(2), 3, 1);
         let records = vec![
             make_record(vec![1.0, 2.0]),

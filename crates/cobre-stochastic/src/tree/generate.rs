@@ -178,6 +178,11 @@ fn try_copy_noise_group(
     true
 }
 
+fn opening_slice_mut(data: &mut [f64], opening_idx: usize, dim: usize) -> &mut [f64] {
+    let start = opening_idx * dim;
+    &mut data[start..start + dim]
+}
+
 /// Generate raw noise for one stage into `stage_slice` using its configured method.
 ///
 /// Returns `Ok(true)` when the method embeds its own correlation
@@ -254,8 +259,7 @@ fn generate_stage_raw_noise(
             }
 
             for opening_idx in 0..n_openings {
-                let start = opening_idx * dim;
-                let noise_slice = &mut stage_slice[start..start + dim];
+                let noise_slice = opening_slice_mut(stage_slice, opening_idx, dim);
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
                 #[allow(clippy::cast_possible_truncation)]
@@ -272,8 +276,7 @@ fn generate_stage_raw_noise(
 /// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
 fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, output: &mut [f64]) {
     for opening_idx in 0..n_openings {
-        let start = opening_idx * dim;
-        let noise_slice = &mut output[start..start + dim];
+        let noise_slice = opening_slice_mut(output, opening_idx, dim);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
         let mut rng = rng_from_seed(seed);
@@ -387,27 +390,20 @@ pub fn generate_opening_tree<'a>(
         let groups = correlation.groups_for_stage(stage.id);
 
         for opening_idx in 0..n_openings {
-            let start = opening_idx * dim;
-            let noise = &mut stage_slice[start..start + dim];
+            let noise = opening_slice_mut(stage_slice, opening_idx, dim);
             let (inflow_noise, load_noise, ncs_noise) = dims.split_segments_mut(noise);
-            DecomposedCorrelation::apply_groups_for_class(
-                groups,
-                EntityClass::Inflow,
-                inflow_noise,
-                &mut corr_scratch,
-            );
-            DecomposedCorrelation::apply_groups_for_class(
-                groups,
-                EntityClass::Load,
-                load_noise,
-                &mut corr_scratch,
-            );
-            DecomposedCorrelation::apply_groups_for_class(
-                groups,
-                EntityClass::Ncs,
-                ncs_noise,
-                &mut corr_scratch,
-            );
+            for (class, class_noise) in [
+                (EntityClass::Inflow, inflow_noise),
+                (EntityClass::Load, load_noise),
+                (EntityClass::Ncs, ncs_noise),
+            ] {
+                DecomposedCorrelation::apply_groups_for_class(
+                    groups,
+                    class,
+                    class_noise,
+                    &mut corr_scratch,
+                );
+            }
         }
     }
 

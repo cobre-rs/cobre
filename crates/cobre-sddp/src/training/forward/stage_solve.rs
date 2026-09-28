@@ -93,7 +93,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     // `mem::take` the scratch buffer out before the solve borrows ws, so it can
     // be filled from `view` slices tied to ws while `&mut ws` is live; restored
     // after the last read so the next stage reuses the warmed allocation.
-    let mut unscaled_primal: Vec<f64> = std::mem::take(&mut ws.scratch.unscaled_primal);
+    let mut unscaled_primal = std::mem::take(&mut ws.scratch.unscaled_primal);
 
     // DCS branch solves the cut pool lazily from the cut-free base loaded above
     // (extracting the primal, not the dual); frozen branch solves the all-cuts LP

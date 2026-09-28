@@ -105,10 +105,8 @@ pub fn resolve_evaporation_models_from_artifacts(
         ));
     }
 
-    let geometry_rows: &[HydroGeometryRow] = &artifacts.hydro_geometry;
-
     let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
-    for row in geometry_rows {
+    for row in &artifacts.hydro_geometry {
         geometry_map.entry(row.hydro_id).or_default().push(row);
     }
     // Interpolation below assumes ascending volume order.
@@ -247,7 +245,7 @@ fn resolve_evaporation_core(
                     (midpoint_v, midpoint_area, midpoint_slope)
                 };
 
-            let stage_hours: f64 = BlockClock::new(stage).total_hours();
+            let stage_hours = BlockClock::new(stage).total_hours();
 
             // A zero-duration stage no longer surfaces as a non-finite coefficient
             // below (the divisor is now the calendar month, never zero), so reject

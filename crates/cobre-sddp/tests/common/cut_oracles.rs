@@ -118,7 +118,6 @@ impl CutOracleReport {
 struct OracleCtx<'a> {
     setup: &'a StudySetup,
     tree_view: OpeningTreeView<'a>,
-    forward_passes: usize,
     /// One per pool (`pool_id == stage` on a chain), each its base template
     /// plus that pool's own active cuts as rows — unlike the setup's own
     /// `StageContext::templates`, which carries no cuts and would leave a
@@ -432,7 +431,6 @@ pub fn run_cut_oracles(label: &str, mut setup: StudySetup) -> CutOracleReport {
     let occ = OracleCtx {
         setup: &setup,
         tree_view: setup.training_ctx().stochastic.tree_view(),
-        forward_passes,
         frozen_templates: &frozen_templates,
     };
 

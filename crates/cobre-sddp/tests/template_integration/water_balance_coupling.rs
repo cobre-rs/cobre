@@ -100,7 +100,7 @@ fn every_committed_deck_reads_z_inflow_on_its_water_rows() {
                         -zeta
                     } else {
                         let k = r - (water.start + d * stride);
-                        -(block_hours[k] * 0.0036)
+                        -(block_hours[k] * M3S_TO_HM3)
                     };
                     assert!(
                         (unscaled - expected).abs() < 1e-12 * zeta.abs(),

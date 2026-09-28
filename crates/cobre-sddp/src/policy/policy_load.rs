@@ -491,7 +491,7 @@ fn build_basis_cache_for_nodes(
             .iter()
             .map(|&c| BasisStatus::from_discriminant_code(c))
             .collect();
-        let row_status: Vec<BasisStatus> = record
+        let mut row_status: Vec<BasisStatus> = record
             .row_status
             .iter()
             .map(|&r| BasisStatus::from_discriminant_code(r))
@@ -515,7 +515,6 @@ fn build_basis_cache_for_nodes(
                     && active.iter().enumerate().all(|(i, &s)| s as usize == i);
                 (is_unbroken_prefix && k <= active.len()).then(|| active[..k].to_vec())
             });
-        let mut row_status = row_status;
         let cut_row_slots = cut_row_slots.unwrap_or_else(|| {
             row_status.truncate(base_row_count);
             Vec::new()

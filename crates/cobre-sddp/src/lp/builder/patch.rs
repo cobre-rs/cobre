@@ -737,8 +737,8 @@ mod tests {
     #[test]
     fn fill_col_state_patches_storage_indices() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         buf.fill_col_state_patches(
             &state_layout,
             &state,
@@ -756,8 +756,8 @@ mod tests {
     #[test]
     fn fill_col_state_patches_storage_values() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         buf.fill_col_state_patches(
             &state_layout,
             &state,
@@ -783,8 +783,8 @@ mod tests {
     #[test]
     fn fill_col_state_patches_inflow_lags_indices_and_values() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         buf.fill_col_state_patches(
             &state_layout,
             &state,
@@ -881,8 +881,8 @@ mod tests {
     #[test]
     fn fill_col_state_patches_equality_constraints() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         buf.fill_col_state_patches(
             &state_layout,
             &state,
@@ -940,8 +940,8 @@ mod tests {
     #[test]
     fn fill_col_state_patches_zero_anticipated_collapses_correctly() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         buf.fill_col_state_patches(
             &state_layout,
             &state,
@@ -961,8 +961,8 @@ mod tests {
     #[test]
     fn row_buffer_unchanged_after_fill_col_state_patches() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         buf.fill_col_state_patches(
             &state_layout,
             &state,
@@ -1179,8 +1179,8 @@ mod tests {
     #[should_panic(expected = "outside admissible box")]
     fn fill_col_state_patches_panics_on_out_of_box_pin() {
         let state = [10.0_f64, 20.0, 30.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut buf = PatchBuffer::new(&state_layout(3, 2), &[], &[]);
         let state_layout = state_layout(3, 2);
+        let mut buf = PatchBuffer::new(&state_layout, &[], &[]);
         let mut state_box = unbounded_state_box(state.len());
         state_box.upper[0] = 5.0;
 

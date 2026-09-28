@@ -286,11 +286,10 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
         put_usize(buf, field);
     }
 
-    let block_mode_tag: u8 = match block_mode {
+    buf.push(match block_mode {
         BlockMode::Parallel => 0,
         BlockMode::Chronological => 1,
-    };
-    buf.push(block_mode_tag);
+    });
 
     put_hydro_sys_slice(buf, fpha_hydro_indices);
     put_hydro_sys_slice(buf, evap_hydro_indices);

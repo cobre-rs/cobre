@@ -572,12 +572,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     };
 
     let raw_noise = vec![0.37_f64];
-    let sizing = WorkspaceSizing {
-        max_openings: 1,
-        initial_pool_capacity: 1,
-        max_local_fwd: 1,
-        noise: NoisePreallocation::StochasticDim,
-    };
+    let sizing = minimal_sizing();
     let params = StageSolvePrepParams {
         state_source: StateSource(&[]),
         inflow_noise: InflowNoise::PreBuilt,
@@ -697,12 +692,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     let current_state = vec![42.0_f64];
     // [hydro eta (unread under PreBuilt) | load eta].
     let raw_noise = vec![0.3_f64, 0.4_f64];
-    let sizing = WorkspaceSizing {
-        max_openings: 1,
-        initial_pool_capacity: 1,
-        max_local_fwd: 1,
-        noise: NoisePreallocation::StochasticDim,
-    };
+    let sizing = minimal_sizing();
     let mut scratch = ScratchBuffers::new(&training_ctx, &ctx, sizing);
     // Sentinel pre-fill: PreBuilt must leave this untouched, since
     // transform_inflow_noise clears its target buffer before refilling it.

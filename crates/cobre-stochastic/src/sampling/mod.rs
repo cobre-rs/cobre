@@ -1453,8 +1453,6 @@ mod tests {
             assert!(v.is_finite(), "element[{i}] is not finite: {v}");
         }
         assert_eq!(noise.as_slice().len(), dim);
-        let _ = ctx;
-        let _ = stages;
     }
 
     #[test]

@@ -592,7 +592,7 @@ fn test_clp_solve_rejects_undersized_row_basis() {
     let offered_before = solver.stats.basis_offered;
     let failures_before = solver.stats.basis_consistency_failures;
 
-    let err_variant: Result<(), SolverError> = solver.solve(Some(&captured)).map(|_| ());
+    let err_variant = solver.solve(Some(&captured)).map(|_| ());
 
     assert_eq!(
         solver.stats.basis_consistency_failures - failures_before,

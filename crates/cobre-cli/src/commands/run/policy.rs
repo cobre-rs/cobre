@@ -1,6 +1,7 @@
 //! Policy load/warm-start/resume phase for `cobre run`.
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use cobre_comm::Communicator;
 use cobre_core::System;
@@ -146,6 +147,23 @@ fn load_checkpoint_into_setup(
     Ok(())
 }
 
+fn require_policy_dir(
+    ctx: &RunContext<impl Communicator>,
+    setup: &StudySetup,
+    unmet_requirement: &str,
+) -> Result<PathBuf, CliError> {
+    let policy_dir = ctx.output_dir.join(&setup.policy_path);
+    if !policy_dir.exists() {
+        return Err(CliError::Internal {
+            message: format!(
+                "Policy directory not found: {}. {unmet_requirement}",
+                policy_dir.display()
+            ),
+        });
+    }
+    Ok(policy_dir)
+}
+
 /// Apply warm-start or resume policy before training, if requested.
 pub(super) fn apply_training_policy(
     ctx: &RunContext<impl Communicator>,
@@ -156,16 +174,8 @@ pub(super) fn apply_training_policy(
 ) -> Result<(), CliError> {
     match policy_mode {
         WarmStart => {
-            let policy_dir = ctx.output_dir.join(&setup.policy_path);
-            if !policy_dir.exists() {
-                return Err(CliError::Internal {
-                    message: format!(
-                        "Policy directory not found: {}. Cannot warm-start \
-                         without a prior policy.",
-                        policy_dir.display()
-                    ),
-                });
-            }
+            let policy_dir =
+                require_policy_dir(ctx, setup, "Cannot warm-start without a prior policy.")?;
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
@@ -183,16 +193,8 @@ pub(super) fn apply_training_policy(
             }
         }
         Resume => {
-            let policy_dir = ctx.output_dir.join(&setup.policy_path);
-            if !policy_dir.exists() {
-                return Err(CliError::Internal {
-                    message: format!(
-                        "Policy directory not found: {}. Cannot resume \
-                         without a prior checkpoint.",
-                        policy_dir.display()
-                    ),
-                });
-            }
+            let policy_dir =
+                require_policy_dir(ctx, setup, "Cannot resume without a prior checkpoint.")?;
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
@@ -313,16 +315,11 @@ pub(super) fn load_policy_for_simulation(
             .write_line("Training disabled. Loading policy for simulation-only mode...");
     }
 
-    let policy_dir = ctx.output_dir.join(&setup.policy_path);
-    if !policy_dir.exists() {
-        return Err(CliError::Internal {
-            message: format!(
-                "Policy directory not found: {}. Cannot run simulation-only \
-                 mode without a trained policy.",
-                policy_dir.display()
-            ),
-        });
-    }
+    let policy_dir = require_policy_dir(
+        ctx,
+        setup,
+        "Cannot run simulation-only mode without a trained policy.",
+    )?;
 
     let (checkpoint, proof) = load_and_validate_checkpoint(ctx, &policy_dir, system, setup)?;
 

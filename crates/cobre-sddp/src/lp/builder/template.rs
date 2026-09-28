@@ -1042,8 +1042,8 @@ fn build_template_build_ctx<'a>(
 }
 
 /// Transpose the per-stage `Vec<StageBuildOutput>` into the parallel per-stage
-/// `Vec`s of [`StageTemplates`], computing the noise-scale, zeta, block-hour,
-/// and hydro-productivity arrays.
+/// `Vec`s of [`StageTemplates`], computing the block-hour and
+/// hydro-productivity arrays.
 fn assemble_stage_templates_output(
     stage_outputs: Vec<StageBuildOutput>,
     load_bus_indices: Vec<usize>,

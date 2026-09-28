@@ -135,6 +135,14 @@ pub struct DcsScoringScratch {
     pub violations: Vec<(f64, u32)>,
 }
 
+/// Grow `buf` to `target` capacity, growth-only — `additional` is computed
+/// from `len()`, not `capacity()`, per `DcsScoringScratch::reserve`'s doc.
+fn reserve_to<T>(buf: &mut Vec<T>, target: usize) {
+    if buf.capacity() < target {
+        buf.reserve(target - buf.len());
+    }
+}
+
 impl DcsScoringScratch {
     /// Grow the scratch buffers to hold `n_state` state entries and up to
     /// `pool_capacity` candidate cuts, growth-only.
@@ -148,26 +156,11 @@ impl DcsScoringScratch {
     /// from a nonzero (but still-short-of-target) capacity, e.g. a pool that
     /// grew twice.
     pub fn reserve(&mut self, n_state: usize, pool_capacity: usize) {
-        if self.unscaled_state.capacity() < n_state {
-            self.unscaled_state
-                .reserve(n_state - self.unscaled_state.len());
-        }
-        let coef_capacity = pool_capacity * n_state;
-        if self.cand_coef_block.capacity() < coef_capacity {
-            self.cand_coef_block
-                .reserve(coef_capacity - self.cand_coef_block.len());
-        }
-        if self.alpha.capacity() < pool_capacity {
-            self.alpha.reserve(pool_capacity - self.alpha.len());
-        }
-        if self.cand_slots.capacity() < pool_capacity {
-            self.cand_slots
-                .reserve(pool_capacity - self.cand_slots.len());
-        }
-        if self.violations.capacity() < pool_capacity {
-            self.violations
-                .reserve(pool_capacity - self.violations.len());
-        }
+        reserve_to(&mut self.unscaled_state, n_state);
+        reserve_to(&mut self.cand_coef_block, pool_capacity * n_state);
+        reserve_to(&mut self.alpha, pool_capacity);
+        reserve_to(&mut self.cand_slots, pool_capacity);
+        reserve_to(&mut self.violations, pool_capacity);
     }
 }
 
@@ -466,10 +459,7 @@ impl DcsSolveScratch {
     /// subtracting `capacity()` would under-reserve here.
     pub fn reserve(&mut self, n_state: usize, pool_capacity: usize) {
         self.scoring.reserve(n_state, pool_capacity);
-        if self.out_selected.capacity() < pool_capacity {
-            self.out_selected
-                .reserve(pool_capacity - self.out_selected.len());
-        }
+        reserve_to(&mut self.out_selected, pool_capacity);
         // base_row_offset 0 is a placeholder; each fresh solve resets it to the
         // loaded core's row count in `lazy_solve_preloaded`.
         self.row_map.reset(pool_capacity, 0);
@@ -480,9 +470,7 @@ impl DcsSolveScratch {
             &mut self.res_dual,
             &mut self.res_reduced_costs,
         ] {
-            if buf.capacity() < pool_capacity {
-                buf.reserve(pool_capacity - buf.len());
-            }
+            reserve_to(buf, pool_capacity);
         }
     }
 

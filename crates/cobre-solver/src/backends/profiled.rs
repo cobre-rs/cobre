@@ -53,8 +53,7 @@ impl<S: SolverInterface> ProfiledSolver<S> {
         if *profile == self.current_profile {
             return;
         }
-        self.inner.apply_profile(profile);
-        self.current_profile = *profile;
+        self.apply_profile(profile);
     }
 
     /// The currently applied profile.

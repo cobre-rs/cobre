@@ -189,6 +189,12 @@ impl StateRegion {
     }
 }
 
+/// `0..0` when `n == 0`, never `cursor.alloc(0)`'s `pos..pos` — the sentinel
+/// an empty bucket/commitment-hold block must carry byte-identically.
+fn alloc_or_empty(cursor: &mut RangeCursor, n: usize) -> Range<usize> {
+    if n > 0 { cursor.alloc(n) } else { 0..0 }
+}
+
 impl StateSpace {
     /// Construct a finalized [`StateSpace`] from the state dimensions and the
     /// per-hydro effective lag-slot counts.
@@ -231,28 +237,12 @@ impl StateSpace {
         let mut cursor = RangeCursor::new(0);
         let storage = cursor.alloc(n);
         let inflow_lags = cursor.alloc(n * l);
-        let transit_buckets_out = if n_buckets > 0 {
-            cursor.alloc(n_buckets)
-        } else {
-            0..0
-        };
-        let commit_out = if n_ant_state > 0 {
-            cursor.alloc(n_ant_state)
-        } else {
-            0..0
-        };
+        let transit_buckets_out = alloc_or_empty(&mut cursor, n_buckets);
+        let commit_out = alloc_or_empty(&mut cursor, n_ant_state);
         let z_inflow = cursor.alloc(n);
         let storage_in = cursor.alloc(n);
-        let transit_buckets_in = if n_buckets > 0 {
-            cursor.alloc(n_buckets)
-        } else {
-            0..0
-        };
-        let commit_in = if n_ant_state > 0 {
-            cursor.alloc(n_ant_state)
-        } else {
-            0..0
-        };
+        let transit_buckets_in = alloc_or_empty(&mut cursor, n_buckets);
+        let commit_in = alloc_or_empty(&mut cursor, n_ant_state);
 
         let theta = cursor.pos();
 

@@ -140,7 +140,7 @@ mod boundary_cuts {
         let config_path = case_dir.join("config.json");
         let config = cobre_io::parse_config(&config_path).expect("config");
 
-        let mut config_5iter = config.clone();
+        let mut config_5iter = config;
         config_5iter.training.stopping_rules =
             Some(vec![StoppingRuleConfig::IterationLimit { limit: 5 }]);
 
@@ -218,7 +218,7 @@ mod boundary_cuts {
         let config_path = case_dir.join("config.json");
         let config = cobre_io::parse_config(&config_path).expect("config");
 
-        let mut config_5iter = config.clone();
+        let mut config_5iter = config;
         config_5iter.training.stopping_rules =
             Some(vec![StoppingRuleConfig::IterationLimit { limit: 5 }]);
 

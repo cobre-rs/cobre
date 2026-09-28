@@ -885,14 +885,13 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
     // Setup-sum invariant: sum of per-worker BWD_SETUP equals
     // BackwardPassComplete.setup_time_ms within ±1 ms tolerance.
     // (BackwardPassComplete.setup_time_ms is u64; per-worker timings are f64.)
-    let bwd_setup_total_ms_u64 = events
+    let bwd_setup_total_ms = events
         .iter()
         .find_map(|e| match e {
             TrainingEvent::BackwardPassComplete { setup_time_ms, .. } => Some(*setup_time_ms),
             _ => None,
         })
-        .expect("BackwardPassComplete event must exist");
-    let bwd_setup_total_ms = bwd_setup_total_ms_u64 as f64;
+        .expect("BackwardPassComplete event must exist") as f64;
     assert!(
         (bwd_setup_sum_ms - bwd_setup_total_ms).abs() < 1.0,
         "sum of per-worker BWD_SETUP ({bwd_setup_sum_ms} ms) must match \

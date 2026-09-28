@@ -274,7 +274,6 @@ mod anticipated_5stage_k2_smoke {
             .collect();
 
         let k_max: usize = 2;
-        let n_st = n_stages;
 
         fn default_hydro_bounds() -> HydroStageBounds {
             HydroStageBounds {
@@ -321,7 +320,7 @@ mod anticipated_5stage_k2_smoke {
                 n_lines: 0,
                 n_pumping: 0,
                 n_contracts: 0,
-                n_stages: n_st,
+                n_stages,
                 k_max,
             },
             &BoundsDefaults {
@@ -354,7 +353,7 @@ mod anticipated_5stage_k2_smoke {
                 n_buses: 1,
                 n_lines: 0,
                 n_ncs: 0,
-                n_stages: n_st,
+                n_stages,
             },
             &PenaltiesDefaults {
                 hydro: default_hydro_penalties(),
@@ -753,7 +752,6 @@ mod anticipated_two_plants_smoke {
             .collect();
 
         let k_max: usize = 4;
-        let n_st = n_stages;
 
         fn default_hydro_bounds() -> HydroStageBounds {
             HydroStageBounds {
@@ -800,7 +798,7 @@ mod anticipated_two_plants_smoke {
                 n_lines: 0,
                 n_pumping: 0,
                 n_contracts: 0,
-                n_stages: n_st,
+                n_stages,
                 k_max,
             },
             &BoundsDefaults {
@@ -831,7 +829,7 @@ mod anticipated_two_plants_smoke {
             .into_iter()
             .enumerate()
         {
-            for stage_idx in 0..n_st {
+            for stage_idx in 0..n_stages {
                 *bounds.thermal_bounds_mut(t_idx, stage_idx) = ThermalStageBounds {
                     cost_per_mwh: thermal.cost_per_mwh,
                 };
@@ -848,7 +846,7 @@ mod anticipated_two_plants_smoke {
                 n_buses: 1,
                 n_lines: 0,
                 n_ncs: 0,
-                n_stages: n_st,
+                n_stages,
             },
             &PenaltiesDefaults {
                 hydro: default_hydro_penalties(),

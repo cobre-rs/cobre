@@ -1818,6 +1818,17 @@ fn reverse_declaration_order_if(
     }
 }
 
+fn finite_horizon_graph(nodes: Vec<PolicyNode>, transitions: Vec<Transition>) -> HorizonGraph {
+    HorizonGraph {
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate: 0.0,
+        transitions,
+        nodes,
+        stage_discount_rate_overrides: BTreeMap::new(),
+        season_map: None,
+    }
+}
+
 /// The declared `nodes[]`/`transitions[]` K-fan: root (id `0`) branches into fan
 /// nodes `1..=k` under strictly non-uniform weights `i / Σj` (never a uniform
 /// `1/k` split — a uniform split would make every reduction order sum identical
@@ -1872,14 +1883,7 @@ fn k_fan_policy_graph(k: usize, reversed: bool) -> HorizonGraph {
         });
     }
     reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The default `state_config` every [`fan_or_chain_system_ext`] caller gets when
@@ -3022,14 +3026,7 @@ fn terminal_generated_fan_policy_graph(k: usize) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The terminal-Generated fan control [`StudySetup`]: a root fanning into `k`
@@ -3204,14 +3201,7 @@ fn build_external_distinct_fan_setup(
                 annual_discount_rate_override: None,
             });
         }
-        HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.0,
-            transitions,
-            nodes,
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        }
+        finite_horizon_graph(nodes, transitions)
     };
 
     let hydro_id = EntityId(2);
@@ -3348,14 +3338,7 @@ pub fn external_root_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
                 annual_discount_rate_override: None,
             });
         }
-        HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.0,
-            transitions,
-            nodes,
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        }
+        finite_horizon_graph(nodes, transitions)
     };
 
     let hydro_id = EntityId(2);
@@ -3527,14 +3510,7 @@ fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: boo
             });
         }
         reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
-        HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.0,
-            transitions,
-            nodes,
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        }
+        finite_horizon_graph(nodes, transitions)
     };
 
     let hydro_id = EntityId(2);
@@ -3658,14 +3634,7 @@ fn branching_tree_policy_graph(reversed: bool) -> HorizonGraph {
         }
     }
     reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// Per-study-stage `state_config` for the branching-tree fixture — the non-uniform
@@ -4139,14 +4108,7 @@ fn dual_folding_policy_graph(k: usize) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The dual-folding [`System`]: [`dual_folding_policy_graph`] over the shared
@@ -4297,14 +4259,7 @@ fn trunk_fan_policy_graph(t_trunk: usize, k: usize) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The trunk+fan [`System`]: [`trunk_fan_policy_graph`] over the shared

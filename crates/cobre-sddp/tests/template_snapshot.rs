@@ -25,9 +25,8 @@ fn manifest_path() -> PathBuf {
 /// Build `deck`'s [`StudySetup`], panicking with the deck's key on any
 /// build failure — no deck is ever skipped silently.
 fn build_deck_or_panic(deck: &Deck) -> StudySetup {
-    let dir = deck.dir.clone();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        common::fresh_setup_with(&dir, |_| {})
+        common::fresh_setup_with(&deck.dir, |_| {})
     }))
     .unwrap_or_else(|payload| {
         let msg = payload

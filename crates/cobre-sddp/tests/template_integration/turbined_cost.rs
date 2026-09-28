@@ -128,7 +128,7 @@ fn turbined_cost_mixed_system_all_hydros_carry_cost() {
     let col_turbine_start = 13;
     let block_hours = 744.0;
 
-    let expected = 1.0 * block_hours / COST_SCALE_FACTOR;
+    let expected = block_hours / COST_SCALE_FACTOR;
     for h in 0..4 {
         assert!(
             (t.objective[col_turbine_start + h] - expected).abs() < 1e-15,

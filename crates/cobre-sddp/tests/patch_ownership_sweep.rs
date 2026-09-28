@@ -464,38 +464,14 @@ fn compare_lower_bound_to_forward_root_lp(
         let raw_noise = node_opening_noise(setup, root, j);
         let forward = capture_patched_node_template_at(setup, root, &raw_noise, &initial_state);
 
-        compare_bound_vec(
-            deck,
-            j,
-            "col_lower",
-            &lb_template.col_lower,
-            &forward.col_lower,
-            violations,
-        );
-        compare_bound_vec(
-            deck,
-            j,
-            "col_upper",
-            &lb_template.col_upper,
-            &forward.col_upper,
-            violations,
-        );
-        compare_bound_vec(
-            deck,
-            j,
-            "row_lower",
-            &lb_template.row_lower,
-            &forward.row_lower,
-            violations,
-        );
-        compare_bound_vec(
-            deck,
-            j,
-            "row_upper",
-            &lb_template.row_upper,
-            &forward.row_upper,
-            violations,
-        );
+        for (kind, lb, fwd) in [
+            ("col_lower", &lb_template.col_lower, &forward.col_lower),
+            ("col_upper", &lb_template.col_upper, &forward.col_upper),
+            ("row_lower", &lb_template.row_lower, &forward.row_lower),
+            ("row_upper", &lb_template.row_upper, &forward.row_upper),
+        ] {
+            compare_bound_vec(deck, j, kind, lb, fwd, violations);
+        }
     }
     n_openings
 }

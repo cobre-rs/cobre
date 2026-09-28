@@ -69,6 +69,20 @@ pub(crate) struct HydroReverseLookup {
     pub(crate) filled_min_storage_floor: Vec<Option<FloorLocal>>,
 }
 
+/// Map each system hydro index in `indices` to its local slot via `make`;
+/// `None` for a hydro not in `indices`.
+fn build_reverse_slots<T: Copy>(
+    n_hydros: usize,
+    indices: &[HydroSys],
+    make: impl Fn(usize) -> T,
+) -> Vec<Option<T>> {
+    let mut slots = vec![None; n_hydros];
+    for (local, &sys) in indices.iter().enumerate() {
+        slots[sys.get()] = Some(make(local));
+    }
+    slots
+}
+
 impl HydroReverseLookup {
     /// Build the reverse lookup for one stage from its [`StageGeometry`] and the
     /// study-scope [`HydroCellIndex`].
@@ -85,22 +99,17 @@ impl HydroReverseLookup {
             fpha_cell_local_start.push(n_fpha_cells);
             n_fpha_cells += hydro_cell_index.cells_of(sys).len();
         }
-        let mut evap = vec![None; n_hydros];
-        for (local, &sys) in geometry.evap_hydro_indices.iter().enumerate() {
-            evap[sys.get()] = Some(EvapLocal::new(local));
-        }
-        let mut filling_target = vec![None; n_hydros];
-        for (local, &sys) in geometry.filling_target_hydro_indices.iter().enumerate() {
-            filling_target[sys.get()] = Some(FillingTargetLocal::new(local));
-        }
-        let mut filled_min_storage_floor = vec![None; n_hydros];
-        for (local, &sys) in geometry
-            .filled_min_storage_floor_hydro_indices
-            .iter()
-            .enumerate()
-        {
-            filled_min_storage_floor[sys.get()] = Some(FloorLocal::new(local));
-        }
+        let evap = build_reverse_slots(n_hydros, &geometry.evap_hydro_indices, EvapLocal::new);
+        let filling_target = build_reverse_slots(
+            n_hydros,
+            &geometry.filling_target_hydro_indices,
+            FillingTargetLocal::new,
+        );
+        let filled_min_storage_floor = build_reverse_slots(
+            n_hydros,
+            &geometry.filled_min_storage_floor_hydro_indices,
+            FloorLocal::new,
+        );
         Self {
             fpha,
             fpha_cell_local_start,

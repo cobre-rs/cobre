@@ -608,34 +608,6 @@ fn build_mixed_lead_system(reversed: bool) -> cobre_core::System {
         .expect("mixed_lead_anticipated_study: valid system")
 }
 
-fn build_mixed_lead_config() -> Config {
-    Config {
-        schema: None,
-        modeling: ModelingConfig {
-            inflow_non_negativity: InflowNonNegativityConfig {
-                method: CfgInflowMethod::None,
-            },
-            cost_scale_factor: None,
-        },
-        training: TrainingConfig {
-            enabled: true,
-            tree_seed: Some(42),
-            stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
-            stopping_mode: cobre_io::config::StoppingMode::Any,
-            cut_selection: RowSelectionConfig::default(),
-            solver: TrainingSolverConfig::default(),
-            parallelism: cobre_io::config::ParallelismConfig::default(),
-            scenario_source: None,
-            selection: Some(TrainingSelection::Sampled { forward_passes: 1 }),
-        },
-        upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
-        policy: PolicyConfig::default(),
-        simulation: IoSimulationConfig::default(),
-        exports: ExportsConfig::default(),
-        estimation: EstimationConfig::default(),
-    }
-}
-
 /// 5 monthly stages (2025-01 to 2025-05, one block each) discounted at 6%/yr,
 /// with two anticipated thermals of different lead depths (`LeadStages(1)`
 /// and `LeadStages(3)`) so the long lead's last two decisions target a
@@ -643,7 +615,7 @@ fn build_mixed_lead_config() -> Config {
 /// `reversed == true` reverses every entity vector before `SystemBuilder::build`.
 #[must_use]
 pub fn mixed_lead_anticipated_study(reversed: bool) -> (cobre_core::System, Config) {
-    (build_mixed_lead_system(reversed), build_mixed_lead_config())
+    (build_mixed_lead_system(reversed), build_config())
 }
 
 const EVAP_N_STAGES: usize = 2;
@@ -1431,34 +1403,6 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
         .expect("chronological_noise_study: two independent hydros on a two-stage system")
 }
 
-fn build_chronological_noise_config() -> Config {
-    Config {
-        schema: None,
-        modeling: ModelingConfig {
-            inflow_non_negativity: InflowNonNegativityConfig {
-                method: CfgInflowMethod::None,
-            },
-            cost_scale_factor: None,
-        },
-        training: TrainingConfig {
-            enabled: true,
-            tree_seed: Some(42),
-            stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
-            stopping_mode: cobre_io::config::StoppingMode::Any,
-            cut_selection: RowSelectionConfig::default(),
-            solver: TrainingSolverConfig::default(),
-            parallelism: cobre_io::config::ParallelismConfig::default(),
-            scenario_source: None,
-            selection: Some(TrainingSelection::Sampled { forward_passes: 1 }),
-        },
-        upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
-        policy: PolicyConfig::default(),
-        simulation: IoSimulationConfig::default(),
-        exports: ExportsConfig::default(),
-        estimation: EstimationConfig::default(),
-    }
-}
-
 /// Two chronological (default) stages, two blocks each (300 h, 444 h), on two
 /// independent hydros with per-hydro inflow standard deviations `[10, 20]`
 /// m3/s: backs the chronological inflow-noise-ownership test
@@ -1466,8 +1410,5 @@ fn build_chronological_noise_config() -> Config {
 /// cell of the patch-ownership sweep (`tests/patch_ownership_sweep.rs`).
 #[must_use]
 pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::System, Config) {
-    (
-        build_chronological_noise_system(spec),
-        build_chronological_noise_config(),
-    )
+    (build_chronological_noise_system(spec), build_config())
 }

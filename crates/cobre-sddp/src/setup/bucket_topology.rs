@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{BlockMode, EntityId, Stage, System, window_period_overlaps};
+use cobre_core::{BlockMode, EntityId, Hydro, Stage, System, window_period_overlaps};
 
 use crate::block_clock::BlockClock;
 use crate::lead_time::{SpreadResolution, resolve_arrival_density_at, resolve_spread};
@@ -74,6 +74,14 @@ fn declared_arcs(system: &System) -> HashMap<EntityId, Vec<f64>> {
         arcs.entry(downstream_id).or_default().push(t_v);
     }
     arcs
+}
+
+/// A hydro's declared arc travel time — `Some` only when `travel_time_hours >
+/// 0.0` and `downstream_id` is present, mirroring [`declared_arcs`]'s
+/// per-hydro filter; `None` skips the hydro as an undeclared arc.
+fn declared_travel_time(hydro: &Hydro) -> Option<f64> {
+    hydro.downstream_id?;
+    hydro.travel_time_hours.filter(|&t| t > 0.0)
 }
 
 /// Extends the base calendar — study stages plus any declared post-study
@@ -221,12 +229,9 @@ pub(crate) fn build_arc_stage_weights(system: &System) -> HashMap<usize, Vec<Vec
     let mut arc_stage_weights = HashMap::new();
 
     for (u_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_v) = hydro.travel_time_hours.filter(|&t| t > 0.0) else {
+        let Some(t_v) = declared_travel_time(hydro) else {
             continue;
         };
-        if hydro.downstream_id.is_none() {
-            continue;
-        }
         let extended = extend_for_resolution(&base_calendar, t_v);
         let k_by_stage: Vec<Vec<f64>> = (0..n_stages)
             .map(|stage| resolve_spread(t_v, stage, &extended, None).stage_weights)
@@ -255,12 +260,9 @@ pub(crate) fn build_arc_spread_chrono(
     let mut arc_spread_chrono = HashMap::new();
 
     for (u_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_v) = hydro.travel_time_hours.filter(|&t| t > 0.0) else {
+        let Some(t_v) = declared_travel_time(hydro) else {
             continue;
         };
-        if hydro.downstream_id.is_none() {
-            continue;
-        }
         let extended = extend_for_resolution(&base_calendar, t_v);
         let by_stage: Vec<Option<SpreadResolution>> = (0..n_stages)
             .map(|stage_idx| {
@@ -303,12 +305,9 @@ pub(crate) fn build_arc_arrival_density(
     let mut arc_arrival_density = HashMap::new();
 
     for (u_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_v) = hydro.travel_time_hours.filter(|&t| t > 0.0) else {
+        let Some(t_v) = declared_travel_time(hydro) else {
             continue;
         };
-        if hydro.downstream_id.is_none() {
-            continue;
-        }
         let Some(k_by_stage) = arc_stage_weights.get(&u_idx) else {
             continue;
         };

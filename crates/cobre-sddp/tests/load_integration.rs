@@ -368,12 +368,11 @@ fn test_stochastic_load_context_construction() {
 #[test]
 fn test_stochastic_load_training_completes() {
     let n_stages = 2usize;
-    let n_load_buses = 1usize;
     let stochastic = build_context_with_load(n_stages, 500.0, 50.0);
 
     assert_eq!(
         stochastic.n_load_buses(),
-        n_load_buses,
+        1,
         "pre-condition: n_load_buses must be 1"
     );
 
@@ -402,7 +401,7 @@ fn test_stochastic_load_training_completes() {
             cut_selection: None,
             budget: None,
             cut_activity_tolerance: 0.0,
-            risk_measures: risk_measures.clone(),
+            risk_measures,
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -534,7 +533,7 @@ fn test_deterministic_load_training_matches_baseline() {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
-                risk_measures: risk_measures.clone(),
+                risk_measures,
             },
             events: EventConfig {
                 event_sender: None,
@@ -617,7 +616,7 @@ fn test_stochastic_load_seed_determinism() {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
-                risk_measures: risk_measures.clone(),
+                risk_measures,
             },
             events: EventConfig {
                 event_sender: Some(tx),

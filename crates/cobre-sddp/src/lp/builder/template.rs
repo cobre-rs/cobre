@@ -434,8 +434,6 @@ pub(super) fn build_single_stage_template(
 
     let (col_starts, row_indices, values) = entries::assemble_csc(&col_entries);
 
-    let n_transfer = ctx.n_hydros * ctx.max_par_order;
-
     let template = StageTemplate {
         num_cols: layout.num_cols,
         num_rows: layout.rows.num_rows,
@@ -449,10 +447,6 @@ pub(super) fn build_single_stage_template(
         row_lower,
         row_upper,
         n_state: layout.n_state(),
-        n_transfer,
-        n_dual_relevant: layout.rows.n_dual_relevant,
-        n_hydro: layout.n_h,
-        max_par_order: layout.lag_order,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -560,18 +554,6 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 /// - `num_cols` and `num_rows` are computed by `layout::StageLayout` —
 ///   see `layout.rs` for the authoritative column and row counts
 /// - `n_state  = N*(1+L)`
-/// - `n_transfer = N*L`  (storage + all lags except the oldest)
-/// - `n_dual_relevant = 0`  (state pinning uses column bounds, not state-fixing rows, so no
-///   structural row contributes to cut gradients; the cut path reads `view.reduced_costs`)
-///
-/// ## PAR order and `max_par_order`
-///
-/// `max_par_order` is the maximum of (a) the maximum AR coefficient count
-/// across all hydro inflow models and (b) `par_lp.max_order()`.  The latter
-/// is non-classical only when an annual component is present, in which case
-/// the precompute widens the lag stride to 12 and the LP must allocate
-/// matching column and row slots.  All hydros use the same uniform lag stride
-/// `max_par_order` to enable SIMD-friendly contiguous access.
 ///
 /// ## Objective coefficients
 ///

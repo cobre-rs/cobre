@@ -38,10 +38,6 @@ fn q1_sign_convention_row_equality_vs_column_bound() {
         row_lower: vec![4.0, 7.0],
         row_upper: vec![f64::INFINITY, 7.0],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -76,10 +72,6 @@ fn q1_sign_convention_row_equality_vs_column_bound() {
         row_lower: vec![4.0],
         row_upper: vec![f64::INFINITY],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };

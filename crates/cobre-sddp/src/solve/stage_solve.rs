@@ -386,10 +386,6 @@ mod tests {
             row_lower: vec![6.0, 14.0],
             row_upper: vec![6.0, 14.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -410,10 +406,6 @@ mod tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }

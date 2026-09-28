@@ -413,9 +413,10 @@ fn lag_11_lp_coefficient_equals_psi_hat_over_twelve() {
 
     let tmpl = &templates.templates[0];
     assert_eq!(
-        tmpl.max_par_order, 12,
-        "templates[0].max_par_order must be 12; got {}",
-        tmpl.max_par_order
+        tmpl.n_state,
+        N_H * 13,
+        "templates[0].n_state must reflect a PAR order of 12 (N_H * (1 + 12)); got {}",
+        tmpl.n_state
     );
 
     // Column indices: N=2, L=12.
@@ -525,9 +526,11 @@ fn classical_par_has_no_lag_11_column() {
     let tmpl = &templates.templates[0];
 
     assert_eq!(
-        tmpl.max_par_order, AR_ORDER,
-        "templates[0].max_par_order must be {AR_ORDER} for classical PAR(2); got {}",
-        tmpl.max_par_order
+        tmpl.n_state,
+        N_H * (1 + AR_ORDER),
+        "templates[0].n_state must reflect a PAR order of {AR_ORDER} for classical PAR(2) \
+         (N_H * (1 + {AR_ORDER})); got {}",
+        tmpl.n_state
     );
 
     // For N=2, L=2 the inflow_lags range is N..N*(1+L) = 2..6.

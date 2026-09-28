@@ -88,7 +88,7 @@ fn put_range(buf: &mut Vec<u8>, range: &Range<usize>) {
 /// Group keys [`encode_lp_facts`] writes, guaranteed present even for zero
 /// stages — the fixed schema [`encode_stage_templates_facts`]'s 24-key
 /// contract depends on.
-const LP_FACT_GROUP_KEYS: [&str; 11] = [
+const LP_FACT_GROUP_KEYS: [&str; 7] = [
     "lp.dims",
     "lp.sparsity",
     "lp.values",
@@ -96,10 +96,6 @@ const LP_FACT_GROUP_KEYS: [&str; 11] = [
     "lp.row_bounds",
     "lp.objective",
     "lp.scaling",
-    "solver_meta.n_transfer",
-    "solver_meta.n_dual_relevant",
-    "solver_meta.n_hydro",
-    "solver_meta.max_par_order",
 ];
 
 pub(crate) fn encode_lp_facts(templates: &[StageTemplate], groups: &mut FactGroups) {
@@ -120,10 +116,6 @@ pub(crate) fn encode_lp_facts(templates: &[StageTemplate], groups: &mut FactGrou
             row_lower,
             row_upper,
             n_state,
-            n_transfer,
-            n_dual_relevant,
-            n_hydro,
-            max_par_order,
             col_scale,
             row_scale,
         } = template;
@@ -162,22 +154,6 @@ pub(crate) fn encode_lp_facts(templates: &[StageTemplate], groups: &mut FactGrou
         put_usize(scaling, stage);
         put_f64_slice(scaling, col_scale);
         put_f64_slice(scaling, row_scale);
-
-        let n_transfer_group = group(groups, "solver_meta.n_transfer");
-        put_usize(n_transfer_group, stage);
-        put_usize(n_transfer_group, *n_transfer);
-
-        let n_dual_relevant_group = group(groups, "solver_meta.n_dual_relevant");
-        put_usize(n_dual_relevant_group, stage);
-        put_usize(n_dual_relevant_group, *n_dual_relevant);
-
-        let n_hydro_group = group(groups, "solver_meta.n_hydro");
-        put_usize(n_hydro_group, stage);
-        put_usize(n_hydro_group, *n_hydro);
-
-        let max_par_order_group = group(groups, "solver_meta.max_par_order");
-        put_usize(max_par_order_group, stage);
-        put_usize(max_par_order_group, *max_par_order);
     }
 }
 
@@ -534,10 +510,6 @@ mod tests {
                 "lp.scaling",
                 "lp.sparsity",
                 "lp.values",
-                "solver_meta.max_par_order",
-                "solver_meta.n_dual_relevant",
-                "solver_meta.n_hydro",
-                "solver_meta.n_transfer",
             ]
         );
     }
@@ -603,10 +575,6 @@ mod tests {
                 "reporting.generic_constraint_row_entries",
                 "reporting.hydro_productivities_per_stage",
                 "reporting.zeta_per_stage",
-                "solver_meta.max_par_order",
-                "solver_meta.n_dual_relevant",
-                "solver_meta.n_hydro",
-                "solver_meta.n_transfer",
                 "state_boxes",
                 "stochastic.load_buses",
             ]

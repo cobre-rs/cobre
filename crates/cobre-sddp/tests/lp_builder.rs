@@ -1467,8 +1467,7 @@ mod cell_partition_gates {
     // ---- State-space invariance --------------------------------------------
 
     /// Declaring groups (including the two-bus variant, which DOES add
-    /// columns) never moves `n_state`, `n_transfer`, `n_dual_relevant`,
-    /// `n_hydro`, or `max_par_order`, and an independently-built
+    /// columns) never moves `n_state`, and an independently-built
     /// `StateSpace` (unrelated to `unit_groups` at all) agrees. Checkpoint
     /// bytes and the terminal entity manifest are a separate artifact-level
     /// concern this test does not assert.
@@ -1480,16 +1479,6 @@ mod cell_partition_gates {
 
         for (label, t) in [("A", &tmpl_a), ("B", &tmpl_b), ("C", &tmpl_c)] {
             assert_eq!(t.n_state, tmpl_b.n_state, "{label}: n_state");
-            assert_eq!(t.n_transfer, tmpl_b.n_transfer, "{label}: n_transfer");
-            assert_eq!(
-                t.n_dual_relevant, tmpl_b.n_dual_relevant,
-                "{label}: n_dual_relevant"
-            );
-            assert_eq!(t.n_hydro, tmpl_b.n_hydro, "{label}: n_hydro");
-            assert_eq!(
-                t.max_par_order, tmpl_b.max_par_order,
-                "{label}: max_par_order"
-            );
         }
 
         // Independent cross-check via a totally separate code path: a

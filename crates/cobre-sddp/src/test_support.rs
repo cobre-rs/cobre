@@ -926,8 +926,7 @@ pub(crate) fn inflow_m3s_per_hydro_from_primal(
         .collect()
 }
 
-/// Bucket-only [`StageTemplate`]: `num_cols` free columns, zero rows. `n_hydro = 0`
-/// so noise transformation never runs.
+/// Bucket-only [`StageTemplate`]: `num_cols` free columns, zero rows.
 #[must_use]
 pub fn transit_bucket_only_template(num_cols: usize, n_state: usize) -> StageTemplate {
     StageTemplate {
@@ -943,10 +942,6 @@ pub fn transit_bucket_only_template(num_cols: usize, n_state: usize) -> StageTem
         row_lower: Vec::new(),
         row_upper: Vec::new(),
         n_state,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -3941,10 +3936,6 @@ pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
         row_lower,
         row_upper,
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -4436,10 +4427,6 @@ pub fn assert_templates_byte_identical(a: &StageTemplate, b: &StageTemplate, lab
         row_lower,
         row_upper,
         n_state,
-        n_transfer,
-        n_dual_relevant,
-        n_hydro,
-        max_par_order,
         col_scale,
         row_scale,
     } = a;
@@ -4447,13 +4434,6 @@ pub fn assert_templates_byte_identical(a: &StageTemplate, b: &StageTemplate, lab
     assert_eq!(*num_rows, b.num_rows, "{label}: num_rows");
     assert_eq!(*num_nz, b.num_nz, "{label}: num_nz");
     assert_eq!(*n_state, b.n_state, "{label}: n_state");
-    assert_eq!(*n_transfer, b.n_transfer, "{label}: n_transfer");
-    assert_eq!(
-        *n_dual_relevant, b.n_dual_relevant,
-        "{label}: n_dual_relevant"
-    );
-    assert_eq!(*n_hydro, b.n_hydro, "{label}: n_hydro");
-    assert_eq!(*max_par_order, b.max_par_order, "{label}: max_par_order");
     assert_eq!(*col_starts, b.col_starts, "{label}: col_starts");
     assert_eq!(*row_indices, b.row_indices, "{label}: row_indices");
     let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
@@ -4488,10 +4468,6 @@ mod byte_identity_tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: vec![0.0],
             row_scale: vec![],
         };

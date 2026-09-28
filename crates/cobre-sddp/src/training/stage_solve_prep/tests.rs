@@ -197,10 +197,6 @@ fn minimal_forward_template() -> StageTemplate {
         row_lower: vec![0.0],
         row_upper: vec![0.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -221,10 +217,6 @@ fn single_hydro_load_template() -> StageTemplate {
         row_lower: vec![0.0, 0.0],
         row_upper: vec![0.0, 0.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -541,10 +533,6 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
         row_lower: vec![],
         row_upper: vec![],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }];

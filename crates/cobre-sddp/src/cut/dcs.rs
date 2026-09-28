@@ -1763,10 +1763,6 @@ mod tests {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }

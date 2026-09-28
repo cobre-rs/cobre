@@ -3542,41 +3542,6 @@ fn relocated_min_generation_constant_productivity_coefficients() {
 }
 
 #[test]
-fn relocated_operational_violation_rows_outside_dual_relevant() {
-    let (layout, t) = build_active_violations_layout_and_template();
-
-    assert_eq!(
-        t.n_dual_relevant, 0,
-        "n_dual_relevant is always 0 with column-bound state pinning"
-    );
-
-    assert!(
-        layout.slack.oper_violation.min_outflow_rows.start > t.n_dual_relevant,
-        "min_outflow row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.min_outflow_rows.start,
-        t.n_dual_relevant
-    );
-    assert!(
-        layout.slack.oper_violation.max_outflow_rows.start > t.n_dual_relevant,
-        "max_outflow row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.max_outflow_rows.start,
-        t.n_dual_relevant
-    );
-    assert!(
-        layout.slack.oper_violation.min_turbine_rows.start > t.n_dual_relevant,
-        "min_turbine row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.min_turbine_rows.start,
-        t.n_dual_relevant
-    );
-    assert!(
-        layout.slack.oper_violation.min_generation_rows.start > t.n_dual_relevant,
-        "min_generation row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.min_generation_rows.start,
-        t.n_dual_relevant
-    );
-}
-
-#[test]
 fn relocated_diagnostic_template_operational_violation_correctness() {
     let (layout, t) = build_active_violations_layout_and_template();
 

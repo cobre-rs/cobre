@@ -863,15 +863,14 @@ mod determinism {
     //   num_cols     = 39
     //
     // The primal must have 39 entries so simulation's per-block extraction can
-    // address every equipment column. The dual must have at least
-    // n_dual_relevant = 3 entries so the backward pass can extract dual values
-    // for the 3 storage-fixing rows, and at least 7 to cover the widened
-    // geometry's water-balance/load-balance row family.
+    // address every equipment column. The dual must have at least 7 entries
+    // to cover the widened geometry's water-balance/load-balance row family.
     // ===========================================================================
 
     const PRIMAL_3H: &[f64] = &[0.0; 39];
-    // The dual must cover: n_dual_relevant (3) + max cuts per stage (10 iterations × 1 pass = 10).
-    // Use 64 to cover any reasonable iteration count without tight sizing.
+    // The dual must cover the widened row family plus max cuts per stage
+    // (10 iterations × 1 pass = 10). Use 64 to cover any reasonable iteration
+    // count without tight sizing.
     const DUAL_3H: &[f64] = &[0.0; 64];
     const REDUCED_COSTS_3H: &[f64] = &[0.0; 39];
 
@@ -1182,10 +1181,6 @@ mod determinism {
             row_lower: vec![0.0; num_rows],
             row_upper: vec![0.0; num_rows],
             n_state: 3,
-            n_transfer: 0,
-            n_dual_relevant: 3,
-            n_hydro: 3,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }

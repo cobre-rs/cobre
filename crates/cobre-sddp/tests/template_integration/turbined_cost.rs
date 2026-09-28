@@ -153,7 +153,7 @@ fn load_balance_rhs_matches_load_model_mean_mw() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
-    // No hydros → n_dual_relevant=0, water_balance_rows=0, load_balance at row 0, blk 0
+    // No hydros → water_balance_rows=0, load_balance at row 0, blk 0
     let load_row = 0;
     assert_eq!(
         t.row_lower[load_row], 100.0,

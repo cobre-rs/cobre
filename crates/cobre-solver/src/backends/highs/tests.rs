@@ -19,10 +19,6 @@ fn make_fixture_stage_template() -> StageTemplate {
         row_lower: vec![6.0, 14.0],
         row_upper: vec![6.0, 14.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -1131,10 +1127,6 @@ mod research_tests {
             row_lower: vec![1.0],
             row_upper: vec![f64::INFINITY],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -1161,10 +1153,6 @@ mod research_tests {
             row_lower: vec![99.0],
             row_upper: vec![99.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -1200,10 +1188,6 @@ mod research_tests {
             row_lower: vec![99.0],
             row_upper: vec![99.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };

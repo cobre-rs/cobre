@@ -418,13 +418,14 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
     let stochastic = build_stochastic();
 
     let n_stages = stage_templates.templates.len();
-    let first_tmpl = stage_templates.templates.first().expect("at least 1 stage");
-    let has_inflow_penalty = inflow_method.has_slack_columns() && first_tmpl.n_hydro > 0;
+    let n_h = system.hydros().len();
+    let max_par_order = par_lp.max_order();
+    let has_inflow_penalty = inflow_method.has_slack_columns() && n_h > 0;
     let study_dims = study_dims_for(
         system.thermals().len(),
         system.lines().len(),
         system.buses().len(),
-        first_tmpl.n_hydro,
+        n_h,
         has_inflow_penalty,
     );
     let geometry = stage_templates
@@ -433,7 +434,7 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
         .expect("at least 1 stage geometry")
         .clone();
 
-    let state = state_layout_for(first_tmpl.n_hydro, first_tmpl.max_par_order);
+    let state = state_layout_for(n_h, max_par_order);
     let initial_state = vec![0.0_f64; state.n_state];
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,

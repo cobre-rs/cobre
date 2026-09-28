@@ -79,11 +79,12 @@ fn test_penalty_objective_coefficient() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // N=1, L=0: theta=3, decision_start=4, turbine=4, spillage=5, diversion=6,
     // deficit=7, excess=8, inflow_slack=9, withdrawal_neg=10, withdrawal_pos=11,
     // outflow_below=12, outflow_above=13, turbine_below=14, generation_below=15.
     // inflow_slack sits before the 2 withdrawal + 4 op-violation slacks (6 per hydro).
-    let slack_col = t.num_cols - 1 - 6 * t.n_hydro;
+    let slack_col = t.num_cols - 1 - 6 * n_h;
     let expected_obj = 1000.0 * 744.0 / COST_SCALE_FACTOR;
     assert!(
         (t.objective[slack_col] - expected_obj).abs() < 1e-12,
@@ -134,9 +135,10 @@ fn test_penalty_slack_in_water_balance() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // inflow_slack sits before the withdrawal + 4 op-violation slacks (6 per hydro).
-    let slack_col = t.num_cols - 1 - 6 * t.n_hydro;
+    let slack_col = t.num_cols - 1 - 6 * n_h;
 
     let water_balance_row = 1_usize; // N + h = 1 + 0
 
@@ -168,8 +170,9 @@ fn test_penalty_slack_bounds() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // inflow_slack sits before the withdrawal + 4 op-violation slacks (6 per hydro).
-    let slack_col = t.num_cols - 1 - 6 * t.n_hydro;
+    let slack_col = t.num_cols - 1 - 6 * n_h;
     assert_eq!(t.col_lower[slack_col], 0.0, "slack lower bound must be 0.0");
     assert!(
         t.col_upper[slack_col].is_infinite() && t.col_upper[slack_col] > 0.0,
@@ -196,9 +199,10 @@ fn test_penalty_water_balance_coefficient_value() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // inflow_slack sits before the withdrawal + 4 op-violation slacks (6 per hydro).
-    let slack_col = t.num_cols - 1 - 6 * t.n_hydro;
+    let slack_col = t.num_cols - 1 - 6 * n_h;
     let water_balance_row = 1_usize; // N + h = 1 + 0
     let zeta = 744.0 * (3_600.0 / 1_000_000.0);
     let expected_coeff = -zeta;
@@ -269,9 +273,10 @@ fn test_penalty_slack_absorbs_negative_inflow() {
     )
     .expect("constant productivity ok");
     let template = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // inflow_slack sits before the withdrawal + 4 op-violation slacks (6 per hydro).
-    let col_inflow_slack_start = template.num_cols - 1 - 6 * template.n_hydro;
+    let col_inflow_slack_start = template.num_cols - 1 - 6 * n_h;
 
     let col_storage_in = 2_usize; // storage_in for hydro 0 when N=1, L=0
     let water_balance_row = 1_usize; // N + h = 1 + 0

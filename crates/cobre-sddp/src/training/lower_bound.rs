@@ -571,10 +571,6 @@ mod tests {
             row_lower: vec![0.0],
             row_upper: vec![0.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -969,7 +965,6 @@ mod tests {
     // ── Shared test setup ────────────────────────────────────────────────────
 
     fn make_fcf(n_stages: usize, n_state: usize) -> FutureCostFunction {
-        // max_cuts=100, n_transfer=0
         FutureCostFunction::new(n_stages, n_state, 2, 100, &vec![0; n_stages])
     }
 
@@ -1942,10 +1937,6 @@ mod tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };

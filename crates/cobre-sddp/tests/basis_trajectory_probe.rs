@@ -329,10 +329,6 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         row_lower: vec![0.0; total_rows],
         row_upper: vec![0.0; total_rows],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: n_hydros,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };

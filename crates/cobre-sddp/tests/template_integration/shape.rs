@@ -183,24 +183,6 @@ fn n_state_matches_indexer() {
 }
 
 #[test]
-fn n_transfer_is_n_times_lag_order() {
-    // n_transfer = N*L = 1*2 = 2
-    let system = one_hydro_system(1, 2);
-    let result = build_stage_templates_resolving_layout(
-        &system,
-        no_penalty_config(),
-        &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
-        &default_production(&system),
-        &default_evaporation(&system),
-        &ResolvedParameters::default(),
-    )
-    .expect("constant productivity ok");
-    let t = &result.templates[0];
-    assert_eq!(t.n_transfer, 2, "n_transfer = N*L");
-}
-
-#[test]
 fn csc_col_starts_monotone_nondecreasing() {
     let system = one_hydro_system(1, 1);
     let result = build_stage_templates_resolving_layout(

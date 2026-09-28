@@ -269,33 +269,6 @@ pub struct StageTemplate {
     /// Number of state variables (contiguous prefix of columns).
     pub n_state: usize,
 
-    /// Number of state values transferred between consecutive stages.
-    ///
-    /// Equal to `N * L` per
-    /// [Solver Abstraction SS2.1](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
-    /// This is the storage volumes plus all AR lags except the oldest
-    /// (which ages out of the lag window).
-    pub n_transfer: usize,
-
-    /// Number of dual-relevant constraint rows (contiguous prefix of rows).
-    ///
-    /// Currently equal to `n_state` (= `N + N*L` where `N` is the number of
-    /// hydros and `L` is the maximum PAR lag order). FPHA and generic variable
-    /// constraint rows are structural and not included in the dual-relevant set.
-    ///
-    /// Gradient coefficients are extracted from `dual[0..n_dual_relevant]`.
-    pub n_dual_relevant: usize,
-
-    /// Number of operating hydros at this stage.
-    pub n_hydro: usize,
-
-    /// Maximum PAR order across all operating hydros at this stage.
-    ///
-    /// Determines the uniform lag stride: all hydros store `max_par_order`
-    /// lag values regardless of their individual PAR order, enabling SIMD
-    /// vectorization with a single contiguous state stride.
-    pub max_par_order: usize,
-
     /// Per-column scaling factors for numerical conditioning.
     ///
     /// When non-empty (length `num_cols`), the constraint matrix, objective
@@ -388,10 +361,6 @@ impl StageTemplate {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -747,10 +716,6 @@ mod tests {
             row_lower: vec![6.0, 14.0],
             row_upper: vec![6.0, 14.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -777,10 +742,6 @@ mod tests {
         assert_eq!(tmpl.row_upper, vec![6.0, 14.0]);
 
         assert_eq!(tmpl.n_state, 1);
-        assert_eq!(tmpl.n_transfer, 0);
-        assert_eq!(tmpl.n_dual_relevant, 1);
-        assert_eq!(tmpl.n_hydro, 1);
-        assert_eq!(tmpl.max_par_order, 0);
     }
 
     #[test]

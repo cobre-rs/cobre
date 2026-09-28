@@ -165,9 +165,10 @@ fn max_par_order_uses_par_lp_when_annual_present() {
     .expect("build_stage_templates_resolving_layout ok");
 
     assert_eq!(
-        result.templates[0].max_par_order, 12,
-        "annual component must widen max_par_order to 12, got {}",
-        result.templates[0].max_par_order
+        result.templates[0].n_state,
+        2 * (1 + 12),
+        "annual component must widen the PAR order to 12, so n_state == N*(1+12); got {}",
+        result.templates[0].n_state
     );
 }
 
@@ -216,9 +217,10 @@ fn max_par_order_classical_unchanged() {
     .expect("build_stage_templates_resolving_layout ok");
 
     assert_eq!(
-        result.templates[0].max_par_order, 3,
-        "classical-PAR max_par_order must remain 3, got {}",
-        result.templates[0].max_par_order
+        result.templates[0].n_state,
+        2 * (1 + 3),
+        "classical PAR order must remain 3, so n_state == N*(1+3); got {}",
+        result.templates[0].n_state
     );
 }
 
@@ -276,13 +278,14 @@ fn max_par_order_z_inflow_row_has_twelve_lag_entries() {
     .expect("build_stage_templates_resolving_layout ok");
 
     let t = &result.templates[0];
-    assert_eq!(
-        t.max_par_order, 12,
-        "precondition: max_par_order must be 12"
-    );
-
     let n_h = 2_usize;
     let l = 12_usize;
+    assert_eq!(
+        t.n_state,
+        n_h * (1 + l),
+        "precondition: the PAR order must be 12, so n_state == N*(1+12)"
+    );
+
     let row_z_inflow_h0 = 0_usize; // z_inflow rows start at 0
 
     // z_inflow column for hydro 0: col_z_inflow_start = N*(1+L) = 2*13 = 26.
@@ -1072,33 +1075,6 @@ fn test_n_state_includes_n_ant_state() {
     );
 }
 
-/// Anticipated state does not participate in the transfer operation (the
-/// commitment-hold ring carry is handled in-LP): with n_hydros=0, max_par_order=0,
-/// `n_transfer = n_hydros * max_par_order = 0`.
-#[test]
-fn test_n_transfer_unchanged_by_anticipated() {
-    let system = two_anticipated_thermal_system(4);
-    let result = build_stage_templates_resolving_layout(
-        &system,
-        no_penalty_config(),
-        &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
-        &default_production(&system),
-        &default_evaporation(&system),
-        &ResolvedParameters::default(),
-    )
-    .expect("build ok");
-
-    let t = &result.templates[0];
-    // n_hydros=0, max_par_order=0 → n_transfer = n_hydros * max_par_order = 0.
-    let expected_n_transfer = 0_usize;
-    assert_eq!(
-        t.n_transfer, expected_n_transfer,
-        "n_transfer must equal n_hydros * max_par_order = {expected_n_transfer} (no anticipated contribution), got {}",
-        t.n_transfer
-    );
-}
-
 /// K=1 LP roundtrip: N=1 hydro, T=1 anticipated thermal (K=1), B=1 bus,
 /// 2 blocks × 360h, n_stages=4, no discounting.
 ///
@@ -1703,16 +1679,6 @@ fn test_anticipated_thermals_lp_roundtrip_k0_baseline_parity() {
             ta.n_state, tb.n_state,
             "parity: stage {s} n_state must match ({} vs {})",
             ta.n_state, tb.n_state
-        );
-        assert_eq!(
-            ta.n_transfer, tb.n_transfer,
-            "parity: stage {s} n_transfer must match ({} vs {})",
-            ta.n_transfer, tb.n_transfer
-        );
-        assert_eq!(
-            ta.n_dual_relevant, tb.n_dual_relevant,
-            "parity: stage {s} n_dual_relevant must match ({} vs {})",
-            ta.n_dual_relevant, tb.n_dual_relevant
         );
         assert_eq!(
             ta.col_starts, tb.col_starts,

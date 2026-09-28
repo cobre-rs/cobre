@@ -466,8 +466,6 @@ pub(crate) struct ConstraintRows {
     pub(crate) num_rows: usize,
     /// Generic constraint row count.
     pub(crate) n_generic_rows: usize,
-    /// Structural dual-relevant row prefix; `0` (state pinning uses column bounds).
-    pub(crate) n_dual_relevant: usize,
 }
 
 /// Per-stage filling-phase row/column families: the `σ_fill` target (Filling
@@ -1347,10 +1345,6 @@ impl<'a> StageLayout<'a> {
         let n_ncs = ctx.non_controllable_sources.len();
         let col_ncs_start = col.alloc(n_ncs * n_blks).start;
 
-        // n_dual_relevant is 0 — state pinning uses column bounds, so the cut path
-        // reads view.reduced_costs, not a structural dual prefix.
-        let n_dual_relevant = 0_usize;
-
         // σ_fill then σ^{v-} rows, in the pre-cut region after the
         // operational-violation rows. Both MUST stay strictly below `num_rows`: a
         // row at index `>= num_rows` aliases the append-only cut rows (slot-identity
@@ -1489,7 +1483,6 @@ impl<'a> StageLayout<'a> {
             row_generic_start,
             num_rows,
             n_generic_rows: generic.n_generic_rows,
-            n_dual_relevant,
         };
         let filling = FillingLayout {
             row_filling_target_start,

@@ -261,10 +261,6 @@ fn minimal_template_1_0() -> StageTemplate {
         row_lower: vec![0.0; num_rows],
         row_upper: vec![0.0; num_rows],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }

@@ -184,7 +184,6 @@ pub(crate) struct EnumeratedParams<'a> {
     pub fwd_offset: usize,
     pub local_forward_passes: usize,
     pub total_forward_passes: usize,
-    pub terminal_has_boundary_cuts: bool,
     pub ctx: &'a StageContext<'a>,
     pub frozen: &'a [StageTemplate],
     pub fcf: &'a FutureCostFunction,
@@ -313,7 +312,7 @@ fn solve_forward_node<S: SolverInterface + Send>(
         t,
         &prep_params,
     );
-    if is_terminal && !params.terminal_has_boundary_cuts {
+    if is_terminal && !pool.has_warm_start_cuts() {
         ws.solver.set_col_bounds(&[state.theta], &[0.0], &[0.0]);
     }
 
@@ -377,7 +376,7 @@ fn solve_forward_node<S: SolverInterface + Send>(
     // Terminal boundary θ prices the post-horizon value-to-go: KEEP it in the cost
     // (subtracting it, the interior form, drops it from the UB only — understating
     // it below the LB). sddp.md "Terminal boundary FCF in the reported total cost".
-    let stage_cost = if is_terminal && params.terminal_has_boundary_cuts {
+    let stage_cost = if is_terminal && pool.has_warm_start_cuts() {
         view_objective * ctx.cost_scale_factor
     } else {
         (view_objective - d_t * unscaled_primal[state.theta]) * ctx.cost_scale_factor
@@ -1020,7 +1019,6 @@ mod tests {
             fwd_offset: 0,
             local_forward_passes: total_forward_passes,
             total_forward_passes,
-            terminal_has_boundary_cuts: false,
             ctx: &stage_ctx,
             frozen: &frozen,
             fcf: &setup.fcf,

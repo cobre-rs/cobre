@@ -1287,7 +1287,7 @@ mod decomp_integration {
 
         let terminal_pool = &setup_c.fcf.pools[num_stages - 1];
         assert!(
-            terminal_pool.warm_start_count > 0,
+            terminal_pool.has_warm_start_cuts(),
             "terminal pool must have boundary cuts after injection; warm_start_count == 0"
         );
         assert!(

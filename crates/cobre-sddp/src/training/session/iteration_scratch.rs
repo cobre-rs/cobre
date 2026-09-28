@@ -56,10 +56,6 @@ pub(crate) struct IterationScratch {
     /// the nested risk-adjusted upper bound. Filled only on an enumerated forward
     /// under an effective `CVaR`; empty otherwise.
     pub(crate) ub_stage_costs: Vec<f64>,
-    /// Whether the terminal pool carried boundary cuts when the static
-    /// terminal template was baked at priming; the terminal template is never
-    /// refrozen afterward, so this stays fixed for the rest of the run.
-    pub(crate) terminal_has_boundary_cuts: bool,
     /// Packed per-stage forward solver-stat scalars, the cross-rank allreduce
     /// input in `run_forward_phase` (empty until the first forward phase).
     pub(crate) fwd_stats_pack_local: Vec<f64>,
@@ -144,7 +140,6 @@ impl IterationScratch {
             freeze_scratch,
             ub_path_weights: Vec::with_capacity(max_local_fwd),
             ub_stage_costs: Vec::with_capacity(max_local_fwd * num_stages),
-            terminal_has_boundary_cuts: false,
             fwd_stats_pack_local: Vec::new(),
             fwd_stats_pack_global: Vec::new(),
             fwd_stats_unpacked: Vec::new(),

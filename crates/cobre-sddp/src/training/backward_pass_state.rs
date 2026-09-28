@@ -4729,7 +4729,6 @@ mod tests {
             fwd_offset: 0,
             local_forward_passes: total_forward_passes,
             total_forward_passes,
-            terminal_has_boundary_cuts: false,
             ctx: &stage_ctx,
             frozen: &frozen,
             fcf: &setup.fcf,

@@ -1000,6 +1000,10 @@ fn terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds() {
         inactive.fcf.pools[terminal].warm_start_count, 1,
         "the injected record still counts as a warm-started slot"
     );
+    assert!(
+        inactive.fcf.pools[terminal].has_warm_start_cuts(),
+        "the owner must still read the pool as boundary-loaded despite the inactive record"
+    );
 
     assert!(
         close(lb_inactive, lb_plain),
@@ -1034,6 +1038,10 @@ fn terminal_boundary_records_all_inactive_leave_the_plain_fan_bounds() {
     assert_eq!(
         inactive.fcf.pools[terminal].warm_start_count, 1,
         "the injected record still counts as a warm-started slot"
+    );
+    assert!(
+        inactive.fcf.pools[terminal].has_warm_start_cuts(),
+        "the owner must still read the pool as boundary-loaded despite the inactive record"
     );
 
     assert!(

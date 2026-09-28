@@ -1342,7 +1342,8 @@ impl Deref for ValidatedBoundaryCuts {
 /// `boundary_cuts.len()` slots — a leaf never receives a new cut, so no
 /// growable training capacity is reserved. The resulting nonzero
 /// `warm_start_count` is what makes the forward pass treat the terminal
-/// stage as boundary-loaded (`terminal_has_boundary_cuts`) and skip theta zeroing.
+/// stage as boundary-loaded ([`CutPool::has_warm_start_cuts`]) and skip
+/// theta zeroing.
 ///
 /// `boundary_cuts` must come from [`load_boundary_cuts`] or
 /// [`ValidatedBoundaryCuts::from_broadcast_records`] — its private fields

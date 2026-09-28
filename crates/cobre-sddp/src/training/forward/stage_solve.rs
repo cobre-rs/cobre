@@ -49,7 +49,6 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
         iteration,
         raw_noise,
         basis_row_capacity,
-        terminal_has_boundary_cuts,
         pool,
         dcs,
         node,
@@ -85,7 +84,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     // Zero theta at the terminal stage (no successor to penalise), but NOT when
     // boundary cuts are loaded — those constrain theta from below and must stay
     // visible in the objective.
-    if horizon.is_terminal(t.next().0) && !terminal_has_boundary_cuts {
+    if horizon.is_terminal(t.next().0) && !pool.has_warm_start_cuts() {
         ws.solver.set_col_bounds(&[state.theta], &[0.0], &[0.0]);
     }
 
@@ -163,7 +162,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     // Terminal boundary θ (post-horizon value-to-go) stays in the reported cost;
     // the interior subtraction would drop it from the UB alone. sddp.md
     // "Terminal boundary FCF in the reported total cost".
-    let stage_cost = if horizon.is_terminal(t.next().0) && terminal_has_boundary_cuts {
+    let stage_cost = if horizon.is_terminal(t.next().0) && pool.has_warm_start_cuts() {
         view_objective * ctx.cost_scale_factor
     } else {
         (view_objective - d_t * unscaled_primal[state.theta]) * ctx.cost_scale_factor

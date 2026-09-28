@@ -797,32 +797,37 @@ The forward trajectory cost and the simulation per-scenario cost both reconstruc
 a path total as `Σ_t cum_d(t)·stage_cost(t)`, where the interior `stage_cost(t) =
 (view.objective − d_t·θ_t)·cost_scale` subtracts the discounted epigraph `θ_t` —
 the future cost-to-go a later stage realizes as its own immediate cost. At the
-TERMINAL stage under a boundary policy (`terminal_has_boundary_cuts`, i.e.
-`fcf.pools[terminal].warm_start_count > 0`) `θ_t` prices the POST-HORIZON
-value-to-go, which no later stage realizes, so it is KEPT in the reported cost
-(`stage_cost = view.objective·cost_scale`) — matching the lower bound, which
-already carries it through `θ_0`'s cuts (`evaluate_lower_bound` pushes the full
-stage-0 `view.objective`). The present values coincide exactly because `θ_t`'s
-objective coefficient IS `d_t`, so `cum_d(t)·d_t·θ_t = cum_d(t+1)·θ_t` is the same
-term the LB books.
+TERMINAL stage under a boundary policy (`CutPool::has_warm_start_cuts` on the
+terminal stage's pool, i.e. `warm_start_count > 0`) `θ_t` prices the
+POST-HORIZON value-to-go, which no later stage realizes, so it is KEPT in the
+reported cost (`stage_cost = view.objective·cost_scale`) — matching the lower
+bound, which already carries it through `θ_0`'s cuts (`evaluate_lower_bound`
+pushes the full stage-0 `view.objective`). The present values coincide exactly
+because `θ_t`'s objective coefficient IS `d_t`, so
+`cum_d(t)·d_t·θ_t = cum_d(t+1)·θ_t` is the same term the LB books.
 
 Subtracting `θ_t` at the terminal boundary stage — the interior form — is the
 wrong-but-compiling alternative: it drops the post-horizon FCF from the UB /
 simulation cost alone, leaving `LB ≫ UB` (a NEGATIVE gap the stopping rule's
 `.max(0.0)` clamp then reads as "converged"). The branch is gated on
-`terminal && terminal_has_boundary_cuts`; a non-boundary study pins terminal `θ`
+`terminal && pool.has_warm_start_cuts()`; a non-boundary study pins terminal `θ`
 to `[0, 0]` (forward) or leaves the terminal pool empty with `θ`'s `0.0` lower
 bound driving it to `0` (simulation), so the fix is byte-neutral there.
 
-Read: `training/forward/enumerated.rs` (`solve_forward_node`),
+Read: `cut/pool.rs` (`CutPool::has_warm_start_cuts`, the flag's only formula),
+`training/forward/enumerated.rs` (`solve_forward_node`),
 `training/forward/stage_solve.rs` (`run_forward_stage`), `simulation/pipeline.rs`
-(`extract_sim_stage_result`, flag computed in `solve_simulation_stage`). Do NOT
-change `evaluate_lower_bound` (`training/lower_bound.rs`) — it is correct — and do
-NOT fold `θ` into the per-stage `compute_cost_result` breakdown
-(`simulation/extraction.rs`), which reports `immediate_cost`/`future_cost`
-separately by design. Pinned by `terminal_boundary_fcf_training_gap_is_consistent`
-and `terminal_boundary_fcf_simulation_cost_includes_post_horizon`
-(`tests/branching_value_oracle.rs`).
+(`extract_sim_stage_result`, flag read from the stage's pool in
+`solve_simulation_stage`). Do NOT change `evaluate_lower_bound`
+(`training/lower_bound.rs`) — it is correct — and do NOT fold `θ` into the
+per-stage `compute_cost_result` breakdown (`simulation/extraction.rs`), which
+reports `immediate_cost`/`future_cost` separately by design. Pinned by
+`terminal_boundary_fcf_training_gap_is_consistent`,
+`terminal_boundary_fcf_simulation_cost_includes_post_horizon`, and
+`terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds`
+(`tests/branching_value_oracle.rs`), and
+`terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan`
+(`setup/tests.rs`).
 
 ## Fused terminal slice projects with the parent pool, not the leaf pool
 

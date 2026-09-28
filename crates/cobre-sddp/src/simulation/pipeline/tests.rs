@@ -2337,7 +2337,6 @@ mod anticipated_ring_matches_forward_propagation {
                 iteration: 1,
                 raw_noise: &[],
                 basis_row_capacity: template.num_rows,
-                terminal_has_boundary_cuts: false,
                 pool: &fcf.pools[t],
                 dcs: None,
                 node: NodePos(t),

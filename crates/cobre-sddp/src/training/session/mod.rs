@@ -1287,10 +1287,7 @@ where
     /// [`prime_frozen_templates`] (`false`) and left untouched by every
     /// per-iteration refreeze (`true`). Skipping is deliberately confined to this
     /// flag, never a `pool_stage`-derived early return baked into the loop bounds,
-    /// so the priming call still bakes the terminal pool and captures
-    /// `scratch.terminal_has_boundary_cuts` from its active-cut count — the
-    /// static template property the forward pass reads instead of a live
-    /// pool lookup.
+    /// so the priming call still bakes the terminal pool.
     ///
     /// Deliberately left unoptimized: the refreeze is quadratic in the active-cut
     /// count only in the no-cut-selection default, which production never runs at
@@ -1307,9 +1304,6 @@ where
             let is_terminal = terminal_stage == Some(t);
             if skip_static_terminal && is_terminal {
                 continue;
-            }
-            if is_terminal {
-                self.scratch.terminal_has_boundary_cuts = self.fcf.pools[p].active_count() > 0;
             }
             build_cut_row_batch_into(
                 &mut self.scratch.freeze_row_batches[p],

@@ -504,16 +504,8 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     ws.scratch.unscaled_primal = unscaled_primal;
     ws.scratch.unscaled_dual = unscaled_dual;
 
-    // Study-level terminal-boundary flag, mirroring the forward pass's
-    // `terminal_has_boundary_cuts`; the pool read runs only at the terminal stage.
-    let num_stages = training_ctx.horizon.num_stages();
-    let include_terminal_theta = training_ctx.horizon.is_terminal(t.next().0)
-        && training_ctx
-            .node_graph
-            .any_stage_node(StageIdx(num_stages - 1))
-            .is_some_and(|n| {
-                fcf.pools[training_ctx.node_graph.nodes[n].pool_id].warm_start_count > 0
-            });
+    let include_terminal_theta =
+        training_ctx.horizon.is_terminal(t.next().0) && fcf.pools[pool_id].has_warm_start_cuts();
 
     let (immediate_cost, result) = extract_sim_stage_result(
         &mut ws.scratch.inflow_m3s_buf,

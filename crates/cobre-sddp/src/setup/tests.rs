@@ -10820,7 +10820,7 @@ fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
             .any_stage_node(last)
             .expect("terminal stage carries an alive node");
         let s2s3_pool = node_graph.nodes[s2s3_node].pool_id;
-        let s2s3 = setup.fcf.pools[s2s3_pool].warm_start_count > 0;
+        let s2s3 = setup.fcf.pools[s2s3_pool].has_warm_start_cuts();
 
         assert_eq!(s1, s2s3, "the S1 and S2/S3 formulas must agree");
         assert_eq!(

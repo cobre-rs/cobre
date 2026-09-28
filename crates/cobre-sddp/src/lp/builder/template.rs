@@ -734,12 +734,7 @@ pub fn build_stage_templates_resolving_layout(
     let (state_layout, _, anticipated_plants) =
         resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let study_total_hours: Vec<f64> = study_stages
-        .iter()
-        .map(|s| BlockClock::new(s).total_hours())
-        .collect();
-    let time_value = TimeValue::from_system(system, &anticipated_plants, &study_total_hours);
+    let time_value = TimeValue::from_system(system, &anticipated_plants);
     Ok(build_stage_templates(
         system,
         inflow_method,

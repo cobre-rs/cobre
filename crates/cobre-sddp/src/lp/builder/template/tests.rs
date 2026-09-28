@@ -23,7 +23,7 @@ use cobre_stochastic::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
-use crate::block_clock::{BlockClock, M3S_TO_HM3};
+use crate::block_clock::M3S_TO_HM3;
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
@@ -48,13 +48,8 @@ use super::super::test_support::{ctx_anticipated_and_mask_inputs, state_layout_f
 /// every direct test call site — resolved through the same production entry
 /// point (`TimeValue::from_system`) rather than hand-assembled.
 fn build_time_value_for(system: &cobre_core::System) -> TimeValue {
-    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let study_total_hours: Vec<f64> = study_stages
-        .iter()
-        .map(|s| BlockClock::new(s).total_hours())
-        .collect();
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
-    TimeValue::from_system(system, &anticipated_plants, &study_total_hours)
+    TimeValue::from_system(system, &anticipated_plants)
 }
 
 // ── Fixtures ─────────────────────────────────────────────────────────────

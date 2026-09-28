@@ -4,6 +4,7 @@
 use cobre_core::{EntityId, HorizonGraph, PostStudyStages, PostStudyThermalBound, Stage, System};
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
+use crate::block_clock::BlockClock;
 use crate::lp::indexer::{AnticipatedLocal, AnticipatedPlants};
 
 /// Compute per-stage one-step discount factors from study stages and a policy graph.
@@ -288,25 +289,24 @@ pub(crate) struct TimeValue {
 
 impl TimeValue {
     /// Resolve the whole delivery calendar directly from `system`: derives the
-    /// study stages (`id >= 0`) and the anticipated thermal ids (projected from
-    /// `anticipated_plants`, [`crate::indexer::AnticipatedPlants`]'s canonical
-    /// order), the post-study calendar and the policy graph, then delegates to
-    /// [`Self::resolve`]. `study_total_hours` is supplied by the caller
-    /// (`BlockClock`) rather than derived here — `block_clock` is not on this
-    /// module's import allowlist.
-    pub(crate) fn from_system(
-        system: &System,
-        anticipated_plants: &AnticipatedPlants,
-        study_total_hours: &[f64],
-    ) -> Self {
+    /// study stages (`id >= 0`) and their total hours (via [`BlockClock`]),
+    /// the anticipated thermal ids (projected from `anticipated_plants`,
+    /// [`crate::indexer::AnticipatedPlants`]'s canonical order), the
+    /// post-study calendar and the policy graph, then delegates to
+    /// [`Self::resolve`].
+    pub(crate) fn from_system(system: &System, anticipated_plants: &AnticipatedPlants) -> Self {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
+        let study_total_hours: Vec<f64> = study_stages
+            .iter()
+            .map(|s| BlockClock::new(s).total_hours())
+            .collect();
         let anticipated_thermal_ids: Vec<EntityId> = anticipated_plants
             .thermals()
             .map(|t| system.thermals()[t.get()].id)
             .collect();
         Self::resolve(
             &study_stages,
-            study_total_hours,
+            &study_total_hours,
             system.post_study_stages(),
             &anticipated_thermal_ids,
             system.policy_graph(),
@@ -572,40 +572,38 @@ mod tests {
 }
 
 #[cfg(test)]
+use cobre_core::temporal::{
+    BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+};
+
+/// A minimal parallel-mode, no-block stage for a delivery-calendar fixture.
+#[cfg(test)]
+fn stage(id: i32, start: chrono::NaiveDate, end: chrono::NaiveDate) -> Stage {
+    Stage {
+        index: 0,
+        id,
+        start_date: start,
+        end_date: end,
+        season_id: None,
+        blocks: vec![],
+        block_mode: BlockMode::Parallel,
+        state_config: StageStateConfig {
+            storage: true,
+            inflow_lags: false,
+        },
+        risk_config: StageRiskConfig::Expectation,
+        scenario_config: ScenarioSourceConfig {
+            branching_factor: 1,
+            noise_method: NoiseMethod::Saa,
+        },
+    }
+}
+
+#[cfg(test)]
 mod from_system_tests {
-    use super::{AnticipatedPlants, TimeValue};
-    use chrono::NaiveDate;
-    use cobre_core::temporal::{
-        BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
-    };
-    use cobre_core::{
-        AnticipatedConfig, Bus, DeficitSegment, EntityId, Stage, SystemBuilder, Thermal,
-    };
-
-    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| unreachable!("hardcoded date is valid"))
-    }
-
-    fn stage(id: i32, start: NaiveDate, end: NaiveDate) -> Stage {
-        Stage {
-            index: 0,
-            id,
-            start_date: start,
-            end_date: end,
-            season_id: None,
-            blocks: vec![],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 1,
-                noise_method: NoiseMethod::Saa,
-            },
-        }
-    }
+    use super::{AnticipatedPlants, TimeValue, stage};
+    use crate::test_support::ymd;
+    use cobre_core::{AnticipatedConfig, Bus, DeficitSegment, EntityId, SystemBuilder, Thermal};
 
     /// A two-stage system with one anticipated thermal resolves through
     /// `from_system` to the same `delivery_stage_ids` a study-only-axis
@@ -644,9 +642,8 @@ mod from_system_tests {
             .build()
             .expect("minimal two-stage anticipated system must build");
 
-        let study_total_hours = vec![744.0, 672.0];
         let anticipated_plants = AnticipatedPlants::build(system.thermals());
-        let tv = TimeValue::from_system(&system, &anticipated_plants, &study_total_hours);
+        let tv = TimeValue::from_system(&system, &anticipated_plants);
 
         assert_eq!(tv.delivery_stage_ids(), &[0, 1]);
     }
@@ -935,38 +932,10 @@ mod discount_factor_tests {
 mod resolve_tests {
     use super::{
         TimeValue, compute_cumulative_discount_factors, compute_per_stage_discount_factors,
-        resolve_post_study_artifacts,
+        resolve_post_study_artifacts, stage,
     };
-    use chrono::NaiveDate;
-    use cobre_core::temporal::{
-        BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
-    };
+    use crate::test_support::ymd;
     use cobre_core::{HorizonGraph, PostStudyStage, PostStudyStages, Stage};
-
-    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| unreachable!("hardcoded date is valid"))
-    }
-
-    fn stage(id: i32, start: NaiveDate, end: NaiveDate) -> Stage {
-        Stage {
-            index: 0,
-            id,
-            start_date: start,
-            end_date: end,
-            season_id: None,
-            blocks: vec![],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: true,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 1,
-                noise_method: NoiseMethod::Saa,
-            },
-        }
-    }
 
     /// `resolve` concatenates the study and post-study hours, cumulative
     /// factors and synthetic ids bit-exactly, for a deck with two post-study

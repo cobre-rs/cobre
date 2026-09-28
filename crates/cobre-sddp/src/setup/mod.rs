@@ -95,7 +95,7 @@ use cobre_stochastic::{
 };
 
 use crate::{
-    block_clock::{BlockClock, M3S_TO_HM3},
+    block_clock::M3S_TO_HM3,
     config::{CutManagementConfig, EventParams},
     cut::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
@@ -994,12 +994,7 @@ fn build_energy_and_templates(
         cost_scale_factor,
     )?;
 
-    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let study_total_hours: Vec<f64> = study_stages
-        .iter()
-        .map(|s| BlockClock::new(s).total_hours())
-        .collect();
-    let time_value = TimeValue::from_system(system, anticipated_plants, &study_total_hours);
+    let time_value = TimeValue::from_system(system, anticipated_plants);
 
     let mut stage_templates = build_stage_templates(
         system,

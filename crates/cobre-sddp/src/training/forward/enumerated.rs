@@ -389,12 +389,7 @@ fn solve_forward_node<S: SolverInterface + Send>(
         .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = ctx.stage_lag(t);
-    let downstream_par_order = ws
-        .scratch
-        .downstream_completed_lags
-        .len()
-        .checked_div(ws.scratch.lag_accumulator.len())
-        .unwrap_or(0);
+    let downstream_par_order = training_ctx.study_dims.downstream_par_order;
     assemble_outgoing_state(
         &mut ws.current_state,
         &unscaled_primal,

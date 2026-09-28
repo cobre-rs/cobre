@@ -541,12 +541,7 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
         .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = ctx.stage_lag(t);
-    let downstream_par_order = ws
-        .scratch
-        .downstream_completed_lags
-        .len()
-        .checked_div(ws.scratch.lag_accumulator.len())
-        .unwrap_or(0);
+    let downstream_par_order = study_dims.downstream_par_order;
     // Pass unscaled_primal as a separate borrow so the borrow checker sees it is
     // disjoint from the &mut ws.scratch.lag_* fields passed alongside it.
     let unscaled_primal_ref: &[f64] = &ws.scratch.unscaled_primal;

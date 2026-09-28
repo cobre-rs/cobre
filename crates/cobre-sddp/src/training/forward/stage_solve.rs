@@ -184,12 +184,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
         .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = resolve_stage_lag_transition(ctx.stage_lag_transitions, t.0);
-    let downstream_par_order = ws
-        .scratch
-        .downstream_completed_lags
-        .len()
-        .checked_div(ws.scratch.lag_accumulator.len())
-        .unwrap_or(0);
+    let downstream_par_order = training_ctx.study_dims.downstream_par_order;
     assemble_outgoing_state(
         &mut ws.current_state,
         &unscaled_primal,

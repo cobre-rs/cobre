@@ -1536,19 +1536,20 @@ fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> V
 ///
 /// The sole `resolve_point` consumer (via [`AnticipatedResolution::resolve`]).
 /// Warn-free: [`resolve_anticipated_commitments`] wraps this with the setup-time
-/// `K = 0` advisory; [`crate::lp::builder::build_stage_templates`] calls this core
+/// `K = 0` advisory; `lp::builder::test_support`'s fixture calls this core
 /// directly to attach an identical resolution onto its own `StateSpace` — the
 /// same accepted redundant-but-deterministic recompute this crate already
 /// applies to the bucket topology, not a second advisory emission. Returns the
 /// per-plant resolution and the anticipated-local constant leads: a
 /// `LeadStages(ℓ)` plant keeps `ℓ` byte-for-byte; a `LeadTime` plant takes its
-/// per-plant ring depth ([`PointResolution::ring_depth`]) — the plant's own
-/// `k_i` reachability/padding bound the slot masking and policy manifest read.
+/// per-plant ring depth ([`PointResolution::ring_depth`]) —
+/// [`crate::lp::indexer::for_each_live_commitment_slot`] owns which slots that
+/// ring depth reaches, for both the LP fill and the policy manifest read.
 ///
 /// The delivery axis is EXTENDED: `n_delivery = n_stages + n_post` while
 /// `n_decision` stays `n_stages` (decisions are only ever made in-study), so a
 /// `LeadTime` plant's resolution can target a post-study delivery. Widening
-/// this site alone is a half-switch — [`crate::lp::indexer::anticipated_gate::anticipated_resolution_for`]'s
+/// this site alone is a half-switch — [`crate::lp::indexer::anticipated_resolution_for`]'s
 /// fixture fallback must widen in lockstep or the two resolution paths desync
 /// the moment a study declares `post_study_stages`.
 pub(crate) fn resolve_anticipated_commitments_core(

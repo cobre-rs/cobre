@@ -206,11 +206,9 @@ pub(crate) struct AnticipatedLayout {
     /// Start of the commitment-MATURITY rows: one per anticipated plant
     /// whose delivery matures THIS stage (`PointResolution::is_anticipated_at`,
     /// `false` at a `K = 0` self-delivery). Every such plant gets exactly one
-    /// row here regardless of commissioning activeness — the row renders
-    /// EITHER the fish coupling or a same-slot carry, decided by
-    /// [`super::entries::fill_anticipated_fishing_entries`]'s `if`/`else` on
-    /// `is_anticipated_decision_active_for_delivery` — the single governing
-    /// branch. After operational-violation rows.
+    /// row here regardless of commissioning activeness — maturity always
+    /// fishes, via [`super::entries::fill_anticipated_fishing_entries`].
+    /// After operational-violation rows.
     pub(crate) row_anticipated_fishing_start: usize,
     /// Commitment-maturity row count this stage (`Some` count of
     /// `anticipated_fishing_row_pos`).
@@ -221,14 +219,15 @@ pub(crate) struct AnticipatedLayout {
     /// matures through the ring at all). Length `n_anticipated`.
     pub(crate) anticipated_fishing_row_pos: Vec<Option<usize>>,
     /// Start of the future-window commitment-carry equality rows (same-slot
-    /// hold, `slot^out − slot^in = 0`,
+    /// hold, `slot^out − slot^in = 0`, routed by
+    /// `fill_anticipated_slot_definition_entries` via
     /// [`super::delivery_ring::DeliveryRing::emit_carry_rows`]): every
     /// STRICTLY FUTURE, not-yet-due in-study slot, modular-addressed
-    /// (`ring_index(delivery_target) mod k_max`). The commitment maturing THIS stage is
-    /// never here even when the single governing branch selects carry over
-    /// fish — that carry renders through the maturity row above instead, so
-    /// this family and `row_anticipated_fishing_start` never double-book the
-    /// same delivery. Immediately after `row_anticipated_state_out_def_start`.
+    /// (`ring_index(delivery_target) mod k_max`). The commitment maturing THIS
+    /// stage is never here — it always fishes through the maturity row above;
+    /// carry-to-terminal belongs to the post-study-targeted slot alone, so this
+    /// family and `row_anticipated_fishing_start` never double-book the same
+    /// delivery. Immediately after `row_anticipated_state_out_def_start`.
     pub(crate) row_anticipated_slot_definition_start: usize,
     /// Count of future-window carrying slots this stage
     /// (`anticipated_slot_row_pos`'s `Some` count).
@@ -239,8 +238,8 @@ pub(crate) struct AnticipatedLayout {
     /// stage's compact row position within the future-window carry-row
     /// family, or `None` when the slot's target is this stage's own latch
     /// (`row_anticipated_state_out_def_start` owns it), matures THIS stage
-    /// (`row_anticipated_fishing_start` owns it, fish-or-carry), is beyond
-    /// the study horizon, or is not yet ready
+    /// (always fished instead, `row_anticipated_fishing_start` owns it), is
+    /// beyond the study horizon, or is not yet ready
     /// (`PointResolution::is_ready_at`). Length `n_anticipated * k_max`.
     pub(crate) anticipated_slot_row_pos: Vec<Option<usize>>,
 }
@@ -602,10 +601,8 @@ fn build_transit_bucket_row_pos(
 /// instead is the wrong-but-compiling alternative: it would freeze `[0, 0]`
 /// a slot the terminal boundary must carry, zeroing a commitment the FCF
 /// prices. This covers only STRICTLY FUTURE, not-yet-due deliveries; the
-/// commitment maturing EXACTLY this stage (`m == stage_idx`) is the single
-/// governing branch's fish-or-carry decision, owned by
-/// [`build_anticipated_fishing_row_pos`] and its entries-side `if`/`else` —
-/// never duplicated here.
+/// commitment maturing EXACTLY this stage (`m == stage_idx`) always fishes,
+/// owned by [`build_anticipated_fishing_row_pos`] — never duplicated here.
 ///
 /// The strictly-future ring-window sweep, its readiness filter, and its
 /// per-plant physical-target resolution are owned by
@@ -1321,8 +1318,7 @@ impl<'a> StageLayout<'a> {
         // delivery matures this stage (`build_anticipated_fishing_row_pos`) —
         // a `K = 0` self-delivery excludes a plant's row this stage, so the
         // row family is sparse like the deposit family below, not the dense
-        // `ctx.n_anticipated` count. Content (fish vs carry) is decided by
-        // `entries.rs`'s `if`/`else`, not here.
+        // `ctx.n_anticipated` count.
         let n_stages = ctx.resolved.bounds.n_stages();
         let (anticipated_fishing_row_pos, n_anticipated_fishing_rows) =
             build_anticipated_fishing_row_pos(state, n_stages, stage_idx);
@@ -1342,8 +1338,8 @@ impl<'a> StageLayout<'a> {
 
         // Future-window commitment-carry rows, modular-addressed
         // (`build_anticipated_slot_row_pos`) — strictly future, not-yet-due
-        // deliveries only; the maturing-this-stage carry (when the single
-        // governing branch selects it) is rendered by the maturity row above.
+        // deliveries only; the commitment maturing this stage is fished by
+        // the maturity row above instead.
         let (anticipated_slot_row_pos, n_anticipated_slot_definition_rows) =
             build_anticipated_slot_row_pos(state, n_stages, stage_idx);
         let row_anticipated_slot_definition_start =

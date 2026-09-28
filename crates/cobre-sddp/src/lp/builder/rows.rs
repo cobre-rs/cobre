@@ -490,8 +490,7 @@ pub(super) fn fill_operational_violation_rows(
 /// plant whose delivery matures THIS stage
 /// (`layout.anticipated.anticipated_fishing_row_pos`; a `K = 0`
 /// self-delivery, or no maturing delivery, excludes a plant's row this
-/// stage). Both branches of the single governing fish/carry decision
-/// (`entries.rs`'s `if`/`else`) render `[0, 0]` here identically.
+/// stage).
 pub(super) fn fill_anticipated_fishing_rows(
     layout: &StageLayout,
     row_lower: &mut [f64],

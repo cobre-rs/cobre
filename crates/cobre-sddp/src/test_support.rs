@@ -2766,15 +2766,8 @@ fn capture_patched_node_template_with_raw_noise(
     let space = &setup.stage_data.state;
     let n_load_buses = setup.stage_data.stage_templates.n_load_buses();
     let max_blocks = setup.loop_params.max_blocks;
-    let mut patch_buf = PatchBuffer::new(
-        space.hydro_count,
-        space.max_par_order,
-        n_load_buses,
-        max_blocks,
-        space.n_buckets,
-        space.n_anticipated,
-        space.k_max,
-    );
+    let ctx = setup.stage_ctx();
+    let mut patch_buf = PatchBuffer::new(space, ctx.load_bus_indices, ctx.geometry_per_stage);
     let mut scratch = ScratchBuffers::new(WorkspaceSizing {
         hydro_count: space.hydro_count,
         max_par_order: space.max_par_order,
@@ -2791,7 +2784,6 @@ fn capture_patched_node_template_with_raw_noise(
         k_max: space.k_max,
     });
 
-    let ctx = setup.stage_ctx();
     let training_ctx = setup.training_ctx();
     let params = StageSolvePrepParams {
         state_source: StateSource(incoming_state),
@@ -2846,14 +2838,7 @@ pub fn no_cut_root_lower_bound<S: SolverInterface>(
     let state = training_ctx.state;
     let stage_ctx = setup.stage_ctx();
 
-    let mut patch_buf = crate::lower_bound::lower_bound_patch_buffer(
-        state.hydro_count,
-        state.max_par_order,
-        state.n_buckets,
-        state.n_anticipated,
-        state.k_max,
-        &stage_ctx,
-    );
+    let mut patch_buf = crate::lower_bound::lower_bound_patch_buffer(state, &stage_ctx);
     let mut lb_cut_batch = RowBatch {
         num_rows: 0,
         row_starts: Vec::new(),

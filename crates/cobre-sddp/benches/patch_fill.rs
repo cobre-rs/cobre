@@ -7,6 +7,7 @@
 
 use cobre_sddp::indexer::{BlockGrid, BlockRowFamily, StateSpace};
 use cobre_sddp::lp::builder::PatchBuffer;
+use cobre_sddp::test_support::equipment_free_geometry;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
@@ -16,13 +17,14 @@ const SHAPES: &[(&str, usize, usize, usize)] =
 fn bench_patch_fill(c: &mut Criterion) {
     let mut group = c.benchmark_group("patch_fill");
     for &(name, n_buses, n_blocks, n_hydros) in SHAPES {
-        let mut buf = PatchBuffer::new(n_hydros, 0, n_buses, n_blocks, 0, 0, 0);
-        let load_rhs = vec![100.0_f64; n_buses * n_blocks];
+        let state = StateSpace::new(n_hydros, 0, 0, Vec::new(), 0, 0, vec![], &vec![0; n_hydros]);
         let bus_positions: Vec<usize> = (0..n_buses).rev().collect();
+        let geometry = equipment_free_geometry(&[n_blocks]);
+        let mut buf = PatchBuffer::new(&state, &bus_positions, &geometry);
+        let load_rhs = vec![100.0_f64; n_buses * n_blocks];
         let z_inflow_rhs = vec![0.5_f64; n_hydros];
         let row_scale: [f64; 0] = [];
         let load_rows = BlockRowFamily::per_block(0..n_buses * n_blocks);
-        let state = StateSpace::new(n_hydros, 0, 0, Vec::new(), 0, 0, vec![], &vec![0; n_hydros]);
 
         group.bench_function(name, |b| {
             b.iter(|| {

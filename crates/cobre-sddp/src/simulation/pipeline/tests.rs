@@ -503,11 +503,17 @@ fn single_workspace_with_load_buses(
     solver: MockSolver,
     n_load_buses: usize,
 ) -> Vec<SolverWorkspace<MockSolver>> {
+    let load_bus_indices: Vec<usize> = (0..n_load_buses).collect();
+    let geometry = test_support::equipment_free_geometry(&[1]);
     vec![SolverWorkspace {
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1, 0, 0, 0),
+        patch_buf: PatchBuffer::new(
+            &test_support::state_layout(1, 0),
+            &load_bus_indices,
+            &geometry,
+        ),
         current_state: Vec::with_capacity(1),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::new(),
@@ -555,7 +561,7 @@ fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0), // N=1, L=0
+        patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]), // N=1, L=0
         current_state: Vec::with_capacity(1),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::new(),
@@ -1405,7 +1411,7 @@ fn single_workspace_with_hydros(
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0, 0, 0, 0),
+        patch_buf: PatchBuffer::new(&test_support::state_layout(hydro_count, 0), &[], &[]),
         current_state: Vec::with_capacity(hydro_count),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::new(),
@@ -1852,12 +1858,40 @@ mod dcs_simulation {
             k_max: 0,
         };
         let solver = ActiveSolver::new().expect("ActiveSolver::new()");
+        let state = test_support::state_layout(1, 0);
+        let stochastic = test_support::hydro_free_stochastic_context(1, 1);
+        let node_graph = crate::test_support::chain_node_graph(&stochastic);
+        let study_dims = test_support::study_dims();
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
+        let initial_state: Vec<f64> = Vec::new();
+        let training_ctx = TrainingContext {
+            node_graph: &node_graph,
+            horizon: &horizon,
+            state: &state,
+            cut_state_layouts: &cut_state_layouts,
+            study_dims: &study_dims,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+        };
         SolverWorkspace::new(
             0,
             0,
             solver,
-            PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
-            1,
+            PatchBuffer::new(&state, &[], &[]),
+            &training_ctx,
             sizing,
         )
     }
@@ -2289,8 +2323,8 @@ mod anticipated_ring_matches_forward_propagation {
             0,
             0,
             SequencedSolver::new(ring_sequence(num_cols)),
-            PatchBuffer::new(0, 0, 0, 0, 0, 1, 2),
-            state.n_state,
+            PatchBuffer::new(state, &[], &[]),
+            training_ctx,
             ring_sizing(state.n_state),
         );
         ws.current_state.clear();
@@ -2352,8 +2386,8 @@ mod anticipated_ring_matches_forward_propagation {
             0,
             0,
             SequencedSolver::new(ring_sequence(num_cols)),
-            PatchBuffer::new(0, 0, 0, 0, 0, 1, 2),
-            state.n_state,
+            PatchBuffer::new(state, &[], &[]),
+            training_ctx,
             ring_sizing(state.n_state),
         );
         ws.current_state.clear();

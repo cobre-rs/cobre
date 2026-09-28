@@ -2341,7 +2341,11 @@ mod tests {
             rank: 0,
             worker_id: 0,
             solver: ProfiledSolver::new(solver),
-            patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(
+                &crate::test_support::state_layout(hydro_count, 0),
+                &[],
+                &[],
+            ),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),

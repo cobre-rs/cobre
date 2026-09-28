@@ -332,7 +332,8 @@ impl StudySetup {
         let mut pool = WorkspacePool::try_new(
             rank,
             n_threads,
-            self.stage_data.state.n_state,
+            &self.training_ctx(),
+            &self.stage_ctx(),
             WorkspaceSizing {
                 hydro_count: self.stage_data.state.hydro_count,
                 max_par_order: self.stage_data.state.max_par_order,

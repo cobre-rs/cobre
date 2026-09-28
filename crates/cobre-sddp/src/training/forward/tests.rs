@@ -538,7 +538,7 @@ fn single_workspace(solver: MockSolver, state: &StateSpace) -> SolverWorkspace<M
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(state.hydro_count, state.max_par_order, 0, 0, 0, 0, 0),
+        patch_buf: PatchBuffer::new(state, &[], &[]),
         current_state: Vec::with_capacity(state.n_state),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::with_capacity(state.hydro_count),
@@ -2473,7 +2473,9 @@ fn forward_pass_load_noise_positive_realization() {
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus(300.0, 30.0);
     let state = test_support::state_layout(1, 0);
-    let patch_buf = PatchBuffer::new(1, 0, n_load_buses, 1, 0, 0, 0);
+    let load_bus_indices = vec![0usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
+    let patch_buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
     let mut ws = SolverWorkspace {
         rank: 0,
         worker_id: 0,
@@ -2527,8 +2529,6 @@ fn forward_pass_load_noise_positive_realization() {
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let mut basis_store = BasisStore::new(1, 1);
-    let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
@@ -2612,7 +2612,9 @@ fn forward_pass_load_noise_clamped_to_zero() {
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus(-1000.0, 1.0);
     let state = test_support::state_layout(1, 0);
-    let patch_buf = PatchBuffer::new(1, 0, n_load_buses, 1, 0, 0, 0);
+    let load_bus_indices = vec![0usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
+    let patch_buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
     let mut ws = SolverWorkspace {
         rank: 0,
         worker_id: 0,
@@ -2666,8 +2668,6 @@ fn forward_pass_load_noise_clamped_to_zero() {
     let fcf = FutureCostFunction::new(1, state.n_state, 1, 10, &[0; 1]);
     let horizon = HorizonMode::Finite { num_stages: 1 };
     let mut basis_store = BasisStore::new(1, 1);
-    let load_bus_indices = vec![0usize];
-    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1)];
 
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
@@ -3307,12 +3307,40 @@ mod dcs_forward {
             k_max: 0,
         };
         let solver = ActiveSolver::new().expect("ActiveSolver::new()");
+        let state = test_support::state_layout(1, 0);
+        let stochastic = test_support::hydro_free_stochastic_context(1, 1);
+        let node_graph = crate::test_support::chain_node_graph(&stochastic);
+        let study_dims = test_support::study_dims();
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
+        let initial_state: Vec<f64> = Vec::new();
+        let training_ctx = TrainingContext {
+            node_graph: &node_graph,
+            horizon: &horizon,
+            state: &state,
+            cut_state_layouts: &cut_state_layouts,
+            study_dims: &study_dims,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+        };
         SolverWorkspace::new(
             0,
             0,
             solver,
-            PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
-            1,
+            PatchBuffer::new(&state, &[], &[]),
+            &training_ctx,
             sizing,
         )
     }
@@ -3948,12 +3976,41 @@ mod transit_bucket_copy_gap {
             n_anticipated: 1,
             k_max: 1,
         };
+        let state =
+            test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
+        let stochastic = one_hydro_stochastic_context();
+        let node_graph = crate::test_support::chain_node_graph(&stochastic);
+        let study_dims = test_support::study_dims();
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
+        let initial_state: Vec<f64> = Vec::new();
+        let training_ctx = TrainingContext {
+            node_graph: &node_graph,
+            horizon: &horizon,
+            state: &state,
+            cut_state_layouts: &cut_state_layouts,
+            study_dims: &study_dims,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+        };
         SolverWorkspace::new(
             0,
             0,
             MockSolver::always_ok(transit_bucket_solution()),
-            PatchBuffer::new(1, 1, 0, 0, 1, 1, 1),
-            4,
+            PatchBuffer::new(&state, &[], &[]),
+            &training_ctx,
             sizing,
         )
     }

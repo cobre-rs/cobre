@@ -1675,19 +1675,6 @@ mod by_node_scratch {
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let comm = StubComm;
-        let mut workspace_pool = WorkspacePool::new(
-            0,
-            1,
-            n_state,
-            WorkspaceSizing {
-                hydro_count: 1,
-                max_openings: n_openings,
-                initial_pool_capacity: 20,
-                n_state,
-                ..WorkspaceSizing::default()
-            },
-            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
-        );
         let mut basis_store = BasisStore::new(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
@@ -1717,6 +1704,20 @@ mod by_node_scratch {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let mut workspace_pool = WorkspacePool::new(
+            0,
+            1,
+            &training_ctx,
+            &ctx,
+            WorkspaceSizing {
+                hydro_count: 1,
+                max_openings: n_openings,
+                initial_pool_capacity: 20,
+                n_state,
+                ..WorkspaceSizing::default()
+            },
+            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
+        );
 
         let local_count = exchange.local_count();
         let mut state =
@@ -1794,19 +1795,6 @@ mod by_node_scratch {
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let comm = StubComm;
-        let mut workspace_pool = WorkspacePool::new(
-            0,
-            1,
-            n_state,
-            WorkspaceSizing {
-                hydro_count: 1,
-                max_openings: n_openings,
-                initial_pool_capacity: 20,
-                n_state,
-                ..WorkspaceSizing::default()
-            },
-            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
-        );
         let mut basis_store = BasisStore::new(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
@@ -1836,6 +1824,20 @@ mod by_node_scratch {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let mut workspace_pool = WorkspacePool::new(
+            0,
+            1,
+            &training_ctx,
+            &ctx,
+            WorkspaceSizing {
+                hydro_count: 1,
+                max_openings: n_openings,
+                initial_pool_capacity: 20,
+                n_state,
+                ..WorkspaceSizing::default()
+            },
+            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
+        );
 
         let local_count = exchange.local_count();
         let mut state =

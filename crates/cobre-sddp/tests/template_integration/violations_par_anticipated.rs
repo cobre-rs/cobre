@@ -324,8 +324,32 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     let m: usize = 2;
     let b_max: usize = 3;
 
+    // `load_bus_indices`/`geometry_per_stage` are owners `PatchBuffer::new` reads
+    // only through `.len()`/`StageGeometry::max_blocks`; their content need not
+    // correspond to a real M=2-load-bus, N=3-hydro system — a real single-load-bus,
+    // `b_max`-block geometry (built via the existing `one_bus_system_n_blks`
+    // fixture, the only public route to a `StageGeometry` outside the crate)
+    // supplies the block count, and an arbitrary `m`-long index slice supplies M.
+    let load_bus_indices: Vec<usize> = (0..m).collect();
+    let geometry_system = one_bus_system_n_blks(b_max);
+    let geometry_result = build_stage_templates_resolving_layout(
+        &geometry_system,
+        no_penalty_config(),
+        &PrecomputedPar::default(),
+        &PrecomputedNormal::default(),
+        &default_production(&geometry_system),
+        &default_evaporation(&geometry_system),
+        &ResolvedParameters::default(),
+    )
+    .expect("geometry fixture build ok");
+    let state = StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]);
+
     let capacity_formula = m * b_max + n;
-    let mut buf = PatchBuffer::new(n, l, m, b_max, 0, 0, 0);
+    let mut buf = PatchBuffer::new(
+        &state,
+        &load_bus_indices,
+        &geometry_result.geometry_per_stage,
+    );
 
     assert_eq!(
         buf.indices.len(),
@@ -351,7 +375,6 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     );
 
     let z_inflow_rhs: Vec<f64> = (0..n).map(|h| 80.0 + h as f64).collect();
-    let state = StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]);
     buf.fill_z_inflow_patches(&state, &z_inflow_rhs, &[]);
 
     // The count uses b_active, not B_max: any generic-constraint patching would push

@@ -1385,14 +1385,35 @@ mod determinism {
             fx.n_stages,
         );
 
+        let sim_training_ctx = TrainingContext {
+            node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
+            horizon: &fx.horizon,
+            state: &fx.state,
+            cut_state_layouts: &all_enabled_cut_state_layouts(&fx.state, fx.n_stages),
+            study_dims: &study_dims(),
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            stages: &[],
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+        };
         let mut workspaces: Vec<SolverWorkspace<MockSolver3H>> = (0..n_workspaces)
             .map(|idx| {
                 SolverWorkspace::new(
                     0,
                     i32::try_from(idx).expect("worker_id fits in i32"),
                     MockSolver3H::new(100.0),
-                    PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-                    fx.state.n_state,
+                    PatchBuffer::new(&fx.state, &[], &[]),
+                    &sim_training_ctx,
                     WorkspaceSizing {
                         hydro_count: fx.state.hydro_count,
                         max_par_order: fx.state.max_par_order,

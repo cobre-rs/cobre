@@ -8,7 +8,7 @@ use cobre_solver::freeze_rows_into_template;
 use cobre_solver::{RowBatch, StageTemplate};
 
 use crate::{
-    context::StageContext,
+    context::{StageContext, TrainingContext},
     cut::CutRowMap,
     lower_bound::LbEvalScratch,
     lp::builder::PatchBuffer,
@@ -74,24 +74,17 @@ impl IterationScratch {
     /// Allocate all iteration scratch buffers; pre-freeze each `frozen_templates[p]`
     /// as an empty-cut-batch structural copy of pool `p`'s base stage template so
     /// iteration 1 can use the frozen load path.
-    // Rationale: each argument sizes a distinct pre-allocated scratch region with
-    // its own sizing formula, so no sub-struct would group a subset of the arity.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         max_local_fwd: usize,
         num_stages: usize,
         pool_stage: &[StageIdx],
-        n_state: usize,
         lb_root_pool_capacity: usize,
         template_0_num_rows: usize,
-        hydro_count: usize,
-        max_par_order: usize,
-        n_buckets: usize,
-        n_anticipated: usize,
-        k_max: usize,
+        training_ctx: &TrainingContext<'_>,
         stage_ctx: &StageContext<'_>,
     ) -> Self {
         let n_pools = pool_stage.len();
+        let n_state = training_ctx.state.n_state;
         let records: Vec<TrajectoryRecord> = (0..max_local_fwd * num_stages)
             .map(|_| TrajectoryRecord {
                 primal: Vec::new(),
@@ -102,14 +95,7 @@ impl IterationScratch {
             })
             .collect();
 
-        let patch_buf = crate::lower_bound::lower_bound_patch_buffer(
-            hydro_count,
-            max_par_order,
-            n_buckets,
-            n_anticipated,
-            k_max,
-            stage_ctx,
-        );
+        let patch_buf = crate::lower_bound::lower_bound_patch_buffer(training_ctx.state, stage_ctx);
 
         let empty_row_batch = || RowBatch {
             num_rows: 0,
@@ -145,8 +131,8 @@ impl IterationScratch {
         // The LB path is always stage 0, so `n_load_buses`/`max_blocks`/pool-capacity
         // sizing hints are irrelevant; `ScratchBuffers` fields grow on demand.
         let lb_noise_scratch = ScratchBuffers::new(WorkspaceSizing {
-            hydro_count,
-            max_par_order,
+            hydro_count: training_ctx.state.hydro_count,
+            max_par_order: training_ctx.state.max_par_order,
             downstream_par_order: stage_ctx.downstream_par_order,
             ..WorkspaceSizing::default()
         });
@@ -192,9 +178,70 @@ mod tests {
     use cobre_solver::StageTemplate;
 
     use super::IterationScratch;
+    use crate::context::TrainingContext;
     use crate::lp::builder::StageGeometry;
+    use crate::lp::indexer::StateSpace;
     use crate::setup::node_graph::StageIdx;
-    use crate::test_support::{StageContextFixture, equipment_free_geometry};
+    use crate::test_support::{
+        StageContextFixture, equipment_free_geometry, state_layout, state_layout_full,
+        state_layout_with_transit_buckets,
+    };
+
+    /// Owns the pieces a [`TrainingContext`] borrows, so sizing tests can lend
+    /// one without threading a `stochastic`/`node_graph`/`study_dims` triple
+    /// through every call site.
+    struct TestTrainingCtx {
+        state: StateSpace,
+        stochastic: cobre_stochastic::StochasticContext,
+        node_graph: crate::setup::node_graph::NodeGraph,
+        study_dims: crate::lp::indexer::StudyDimensions,
+        cut_state_layouts: Vec<crate::lp::indexer::CutStateProjection>,
+        horizon: crate::horizon_mode::HorizonMode,
+        inflow_method: crate::InflowNonNegativityMethod,
+        initial_state: Vec<f64>,
+    }
+
+    impl TestTrainingCtx {
+        fn new(state: StateSpace) -> Self {
+            let stochastic = crate::test_support::hydro_free_stochastic_context(1, 1);
+            let node_graph = crate::test_support::chain_node_graph(&stochastic);
+            let cut_state_layouts = crate::test_support::all_enabled_cut_state_layouts(&state, 1);
+            Self {
+                stochastic,
+                node_graph,
+                study_dims: crate::test_support::study_dims(),
+                cut_state_layouts,
+                horizon: crate::horizon_mode::HorizonMode::Finite { num_stages: 1 },
+                inflow_method: crate::InflowNonNegativityMethod::None,
+                initial_state: Vec::new(),
+                state,
+            }
+        }
+
+        fn training_ctx(&self) -> TrainingContext<'_> {
+            TrainingContext {
+                horizon: &self.horizon,
+                state: &self.state,
+                cut_state_layouts: &self.cut_state_layouts,
+                study_dims: &self.study_dims,
+                inflow_method: &self.inflow_method,
+                stochastic: &self.stochastic,
+                initial_state: &self.initial_state,
+                inflow_scheme: cobre_core::scenario::SamplingScheme::InSample,
+                load_scheme: cobre_core::scenario::SamplingScheme::InSample,
+                ncs_scheme: cobre_core::scenario::SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                lag_accum_seed: &[],
+                lag_weight_seed: &[],
+                dcs: None,
+                node_graph: &self.node_graph,
+            }
+        }
+    }
 
     fn minimal_template() -> StageTemplate {
         StageTemplate {
@@ -226,29 +273,24 @@ mod tests {
     fn iteration_scratch_new_sizes_vecs_correctly() {
         let max_local_fwd = 2;
         let num_stages = 3;
-        let n_state = 4;
         let lb_root_pool_capacity = 10;
         let template_0_num_rows = 5;
-        let hydro_count = 1;
-        let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
+        let training_fixture = TestTrainingCtx::new(state_layout(1, 1));
+        let training_ctx = training_fixture.training_ctx();
+        let n_state = training_ctx.state.n_state;
 
         let scratch = IterationScratch::new(
             max_local_fwd,
             num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 
@@ -283,29 +325,23 @@ mod tests {
     fn iteration_scratch_new_pre_freezes_templates() {
         let max_local_fwd = 2;
         let num_stages = 3;
-        let n_state = 4;
         let lb_root_pool_capacity = 10;
         let template_0_num_rows = 5;
-        let hydro_count = 1;
-        let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
+        let training_fixture = TestTrainingCtx::new(state_layout(1, 1));
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
             num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 
@@ -328,7 +364,6 @@ mod tests {
     fn iteration_scratch_new_sizes_patch_buffer_for_anticipated_thermals() {
         let max_local_fwd = 1;
         let num_stages = 2;
-        let n_state = 4;
         let lb_root_pool_capacity = 4;
         let template_0_num_rows = 4;
         let hydro_count = 2;
@@ -340,19 +375,26 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
+        let state = state_layout_full(
+            hydro_count,
+            max_par_order,
+            n_anticipated,
+            vec![k_max; n_anticipated],
+        );
+        assert_eq!(
+            state.k_max, k_max,
+            "ring_size must resolve to k_max for uniform leads"
+        );
+        let training_fixture = TestTrainingCtx::new(state);
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
             num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            n_anticipated,
-            k_max,
+            &training_ctx,
             &stage_ctx,
         );
 
@@ -391,7 +433,6 @@ mod tests {
     fn iteration_scratch_new_patch_buffer_zero_anticipated_unchanged() {
         let max_local_fwd = 1;
         let num_stages = 2;
-        let n_state = 2;
         let lb_root_pool_capacity = 4;
         let template_0_num_rows = 4;
         let hydro_count = 2;
@@ -401,19 +442,16 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
+        let training_fixture = TestTrainingCtx::new(state_layout(hydro_count, max_par_order));
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
             num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 
@@ -433,7 +471,6 @@ mod tests {
     fn iteration_scratch_new_sizes_patch_buffer_for_transit_buckets() {
         let max_local_fwd = 1;
         let num_stages = 2;
-        let n_state = 5;
         let lb_root_pool_capacity = 4;
         let template_0_num_rows = 4;
         let hydro_count = 2;
@@ -444,19 +481,25 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
+        let bucket_order = (0..n_buckets).map(|d| (0, d)).collect();
+        let state = state_layout_with_transit_buckets(
+            hydro_count,
+            max_par_order,
+            n_buckets,
+            bucket_order,
+            0,
+            vec![],
+        );
+        let training_fixture = TestTrainingCtx::new(state);
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
             num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            n_buckets,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 

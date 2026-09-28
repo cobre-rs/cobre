@@ -543,7 +543,7 @@ fn single_workspace<S: SolverInterface + Send>(
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+        patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
         current_state: Vec::with_capacity(n_state),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::new(),
@@ -593,7 +593,18 @@ fn transit_bucket_only_workspace(
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(0, 0, 0, 0, n_buckets, 0, 0),
+        patch_buf: PatchBuffer::new(
+            &test_support::state_layout_with_transit_buckets(
+                0,
+                0,
+                n_buckets,
+                (0..n_buckets).map(|d| (0, d)).collect(),
+                0,
+                vec![],
+            ),
+            &[],
+            &[],
+        ),
         current_state: Vec::new(),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::new(),
@@ -2303,7 +2314,7 @@ fn test_backward_pass_parallel_cut_determinism() {
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver_1),
-        patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+        patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
         current_state: Vec::with_capacity(n_state),
         scratch: ScratchBuffers {
             inflow_m3s_buf: Vec::new(),
@@ -2399,7 +2410,7 @@ fn test_backward_pass_parallel_cut_determinism() {
             rank: 0,
             worker_id: idx,
             solver: ProfiledSolver::new(MockSolver::always_ok(solution.clone())),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),
@@ -2717,8 +2728,12 @@ fn backward_pass_load_patches_applied() {
     let stochastic = make_stochastic_context_with_load(n_stages, n_openings, 300.0, 30.0);
     let state = test_support::state_layout(1, 0);
 
+    // geometry_per_stage[successor=1].load_balance starts at 10; load_bus_indices=[0]; 1 block/stage.
+    let load_bus_indices = vec![0_usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
+
     // PatchBuffer: n_hydros=1, max_par_order=0, n_load_buses=1, max_blocks=1.
-    let patch_buf = PatchBuffer::new(1, 0, 1, 1, 0, 0, 0);
+    let patch_buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
 
     // Template: 2 rows; row content is irrelevant here (this test exercises
     // only the load-balance patch, addressed via geometry_per_stage).
@@ -2800,10 +2815,6 @@ fn backward_pass_load_patches_applied() {
     let comm = StubComm;
     let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-    // geometry_per_stage[successor=1].load_balance starts at 10; load_bus_indices=[0]; 1 block/stage.
-    let load_bus_indices = vec![0_usize];
-    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
-
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let state_boxes = permissive_state_boxes(n_state, n_stages);
     let _ = run_backward_pass(&mut BackwardPassInputs {
@@ -2880,7 +2891,7 @@ fn backward_pass_no_load_buses_unchanged() {
     let state = test_support::state_layout(1, 0);
 
     // PatchBuffer with no load buses: n_load_buses=0, max_blocks=1.
-    let patch_buf = PatchBuffer::new(1, 0, 0, 0, 0, 0, 0);
+    let patch_buf = PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]);
 
     let template = StageTemplate {
         num_cols: 3,
@@ -3037,7 +3048,10 @@ fn backward_pass_cut_coefficients_unaffected() {
     let stochastic = make_stochastic_context_with_load(n_stages, n_openings, 200.0, 20.0);
     let state = test_support::state_layout(1, 0);
 
-    let patch_buf = PatchBuffer::new(1, 0, 1, 1, 0, 0, 0);
+    let load_bus_indices = vec![0_usize];
+    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
+
+    let patch_buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
 
     let template = StageTemplate {
         num_cols: 3,
@@ -3113,9 +3127,6 @@ fn backward_pass_cut_coefficients_unaffected() {
     let mut workspaces = vec![ws];
     let comm = StubComm;
     let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
-
-    let load_bus_indices = vec![0_usize];
-    let geometry_per_stage = vec![test_support::geometry_with_load_balance(10, 1, 1); n_stages];
 
     let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
     let state_boxes = permissive_state_boxes(n_state, n_stages);
@@ -3486,7 +3497,7 @@ fn run_backward_pass_with_n_workers(n_workers: usize) -> FutureCostFunction {
             rank: 0,
             worker_id: i32::try_from(idx).expect("worker_id fits in i32"),
             solver: ProfiledSolver::new(MockSolver::always_ok(solution.clone())),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),
@@ -3835,7 +3846,7 @@ fn allgatherv_single_rank_two_workers_stage_stats_has_per_worker_entries() {
             rank: 0,
             worker_id: i32::try_from(idx).expect("idx fits in i32"),
             solver: ProfiledSolver::new(MockSolver::always_ok(solution.clone())),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),
@@ -4048,7 +4059,7 @@ fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
             rank: 0,
             worker_id: i32::try_from(idx).expect("idx fits in i32"),
             solver: ProfiledSolver::new(MockSolver::always_ok(solution.clone())),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),
@@ -4739,7 +4750,7 @@ fn handshake_passes_with_local_backend() {
             rank: 0,
             worker_id: i32::try_from(idx).expect("idx fits i32"),
             solver: ProfiledSolver::new(MockSolver::always_ok(solution.clone())),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
                 inflow_m3s_buf: Vec::new(),
@@ -5138,12 +5149,40 @@ fn dcs_active_workspace() -> Vec<SolverWorkspace<ActiveSolver>> {
         k_max: 0,
     };
     let solver = ActiveSolver::new().expect("ActiveSolver::new()");
+    let state = test_support::state_layout(1, 0);
+    let stochastic = test_support::hydro_free_stochastic_context(1, 1);
+    let node_graph = crate::test_support::chain_node_graph(&stochastic);
+    let study_dims = test_support::study_dims();
+    let horizon = HorizonMode::Finite { num_stages: 1 };
+    let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
+    let initial_state: Vec<f64> = Vec::new();
+    let training_ctx = TrainingContext {
+        node_graph: &node_graph,
+        horizon: &horizon,
+        state: &state,
+        cut_state_layouts: &cut_state_layouts,
+        study_dims: &study_dims,
+        inflow_method: &InflowNonNegativityMethod::None,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        stages: &[],
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        lag_accum_seed: &[],
+        lag_weight_seed: &[],
+        dcs: None,
+    };
     vec![SolverWorkspace::new(
         0,
         0,
         solver,
-        PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
-        1,
+        PatchBuffer::new(&state, &[], &[]),
+        &training_ctx,
         sizing,
     )]
 }

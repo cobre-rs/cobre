@@ -250,13 +250,11 @@ impl StudySetup {
 
     /// Construct a [`TrainingContext`] borrowing from this setup.
     ///
-    /// Test-support hook (mirrors [`Self::set_risk_measures`] /
-    /// [`Self::set_scheduler`] in this file): reachable from downstream
-    /// integration tests via the `test-support` feature so a probe can drive
+    /// `create_workspace_pool`'s own owner-based sizing reads it; it is also
+    /// reachable from downstream integration tests so a probe can drive
     /// production entry points (e.g. `forward::run_forward_pass`,
     /// `solve::stage_solve::run_stage_solve`) that take a `&TrainingContext`
     /// without duplicating this crate's private field layout.
-    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn training_ctx(&self) -> TrainingContext<'_> {
         let tr = &self.scenario_libraries.training;

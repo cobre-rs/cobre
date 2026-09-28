@@ -483,12 +483,40 @@ fn zero_energy_conversion(n_hydros: usize, n_stages: usize) -> EnergyConversionS
 /// All tests use a single workspace (serial execution) so that existing
 /// assertions about scenario ordering and call counts remain valid.
 fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
+    let state = state_layout_for(1, 0);
+    let stochastic = cobre_sddp::test_support::hydro_free_stochastic_context(1, 1);
+    let node_graph = cobre_sddp::test_support::chain_node_graph(&stochastic);
+    let sd = study_dims();
+    let horizon = HorizonMode::Finite { num_stages: 1 };
+    let cut_state_layouts = all_enabled_cut_state_layouts(&state, 1);
+    let initial_state: Vec<f64> = Vec::new();
+    let training_ctx = TrainingContext {
+        node_graph: &node_graph,
+        horizon: &horizon,
+        state: &state,
+        cut_state_layouts: &cut_state_layouts,
+        study_dims: &sd,
+        inflow_method: &InflowNonNegativityMethod::None,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        stages: &[],
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        lag_accum_seed: &[],
+        lag_weight_seed: &[],
+        dcs: None,
+    };
     vec![SolverWorkspace::new(
         0,
         0,
         solver,
-        PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
-        1,
+        PatchBuffer::new(&state, &[], &[]),
+        &training_ctx,
         WorkspaceSizing {
             hydro_count: 1,
             ..WorkspaceSizing::default()
@@ -1307,14 +1335,35 @@ fn test_simulation_parallel_cost_determinism() {
     .unwrap();
 
     let (tx4, _rx4) = mpsc::sync_channel(64);
+    let workspace_4_training_ctx = TrainingContext {
+        node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
+        horizon: &horizon,
+        state: &state,
+        cut_state_layouts: &all_enabled_cut_state_layouts(&state, n_stages),
+        study_dims: &study_dims(),
+        inflow_method: &InflowNonNegativityMethod::None,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        stages: &[],
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        lag_accum_seed: &[],
+        lag_weight_seed: &[],
+        dcs: None,
+    };
     let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4_i32)
         .map(|idx| {
             SolverWorkspace::new(
                 0,
                 idx,
                 MockSolver::always_ok(solution.clone()),
-                PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
-                1,
+                PatchBuffer::new(&state, &[], &[]),
+                &workspace_4_training_ctx,
                 WorkspaceSizing {
                     hydro_count: 1,
                     ..WorkspaceSizing::default()

@@ -801,8 +801,8 @@ fn train_simulate_write_cycle() {
         0,
         0,
         sim_solver,
-        PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-        fx.state.n_state,
+        PatchBuffer::new(&fx.state, &[], &[]),
+        &training_context,
         WorkspaceSizing {
             hydro_count: fx.state.hydro_count,
             max_par_order: fx.state.max_par_order,
@@ -1400,8 +1400,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         0,
         0,
         sim_solver,
-        PatchBuffer::new(state.hydro_count, state.max_par_order, 0, 0, 0, 0, 0),
-        state.n_state,
+        PatchBuffer::new(&state, &[], &[]),
+        &training_context,
         WorkspaceSizing {
             hydro_count: state.hydro_count,
             max_par_order: state.max_par_order,
@@ -1576,8 +1576,8 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
                 0,
                 0,
                 sim_solver,
-                PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-                fx.state.n_state,
+                PatchBuffer::new(&fx.state, &[], &[]),
+                &training_context,
                 WorkspaceSizing {
                     hydro_count: fx.state.hydro_count,
                     max_par_order: fx.state.max_par_order,

@@ -196,7 +196,8 @@ where
         let mut fwd_pool = WorkspacePool::try_new(
             ranks.fwd_rank,
             n_threads,
-            ranks.n_state,
+            training_ctx,
+            stage_ctx,
             WorkspaceSizing {
                 hydro_count: state.hydro_count,
                 max_par_order: state.max_par_order,
@@ -316,14 +317,9 @@ where
             ranks.max_local_fwd,
             ranks.num_stages,
             &training_ctx.node_graph.pool_stage,
-            ranks.n_state,
             fcf.pools[lb_root_pool].capacity,
             stage_ctx.template(StageIdx(0)).num_rows,
-            state.hydro_count,
-            state.max_par_order,
-            state.n_buckets,
-            state.n_anticipated,
-            state.k_max,
+            training_ctx,
             stage_ctx,
         );
 

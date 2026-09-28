@@ -342,7 +342,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     // (no load buses, no anticipated thermals, no NCS in scope) ----
     let mut reference_scratch = ScratchBuffers::new(sizing);
     let mut reference_solver = RecordingSolver::default();
-    let mut reference_patch_buf = PatchBuffer::new(1, 0, 0, 0, 0, 0, 0);
+    let mut reference_patch_buf = PatchBuffer::new(&state, &[], &[]);
 
     transform_inflow_noise(
         &raw_noise,
@@ -373,7 +373,7 @@ fn run_matches_open_coded_forward_block_for_minimal_fixture() {
     // ---- owner: StageSolvePrep::run configured the way forward would ----
     let mut owner_scratch = ScratchBuffers::new(sizing);
     let mut owner_solver = RecordingSolver::default();
-    let mut owner_patch_buf = PatchBuffer::new(1, 0, 0, 0, 0, 0, 0);
+    let mut owner_patch_buf = PatchBuffer::new(&state, &[], &[]);
     let params = StageSolvePrepParams {
         state_source: StateSource(&current_state),
         inflow_noise: InflowNoise::Transform,
@@ -640,7 +640,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
     // ---- owner: StageSolvePrep::run's internal NCS-patch wiring ----
     let mut owner_scratch = ScratchBuffers::new(sizing);
     let mut owner_solver = RecordingSolver::default();
-    let mut owner_patch_buf = PatchBuffer::new(0, 0, 0, 0, 0, 0, 0);
+    let mut owner_patch_buf = PatchBuffer::new(&state, &[], &[]);
     StageSolvePrep::run(
         &mut owner_solver,
         &mut owner_patch_buf,
@@ -736,7 +736,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
     scratch.z_inflow_rhs_buf = vec![222.0];
 
     let mut solver = RecordingSolver::default();
-    let mut patch_buf = PatchBuffer::new(1, 0, 1, 1, 0, 0, 0);
+    let mut patch_buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
     let params = StageSolvePrepParams {
         state_source: StateSource(&current_state),
         inflow_noise: InflowNoise::PreBuilt,
@@ -774,7 +774,7 @@ fn run_reads_prebuilt_inflow_rhs_verbatim_under_prebuilt() {
         1,
         &mut reference_scratch.load_rhs_buf,
     );
-    let mut reference_patch_buf = PatchBuffer::new(1, 0, 1, 1, 0, 0, 0);
+    let mut reference_patch_buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
     let grid = BlockGrid::new(1, training_ctx.study_dims.max_deficit_segments);
     let load_rows = BlockRowFamily::per_block(1..2);
     reference_patch_buf.fill_load_patches(

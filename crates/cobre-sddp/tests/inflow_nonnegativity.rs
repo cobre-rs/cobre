@@ -585,12 +585,33 @@ fn simulate_fixture(
         all_results
     });
 
+    let sim_training_ctx = TrainingContext {
+        node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
+        horizon: &fx.horizon,
+        state: &fx.state,
+        cut_state_layouts: &all_enabled_cut_state_layouts(&fx.state, N_STAGES),
+        study_dims: &fx.study_dims,
+        inflow_method: &fx.inflow_method,
+        stochastic: &fx.stochastic,
+        initial_state: &fx.initial_state,
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        stages: &[],
+        lag_accum_seed: &[],
+        lag_weight_seed: &[],
+        dcs: None,
+    };
     let mut sim_workspaces = vec![SolverWorkspace::new(
         0,
         0,
         ActiveSolver::new().expect("ActiveSolver::new must succeed"),
-        PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-        fx.state.n_state,
+        PatchBuffer::new(&fx.state, &[], &[]),
+        &sim_training_ctx,
         WorkspaceSizing {
             hydro_count: fx.state.hydro_count,
             max_par_order: fx.state.max_par_order,

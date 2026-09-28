@@ -580,6 +580,43 @@ fn external_ar0_inflow_models(
     models
 }
 
+/// The PAR model the LP applies to inflow noise: the fitted build over
+/// `system`'s study stages and hydros, then the [`SamplingScheme::External`]
+/// override when `inflow_scheme` names it.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InvalidParParameters`] when a PAR model has AR
+/// order > 0 with zero standard deviation.
+pub fn build_inflow_par(
+    system: &System,
+    inflow_scheme: Option<SamplingScheme>,
+) -> Result<PrecomputedPar, StochasticError> {
+    let study_stages: Vec<_> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let stage_index = stage_id_to_index(&study_stages);
+    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+    let cycle_len = system
+        .policy_graph()
+        .season_map
+        .as_ref()
+        .map(|sm| sm.seasons.len());
+
+    let par_lp =
+        PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, cycle_len)?;
+    if inflow_scheme == Some(SamplingScheme::External) {
+        let external_models =
+            external_ar0_inflow_models(system, &hydro_ids, &study_stages, &stage_index, &par_lp);
+        PrecomputedPar::build(&external_models, &study_stages, &hydro_ids, cycle_len)
+    } else {
+        Ok(par_lp)
+    }
+}
+
 /// Initialize the full stochastic pipeline from a [`System`] reference.
 ///
 /// Stage filtering keeps only study stages (non-negative `stage.id`). Load-bus
@@ -678,20 +715,7 @@ pub fn build_stochastic_context(
         }
     };
 
-    let cycle_len = system
-        .policy_graph()
-        .season_map
-        .as_ref()
-        .map(|sm| sm.seasons.len());
-    let par_lp =
-        PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, cycle_len)?;
-    let par_lp = if schemes.inflow == Some(SamplingScheme::External) {
-        let external_models =
-            external_ar0_inflow_models(system, &hydro_ids, &study_stages, &stage_index, &par_lp);
-        PrecomputedPar::build(&external_models, &study_stages, &hydro_ids, cycle_len)?
-    } else {
-        par_lp
-    };
+    let par_lp = build_inflow_par(system, schemes.inflow)?;
 
     let correlation = if dim == 0 || system.correlation().profiles.is_empty() {
         DecomposedCorrelation::empty()

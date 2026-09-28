@@ -2932,6 +2932,19 @@ pub fn lower_bound_root_templates<S: SolverInterface>(
     Ok(recorder.recorded)
 }
 
+/// `(downstream_completed_lags.len(), lag_accumulator.len())` of a built
+/// workspace's scratch — both `pub(crate)`, unreachable from a `tests/`
+/// integration crate without this accessor.
+#[must_use]
+pub fn workspace_downstream_lag_shape<S: SolverInterface>(
+    ws: &SolverWorkspace<S>,
+) -> (usize, usize) {
+    (
+        ws.scratch.downstream_completed_lags.len(),
+        ws.scratch.lag_accumulator.len(),
+    )
+}
+
 // ── Branching value oracle: fixtures ─────────────────────────────────────────
 
 /// Number of stages in the terminal-Generated fan control (root + one leaf level).

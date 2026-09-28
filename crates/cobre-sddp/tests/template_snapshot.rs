@@ -416,7 +416,10 @@ fn template_snapshot_regen() {
 #[test]
 fn every_deck_workspace_pool_is_sized_from_its_owners() {
     use cobre_comm::LocalBackend;
+    use cobre_sddp::test_support::workspace_downstream_lag_shape;
     use cobre_solver::ActiveSolver;
+
+    let mut any_downstream_par_order_positive = false;
 
     for deck in active_decks() {
         let setup = build_deck_or_panic(&deck);
@@ -429,6 +432,8 @@ fn every_deck_workspace_pool_is_sized_from_its_owners() {
             .map(|g| g.n_blks)
             .max()
             .unwrap_or(0);
+
+        any_downstream_par_order_positive |= training_ctx.study_dims.downstream_par_order > 0;
 
         let comm = LocalBackend;
         let pool = setup
@@ -455,6 +460,26 @@ fn every_deck_workspace_pool_is_sized_from_its_owners() {
                 "deck {}: current_state capacity",
                 deck.key
             );
+            let (downstream_completed_lags_len, lag_accumulator_len) =
+                workspace_downstream_lag_shape(ws);
+            assert_eq!(
+                downstream_completed_lags_len,
+                lag_accumulator_len * training_ctx.study_dims.downstream_par_order,
+                "deck {}: downstream_completed_lags length",
+                deck.key
+            );
         }
+
+        assert_eq!(
+            stage_ctx.templates.len(),
+            training_ctx.horizon.num_stages(),
+            "deck {}: stage template count",
+            deck.key
+        );
     }
+
+    assert!(
+        any_downstream_par_order_positive,
+        "at least one swept deck must have downstream_par_order > 0"
+    );
 }

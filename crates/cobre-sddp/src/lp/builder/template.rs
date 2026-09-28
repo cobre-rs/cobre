@@ -137,9 +137,7 @@ impl StageTemplates {
 /// columns. The per-stage `n_blks` stride was already correct; this closes the
 /// matching base/length gap. Uniform-block studies coincide with stage 0.
 ///
-/// [`Default`] is the all-`0..0` geometry — every extraction read it gates returns
-/// zero — the safe fallback when no per-stage geometry is available.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StageGeometry {
     /// Turbined-flow column range (one per hydro per block). `turbine.start` is
     /// `theta + 1` and stage-invariant, but `turbine.end` is `n_blks`-dependent,

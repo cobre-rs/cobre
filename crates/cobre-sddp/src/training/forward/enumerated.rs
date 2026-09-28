@@ -185,9 +185,6 @@ pub(crate) struct EnumeratedParams<'a> {
     pub local_forward_passes: usize,
     pub total_forward_passes: usize,
     pub terminal_has_boundary_cuts: bool,
-    pub initial_state: &'a [f64],
-    pub lag_accum_seed: &'a [f64],
-    pub lag_weight_seed: &'a [f64],
     pub ctx: &'a StageContext<'a>,
     pub frozen: &'a [StageTemplate],
     pub fcf: &'a FutureCostFunction,
@@ -748,7 +745,8 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
             ws.current_state.extend_from_slice(&arena[p].out_state);
             arena[p].accum.restore_into(&mut ws.scratch);
         } else {
-            ws.current_state.extend_from_slice(params.initial_state);
+            ws.current_state
+                .extend_from_slice(params.training_ctx.initial_state);
             seed_root_accumulators(ws, params);
         }
 
@@ -841,14 +839,14 @@ fn seed_root_accumulators<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     params: &EnumeratedParams<'_>,
 ) {
-    if params.lag_accum_seed.is_empty() {
+    if params.training_ctx.lag_accum_seed.is_empty() {
         ws.scratch.lag_accumulator.fill(0.0);
         ws.scratch.lag_weight_accum.fill(0.0);
     } else {
-        ws.scratch.lag_accumulator[..params.lag_accum_seed.len()]
-            .copy_from_slice(params.lag_accum_seed);
-        ws.scratch.lag_weight_accum[..params.lag_weight_seed.len()]
-            .copy_from_slice(params.lag_weight_seed);
+        ws.scratch.lag_accumulator[..params.training_ctx.lag_accum_seed.len()]
+            .copy_from_slice(params.training_ctx.lag_accum_seed);
+        ws.scratch.lag_weight_accum[..params.training_ctx.lag_weight_seed.len()]
+            .copy_from_slice(params.training_ctx.lag_weight_seed);
     }
     ws.scratch.downstream_accumulator.fill(0.0);
     ws.scratch.downstream_weight_accum = 0.0;
@@ -1028,9 +1026,6 @@ mod tests {
             local_forward_passes: total_forward_passes,
             total_forward_passes,
             terminal_has_boundary_cuts: false,
-            initial_state: training_ctx.initial_state,
-            lag_accum_seed: training_ctx.lag_accum_seed,
-            lag_weight_seed: training_ctx.lag_weight_seed,
             ctx: &stage_ctx,
             frozen: &frozen,
             fcf: &setup.fcf,

@@ -35,7 +35,6 @@ use crate::{
         EnumeratedForwardResult, EnumeratedForwardScratch, EnumeratedParams, ForwardResult,
         StageKey, run_enumerated_forward, run_forward_stage,
     },
-    lp::indexer::StateSpace,
     setup::node_graph::{EnumeratedPlan, NodePos, StageIdx, Traversal, advance_sampled_node},
     solve::partition,
     solver_phase::Phase,
@@ -141,16 +140,6 @@ pub(crate) struct ForwardWorkerParams<'a> {
     /// The stage-0 root's canonical `NodeGraph` position — every trajectory's
     /// walk starts here. A chain-degenerate graph's root is `nodes[0]`.
     pub root_node: NodePos,
-    /// Initial reservoir state shared across all workers.
-    pub initial_state: &'a [f64],
-    /// Lag-accumulator seed values at trajectory start (empty → zero-init).
-    pub lag_accum_seed: &'a [f64],
-    /// Per-entity lag-accumulator weight seed at trajectory start, copied
-    /// alongside [`Self::lag_accum_seed`] (length matches).
-    pub lag_weight_seed: &'a [f64],
-    /// Stage-invariant state layout; only `inflow_lags.start` is read (the
-    /// initial-state lag base).
-    pub state: &'a StateSpace,
     /// Stage-level LP context (templates, row counts, noise scales).
     pub ctx: &'a StageContext<'a>,
     /// Frozen LP templates including pre-appended prior-iteration cuts.
@@ -430,14 +419,7 @@ impl ForwardPassState {
         S: SolverInterface<Profile = ActiveProfile> + Send,
     {
         let training_ctx = inputs.training_ctx;
-        let TrainingContext {
-            horizon,
-            state,
-            initial_state,
-            lag_accum_seed,
-            lag_weight_seed,
-            ..
-        } = training_ctx;
+        let TrainingContext { horizon, .. } = training_ctx;
         let num_stages = horizon.num_stages();
         let forward_passes = inputs.local_forward_passes;
 
@@ -507,10 +489,6 @@ impl ForwardPassState {
             fwd_offset: inputs.fwd_offset,
             terminal_has_boundary_cuts,
             root_node,
-            initial_state,
-            lag_accum_seed,
-            lag_weight_seed,
-            state,
             ctx: inputs.ctx,
             frozen: inputs.frozen,
             fcf: inputs.fcf,
@@ -591,9 +569,6 @@ impl ForwardPassState {
             local_forward_passes: inputs.local_forward_passes,
             total_forward_passes: inputs.total_forward_passes,
             terminal_has_boundary_cuts,
-            initial_state: training_ctx.initial_state,
-            lag_accum_seed: training_ctx.lag_accum_seed,
-            lag_weight_seed: training_ctx.lag_weight_seed,
             ctx: inputs.ctx,
             frozen: inputs.frozen,
             fcf: inputs.fcf,
@@ -912,21 +887,21 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
             // t -> t+1, so the state that fed this visit is always this same
             // trajectory's own `t - 1` solve, on a chain or a declared graph alike.
             let src: &[f64] = if t.0 == 0 {
-                params.initial_state
+                params.training_ctx.initial_state
             } else {
                 &worker_records[local_m * num_stages + (t.0 - 1)].state
             };
             ws.current_state.extend_from_slice(src);
 
             if t.0 == 0 {
-                if params.lag_accum_seed.is_empty() {
+                if params.training_ctx.lag_accum_seed.is_empty() {
                     ws.scratch.lag_accumulator.fill(0.0);
                     ws.scratch.lag_weight_accum.fill(0.0);
                 } else {
-                    ws.scratch.lag_accumulator[..params.lag_accum_seed.len()]
-                        .copy_from_slice(params.lag_accum_seed);
-                    ws.scratch.lag_weight_accum[..params.lag_weight_seed.len()]
-                        .copy_from_slice(params.lag_weight_seed);
+                    ws.scratch.lag_accumulator[..params.training_ctx.lag_accum_seed.len()]
+                        .copy_from_slice(params.training_ctx.lag_accum_seed);
+                    ws.scratch.lag_weight_accum[..params.training_ctx.lag_weight_seed.len()]
+                        .copy_from_slice(params.training_ctx.lag_weight_seed);
                 }
                 ws.scratch.downstream_accumulator.fill(0.0);
                 ws.scratch.downstream_weight_accum = 0.0;
@@ -955,7 +930,7 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
                 params.sampler.apply_initial_state(
                     &class_req,
                     &mut ws.current_state,
-                    params.state.inflow_lags.start,
+                    params.training_ctx.state.inflow_lags.start,
                 );
             }
             let noise = params.sampler.sample(SampleRequest {
@@ -1634,10 +1609,6 @@ mod tests {
             fwd_offset: 0,
             terminal_has_boundary_cuts: false,
             root_node: NodePos(0),
-            initial_state: &fx.initial_state,
-            lag_accum_seed: &[],
-            lag_weight_seed: &[],
-            state: &fx.state,
             ctx: &ctx,
             frozen: &fx.templates,
             fcf: &fx.fcf,
@@ -2136,10 +2107,6 @@ mod tests {
             fwd_offset: 0,
             terminal_has_boundary_cuts: false,
             root_node: NodePos(0),
-            initial_state: &initial_state,
-            lag_accum_seed: &lag_accum_seed,
-            lag_weight_seed: &lag_weight_seed,
-            state: &state,
             ctx: &ctx,
             frozen: &templates,
             fcf: &fcf,
@@ -2422,10 +2389,6 @@ mod tests {
             fwd_offset: 0,
             terminal_has_boundary_cuts: false,
             root_node: root,
-            initial_state: &initial_state,
-            lag_accum_seed: &[],
-            lag_weight_seed: &[],
-            state: &state,
             ctx: &ctx,
             frozen: &templates,
             fcf: &fcf,

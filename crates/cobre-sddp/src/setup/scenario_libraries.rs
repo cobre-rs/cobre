@@ -32,10 +32,10 @@ use crate::lp::builder::models_from_normal;
 /// # Errors
 ///
 /// Returns `SddpError::Stochastic` on window discovery or validation failure.
-// Rationale: mirrors standardize_historical_windows's own arity, whose stage-0
-// seed already travels as one `DerivedSeed`; the remaining inputs are
-// independent and still exceed the threshold.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "it forwards the independent inputs of standardize_historical_windows"
+)]
 pub(crate) fn build_historical_inflow_library(
     inflow_history: &[InflowHistoryRow],
     hydro_ids: &[EntityId],

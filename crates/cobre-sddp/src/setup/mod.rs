@@ -26,6 +26,8 @@
 //! # }
 //! ```
 
+#![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
+
 use chrono::NaiveDate;
 use cobre_core::ContractType::Import;
 use cobre_core::temporal::SeasonCycleType::Monthly;
@@ -410,10 +412,10 @@ impl StudySetup {
     ///   has no study stages").
     /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
     ///   model shape does not match `system` (see `validate_par_shape`).
-    // Rationale (too_many_lines): a single linear pass building the `StudySetup`
-    // literal from per-entity prep blocks; splitting it would scatter the
-    // construction the literal reads.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear pass fills the StudySetup literal from per-entity prep blocks"
+    )]
     pub fn from_broadcast_params(
         system: &System,
         mut stochastic: StochasticContext,
@@ -966,12 +968,10 @@ struct EnergyAndTemplates {
 ///
 /// - [`SddpError::Validation`] — on energy-conversion / resolved-parameter
 ///   construction failure, or when the post-processed template list is empty.
-// Rationale (too_many_arguments): each of the three arc-table parameters threads
-// the single setup-owned derivation (`build_transit_bucket_topology`) into
-// `build_stage_templates`, mirroring the existing `per_stage_mask` thread; a
-// wrapper struct used at this one call site would rename the coupling, not
-// remove it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a wrapper around the three arc-table inputs would rename their one setup-owned derivation, not remove it"
+)]
 fn build_energy_and_templates(
     system: &System,
     inflow_method: crate::InflowNonNegativityMethod,
@@ -1832,9 +1832,10 @@ fn precompute_lag_data(
 ///
 /// Propagates [`SddpError`] from the individual library builders on validation
 /// or padding failure.
-// Rationale: mirrors build_historical_inflow_library/build_external_inflow_library's
-// own arity; a context struct would just relocate the arity, not reduce it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "it forwards the independent inputs of the scenario-library builders it calls"
+)]
 fn build_scenario_libraries(
     system: &System,
     stages: &[Stage],
@@ -2700,9 +2701,10 @@ fn build_initial_state(
                 start_date: history.start_date,
                 end_date: history.end_date,
             };
-            // coverage's whole-day-hours arithmetic keeps a full-coverage ratio
-            // bit-exact (mirrors StageCalendar::covers_exactly).
-            #[allow(clippy::float_cmp)]
+            #[expect(
+                clippy::float_cmp,
+                reason = "whole-day-hours coverage makes a full-coverage ratio exactly 1.0"
+            )]
             for (slot, fraction) in calendar.coverage(&window).into_iter().enumerate() {
                 if fraction == 1.0 {
                     if slot < k_i {
@@ -2730,9 +2732,10 @@ fn build_initial_state(
                     }
                 }
             }
-            // Padding slots `[K_i, k_max)` must stay 0.0 — a non-zero value corrupts
-            // the ring buffer and causes LP infeasibility.
-            #[allow(clippy::float_cmp)]
+            #[expect(
+                clippy::float_cmp,
+                reason = "padding slots must be exactly 0.0, because a non-zero value corrupts the ring buffer and makes the LP infeasible"
+            )]
             for slot in k_i..layout.k_max {
                 let off = layout.commit_out.start
                     + layout.commitment_hold_in_study_offset(local_idx, slot);
@@ -2842,9 +2845,10 @@ fn study_start_date(system: &System) -> Option<NaiveDate> {
 
 /// Hours of wall clock between `earlier` and `later` (`later − earlier`),
 /// positive when `earlier` precedes `later`.
-// Rationale: pre-study spans are on the order of years, far under f64's
-// exact-integer range; a checked conversion buys nothing.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "pre-study spans are years long, far inside f64's exact-integer range"
+)]
 fn hours_between(later: NaiveDate, earlier: NaiveDate) -> f64 {
     (later - earlier).num_hours() as f64
 }

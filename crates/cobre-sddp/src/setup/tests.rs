@@ -54,11 +54,10 @@ fn minimal_system(n_stages: usize) -> cobre_core::System {
 /// [`minimal_system`]'s body, generalized to accept a caller-supplied
 /// `policy_graph` (a node-native or discount-override fixture, e.g.) instead
 /// of always defaulting to a plain chain.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn minimal_system_with_policy_graph(
     n_stages: usize,
@@ -291,11 +290,9 @@ fn minimal_system_with_policy_graph(
 
 /// FPHA hydro with no VHA rows or `specific_productivity_mw_per_m3s_per_m`, so
 /// the energy-conversion gate must reject it.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 fn minimal_fpha_misconfigured_system(n_stages: usize) -> cobre_core::System {
     use chrono::NaiveDate;
@@ -1809,10 +1806,9 @@ fn prepare_stochastic_no_opening_tree_gives_non_user_supplied_provenance() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 fn test_prepare_stochastic_historical_residuals_noise_method() {
     use super::prepare_stochastic;
@@ -2259,11 +2255,10 @@ fn layout_with_anticipated(n_anticipated: usize, k_values: &[usize]) -> StateSpa
 /// 2-hydro PAR(2) system with `inflow_lags`, `season_map`, and
 /// `inflow_history` threaded through (empty/`None` when a caller does not
 /// need them) so a caller can exercise the derived-seed path end-to-end.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn minimal_system_2_hydros_with_history(
     n_stages: usize,
@@ -2744,11 +2739,10 @@ fn build_initial_state_derived_lags_match_positional_seed() {
 /// `[id=2, id=1]` — id-DESCENDING, not id-ascending. Accepts a caller-supplied
 /// `InitialConditions` so a test can seed `storage` per hydro and check each
 /// lands on its OWN coordinate.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn staggered_dates_system_2_hydros(
     n_stages: usize,
@@ -3082,11 +3076,10 @@ fn test_initial_state_seeds_correctly_under_staggered_commissioning_dates() {
 /// 2-hydro fixture: hydro 2 is a filling reservoir, hydro 1 operating, with
 /// caller-supplied `initial_conditions`. `start_stage_id` sets hydro 2's
 /// filling start stage (0 = mid-filling seed; >0 = empty pit).
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn filling_system_2_hydros(
     n_stages: usize,
@@ -3642,11 +3635,10 @@ fn anticipated_stage_window(i: usize) -> (chrono::NaiveDate, chrono::NaiveDate) 
 /// N anticipated thermals with the given `lead_stages`; IDs are `10 + i` (kept
 /// clear of the bus id 1 and hydro id 3). `past_commits` must be pre-sorted by
 /// `thermal_id`.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn system_with_anticipated_thermals(
     k_values: &[u32],
@@ -3899,11 +3891,10 @@ fn system_with_anticipated_thermals(
 /// id-ascending. Mirrors [`system_with_anticipated_thermals`] but with
 /// staggered dates, exercising the thermal id->position lookup under the
 /// same bug trigger as the hydro-side fixtures.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn system_with_two_anticipated_thermals_staggered_dates(
     past_commits: Vec<cobre_core::AnticipatedCommitmentHistory>,
@@ -4857,11 +4848,9 @@ fn historical_library_none_for_insample() {
 /// least one window: 2 monthly stages (seasons 0-1) and data covering
 /// 1990-1991. With `max_par_order = 0`, a window is valid when both study
 /// months are observed — year 1990 covers months 0-1, so it qualifies.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 fn system_with_historical_inflow(n_stages: usize) -> cobre_core::System {
     use chrono::NaiveDate;
@@ -5150,12 +5139,10 @@ fn historical_library_built_when_scheme_is_historical() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture values widen with as to match the literal tables beside them"
 )]
 fn external_inflow_library_built_when_scheme_is_external() {
     use chrono::NaiveDate;
@@ -5422,12 +5409,10 @@ fn external_inflow_library_built_when_scheme_is_external() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture values widen with as to match the literal tables beside them"
 )]
 fn external_load_library_built_when_scheme_is_external() {
     use chrono::NaiveDate;
@@ -5699,12 +5684,10 @@ fn external_load_library_built_when_scheme_is_external() {
 /// with `std_mw > 0.0` and one with `std_mw == 0.0`, both present in the
 /// external load rows; setup must succeed and the library must carry both.
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture values widen with as to match the literal tables beside them"
 )]
 fn external_load_library_includes_zero_sigma_bus_when_scheme_is_external() {
     use chrono::NaiveDate;
@@ -6006,12 +5989,10 @@ fn external_load_library_includes_zero_sigma_bus_when_scheme_is_external() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture values widen with as to match the literal tables beside them"
 )]
 fn external_ncs_library_built_when_scheme_is_external() {
     use chrono::NaiveDate;
@@ -6303,12 +6284,9 @@ fn external_ncs_library_built_when_scheme_is_external() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 fn historical_library_fails_when_no_valid_windows() {
     use chrono::NaiveDate;
@@ -6681,11 +6659,10 @@ fn minimal_system_with_anticipated(
 /// `post_study_stages` threads straight onto the built system for post-horizon
 /// commitment-window fixtures. `past_commits` seeds
 /// `initial_conditions.past_anticipated_commitments` directly.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn minimal_system_with_anticipated_and_commitments(
     stage_hours: &[f64],
@@ -7498,11 +7475,10 @@ fn stage_id_resolver_agrees_with_study_stage_ids() {
 
 /// 2-hydro cascade: hydro 2 (upstream) declares a travel-time arc into hydro 1
 /// (downstream), so `bucket_topology.n_buckets > 0`.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::items_after_statements
+    clippy::items_after_statements,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and fixture-local helper items sit beside the entities that use them"
 )]
 fn system_with_travel_time_arc(n_stages: usize) -> cobre_core::System {
     use chrono::NaiveDate;
@@ -8022,7 +7998,10 @@ fn cut_row_from_state_matches_reference_loop() {
 /// PAR(2) study (one stage per `state_configs` entry): AR(2) coefficients plus
 /// pre-study inflow models at stage ids -1/-2 give the PAR builder its lag
 /// statistics, so the global `StateSpace` has `n_state = N*(1 + 2)`.
-#[allow(clippy::too_many_lines, clippy::cast_possible_wrap)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+)]
 fn par2_system_with_state_configs(state_configs: &[StageStateConfig]) -> cobre_core::System {
     use chrono::NaiveDate;
 
@@ -8986,10 +8965,9 @@ fn lead_time_fanout_rejected_at_setup() {
 /// `LeadTime(900.0)` fanning (`max_fanout == 2`) on `[744,168,168]` h. Declared
 /// `[fanning, non_fanning]` (`SystemBuilder` re-sorts by `EntityId` ascending) so
 /// the declaration-order-invariance test proves rejection is input-order-independent.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 fn system_with_two_thermals_one_fanning() -> cobre_core::System {
     use chrono::NaiveDate;
@@ -9218,10 +9196,9 @@ fn lead_time_fanout_rejection_is_declaration_order_invariant() {
 /// Anticipated (`T1`=20, `T3`=22) and non-anticipated (`T2`=21) thermals
 /// interleaved in declaration order, sharing one `operational_start_date` so
 /// canonical order matches declaration order.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 fn system_with_interleaved_anticipated_thermals() -> cobre_core::System {
     use chrono::NaiveDate;

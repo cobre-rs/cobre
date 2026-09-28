@@ -157,7 +157,11 @@ pub fn build_ncs_factor_entries(system: &System) -> Vec<(EntityId, i32, Vec<Bloc
             continue;
         }
         for (stage_idx, stage) in study_stages.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "block indices are far below i32::MAX"
+            )]
             let block_pairs: Vec<BlockFactorPair> = stage
                 .blocks
                 .iter()
@@ -553,11 +557,10 @@ mod tests {
         past_inflow_seed: f64,
     }
 
-    // Rationale: one flat literal `System` fixture (bus, hydro, 5 stages,
-    // inflow models, bounds, penalties) mirroring `setup/tests.rs`'s
-    // `minimal_system_2_hydros_with_history`; splitting it fragments a
-    // single-purpose, single-call fixture across artificial sub-functions.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+    )]
     fn build_ring_fixture() -> RingFixture {
         let hydro_id = EntityId(2);
         let bus_id = EntityId(1);
@@ -996,14 +999,9 @@ mod tests {
     /// each carrying a distinct `value_m3s = 1000.0 + k` (`k` = 1 for December
     /// 2025, the most recent, up to `n_lag_months` for the oldest) so a caller
     /// can identify exactly which calendar month landed in which lag slot.
-    // Rationale: one flat literal `System` fixture (bus, hydro, 12 stages,
-    // inflow models, bounds, penalties) mirroring `build_ring_fixture` above;
-    // splitting it fragments a single-purpose, single-call fixture across
-    // artificial sub-functions.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
     )]
     fn build_ar0_fixture_with_declared_lag_history(n_lag_months: u32) -> (System, ScenarioSource) {
         let hydro_id = EntityId(1);
@@ -1416,7 +1414,10 @@ mod tests {
     /// directly — a disagreement P-B1 (cobre-io) would reject at load, unreachable
     /// through the public API but the exact input that separates take-first from an
     /// element-wise minimum.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+    )]
     fn external_count_system(
         stage_ids: &[i32],
         inflow_per_stage: usize,

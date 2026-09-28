@@ -294,7 +294,10 @@ pub struct NodeOpenings {
 }
 
 impl NodeOpenings {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "opening counts are far inside f64's exact-integer range"
+    )]
     fn new(source: OpeningSource, offset: usize, len: usize) -> Self {
         Self {
             source,
@@ -485,7 +488,11 @@ fn build_chain_node_graph(
             successors.push(Vec::new());
         }
     }
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        reason = "stage counts are far below i32::MAX"
+    )]
     let node_ids: TypedVec<NodePos, NodeId> = (0..n_stages as i32).map(NodeId).collect();
     NodeGraph {
         node_ids,
@@ -902,10 +909,10 @@ impl NodeGraph {
     /// exactly `0.0`, and the floor is `F` bit-for-bit for every pool — the
     /// sacred-parity chain identity falls out of this one formula with no shape
     /// branch.
-    #[allow(
-        clippy::cast_precision_loss,
+    #[expect(
         clippy::cast_sign_loss,
-        clippy::cast_possible_truncation
+        clippy::cast_possible_truncation,
+        reason = "the ceiled probability-weighted pass count is non-negative and far below u64::MAX"
     )]
     pub(crate) fn pool_cut_stride(&self, forward_passes: u32) -> Vec<u64> {
         let n = self.nodes.len();
@@ -1741,7 +1748,10 @@ mod tests {
     /// with `n_hydros` hydro entities carrying independent noise and
     /// `branching_factor` openings per stage — enough to exercise
     /// `stochastic.opening_tree()` without any external library.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+    )]
     fn stochastic_context(
         n_stages: usize,
         n_hydros: usize,
@@ -1966,7 +1976,10 @@ mod tests {
     // ── Chain degeneracy ────────────────────────────────────────────────────
 
     #[test]
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test counts are small, far inside f64's exact-integer range"
+    )]
     fn chain_degeneracy_one_node_per_stage_1to1_pools_uniform_q_bit_pattern() {
         let n_stages = 4;
         let branching = 5;
@@ -2881,10 +2894,9 @@ mod tests {
 
     /// A 3-stage K-fan (root -> fan -> leaf), `branching_factor` 1, non-uniform
     /// root out-edges `i / Σj` — the shape the enumerated forward driver walks.
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap
+        reason = "test counts are small, far inside f64's exact-integer range"
     )]
     fn enumerated_k_fan(k: usize) -> NodeGraph {
         let stochastic = stochastic_context(3, 1, 1);

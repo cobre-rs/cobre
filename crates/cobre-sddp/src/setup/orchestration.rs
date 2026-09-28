@@ -315,7 +315,10 @@ impl StudySetup {
     ///
     /// Panics if `comm.rank() > i32::MAX`. MPI world sizes are bounded well
     /// below this on all real systems.
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "an MPI rank is a C int, so its i32 conversion cannot fail"
+    )]
     pub fn create_workspace_pool<S: SolverInterface + Send, C: Communicator>(
         &self,
         comm: &C,

@@ -137,7 +137,10 @@ fn single_node_source_injects_into_the_one_pool_every_terminal_fan_leaf_shares()
         "the fan must have more nodes than pools, or leaf-pool-sharing has no work to do"
     );
 
-    let terminal_idx = setup.fcf.pools.len() - 1;
+    let terminal_idx = setup
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .expect("the fanned target must carry a terminal pool");
     let leaf_pool_ids: Vec<usize> = leaves
         .iter()
         .map(|&pos| setup.node_graph.nodes[pos].pool_id)
@@ -180,6 +183,10 @@ fn single_node_source_injects_into_the_one_pool_every_terminal_fan_leaf_shares()
         setup.fcf.pools.len(),
         n_pools_before,
         "injection must not fan out into per-leaf pools"
+    );
+    assert!(
+        setup.fcf.pools[terminal_idx].has_warm_start_cuts(),
+        "inject_boundary_cuts must write into the pool NodeGraph::terminal_pool resolves"
     );
 
     for &pool_id in &leaf_pool_ids {

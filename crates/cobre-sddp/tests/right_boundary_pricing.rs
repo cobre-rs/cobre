@@ -508,7 +508,7 @@ fn boundary_cut_prices_the_committed_mw_by_beta_times_x() {
     let tmp = tempfile::tempdir().expect("tempdir");
     inject_ring_boundary(&mut setup, &tmp.path().join("boundary"));
 
-    let terminal_pool_id = setup.fcf.pools.len() - 1;
+    let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
     let template = freeze_terminal_template(&setup, terminal_pool_id);
     let pool = &setup.fcf.pools[terminal_pool_id];
 
@@ -675,7 +675,7 @@ fn shared_boundary_prices_each_fanned_leaf_by_its_own_ring_state() {
     let shared_pool_id = leaf_pool_ids[0];
     assert_eq!(
         shared_pool_id,
-        setup.fcf.pools.len() - 1,
+        setup.node_graph.terminal_pool(setup.num_stages()).unwrap(),
         "the shared leaf pool is the terminal pool the boundary overwrites"
     );
     let pool = &setup.fcf.pools[shared_pool_id];
@@ -742,7 +742,7 @@ fn no_boundary_leaves_theta_zero_with_ring_columns_present() {
         "the post-study-targeted ring slot must be present in the state dimension"
     );
 
-    let terminal_pool_id = setup.fcf.pools.len() - 1;
+    let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
     let pool = &setup.fcf.pools[terminal_pool_id];
     assert_eq!(pool.populated(), 0, "no boundary cut must be loaded");
 

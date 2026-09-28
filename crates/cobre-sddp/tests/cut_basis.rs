@@ -186,7 +186,8 @@ mod boundary_cuts {
         );
         cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
 
-        let terminal_pool = &setup_c.fcf.pools[num_stages - 1];
+        let terminal_pool_id = setup_c.node_graph.terminal_pool(num_stages).unwrap();
+        let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
         assert!(
             terminal_pool.has_warm_start_cuts(),
             "terminal pool must have boundary cuts"

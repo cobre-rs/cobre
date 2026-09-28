@@ -829,7 +829,7 @@ fn assert_fixed_no_boundary_shape(shape: TerminalPoolShape) {
 #[ignore = "trains a wide terminal fan; run with `-- --ignored`"]
 fn terminal_generated_fan_pool_stays_fixed_and_single_materialized() {
     let mut setup = terminal_generated_fan_setup(WIDE_FAN_K, MAX_ITERATIONS);
-    let terminal_idx = setup.fcf.pools.len() - 1;
+    let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
 
     let before = TerminalPoolShape::capture(&setup.fcf.pools[terminal_idx]);
     assert_fixed_no_boundary_shape(before);
@@ -854,7 +854,7 @@ fn terminal_generated_fan_pool_stays_fixed_and_single_materialized() {
 #[ignore = "trains a wide terminal fan; run with `-- --ignored`"]
 fn external_distinct_fan_terminal_pool_stays_fixed_and_single_materialized() {
     let mut setup = external_distinct_fan_setup(DISTINCT_FAN_K, MAX_ITERATIONS);
-    let terminal_idx = setup.fcf.pools.len() - 1;
+    let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
 
     let before = TerminalPoolShape::capture(&setup.fcf.pools[terminal_idx]);
     assert_fixed_no_boundary_shape(before);
@@ -888,9 +888,9 @@ const TERMINAL_BOUNDARY_INTERCEPT: f64 = 100.0;
 /// file-load path is unnecessary for a synthetic fixture). `is_active` selects
 /// the record's own `is_active` field.
 fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64, is_active: bool) {
+    let terminal = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
     let state_dim = setup.fcf.state_dimension;
     let forward_passes = setup.fcf.forward_passes;
-    let terminal = setup.fcf.pools.len() - 1;
     let record = cobre_io::OwnedPolicyCutRecord {
         cut_id: 0,
         slot_index: 0,
@@ -990,7 +990,10 @@ fn terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds() {
     inject_constant_terminal_boundary_fcf(&mut inactive, TERMINAL_BOUNDARY_INTERCEPT, false);
     let (lb_inactive, ub_inactive) = train_bounds(&mut inactive);
 
-    let terminal = inactive.fcf.pools.len() - 1;
+    let terminal = inactive
+        .node_graph
+        .terminal_pool(inactive.num_stages())
+        .unwrap();
     assert_eq!(
         inactive.fcf.pools[terminal].active_count(),
         0,
@@ -1029,7 +1032,10 @@ fn terminal_boundary_records_all_inactive_leave_the_plain_fan_bounds() {
     inject_constant_terminal_boundary_fcf(&mut inactive, TERMINAL_BOUNDARY_INTERCEPT, false);
     let (lb_inactive, ub_inactive) = train_bounds(&mut inactive);
 
-    let terminal = inactive.fcf.pools.len() - 1;
+    let terminal = inactive
+        .node_graph
+        .terminal_pool(inactive.num_stages())
+        .unwrap();
     assert_eq!(
         inactive.fcf.pools[terminal].active_count(),
         0,

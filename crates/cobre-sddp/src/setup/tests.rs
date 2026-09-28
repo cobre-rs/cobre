@@ -10773,9 +10773,9 @@ fn study_horizon_end_ignores_pre_study_stages() {
 
 // ── Terminal boundary flag: S1 vs S2/S3 formula agreement ───────────────────
 
-/// The bake's `active_count() > 0` classification (S1, `training/session/mod.rs`)
-/// and the per-solve `warm_start_count > 0` read (S2/S3, the forward pass and
-/// the simulation pipeline) must classify the terminal pool identically, on a
+/// The bake's active-cut-count classification (S1, `training/session/mod.rs`)
+/// and the per-solve warm-start-count read (S2/S3, the forward pass and the
+/// simulation pipeline) must classify the terminal pool identically, on a
 /// plain and on an injected terminal pool, on a chain and on a terminal fan.
 #[test]
 fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
@@ -10793,8 +10793,11 @@ fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
 
     fn check(setup: &StudySetup, min_terminal_nodes: usize, injected: bool) {
         let node_graph = &setup.node_graph;
-        let last = super::node_graph::StageIdx(setup.training_ctx().horizon.num_stages() - 1);
-        let terminal_pool_id = setup.fcf.pools.len() - 1;
+        let num_stages = setup.training_ctx().horizon.num_stages();
+        let last = super::node_graph::StageIdx(num_stages - 1);
+        let terminal_pool_id = node_graph
+            .terminal_pool(num_stages)
+            .expect("terminal stage carries an alive node");
 
         let terminal_nodes: Vec<_> = node_graph
             .nodes

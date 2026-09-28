@@ -1149,6 +1149,16 @@ impl NodeGraph {
     pub(crate) fn any_stage_node(&self, stage: StageIdx) -> Option<NodePos> {
         self.stage_frontier(stage).next()
     }
+
+    /// The pool every terminal-stage node shares (this module's leaf-sharing
+    /// rule): `nodes[any_stage_node(num_stages - 1)].pool_id`. `None` for a
+    /// zero-stage horizon.
+    #[inline]
+    #[must_use]
+    pub fn terminal_pool(&self, num_stages: usize) -> Option<usize> {
+        let last = num_stages.checked_sub(1)?;
+        Some(self.nodes[self.any_stage_node(StageIdx(last))?].pool_id)
+    }
 }
 
 /// Advance a sampled trajectory from `node` to the node it visits at the next
@@ -2046,6 +2056,38 @@ mod tests {
             "a node with successors never shares the leaf pool"
         );
         assert_eq!(ng.n_pools, 2, "one pool for the root, one shared leaf pool");
+    }
+
+    #[test]
+    fn terminal_pool_resolves_the_chain_and_the_shared_fan_leaf_pool() {
+        let chain = crate::test_support::oracle_chain_setup(1);
+        let chain_num_stages = chain.training_ctx().horizon.num_stages();
+        assert_eq!(
+            chain.node_graph.terminal_pool(chain_num_stages),
+            Some(chain.fcf.pools.len() - 1),
+            "a chain's terminal pool is its last stage's identity pool"
+        );
+
+        let fan = crate::test_support::terminal_generated_fan_setup(2, 1);
+        let fan_num_stages = fan.training_ctx().horizon.num_stages();
+        let terminal = fan
+            .node_graph
+            .terminal_pool(fan_num_stages)
+            .expect("the fan's terminal stage carries alive nodes");
+        assert_eq!(
+            terminal,
+            fan.fcf.pools.len() - 1,
+            "the shared leaf pool owns the highest id"
+        );
+        let last = StageIdx(fan_num_stages - 1);
+        assert!(
+            fan.node_graph
+                .nodes
+                .iter()
+                .filter(|n| n.stage == last)
+                .all(|n| n.pool_id == terminal),
+            "every terminal-stage node must resolve to the same pool"
+        );
     }
 
     #[test]

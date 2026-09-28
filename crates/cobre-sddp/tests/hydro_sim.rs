@@ -1285,7 +1285,8 @@ mod decomp_integration {
         );
         cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
 
-        let terminal_pool = &setup_c.fcf.pools[num_stages - 1];
+        let terminal_pool_id = setup_c.node_graph.terminal_pool(num_stages).unwrap();
+        let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
         assert!(
             terminal_pool.has_warm_start_cuts(),
             "terminal pool must have boundary cuts after injection; warm_start_count == 0"
@@ -3433,7 +3434,7 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
             ant_slot,
         );
 
-        let terminal_pool_id = setup.fcf.pools.len() - 1;
+        let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let node_id = NodeId(i32::try_from(setup.num_stages() - 1).unwrap_or(0));

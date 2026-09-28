@@ -10751,7 +10751,7 @@ mod water_terminal_fcf_valuation {
         let tmp = tempfile::tempdir().expect("tempdir");
         inject_bucket_boundary(&mut setup, &tmp.path().join("boundary"), bucket_col);
 
-        let terminal_pool_id = setup.fcf.pools.len() - 1;
+        let terminal_pool_id = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let terminal_node = NodeId(i32::try_from(setup.num_stages() - 1).expect("fits i32"));

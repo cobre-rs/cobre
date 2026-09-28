@@ -1361,8 +1361,11 @@ impl Deref for ValidatedBoundaryCuts {
 /// }
 /// ```
 pub fn inject_boundary_cuts(setup: &mut StudySetup, boundary_cuts: &ValidatedBoundaryCuts) {
+    let terminal_idx = setup
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap_or(usize::MAX);
     let fcf = &mut setup.fcf;
-    let terminal_idx = fcf.pools.len() - 1;
     let state_dimension = fcf.state_dimension;
     let forward_passes = fcf.forward_passes;
     fcf.pools[terminal_idx] =
@@ -4099,7 +4102,7 @@ mod tests {
     #[test]
     fn inject_boundary_cuts_produces_fixed_capacity_terminal_pool() {
         let mut setup = test_support::oracle_chain_setup(10);
-        let terminal_idx = setup.fcf.pools.len() - 1;
+        let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
         let state_dimension = setup.fcf.state_dimension;
         let records = vec![
             owned_cut(5.0, vec![1.0; state_dimension]),
@@ -4128,7 +4131,7 @@ mod tests {
     #[test]
     fn inject_boundary_cuts_active_cuts_matches_growable_construction() {
         let mut setup = test_support::oracle_chain_setup(10);
-        let terminal_idx = setup.fcf.pools.len() - 1;
+        let terminal_idx = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
         let state_dimension = setup.fcf.state_dimension;
         let forward_passes = setup.fcf.forward_passes;
         let records = vec![
@@ -4192,7 +4195,10 @@ mod tests {
         inject_boundary_cuts(&mut setup_direct, &direct);
         inject_boundary_cuts(&mut setup_bcast, &broadcast);
 
-        let terminal_idx = setup_direct.fcf.pools.len() - 1;
+        let terminal_idx = setup_direct
+            .node_graph
+            .terminal_pool(setup_direct.num_stages())
+            .unwrap();
         let pool_direct = &setup_direct.fcf.pools[terminal_idx];
         let pool_bcast = &setup_bcast.fcf.pools[terminal_idx];
 

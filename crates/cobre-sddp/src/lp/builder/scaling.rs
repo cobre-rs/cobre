@@ -11,7 +11,10 @@ use crate::indexer::StateSpace;
 /// `1 / sqrt(max|A_ij| * min|A_ij|)` over nonzeros, `1.0` for an empty column.
 /// Length `num_cols`.
 #[must_use]
-#[allow(clippy::cast_sign_loss)] // col_starts are non-negative by CSC construction
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "CSC column starts are non-negative by construction"
+)]
 pub(crate) fn compute_col_scale(num_cols: usize, col_starts: &[i32], values: &[f64]) -> Vec<f64> {
     let mut scale = vec![1.0_f64; num_cols];
     for j in 0..num_cols {
@@ -43,8 +46,11 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
     let num_cols = template.num_cols;
     debug_assert_eq!(col_scale.len(), num_cols);
 
-    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
-    // j+1 access; col_starts non-negative by construction
+    #[expect(
+        clippy::needless_range_loop,
+        clippy::cast_sign_loss,
+        reason = "the loop reads col_starts[j + 1], and CSC offsets are non-negative by construction"
+    )]
     for j in 0..num_cols {
         let start = template.col_starts[j] as usize;
         let end = template.col_starts[j + 1] as usize;
@@ -110,7 +116,10 @@ pub(crate) fn apply_commitment_hold_col_scale_unscale(
 /// MUST be called on the ALREADY column-scaled matrix to obtain the standard
 /// `D_r * A * D_c` form (column scaling before row scaling).
 #[must_use]
-#[allow(clippy::cast_sign_loss)] // col_starts and row_indices are non-negative by CSC construction
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "CSC column starts and row indices are non-negative by construction"
+)]
 pub(crate) fn compute_row_scale(
     num_rows: usize,
     num_cols: usize,
@@ -151,8 +160,10 @@ pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
     debug_assert_eq!(row_scale.len(), num_rows);
 
     let num_cols = template.num_cols;
-    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
-    // j+1 access; values non-negative by construction
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "CSC row indices are non-negative by construction"
+    )]
     for j in 0..num_cols {
         let start = template.col_starts[j] as usize;
         let end = template.col_starts[j + 1] as usize;
@@ -182,13 +193,9 @@ pub(super) fn compute_stage_hours(study_stages: &[&Stage]) -> Vec<Vec<f64>> {
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::doc_markdown,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    clippy::float_cmp,
-    clippy::unwrap_used,
-    clippy::expect_used
+    reason = "test docs name LP symbols that are not code identifiers"
 )]
 mod tests {
     use cobre_solver::StageTemplate;

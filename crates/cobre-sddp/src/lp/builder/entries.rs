@@ -1575,15 +1575,19 @@ pub(super) fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<
     for entries in col_entries {
         col_starts.push(offset);
         for &(row, val) in entries {
-            // Rationale: the stage LP row count is far below i32::MAX, so the
-            // i32 cast the HiGHS/CLP C API demands cannot truncate or wrap.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "the solver C API takes i32 row indices, and a stage LP's row count is far below i32::MAX"
+            )]
             row_indices.push(row as i32);
             values.push(val);
         }
-        // Rationale: the running nonzero offset is far below i32::MAX, so the i32
-        // offset the solver C API demands cannot overflow.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "the solver C API takes i32 offsets, and a stage LP's nonzero count is far below i32::MAX"
+        )]
         {
             offset += entries.len() as i32;
         }
@@ -1629,15 +1633,9 @@ mod assemble_csc_tests {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(
-    clippy::too_many_lines,
+#[expect(
     clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp
+    reason = "the test reads non-negative CSC offsets"
 )]
 mod parameter_resolution_tests {
     use cobre_core::{
@@ -2151,11 +2149,9 @@ mod parameter_resolution_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod zero_cost_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -3465,12 +3461,10 @@ mod zero_cost_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
+#[expect(
     clippy::similar_names,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    reason = "test locals mirror the paired column and row names the assertions compare, and the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 mod pumping_water_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -5077,7 +5071,10 @@ mod pumping_water_tests {
         // Build the fixture with the two filling hydros (ids 1, 2) declared in the
         // given order, set each hydro's resolved dead volume, and return the
         // assembled CSC plus the (row_lower, row_upper) bounds at a Filling stage.
-        #[allow(clippy::type_complexity)]
+        #[expect(
+            clippy::type_complexity,
+            reason = "each case returns the raw build tuple its assertions destructure"
+        )]
         let build = |hydros: Vec<Hydro>| -> ((Vec<i32>, Vec<i32>, Vec<f64>), Vec<f64>, Vec<f64>) {
             let mut fixtures = PumpFixtures::new(hydros, Vec::new());
             let h1_idx = fixtures.hydro_pos[&EntityId(1)];
@@ -5945,9 +5942,10 @@ mod pumping_water_tests {
             // block 1 gives the solver an untested, zero-cost way to balance the row
             // that has nothing to do with how block 0's release is partitioned.
             let downstream_idx = 1;
-            // Rationale: `cells.len()` is 1 or 2 in every call site here, far below
-            // f64's exact-integer range, so the cast cannot lose precision.
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "test counts are small, far inside f64's exact-integer range"
+            )]
             let per_cell = total_flow / cells.len() as f64;
             let mut pin_cols = Vec::new();
             let mut pin_bounds = Vec::new();
@@ -8070,7 +8068,10 @@ mod pumping_water_tests {
     /// LATER than the downstream D, evaluated at stage 2 where D is Filling
     /// (`start_D = 2 ≤ 2 < entry_D = 4`) and U is still `PreFilling`
     /// (`2 < start_U = 3`).
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_prefilling_upstream_of_filling_case() -> ((Vec<i32>, Vec<i32>, Vec<f64>), PfuOffsets) {
         let stage_id = 2;
         let fixtures = PumpFixtures::new(
@@ -8195,7 +8196,10 @@ mod pumping_water_tests {
     /// `stage_id`, with H2's resolved per-stage `min_storage_hm3` set to
     /// `TARGET_MIN_STORAGE_HM3`. Returns the assembled CSC triple, the
     /// `(row_lower, row_upper)` vectors, and the `σ_fill` offsets the assertions read.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_target_case(
         stage_id: i32,
     ) -> (
@@ -8503,7 +8507,10 @@ mod pumping_water_tests {
     /// `TARGET_MIN_STORAGE_HM3`. Returns the assembled CSC triple, the
     /// `(row_lower, row_upper)` vectors, and the `σ^{v-}` offsets the assertions
     /// read. Mirrors `build_target_case` but reads the `filled_min_storage_floor` family.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_floor_case(
         stage_id: i32,
     ) -> (
@@ -8709,7 +8716,10 @@ mod pumping_water_tests {
     /// assembled CSC, the `(row_lower, row_upper)` vectors, and the offsets the
     /// short-circuit assertions read. H2 is the mid-cascade filling hydro, so the
     /// short-circuit routes to a REAL downstream (H3), not a sink.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_shortcircuit_case(
         stage_id: i32,
         withdrawal_h: f64,
@@ -9116,7 +9126,10 @@ mod pumping_water_tests {
     /// Build `H1 → H2(non-filling, entry) → H3` at `stage_id`, with H2's resolved
     /// withdrawal set to `withdrawal_h`. Mirrors [`build_shortcircuit_case`] but H2
     /// carries a commissioning window instead of a `FillingConfig`.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_nonfilling_shortcircuit_case(
         stage_id: i32,
         entry: i32,
@@ -9316,7 +9329,10 @@ mod pumping_water_tests {
     /// set to `withdrawal_h1` / `withdrawal_h2`. At a `PreFilling` `stage_id` both H1
     /// and H2 are `PreFilling` (frozen rows), so H1 must cascade THROUGH H2 to H3.
     /// Returns the CSC, `(row_lower, row_upper)`, and the chained offsets.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_chained_shortcircuit_case(
         stage_id: i32,
         withdrawal_h1: f64,
@@ -9572,7 +9588,10 @@ mod pumping_water_tests {
     /// per-stage withdrawal set to `withdrawal_h`. Returns the assembled CSC, the
     /// `(row_lower, row_upper)` vectors, the resolved [`StageLayout`] (block-major
     /// addressing reads through its accessors), and the offsets the assertions read.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_chronological_shortcircuit_case(
         withdrawal_h: f64,
     ) -> (
@@ -9819,7 +9838,10 @@ mod pumping_water_tests {
     /// `[300.0, 444.0]` (truncated to one for the `K = 1` cases). Returns the
     /// assembled CSC, the `(row_lower, row_upper)` vectors, the column
     /// `(col_lower, col_upper, objective)` vectors, and the resolved `StageLayout`.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "each case returns the raw build tuple its assertions destructure"
+    )]
     fn build_fpha_evap_case(
         block_mode: cobre_core::BlockMode,
         durations: &[f64],

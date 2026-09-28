@@ -1,8 +1,9 @@
-#![allow(
+#![expect(
     clippy::doc_markdown,
     clippy::too_many_arguments,
     clippy::identity_op,
-    clippy::erasing_op
+    clippy::erasing_op,
+    reason = "test docs name LP symbols that are not code identifiers, the equivalence check takes each varied input explicitly, and offsets spell the full base-plus-stride formula even when a term is zero"
 )]
 
 use std::collections::{BTreeMap, HashMap};

@@ -388,11 +388,9 @@ impl PatchBuffer {
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::doc_markdown,
-    clippy::too_many_lines,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation
+    reason = "test docs name LP symbols that are not code identifiers"
 )]
 mod tests {
     use super::{PatchBuffer, StateBox};
@@ -1083,7 +1081,10 @@ mod tests {
     /// `commit_in.start + slot*A + plant` at unshifted `anticipated_start =
     /// N*(1+L)`, which is only correct when `B == 0`).
     #[test]
-    #[allow(clippy::cast_precision_loss)] // fixture: small integer indices, no precision lost
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test counts are small, far inside f64's exact-integer range"
+    )]
     fn fill_col_state_patches_b_zero_byte_identical_to_legacy_formula() {
         let n = 3;
         let l = 2;

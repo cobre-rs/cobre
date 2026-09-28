@@ -1080,9 +1080,10 @@ fn enumerate_generic_constraint_rows(
                 && !bound_affine_is_block_varying(constraint, resolved_parameters);
 
         for entry in bound_entries {
-            // entry.block_id is a non-negative 0-indexed block position (upstream
-            // validation), so the cast_sign_loss is safe.
-            #[allow(clippy::cast_sign_loss)]
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "block ids are validated non-negative before the layout is built"
+            )]
             let (block_start, block_count, is_stage_level) = match entry.block_id {
                 None if collapse_stage_level => (0, 1, true),
                 None => (0, n_blks, false),
@@ -1163,12 +1164,11 @@ pub(super) enum StageProductionRole {
 }
 
 impl<'a> StageLayout<'a> {
-    // Rationale: too_many_lines — the role-(b) ranges derive sequentially from the
-    // previous range's `.end`; keeping the whole chain in one function is what makes the
-    // sequential-offset contract auditable in a single linear read.
-    // Rationale: similar_names — `state` (the handle, matching `StageData.state`) next to
-    // `stage`/`stage_idx`; both names are established, renaming would obscure intent.
-    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    #[expect(
+        clippy::too_many_lines,
+        clippy::similar_names,
+        reason = "each range starts at the previous range's end, so the offset chain stays one linear read beside the established state/stage names"
+    )]
     pub(crate) fn new(
         ctx: &TemplateBuildCtx<'_>,
         state: &'a StateSpace,

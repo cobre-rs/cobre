@@ -378,11 +378,10 @@ pub(super) struct StageBuildOutput {
 }
 
 /// Construct the [`StageBuildOutput`] for a single study stage.
-// Rationale: `clippy::similar_names` flags the `state` handle next to `stage`/`stage_idx`;
-// both names are established (the `StageLayout`/`StageData` field is `state`, the per-stage
-// inputs are `stage`/`stage_idx`), so renaming either to satisfy the heuristic would obscure
-// intent rather than clarify it.
-#[allow(clippy::similar_names)]
+#[expect(
+    clippy::similar_names,
+    reason = "state is the StageData field and stage/stage_idx are the per-stage inputs, so renaming either would obscure it"
+)]
 pub(super) fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
     state: &StateSpace,
@@ -601,13 +600,11 @@ fn deterministic_load_models(system: &System, load_scheme: SamplingScheme) -> Ve
 /// constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == intercept_m3s`.
 ///
-// Rationale (too_many_arguments): each of the three arc-table parameters threads
-// the single setup-owned derivation (`build_transit_bucket_topology`) through, the
-// same coupling `per_stage_mask` already threads; a wrapper struct used at this one
-// signature would rename the coupling, not remove it.
-// implicit_hasher: callers pass a concrete `HashMap`; a `BuildHasher` generic buys
-// nothing.
-#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::implicit_hasher,
+    reason = "a wrapper around the three arc-table inputs would rename their one setup-owned derivation, not remove it, and every caller passes a concrete HashMap"
+)]
 #[expect(
     private_interfaces,
     reason = "time_value borrows the crate-private owner until this function's visibility narrows"
@@ -839,15 +836,10 @@ pub(super) fn build_filling_v_target(
 ///
 /// Called once per `build_stage_templates` invocation, after the early-return
 /// guard for empty systems.
-// Rationale: too_many_lines — one linear pass of per-entity prep blocks (position
-// maps, anticipated metadata, contracts, discount factors) feeding a single
-// `TemplateBuildCtx` literal; splitting it would scatter the construction the
-// literal reads back, without removing any branching.
-// Rationale: too_many_arguments — each parameter threads a single-owner value
-// from `StateSpace` into the shared `TemplateBuildCtx` (mirroring the existing
-// `anticipated_resolution`/`anticipated_lead_stages` threads); a wrapper struct
-// used nowhere else would rename the coupling, not remove it.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter threads one single-owner value into the shared build context"
+)]
 fn build_template_build_ctx<'a>(
     system: &'a System,
     inflow_method: InflowNonNegativityMethod,

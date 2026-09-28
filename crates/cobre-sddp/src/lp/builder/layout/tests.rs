@@ -1,9 +1,7 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
+#![expect(
     clippy::too_many_lines,
-    clippy::similar_names
+    clippy::similar_names,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and test locals mirror the paired column and row names the assertions compare"
 )]
 
 use std::collections::{BTreeMap, HashMap};

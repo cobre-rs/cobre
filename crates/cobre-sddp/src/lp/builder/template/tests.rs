@@ -1,15 +1,10 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
+#![expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::needless_range_loop,
     clippy::doc_markdown,
-    clippy::doc_overindented_list_items,
-    clippy::similar_names
+    clippy::similar_names,
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, the test reads non-negative CSC offsets, the loop index addresses parallel arrays, test docs name LP symbols that are not code identifiers, and test locals mirror the paired column and row names the assertions compare"
 )]
 
 use chrono::NaiveDate;
@@ -1812,9 +1807,10 @@ fn anticipated_invariance_system() -> cobre_core::System {
 /// Assert two `StageTemplate`s are bit-for-bit equivalent under the swap-(0,1)
 /// permutation on anticipated-decision, anticipated-state (slot-major), and
 /// anticipated-fishing columns/rows.
-// Paired per-template layout offsets (a/b); a params struct would relocate
-// the arity, not reduce it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the equivalence check takes each varied input explicitly"
+)]
 fn assert_lp_equivalence_after_anticipated_swap(
     tpl_a: &cobre_solver::StageTemplate,
     tpl_b: &cobre_solver::StageTemplate,

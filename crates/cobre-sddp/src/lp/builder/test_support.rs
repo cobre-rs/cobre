@@ -22,9 +22,10 @@ use super::layout::TemplateBuildCtx;
 /// `build_transit_bucket_topology`'s single arc-table derivation), so a
 /// builder-module test's `TemplateBuildCtx` matches what setup builds for the same
 /// system.
-// Rationale: the tuple threads distinct single-owner fixture outputs to one
-// call site; a named struct would add ceremony without reducing the shape.
-#[allow(clippy::type_complexity)]
+#[expect(
+    clippy::type_complexity,
+    reason = "each case returns the raw build tuple its assertions destructure"
+)]
 pub(super) fn ctx_anticipated_and_mask_inputs(
     system: &System,
     par_lp: &PrecomputedPar,

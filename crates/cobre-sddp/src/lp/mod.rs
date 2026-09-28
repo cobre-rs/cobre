@@ -18,6 +18,8 @@
 //!   constraint carries the `−γᵥ/2` coefficient on **both** storage columns
 //!   (the FPHA average-storage contract — see [`builder`]).
 
+#![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
+
 pub mod builder;
 pub(crate) mod generic_constraints;
 pub mod indexer;

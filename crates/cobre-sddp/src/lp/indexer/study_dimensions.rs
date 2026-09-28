@@ -21,10 +21,10 @@ use super::AnticipatedPlants;
 /// `anticipated_plants` is study-invariant, so it is owned here; the
 /// per-stage FPHA / evaporation identity lists vary by stage and are owned by
 /// the per-stage geometry.
-// Rationale: the four bool fields are independent presence flags for optional
-// column groups, not states of one machine; the lint's suggested enum/state-
-// machine refactor would obscure that they vary independently.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the flags mark independent optional column groups, not states of one machine"
+)]
 #[derive(Debug, Clone, Default)]
 pub struct StudyDimensions {
     /// Number of thermal units (T).

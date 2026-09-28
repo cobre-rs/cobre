@@ -1295,12 +1295,10 @@ fn fill_z_inflow_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
+#[expect(
     clippy::needless_range_loop,
-    clippy::similar_names
+    clippy::similar_names,
+    reason = "the loop index addresses parallel arrays and test locals mirror the paired column and row names the assertions compare"
 )]
 mod interior_storage_bound_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -1805,7 +1803,10 @@ mod interior_storage_bound_tests {
 
     /// Expand a CSC `StageTemplate` to a dense `Vec<Vec<f64>>` (mirrors the
     /// `template/tests.rs` dense-comparison helper).
-    #[allow(clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "the test reads non-negative CSC offsets"
+    )]
     fn csc_to_dense(tpl: &cobre_solver::StageTemplate) -> Vec<Vec<f64>> {
         let mut dense = vec![vec![0.0_f64; tpl.num_cols]; tpl.num_rows];
         for j in 0..tpl.num_cols {
@@ -1821,11 +1822,9 @@ mod interior_storage_bound_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod diversion_bound_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -2235,11 +2234,9 @@ mod diversion_bound_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod filling_phase_gating_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -3389,11 +3386,9 @@ mod filling_phase_gating_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod anticipated_objective_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -4339,11 +4334,9 @@ mod anticipated_objective_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod block_family_slack_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -4877,11 +4870,9 @@ mod block_family_slack_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod evaporation_slack_objective_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -5306,11 +5297,9 @@ mod evaporation_slack_objective_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod contract_column_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -5633,11 +5622,9 @@ mod contract_column_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod thermal_block_bound_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -6062,11 +6049,9 @@ mod thermal_block_bound_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod line_contract_pumping_block_bound_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -6800,11 +6785,9 @@ mod line_contract_pumping_block_bound_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod hydro_block_bound_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -7866,11 +7849,9 @@ mod hydro_block_bound_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod cell_column_bound_tests {
     use std::collections::{BTreeMap, HashMap};
@@ -9089,11 +9070,9 @@ mod cell_column_bound_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::similar_names
+#[expect(
+    clippy::similar_names,
+    reason = "test locals mirror the paired column and row names the assertions compare"
 )]
 mod ncs_objective_tests {
     use std::collections::{BTreeMap, HashMap};

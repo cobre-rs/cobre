@@ -191,11 +191,10 @@ pub(crate) struct ContractRefs<'a> {
 /// a stub entity with no LP columns (contracts, non-controllable sources,
 /// withdrawal).
 #[must_use]
-// Rationale: one exhaustive arm per `VariableRef` variant — the match is the
-// dispatch, and its exhaustiveness is the contract that a new variant forces a
-// compile error here. Splitting it into sub-dispatchers to satisfy the
-// line-count heuristic would fragment that closed-set guarantee for no gain.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive arm per VariableRef variant keeps the closed-set dispatch in one match"
+)]
 pub(crate) fn resolve_variable_ref(
     var_ref: &VariableRef,
     block_idx: usize,

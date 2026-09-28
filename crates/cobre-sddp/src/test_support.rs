@@ -4416,6 +4416,93 @@ pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8
     groups
 }
 
+/// Asserts `a` and `b` are the same LP; every `f64` compares by `to_bits()`, so
+/// `0.0` and `-0.0` differ.
+///
+/// # Panics
+///
+/// Panics with `"{label}: <field>"` at the first field that differs.
+pub fn assert_templates_byte_identical(a: &StageTemplate, b: &StageTemplate, label: &str) {
+    let StageTemplate {
+        num_cols,
+        num_rows,
+        num_nz,
+        col_starts,
+        row_indices,
+        values,
+        col_lower,
+        col_upper,
+        objective,
+        row_lower,
+        row_upper,
+        n_state,
+        n_transfer,
+        n_dual_relevant,
+        n_hydro,
+        max_par_order,
+        col_scale,
+        row_scale,
+    } = a;
+    assert_eq!(*num_cols, b.num_cols, "{label}: num_cols");
+    assert_eq!(*num_rows, b.num_rows, "{label}: num_rows");
+    assert_eq!(*num_nz, b.num_nz, "{label}: num_nz");
+    assert_eq!(*n_state, b.n_state, "{label}: n_state");
+    assert_eq!(*n_transfer, b.n_transfer, "{label}: n_transfer");
+    assert_eq!(
+        *n_dual_relevant, b.n_dual_relevant,
+        "{label}: n_dual_relevant"
+    );
+    assert_eq!(*n_hydro, b.n_hydro, "{label}: n_hydro");
+    assert_eq!(*max_par_order, b.max_par_order, "{label}: max_par_order");
+    assert_eq!(*col_starts, b.col_starts, "{label}: col_starts");
+    assert_eq!(*row_indices, b.row_indices, "{label}: row_indices");
+    let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
+    assert_eq!(bits(values), bits(&b.values), "{label}: values");
+    assert_eq!(bits(col_lower), bits(&b.col_lower), "{label}: col_lower");
+    assert_eq!(bits(col_upper), bits(&b.col_upper), "{label}: col_upper");
+    assert_eq!(bits(objective), bits(&b.objective), "{label}: objective");
+    assert_eq!(bits(row_lower), bits(&b.row_lower), "{label}: row_lower");
+    assert_eq!(bits(row_upper), bits(&b.row_upper), "{label}: row_upper");
+    assert_eq!(bits(col_scale), bits(&b.col_scale), "{label}: col_scale");
+    assert_eq!(bits(row_scale), bits(&b.row_scale), "{label}: row_scale");
+}
+
+#[cfg(test)]
+mod byte_identity_tests {
+    use super::assert_templates_byte_identical;
+    use cobre_solver::StageTemplate;
+
+    #[test]
+    #[should_panic(expected = "probe: col_scale")]
+    fn signed_zero_in_a_scale_factor_is_not_byte_identical() {
+        let a = StageTemplate {
+            num_cols: 0,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: vec![],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![],
+            col_upper: vec![],
+            objective: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: vec![0.0],
+            row_scale: vec![],
+        };
+        let b = StageTemplate {
+            col_scale: vec![-0.0],
+            ..a.clone()
+        };
+        assert_templates_byte_identical(&a, &b, "probe");
+    }
+}
+
 #[cfg(test)]
 mod trunk_fan_tests {
     use super::{

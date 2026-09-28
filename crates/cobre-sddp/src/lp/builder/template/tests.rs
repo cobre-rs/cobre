@@ -41,7 +41,7 @@ use crate::resolved_parameters::ResolvedParameters;
 use crate::setup::bucket_topology::build_transit_bucket_topology;
 use crate::setup::template_postprocess::postprocess_templates;
 use crate::setup::{resolve_anticipated_commitments, resolve_state_layout};
-use crate::test_support::state_layout_full;
+use crate::test_support::{assert_templates_byte_identical, state_layout_full};
 use crate::time_value::{
     PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
     compute_per_stage_discount_factors, resolve_post_study_artifacts,
@@ -3870,40 +3870,6 @@ fn build_filling_v_target_empty_for_non_filling() {
     );
 }
 
-/// Assert two `StageTemplate`s are byte-identical: CSC structure
-/// (`col_starts`, `row_indices`, `values`), bounds (`col_lower`/`col_upper`,
-/// `row_lower`/`row_upper`), `objective`, and the full dense matrix — every
-/// `f64` compared by `to_bits()` so it is true bit-identity, not approximate.
-fn assert_templates_byte_identical(tpl_a: &StageTemplate, tpl_b: &StageTemplate) {
-    assert_eq!(tpl_a.num_cols, tpl_b.num_cols, "num_cols");
-    assert_eq!(tpl_a.num_rows, tpl_b.num_rows, "num_rows");
-    assert_eq!(tpl_a.num_nz, tpl_b.num_nz, "num_nz");
-    assert_eq!(tpl_a.n_state, tpl_b.n_state, "n_state");
-
-    assert_eq!(tpl_a.col_starts, tpl_b.col_starts, "col_starts");
-    assert_eq!(tpl_a.row_indices, tpl_b.row_indices, "row_indices");
-
-    let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-    assert_eq!(bits(&tpl_a.values), bits(&tpl_b.values), "values");
-    assert_eq!(bits(&tpl_a.col_lower), bits(&tpl_b.col_lower), "col_lower");
-    assert_eq!(bits(&tpl_a.col_upper), bits(&tpl_b.col_upper), "col_upper");
-    assert_eq!(bits(&tpl_a.objective), bits(&tpl_b.objective), "objective");
-    assert_eq!(bits(&tpl_a.row_lower), bits(&tpl_b.row_lower), "row_lower");
-    assert_eq!(bits(&tpl_a.row_upper), bits(&tpl_b.row_upper), "row_upper");
-
-    let dense_a = csc_to_dense(tpl_a);
-    let dense_b = csc_to_dense(tpl_b);
-    for i in 0..tpl_a.num_rows {
-        for j in 0..tpl_a.num_cols {
-            assert_eq!(
-                dense_a[i][j].to_bits(),
-                dense_b[i][j].to_bits(),
-                "dense coefficient mismatch at row {i} col {j}"
-            );
-        }
-    }
-}
-
 /// One-bus, one-hydro FPHA system whose single stage carries `n_blks` blocks
 /// under `block_mode`. The FPHA generation rows put the average-storage `γᵥ/2`
 /// coefficient on both the incoming and outgoing storage columns, so the
@@ -4092,7 +4058,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
 fn chronological_k1_byte_identical_to_parallel() {
     let parallel = block_template(BlockMode::Parallel, 1);
     let chronological = block_template(BlockMode::Chronological, 1);
-    assert_templates_byte_identical(&parallel, &chronological);
+    assert_templates_byte_identical(&parallel, &chronological, "parallel vs chronological");
 }
 
 /// `theta` and `n_state` are pure functions of `(N, L, A, k_max)` and are

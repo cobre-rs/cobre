@@ -1949,6 +1949,8 @@ mod water_travel_time_no_arc_byte_identity {
     };
     use cobre_solver::StageTemplate;
 
+    use cobre_sddp::test_support::assert_templates_byte_identical;
+
     use super::common::build_setup_in_code;
     use super::common::builders::{
         BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
@@ -2198,81 +2200,6 @@ mod water_travel_time_no_arc_byte_identity {
         setup.stage_data.stage_templates.templates.clone()
     }
 
-    /// Field-by-field byte-identity check: CSC structure (`col_starts`,
-    /// `row_indices`, `values`), bounds, `objective`, scaling, and the
-    /// state/transfer/dual-relevant/hydro/PAR-order dimensions. Every `f64`
-    /// slice compares by `to_bits()` — true bit-identity, not approximate.
-    fn assert_templates_byte_identical(tpl_a: &StageTemplate, tpl_b: &StageTemplate, stage: usize) {
-        assert_eq!(tpl_a.num_cols, tpl_b.num_cols, "stage {stage}: num_cols");
-        assert_eq!(tpl_a.num_rows, tpl_b.num_rows, "stage {stage}: num_rows");
-        assert_eq!(tpl_a.num_nz, tpl_b.num_nz, "stage {stage}: num_nz");
-        assert_eq!(tpl_a.n_state, tpl_b.n_state, "stage {stage}: n_state");
-        assert_eq!(
-            tpl_a.n_transfer, tpl_b.n_transfer,
-            "stage {stage}: n_transfer"
-        );
-        assert_eq!(
-            tpl_a.n_dual_relevant, tpl_b.n_dual_relevant,
-            "stage {stage}: n_dual_relevant"
-        );
-        assert_eq!(tpl_a.n_hydro, tpl_b.n_hydro, "stage {stage}: n_hydro");
-        assert_eq!(
-            tpl_a.max_par_order, tpl_b.max_par_order,
-            "stage {stage}: max_par_order"
-        );
-
-        assert_eq!(
-            tpl_a.col_starts, tpl_b.col_starts,
-            "stage {stage}: col_starts"
-        );
-        assert_eq!(
-            tpl_a.row_indices, tpl_b.row_indices,
-            "stage {stage}: row_indices"
-        );
-
-        let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-        assert_eq!(
-            bits(&tpl_a.values),
-            bits(&tpl_b.values),
-            "stage {stage}: values"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_lower),
-            bits(&tpl_b.col_lower),
-            "stage {stage}: col_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_upper),
-            bits(&tpl_b.col_upper),
-            "stage {stage}: col_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.objective),
-            bits(&tpl_b.objective),
-            "stage {stage}: objective"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_lower),
-            bits(&tpl_b.row_lower),
-            "stage {stage}: row_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_upper),
-            bits(&tpl_b.row_upper),
-            "stage {stage}: row_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_scale),
-            bits(&tpl_b.col_scale),
-            "stage {stage}: col_scale"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_scale),
-            bits(&tpl_b.row_scale),
-            "stage {stage}: row_scale"
-        );
-    }
-
     /// Shared pre-bucket-formula assertion: `n_buckets == 0`, `transit_buckets_out` /
     /// `transit_buckets_in` / `transit_bucket_column_order` empty, and `n_state` equal to the
     /// pre-bucket `N*(1+L) + A*k_max` — computed from the layout's OWN public
@@ -2326,7 +2253,7 @@ mod water_travel_time_no_arc_byte_identity {
             "stage count must match between block modes"
         );
         for (stage, (p, c)) in parallel.iter().zip(chronological.iter()).enumerate() {
-            assert_templates_byte_identical(p, c, stage);
+            assert_templates_byte_identical(p, c, &format!("stage {stage}"));
         }
     }
 

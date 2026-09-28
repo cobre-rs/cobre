@@ -2,6 +2,8 @@
 
 use super::*;
 
+use cobre_sddp::test_support::assert_templates_byte_identical;
+
 /// Parse `json` (a `generic_constraints.json` body) through the real
 /// `cobre_io::constraints::parse_generic_constraints` path — the same loader the
 /// CLI uses — into the flat `Vec<GenericConstraint>`. `name_to_id` is empty (these
@@ -25,8 +27,8 @@ fn parse_generic_from_str(json: &str) -> Vec<cobre_core::GenericConstraint> {
 /// hand-flattened equivalent must desugar to the same flat form AND build a
 /// byte-identical LP. Asserts both the parsed `Vec<GenericConstraint>` (flat-form
 /// identity — implies echo identity, the echo being a pure function of the flat
-/// terms) and the full `StageTemplates` Debug digest (coefficients, bounds, and
-/// slacks — not just row/col counts).
+/// terms) and, stage by stage, the full `StageTemplate` (coefficients, bounds,
+/// and slacks — not just row/col counts).
 fn assert_lp_byte_identical(
     sugared_json: &str,
     flat_json: &str,
@@ -51,10 +53,13 @@ fn assert_lp_byte_identical(
         bounds.clone(),
     ));
     assert_eq!(
-        format!("{sugared_tpl:?}"),
-        format!("{flat_tpl:?}"),
-        "sugared and hand-flattened LP templates must be byte-identical"
+        sugared_tpl.len(),
+        flat_tpl.len(),
+        "sugared and hand-flattened builds must have the same stage count"
     );
+    for (stage, (s, f)) in sugared_tpl.iter().zip(flat_tpl.iter()).enumerate() {
+        assert_templates_byte_identical(s, f, &format!("sugared vs hand-flattened, stage {stage}"));
+    }
 }
 
 /// Byte-identity twin: a single-column named-expression case (the `d13`/`d54`
@@ -121,7 +126,7 @@ fn declaration_order_permutation_is_invariant_in_lp() {
     let rows = vec![(1_i32, 0_i32, None::<i32>, None, Some(500.0_f64))];
     let bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
 
-    let digest = |perm: &[usize; 3]| -> String {
+    let digest = |perm: &[usize; 3]| -> Vec<cobre_solver::StageTemplate> {
         let expressions: Vec<serde_json::Value> = perm
             .iter()
             .map(|&i| serde_json::json!({ "name": defs[i].0, "expression": defs[i].1 }))
@@ -139,16 +144,24 @@ fn declaration_order_permutation_is_invariant_in_lp() {
         });
         let parsed = parse_generic_from_str(&file.to_string());
         let system = one_bus_system_n_blks_with_generic(1, parsed, bounds.clone());
-        format!("{:?}", build_templates_for(&system))
+        build_templates_for(&system)
     };
 
     let first = digest(&perms[0]);
     for perm in &perms[1..] {
+        let templates = digest(perm);
         assert_eq!(
-            digest(perm),
-            first,
-            "declaration-order permutation {perm:?} changed the LP"
+            templates.len(),
+            first.len(),
+            "declaration-order permutation {perm:?} changed the stage count"
         );
+        for (stage, (t, f)) in templates.iter().zip(first.iter()).enumerate() {
+            assert_templates_byte_identical(
+                t,
+                f,
+                &format!("declaration-order permutation {perm:?}, stage {stage}"),
+            );
+        }
     }
 }
 
@@ -1818,9 +1831,9 @@ fn build_templates_with_params(
 
 /// Discharge the desugaring invariant on one twin whose sugared and hand-flattened
 /// forms differ in their flat representation: build each study under its own
-/// resolved parameters and assert the full `StageTemplates` Debug digest matches.
+/// resolved parameters and assert every stage's `StageTemplate` is byte-identical.
 #[allow(clippy::too_many_arguments)]
-fn assert_templates_byte_identical(
+fn assert_desugaring_twin_builds_identical_lp(
     n_blks: usize,
     sugared_constraints: Vec<cobre_core::GenericConstraint>,
     sugared_bounds: cobre_core::ResolvedGenericConstraintBounds,
@@ -1838,10 +1851,13 @@ fn assert_templates_byte_identical(
         flat_params,
     );
     assert_eq!(
-        format!("{sugared_tpl:?}"),
-        format!("{flat_tpl:?}"),
-        "sugared and hand-flattened LP templates must be byte-identical"
+        sugared_tpl.len(),
+        flat_tpl.len(),
+        "sugared and hand-flattened builds must have the same stage count"
     );
+    for (stage, (s, f)) in sugared_tpl.iter().zip(flat_tpl.iter()).enumerate() {
+        assert_templates_byte_identical(s, f, &format!("sugared vs hand-flattened, stage {stage}"));
+    }
 }
 
 /// A `PerStageBlock` parameter used as a coefficient resolves to its own block's
@@ -1948,7 +1964,7 @@ fn per_stage_block_coefficient_twin_matches_hand_flattened_literals() {
     ];
     let flat_bounds = ResolvedGenericConstraintBounds::new(&flat_id_map, flat_rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         n_blks,
         vec![sugared_constraint],
         sugared_bounds,
@@ -2032,7 +2048,7 @@ fn symbolic_upper_bound_ref_twin_matches_literal_per_block_bounds() {
     ];
     let flat_bounds = ResolvedGenericConstraintBounds::new(&flat_id_map, flat_rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         n_blks,
         vec![sugared_constraint],
         sugared_bounds,
@@ -2102,7 +2118,7 @@ fn symbolic_lower_bound_ref_stage_level_collapse_twin() {
     let flat_rows = vec![(300_i32, 0_i32, None::<i32>, Some(floor), None)];
     let flat_bounds = ResolvedGenericConstraintBounds::new(&flat_id_map, flat_rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         n_blks,
         vec![sugared_constraint],
         sugared_bounds,
@@ -2233,7 +2249,7 @@ fn full_cancellation_drops_net_zero_column() {
     let flat_rows = vec![(3_i32, 0_i32, None::<i32>, None, Some(5.0_f64))];
     let flat_bounds = ResolvedGenericConstraintBounds::new(&flat_id_map, flat_rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         1,
         sugared_constraints,
         sugared_bounds,
@@ -2269,7 +2285,7 @@ fn paren_distribution_normalizes_to_hand_flattened_terms() {
     let rows = vec![(4_i32, 0_i32, None::<i32>, None, None)];
     let bounds = ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         1,
         parse_generic_from_str(sugared),
         bounds.clone(),
@@ -2327,7 +2343,7 @@ fn parquet_base_folds_with_inline_affine_remainder() {
     let flat_rows = vec![(5_i32, 0_i32, None::<i32>, None, Some(95.0_f64))];
     let flat_bounds = ResolvedGenericConstraintBounds::new(&flat_id_map, flat_rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         1,
         sugared_constraints,
         sugared_bounds,
@@ -2417,7 +2433,7 @@ fn parameter_rhs_places_two_distinct_terms_on_one_column() {
     let flat_rows = vec![(6_i32, 0_i32, None::<i32>, None, Some(400.0_f64))];
     let flat_bounds = ResolvedGenericConstraintBounds::new(&flat_id_map, flat_rows.into_iter());
 
-    assert_templates_byte_identical(
+    assert_desugaring_twin_builds_identical_lp(
         1,
         sugared_constraints,
         sugared_bounds,
@@ -2469,8 +2485,15 @@ fn declaration_order_and_rhs_term_order_are_invariant_in_lp() {
     let tpl_a = build_templates_for(&one_bus_system_n_blks_with_generic(1, parsed_a, bounds_a));
     let tpl_b = build_templates_for(&one_bus_system_n_blks_with_generic(1, parsed_b, bounds_b));
     assert_eq!(
-        format!("{tpl_a:?}"),
-        format!("{tpl_b:?}"),
-        "declaration order and commutative RHS term order must build byte-identical LP templates"
+        tpl_a.len(),
+        tpl_b.len(),
+        "declaration order and commutative RHS term order must not affect the stage count"
     );
+    for (stage, (a, b)) in tpl_a.iter().zip(tpl_b.iter()).enumerate() {
+        assert_templates_byte_identical(
+            a,
+            b,
+            &format!("declaration order and commutative RHS, stage {stage}"),
+        );
+    }
 }

@@ -7579,7 +7579,7 @@ mod chronological_attribution {
         TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
     use cobre_sddp::lead_time::resolve_spread;
-    use cobre_solver::StageTemplate;
+    use cobre_sddp::test_support::assert_templates_byte_identical;
 
     use super::common::build_setup_in_code;
     use super::common::builders::{
@@ -7999,81 +7999,6 @@ mod chronological_attribution {
         );
     }
 
-    /// Field-by-field byte-identity check: CSC structure, bounds, objective,
-    /// scaling, and the state/transfer/dual-relevant/hydro/PAR-order
-    /// dimensions. Every `f64` slice compares by `to_bits()` — true
-    /// bit-identity, not approximate.
-    fn assert_templates_byte_identical(tpl_a: &StageTemplate, tpl_b: &StageTemplate, stage: usize) {
-        assert_eq!(tpl_a.num_cols, tpl_b.num_cols, "stage {stage}: num_cols");
-        assert_eq!(tpl_a.num_rows, tpl_b.num_rows, "stage {stage}: num_rows");
-        assert_eq!(tpl_a.num_nz, tpl_b.num_nz, "stage {stage}: num_nz");
-        assert_eq!(tpl_a.n_state, tpl_b.n_state, "stage {stage}: n_state");
-        assert_eq!(
-            tpl_a.n_transfer, tpl_b.n_transfer,
-            "stage {stage}: n_transfer"
-        );
-        assert_eq!(
-            tpl_a.n_dual_relevant, tpl_b.n_dual_relevant,
-            "stage {stage}: n_dual_relevant"
-        );
-        assert_eq!(tpl_a.n_hydro, tpl_b.n_hydro, "stage {stage}: n_hydro");
-        assert_eq!(
-            tpl_a.max_par_order, tpl_b.max_par_order,
-            "stage {stage}: max_par_order"
-        );
-
-        assert_eq!(
-            tpl_a.col_starts, tpl_b.col_starts,
-            "stage {stage}: col_starts"
-        );
-        assert_eq!(
-            tpl_a.row_indices, tpl_b.row_indices,
-            "stage {stage}: row_indices"
-        );
-
-        let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-        assert_eq!(
-            bits(&tpl_a.values),
-            bits(&tpl_b.values),
-            "stage {stage}: values"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_lower),
-            bits(&tpl_b.col_lower),
-            "stage {stage}: col_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_upper),
-            bits(&tpl_b.col_upper),
-            "stage {stage}: col_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.objective),
-            bits(&tpl_b.objective),
-            "stage {stage}: objective"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_lower),
-            bits(&tpl_b.row_lower),
-            "stage {stage}: row_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_upper),
-            bits(&tpl_b.row_upper),
-            "stage {stage}: row_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_scale),
-            bits(&tpl_b.col_scale),
-            "stage {stage}: col_scale"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_scale),
-            bits(&tpl_b.row_scale),
-            "stage {stage}: row_scale"
-        );
-    }
-
     /// `K = 1` chronological (single 720 h block) must be byte-identical to
     /// the parallel build, WITH the travel-time arc declared (`χ_{0,d} = k_d`
     /// — the fixed-delivery-density contract). A single chronological block
@@ -8096,7 +8021,7 @@ mod chronological_attribution {
             .zip(chrono_templates.iter())
             .enumerate()
         {
-            assert_templates_byte_identical(p, c, stage);
+            assert_templates_byte_identical(p, c, &format!("stage {stage}"));
         }
     }
 

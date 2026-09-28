@@ -433,6 +433,12 @@ impl TimeValue {
             "TimeValue::from_parts: delivery_cumulative_discount_factors and \
              delivery_stage_ids must have equal length"
         );
+        debug_assert!(
+            discount_factors.len() <= delivery_cumulative_discount_factors.len(),
+            "TimeValue::from_parts: discount_factors must not be longer than \
+             delivery_cumulative_discount_factors — cumulative_discount_factors() slices \
+             the latter by the former's length"
+        );
         Self {
             discount_factors,
             delivery_cumulative_discount_factors,

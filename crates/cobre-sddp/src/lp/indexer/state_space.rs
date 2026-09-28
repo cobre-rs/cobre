@@ -208,11 +208,11 @@ impl StateSpace {
     ///
     /// # Panics (debug builds only)
     ///
-    /// Inherits the [`Self::set_nonzero_mask`] and
-    /// [`Self::finalize_state_column_map`] debug assertions:
-    /// `transit_bucket_column_order.len() == n_buckets`,
-    /// `effective_lag_count.len() == hydro_count`, lag bounds, and
-    /// `state_to_lp_column_map.len() == n_state`.
+    /// `transit_bucket_column_order.len() == n_buckets` and
+    /// `anticipated_lead_stages.len() == n_anticipated`. Inherits the
+    /// [`Self::set_nonzero_mask`] and [`Self::finalize_state_column_map`]
+    /// debug assertions: `effective_lag_count.len() == hydro_count`, lag
+    /// bounds, and `state_to_lp_column_map.len() == n_state`.
     #[must_use]
     pub fn new(
         hydro_count: usize,
@@ -228,6 +228,11 @@ impl StateSpace {
             transit_bucket_column_order.len(),
             n_buckets,
             "transit_bucket_column_order must have exactly n_buckets entries"
+        );
+        debug_assert_eq!(
+            anticipated_lead_stages.len(),
+            n_anticipated,
+            "anticipated_lead_stages must have exactly n_anticipated entries"
         );
 
         let n = hydro_count;

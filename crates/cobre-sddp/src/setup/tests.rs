@@ -1334,6 +1334,63 @@ fn create_workspace_pool_returns_correct_size() {
 }
 
 #[test]
+fn simulation_pool_scratch_is_sized_from_the_study_owners() {
+    use cobre_comm::LocalBackend;
+    use cobre_solver::ActiveSolver;
+
+    let system = minimal_system(2);
+    let config = minimal_config(1, 3);
+    let stochastic = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        OpeningTreeInputs::default(),
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("stochastic context");
+
+    let setup = StudySetup::new(
+        &system,
+        &config,
+        stochastic,
+        PrepareHydroModelsResult::default_from_system(&system),
+        Vec::new(),
+    )
+    .expect("setup");
+
+    let comm = LocalBackend;
+    let pool = setup
+        .create_workspace_pool(&comm, 1, ActiveSolver::new)
+        .expect("workspace pool");
+
+    let state = &setup.stage_data.state;
+    let max_n_blks = setup
+        .stage_data
+        .stage_templates
+        .geometry_per_stage
+        .iter()
+        .map(|g| g.n_blks)
+        .max()
+        .unwrap_or(0);
+    let n_load_buses = setup.stage_data.stage_templates.n_load_buses();
+
+    let scratch = &pool.workspaces[0].scratch;
+    assert_eq!(scratch.lag_accumulator.len(), state.hydro_count);
+    assert_eq!(
+        scratch.downstream_completed_lags.len(),
+        state.hydro_count * setup.downstream_par_order
+    );
+    assert!(scratch.load_rhs_buf.capacity() >= n_load_buses * max_n_blks);
+    assert_eq!(scratch.raw_noise_buf.capacity(), 0);
+}
+
+#[test]
 fn build_training_output_non_empty() {
     use cobre_comm::LocalBackend;
     use cobre_solver::ActiveSolver;

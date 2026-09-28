@@ -412,3 +412,49 @@ fn template_snapshot_regen() {
     std::fs::write(&tmp_path, content).expect("write temporary manifest");
     std::fs::rename(&tmp_path, &path).expect("rename temporary manifest into place");
 }
+
+#[test]
+fn every_deck_workspace_pool_is_sized_from_its_owners() {
+    use cobre_comm::LocalBackend;
+    use cobre_solver::ActiveSolver;
+
+    for deck in active_decks() {
+        let setup = build_deck_or_panic(&deck);
+        let stage_ctx = setup.stage_ctx();
+        let training_ctx = setup.training_ctx();
+        let state = training_ctx.state;
+        let max_n_blks = stage_ctx
+            .geometry_per_stage
+            .iter()
+            .map(|g| g.n_blks)
+            .max()
+            .unwrap_or(0);
+
+        let comm = LocalBackend;
+        let pool = setup
+            .create_workspace_pool(&comm, 1, ActiveSolver::new)
+            .unwrap_or_else(|e| panic!("deck {}: workspace pool: {e:?}", deck.key));
+
+        for ws in &pool.workspaces {
+            assert_eq!(
+                ws.patch_buf.indices.len(),
+                stage_ctx.load_bus_indices.len() * max_n_blks + state.hydro_count,
+                "deck {}: patch_buf.indices length",
+                deck.key
+            );
+            assert_eq!(
+                ws.patch_buf.col_indices.len(),
+                state.hydro_count * (1 + state.max_par_order)
+                    + state.n_buckets
+                    + state.n_anticipated * state.k_max,
+                "deck {}: patch_buf.col_indices length",
+                deck.key
+            );
+            assert!(
+                ws.current_state.capacity() >= state.n_state,
+                "deck {}: current_state capacity",
+                deck.key
+            );
+        }
+    }
+}

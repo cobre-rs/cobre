@@ -97,6 +97,22 @@ impl BlockRowFamily {
             RowsPerEntity::PerBlock => n_blks,
         }
     }
+
+    /// The three private fields, in declaration order, for the canonical
+    /// byte-encoding snapshot — the no-`..` destructure fails to compile the
+    /// moment a field is added, so the digest cannot silently drop it.
+    /// `rows_per_entity` is encoded as `true` for [`RowsPerEntity::PerBlock`],
+    /// `false` for [`RowsPerEntity::One`].
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub(crate) fn canonical_fields(self) -> (usize, usize, bool) {
+        let Self {
+            start,
+            end,
+            rows_per_entity,
+        } = self;
+        (start, end, rows_per_entity == RowsPerEntity::PerBlock)
+    }
 }
 
 #[cfg(test)]

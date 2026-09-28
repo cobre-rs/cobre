@@ -8,7 +8,7 @@ use cobre_core::{BlockMode, EntityId, PostStudyThermalBound};
 use cobre_solver::StageTemplate;
 
 use crate::lp::builder::{GenericConstraintRowEntry, StateBox};
-use crate::lp::indexer::{EvaporationIndices, HydroSys, StateSpace};
+use crate::lp::indexer::{BlockRowFamily, EvaporationIndices, HydroSys, StateSpace};
 use crate::time_value::TimeValue;
 
 use super::{StageGeometry, StageTemplates};
@@ -83,6 +83,13 @@ fn put_option_usize(buf: &mut Vec<u8>, value: Option<usize>) {
 fn put_range(buf: &mut Vec<u8>, range: &Range<usize>) {
     put_usize(buf, range.start);
     put_usize(buf, range.end);
+}
+
+fn put_block_row_family(buf: &mut Vec<u8>, family: BlockRowFamily) {
+    let (start, end, per_block) = family.canonical_fields();
+    put_usize(buf, start);
+    put_usize(buf, end);
+    put_bool(buf, per_block);
 }
 
 /// Group keys [`encode_lp_facts`] writes, guaranteed present even for zero
@@ -269,8 +276,8 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
     put_range(buf, generation_below_slack);
     put_range(buf, contract_import);
     put_range(buf, contract_export);
-    put_range(buf, &water_balance.range());
-    put_range(buf, &load_balance.range());
+    put_block_row_family(buf, *water_balance);
+    put_block_row_family(buf, *load_balance);
     put_range(buf, fpha);
     put_range(buf, filling_target);
     put_range(buf, filling_target_col);

@@ -866,13 +866,7 @@ impl HydroStageContext {
         let state = spec.state;
         let storage_final = view.primal[state.storage_outgoing_col(HydroSys::new(h)).get()];
         let storage_initial = view.primal[state.storage_incoming_col(HydroSys::new(h)).get()];
-        let incremental_inflow = if h < spec.inflow_m3s_per_hydro.len() {
-            spec.inflow_m3s_per_hydro[h]
-        } else if state.max_par_order > 0 {
-            view.primal[state.lag_incoming_col(0, HydroSys::new(h)).get()]
-        } else {
-            0.0
-        };
+        let incremental_inflow = spec.inflow_m3s_per_hydro[h];
         let inflow_slack = if study_dims.has_inflow_penalty {
             view.primal[spec.geometry.inflow_slack_col(HydroSys::new(h))]
         } else {
@@ -922,7 +916,7 @@ impl HydroStageContext {
         let integrated_accumulated = spec
             .energy_conversion
             .integrated_accumulated_productivity(h, spec.stage_index);
-        let v_min = spec.hydro_min_storage_hm3.get(h).copied().unwrap_or(0.0);
+        let v_min = spec.hydro_min_storage_hm3[h];
         let stage_total_hours: f64 = spec.block_hours.iter().sum();
         Self {
             storage_final,

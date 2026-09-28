@@ -569,7 +569,7 @@ mod tests {
             pumping_consumption_mw_per_m3s: &setup.stage_data.pumping_consumption_mw_per_m3s,
             contract_prices_per_stage: &setup.stage_data.contract_prices_per_stage,
             contract_is_import: &setup.stage_data.contract_is_import,
-            ncs_entity_ids_per_stage: &setup.ncs_entity_ids_per_stage,
+            ncs_entity_ids_per_stage: &setup.ncs.entity_ids_per_stage,
             diversion_upstream: &setup.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &setup
                 .stage_data

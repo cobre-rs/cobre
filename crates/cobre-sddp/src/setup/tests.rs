@@ -874,7 +874,7 @@ fn training_ctx_fields_match_study_setup() {
     );
     assert_eq!(
         ctx.initial_state.len(),
-        setup.initial_state.len(),
+        setup.initial.state.len(),
         "initial_state length mismatch"
     );
 }
@@ -3546,7 +3546,7 @@ fn study_setup_initial_state_has_nonzero_lags_from_derived_inflow_history() {
     )
     .expect("setup with inflow_history");
 
-    let state = &setup.initial_state;
+    let state = &setup.initial.state;
 
     // With 2 hydros (N=2) and max_par_order=2 (L=2), lag slots start at N=2.
     // Lag-major layout: slot = lag_start + lag * N + h.

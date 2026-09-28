@@ -145,35 +145,14 @@ pub struct StudySetup {
     pub stochastic: StochasticContext,
     /// Future cost function (cut pool) updated by the backward pass during training.
     pub fcf: FutureCostFunction,
-    pub(crate) initial_state: Vec<f64>,
+    /// Initial state vector and derived inflow-lag seeds ([`InitialConditions`]).
+    pub(crate) initial: InitialConditions,
 
     /// Pre-computed hydro production models (FPHA, turbine curves, etc.).
     pub hydro_models: PrepareHydroModelsResult,
-    pub(crate) ncs_entity_ids_per_stage: Vec<Vec<i32>>,
-    /// Stage-invariant stochastic-slot → dense NCS column index map (slot in
-    /// `StochasticContext::ncs_entity_ids` id-sorted order).
-    ///
-    /// The NCS bound patch sites stride the per-opening cap through
-    /// [`StageGeometry::ncs_generation_col`](crate::lp::builder::StageGeometry::ncs_generation_col)
-    /// at `ncs_stochastic_dense_col[slot]`. Length equals `n_stochastic_ncs`;
-    /// empty when the study has no stochastic NCS.
-    pub(crate) ncs_stochastic_dense_col: Vec<usize>,
-    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per stochastic NCS slot
-    /// (id-sorted to match `ncs_stochastic_dense_col` and the `transform_ncs_noise`
-    /// buffer order).
-    ///
-    /// The dormant-slot `[0, 0]` cap MUST stay identical across the forward,
-    /// backward, and lower-bound patch sites — the `evaluate_lower_bound`
-    /// "patch NCS per opening" contract; a divergence understates the bound (D15).
-    /// Length equals `n_stochastic_ncs`; empty when no stochastic NCS.
-    pub(crate) ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)>,
-    /// Max generation \[MW\] per stochastic NCS entity, sorted by entity ID.
-    pub(crate) ncs_max_gen: Vec<f64>,
-    /// Whether each stochastic NCS entity may be curtailed, aligned 1:1 with
-    /// [`Self::ncs_max_gen`]. `false` = must-run: the patch sites pin
-    /// `col_lower = col_upper` (not `[0, cap]`), and non-simulated must-run
-    /// generation is pre-netted from load.
-    pub(crate) ncs_allow_curtailment: Vec<bool>,
+
+    /// Per-stage and per-slot NCS entity data ([`NcsEntityData`]).
+    pub(crate) ncs: NcsEntityData,
 
     /// Stage-invariant `(entry_stage_id, exit_stage_id)` per anticipated thermal,
     /// in anticipated-local order matching
@@ -288,12 +267,6 @@ pub struct StudySetup {
     pub(crate) horizon: HorizonMode,
     /// Inflow non-negativity enforcement method.
     pub(crate) inflow_method: InflowNonNegativityMethod,
-
-    /// Derived per-hydro PAR lag-slot and accumulator seeds ([`derive_inflow_seeds`]),
-    /// applied to the stage-0 lag block and to every trajectory start in the
-    /// forward pass and simulation pipeline instead of zero-filling. All-zero
-    /// when the derivation has no resolvable data.
-    pub(crate) derived_inflow_seeds: DerivedInflowSeeds,
 
     /// Energy-conversion scalars (`ρ_eq`, `V_ref`, `Q_ref`, `ρ_acum`) per
     /// `(hydro, stage)`, consumed by the energy-balance LP constraints and
@@ -498,8 +471,6 @@ impl StudySetup {
             boundary.is_present(),
         );
 
-        let derived_inflow_seeds = resolve_inflow_seeds(system, state_layout.max_par_order);
-
         // Built here, before the stage templates: `TemplateBuildCtx` reads it during
         // `StageLayout::new`, and the SAME value (never rebuilt or cloned) is stored
         // on `StageData` below.
@@ -550,21 +521,13 @@ impl StudySetup {
             downstream_par_order,
         );
 
-        let mut initial_state = build_initial_state(
+        let initial = resolve_initial_conditions(
             system,
+            &state_layout,
             &study_dims,
-            &state_layout,
-            &derived_inflow_seeds.lag_values,
-        );
-        splice_transit_bucket_seed(
-            &mut initial_state,
-            &state_layout,
-            system,
             &transit_bucket_topology,
+            stage_templates.state_boxes.first(),
         );
-        if let Some(stage0_box) = stage_templates.state_boxes.first() {
-            canonicalize_initial_state(&mut initial_state, &state_layout, stage0_box);
-        }
 
         let n_stages = stage_templates.templates.len();
         let max_iterations = max_iterations_from_rules(&stopping_rule_set);
@@ -586,7 +549,7 @@ impl StudySetup {
             simulation_source,
             forward_passes,
             downstream_par_order,
-            derived_inflow_seeds.as_seed(state_layout.max_par_order),
+            initial.inflow_seeds.as_seed(state_layout.max_par_order),
         )?;
 
         // G1: binds after `build_scenario_libraries` — an `External`-bound
@@ -686,14 +649,7 @@ impl StudySetup {
 
         let risk_measures = build_risk_measures(system);
 
-        let NcsEntityData {
-            entity_counts,
-            ncs_entity_ids_per_stage,
-            ncs_stochastic_dense_col,
-            ncs_stochastic_windows,
-            ncs_max_gen,
-            ncs_allow_curtailment,
-        } = build_ncs_entity_data(system, &stage_templates, &stochastic)?;
+        let entity_counts = build_entity_counts(system);
         let pumping_consumption_mw_per_m3s = build_pumping_consumption(system);
         let contract_prices_per_stage =
             build_contract_prices_per_stage(system, &stage_templates.geometry_per_stage);
@@ -704,6 +660,24 @@ impl StudySetup {
             build_extended_delivery_anchors(system, &state_layout, n_stages);
         let transit_seed_arcs = build_transit_seed_arcs(system);
         let past_defluences = system.initial_conditions().past_defluences.clone();
+
+        let stage_data = stage_data::StageData {
+            stage_templates,
+            time_value,
+            state: state_layout,
+            study_dims,
+            hydro_cell_index,
+            cut_state_layouts,
+            stages,
+            entity_counts,
+            pumping_consumption_mw_per_m3s,
+            contract_prices_per_stage,
+            contract_is_import,
+            stage_lag_transitions,
+            noise_group_ids,
+            scaling_report,
+        };
+        let ncs = build_ncs_entity_data(system, &stage_data, &stochastic)?;
 
         admission_gate(
             &risk_measures,
@@ -716,31 +690,12 @@ impl StudySetup {
             system.hydros().iter().map(|h| h.min_storage_hm3).collect();
 
         Ok(Self {
-            stage_data: stage_data::StageData {
-                stage_templates,
-                time_value,
-                state: state_layout,
-                study_dims,
-                hydro_cell_index,
-                cut_state_layouts,
-                stages,
-                entity_counts,
-                pumping_consumption_mw_per_m3s,
-                contract_prices_per_stage,
-                contract_is_import,
-                stage_lag_transitions,
-                noise_group_ids,
-                scaling_report,
-            },
+            stage_data,
             stochastic,
             fcf,
-            initial_state,
+            initial,
             hydro_models,
-            ncs_entity_ids_per_stage,
-            ncs_stochastic_dense_col,
-            ncs_stochastic_windows,
-            ncs_max_gen,
-            ncs_allow_curtailment,
+            ncs,
             anticipated_windows,
             study_stage_ids,
             extended_delivery_anchors,
@@ -778,7 +733,6 @@ impl StudySetup {
             hardest_first_claim_order: true,
             horizon,
             inflow_method,
-            derived_inflow_seeds,
             energy_conversion,
             hydro_min_storage_hm3,
             warm_start_basis_cache: None,
@@ -845,22 +799,42 @@ mod run_phase_plan_tests {
 // from_broadcast_params sub-phase helpers
 // ---------------------------------------------------------------------------
 
-/// Grouped output of [`build_ncs_entity_data`].
-struct NcsEntityData {
-    entity_counts: EntityCounts,
-    ncs_entity_ids_per_stage: Vec<Vec<i32>>,
-    ncs_stochastic_dense_col: Vec<usize>,
-    ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)>,
-    ncs_max_gen: Vec<f64>,
-    ncs_allow_curtailment: Vec<bool>,
+/// Grouped per-stage and per-slot NCS entity data, held on [`StudySetup::ncs`].
+#[derive(Debug)]
+pub(crate) struct NcsEntityData {
+    pub(crate) entity_ids_per_stage: Vec<Vec<i32>>,
+    /// Stage-invariant stochastic-slot → dense NCS column index map (slot in
+    /// `StochasticContext::ncs_entity_ids` id-sorted order).
+    ///
+    /// The NCS bound patch sites stride the per-opening cap through
+    /// [`StageGeometry::ncs_generation_col`](crate::lp::builder::StageGeometry::ncs_generation_col)
+    /// at `stochastic_dense_col[slot]`. Length equals `n_stochastic_ncs`;
+    /// empty when the study has no stochastic NCS.
+    pub(crate) stochastic_dense_col: Vec<usize>,
+    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per stochastic NCS slot
+    /// (id-sorted to match `stochastic_dense_col` and the `transform_ncs_noise`
+    /// buffer order).
+    ///
+    /// The dormant-slot `[0, 0]` cap MUST stay identical across the forward,
+    /// backward, and lower-bound patch sites — the `evaluate_lower_bound`
+    /// "patch NCS per opening" contract; a divergence understates the bound (D15).
+    /// Length equals `n_stochastic_ncs`; empty when no stochastic NCS.
+    pub(crate) stochastic_windows: Vec<(Option<i32>, Option<i32>)>,
+    /// Max generation \[MW\] per stochastic NCS entity, sorted by entity ID.
+    pub(crate) max_gen: Vec<f64>,
+    /// Whether each stochastic NCS entity may be curtailed, aligned 1:1 with
+    /// [`Self::max_gen`]. `false` = must-run: the patch sites pin
+    /// `col_lower = col_upper` (not `[0, cap]`), and non-simulated must-run
+    /// generation is pre-netted from load.
+    pub(crate) allow_curtailment: Vec<bool>,
 }
 
-/// Build entity counts and the dense NCS column/window maps from the system.
+/// Build the per-stage and per-slot NCS entity data from the system.
 ///
-/// `ncs_stochastic_dense_col`, `ncs_stochastic_windows`, `ncs_max_gen`, and
-/// `ncs_allow_curtailment` are aligned 1:1 in stochastic NCS-entity (slot) order;
-/// see [`StudySetup::ncs_stochastic_dense_col`] and
-/// [`StudySetup::ncs_stochastic_windows`] for what each carries.
+/// `stochastic_dense_col`, `stochastic_windows`, `max_gen`, and
+/// `allow_curtailment` are aligned 1:1 in stochastic NCS-entity (slot) order;
+/// see [`NcsEntityData::stochastic_dense_col`] and
+/// [`NcsEntityData::stochastic_windows`] for what each carries.
 ///
 /// # Errors
 ///
@@ -868,35 +842,34 @@ struct NcsEntityData {
 /// in the system's `non_controllable_sources`.
 fn build_ncs_entity_data(
     system: &System,
-    stage_templates: &StageTemplates,
+    stage_data: &StageData,
     stochastic: &StochasticContext,
 ) -> Result<NcsEntityData, SddpError> {
-    let entity_counts = build_entity_counts(system);
-
-    let n_study = stage_templates.templates.len();
+    let n_study = stage_data.stage_templates.templates.len();
 
     // Every stage repeats the full id-sorted NCS list, so a dormant NCS still
     // occupies its slot and reports a zero row rather than being absent.
-    let ncs_entity_ids_per_stage: Vec<Vec<i32>> =
-        vec![entity_counts.non_controllable_ids.clone(); n_study];
+    let entity_ids_per_stage: Vec<Vec<i32>> =
+        vec![stage_data.entity_counts.non_controllable_ids.clone(); n_study];
 
     let stoch_ncs_ids = stochastic.ncs_entity_ids();
 
     // Bridge each slot to its dense column via entity id (not a direct index) so the
     // map stays correct when only a subset of NCS are stochastic or the orders
     // diverge. Keyed on the id-sorted slot order, not entity declaration order.
-    let mut ncs_stochastic_dense_col: Vec<usize> = Vec::with_capacity(stoch_ncs_ids.len());
-    let mut ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)> =
+    let mut stochastic_dense_col: Vec<usize> = Vec::with_capacity(stoch_ncs_ids.len());
+    let mut stochastic_windows: Vec<(Option<i32>, Option<i32>)> =
         Vec::with_capacity(stoch_ncs_ids.len());
-    let mut ncs_max_gen: Vec<f64> = Vec::with_capacity(stoch_ncs_ids.len());
-    let mut ncs_allow_curtailment: Vec<bool> = Vec::with_capacity(stoch_ncs_ids.len());
+    let mut max_gen: Vec<f64> = Vec::with_capacity(stoch_ncs_ids.len());
+    let mut allow_curtailment: Vec<bool> = Vec::with_capacity(stoch_ncs_ids.len());
     for slot_id in stoch_ncs_ids {
         let not_found = || {
             SddpError::Validation(format!(
                 "stochastic NCS entity {slot_id:?} not found in system non_controllable_sources"
             ))
         };
-        let dense_col = entity_counts
+        let dense_col = stage_data
+            .entity_counts
             .non_controllable_ids
             .iter()
             .position(|&id| id == slot_id.0)
@@ -906,19 +879,18 @@ fn build_ncs_entity_data(
             .iter()
             .find(|n| n.id == *slot_id)
             .ok_or_else(not_found)?;
-        ncs_stochastic_dense_col.push(dense_col);
-        ncs_stochastic_windows.push((ncs.entry_stage_id, ncs.exit_stage_id));
-        ncs_max_gen.push(ncs.max_generation_mw);
-        ncs_allow_curtailment.push(ncs.allow_curtailment);
+        stochastic_dense_col.push(dense_col);
+        stochastic_windows.push((ncs.entry_stage_id, ncs.exit_stage_id));
+        max_gen.push(ncs.max_generation_mw);
+        allow_curtailment.push(ncs.allow_curtailment);
     }
 
     Ok(NcsEntityData {
-        entity_counts,
-        ncs_entity_ids_per_stage,
-        ncs_stochastic_dense_col,
-        ncs_stochastic_windows,
-        ncs_max_gen,
-        ncs_allow_curtailment,
+        entity_ids_per_stage,
+        stochastic_dense_col,
+        stochastic_windows,
+        max_gen,
+        allow_curtailment,
     })
 }
 
@@ -1795,6 +1767,39 @@ fn resolve_inflow_seeds(system: &System, max_par_order: usize) -> DerivedInflowS
             season_map,
             max_par_order,
         ),
+    }
+}
+
+/// Initial state vector and derived per-hydro PAR lag-slot/accumulator seeds,
+/// held on [`StudySetup::initial`].
+#[derive(Debug)]
+pub(crate) struct InitialConditions {
+    pub(crate) state: Vec<f64>,
+    /// Applied to the stage-0 lag block and to every trajectory start in the
+    /// forward pass and simulation pipeline instead of zero-filling. All-zero
+    /// when the derivation has no resolvable data.
+    pub(crate) inflow_seeds: DerivedInflowSeeds,
+}
+
+/// Build the initial state vector and its inflow-lag seeds together —
+/// [`build_initial_state`]'s lag block reads [`resolve_inflow_seeds`]'s output.
+fn resolve_initial_conditions(
+    system: &System,
+    state: &StateSpace,
+    study_dims: &StudyDimensions,
+    topology: &bucket_topology::TransitBucketTopology,
+    stage0_box: Option<&StateBox>,
+) -> InitialConditions {
+    let inflow_seeds = resolve_inflow_seeds(system, state.max_par_order);
+    let mut initial_state =
+        build_initial_state(system, study_dims, state, &inflow_seeds.lag_values);
+    splice_transit_bucket_seed(&mut initial_state, state, system, topology);
+    if let Some(stage0_box) = stage0_box {
+        canonicalize_initial_state(&mut initial_state, state, stage0_box);
+    }
+    InitialConditions {
+        state: initial_state,
+        inflow_seeds,
     }
 }
 

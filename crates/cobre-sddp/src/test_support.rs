@@ -2804,7 +2804,7 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 /// — the base template for the node's stage with the incoming-state pin and the
 /// realized noise applied exactly as the training solve does (via the shared
 /// [`StageSolvePrep::run`] pipeline). The incoming-state columns land pinned to
-/// [`StudySetup::initial_state`]; the extensive-form composer frees and couples them for
+/// [`StudySetup::initial`]; the extensive-form composer frees and couples them for
 /// non-root nodes.
 ///
 /// # Panics
@@ -2814,7 +2814,7 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 #[must_use]
 pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> StageTemplate {
     let raw_noise = oracle_raw_noise(setup, node_pos);
-    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial_state)
+    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial.state)
 }
 
 /// [`capture_patched_node_template`] with a caller-chosen standardized inflow
@@ -2840,12 +2840,12 @@ pub fn capture_patched_node_template_with_inflow_noise(
     );
     let mut raw_noise = vec![0.0_f64; setup.stochastic.dim()];
     raw_noise[hydro].copy_from_slice(inflow_eta);
-    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial_state)
+    capture_patched_node_template_with_raw_noise(setup, node_pos, &raw_noise, &setup.initial.state)
 }
 
 /// [`capture_patched_node_template`] at a caller-chosen raw noise vector and
 /// incoming state, in place of the node's own oracle draw and
-/// [`StudySetup::initial_state`].
+/// [`StudySetup::initial`].
 ///
 /// # Panics
 ///
@@ -2964,7 +2964,7 @@ fn capture_patched_node_template_with_raw_noise(
 /// extensive-form root's incoming-state columns are pinned to.
 #[must_use]
 pub fn oracle_initial_state(setup: &StudySetup) -> Vec<f64> {
-    setup.initial_state.clone()
+    setup.initial.state.clone()
 }
 
 /// `stage`'s admissible box (per outgoing state dimension) as plain `(lower,

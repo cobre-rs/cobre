@@ -4671,12 +4671,12 @@ mod tests {
             &setup.stage_data.stage_templates,
             &setup.stage_data.stage_templates.state_boxes,
         )
-        .ncs_stochastic_dense_col(&setup.ncs_stochastic_dense_col)
-        .ncs_stochastic_windows(&setup.ncs_stochastic_windows)
+        .ncs_stochastic_dense_col(&setup.ncs.stochastic_dense_col)
+        .ncs_stochastic_windows(&setup.ncs.stochastic_windows)
         .anticipated_windows(&setup.anticipated_windows)
         .study_stage_ids(&setup.study_stage_ids)
-        .ncs_max_gen(&setup.ncs_max_gen)
-        .ncs_allow_curtailment(&setup.ncs_allow_curtailment)
+        .ncs_max_gen(&setup.ncs.max_gen)
+        .ncs_allow_curtailment(&setup.ncs.allow_curtailment)
         .discount_factors(setup.stage_data.time_value.discount_factors())
         .cumulative_discount_factors(setup.stage_data.time_value.cumulative_discount_factors())
         .stage_lag_transitions(&setup.stage_data.stage_lag_transitions)
@@ -4690,7 +4690,7 @@ mod tests {
             study_dims: &setup.stage_data.study_dims,
             inflow_method: &setup.inflow_method,
             stochastic: &setup.stochastic,
-            initial_state: &setup.initial_state,
+            initial_state: &setup.initial.state,
             inflow_scheme: tr.inflow_scheme,
             load_scheme: tr.load_scheme,
             ncs_scheme: tr.ncs_scheme,
@@ -4699,8 +4699,8 @@ mod tests {
             external_inflow_library: tr.external_inflow.as_ref(),
             external_load_library: tr.external_load.as_ref(),
             external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &setup.derived_inflow_seeds.accum,
-            lag_weight_seed: &setup.derived_inflow_seeds.weight,
+            lag_accum_seed: &setup.initial.inflow_seeds.accum,
+            lag_weight_seed: &setup.initial.inflow_seeds.weight,
             dcs: None,
             node_graph: &setup.node_graph,
         };

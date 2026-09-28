@@ -144,12 +144,12 @@ impl StudySetup {
             geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
             cost_scale_factor: self.stage_data.stage_templates.cost_scale_factor,
             load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,
-            ncs_stochastic_dense_col: &self.ncs_stochastic_dense_col,
-            ncs_stochastic_windows: &self.ncs_stochastic_windows,
+            ncs_stochastic_dense_col: &self.ncs.stochastic_dense_col,
+            ncs_stochastic_windows: &self.ncs.stochastic_windows,
             anticipated_windows: &self.anticipated_windows,
             study_stage_ids: &self.study_stage_ids,
-            ncs_max_gen: &self.ncs_max_gen,
-            ncs_allow_curtailment: &self.ncs_allow_curtailment,
+            ncs_max_gen: &self.ncs.max_gen,
+            ncs_allow_curtailment: &self.ncs.allow_curtailment,
             discount_factors: self.stage_data.time_value.discount_factors(),
             cumulative_discount_factors: self.stage_data.time_value.cumulative_discount_factors(),
             stage_lag_transitions: &self.stage_data.stage_lag_transitions,
@@ -164,7 +164,7 @@ impl StudySetup {
             study_dims: &self.stage_data.study_dims,
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
+            initial_state: &self.initial.state,
             inflow_scheme: tr.inflow_scheme,
             load_scheme: tr.load_scheme,
             ncs_scheme: tr.ncs_scheme,
@@ -173,8 +173,8 @@ impl StudySetup {
             external_inflow_library: tr.external_inflow.as_ref(),
             external_load_library: tr.external_load.as_ref(),
             external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &self.derived_inflow_seeds.accum,
-            lag_weight_seed: &self.derived_inflow_seeds.weight,
+            lag_accum_seed: &self.initial.inflow_seeds.accum,
+            lag_weight_seed: &self.initial.inflow_seeds.weight,
             dcs: self
                 .cut_management
                 .cut_selection
@@ -261,7 +261,7 @@ impl StudySetup {
             pumping_consumption_mw_per_m3s: &self.stage_data.pumping_consumption_mw_per_m3s,
             contract_prices_per_stage: &self.stage_data.contract_prices_per_stage,
             contract_is_import: &self.stage_data.contract_is_import,
-            ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
+            ncs_entity_ids_per_stage: &self.ncs.entity_ids_per_stage,
             diversion_upstream: &self.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &self
                 .stage_data

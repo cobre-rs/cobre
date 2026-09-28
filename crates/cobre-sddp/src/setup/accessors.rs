@@ -244,7 +244,6 @@ impl StudySetup {
             cumulative_discount_factors: self.stage_data.time_value.cumulative_discount_factors(),
             stage_lag_transitions: &self.stage_data.stage_lag_transitions,
             noise_group_ids: &self.stage_data.noise_group_ids,
-            downstream_par_order: self.stage_data.study_dims.downstream_par_order,
         }
     }
 

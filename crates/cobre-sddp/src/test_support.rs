@@ -684,7 +684,6 @@ pub struct StageContextFixture<'a> {
     anticipated_windows: &'a [(Option<i32>, Option<i32>)],
     stage_lag_transitions: &'a [StageLagTransition],
     noise_group_ids: &'a [u32],
-    downstream_par_order: usize,
 }
 
 impl<'a> StageContextFixture<'a> {
@@ -720,7 +719,6 @@ impl<'a> StageContextFixture<'a> {
             anticipated_windows: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
-            downstream_par_order: 0,
         }
     }
 
@@ -822,13 +820,6 @@ impl<'a> StageContextFixture<'a> {
         self
     }
 
-    /// Sets [`StageContext::downstream_par_order`].
-    #[must_use]
-    pub fn downstream_par_order(mut self, v: usize) -> Self {
-        self.downstream_par_order = v;
-        self
-    }
-
     /// Lends a [`StageContext`] borrowing this fixture's fields.
     #[must_use]
     pub fn ctx(&self) -> StageContext<'_> {
@@ -848,7 +839,6 @@ impl<'a> StageContextFixture<'a> {
             cumulative_discount_factors: self.cumulative_discount_factors,
             stage_lag_transitions: self.stage_lag_transitions,
             noise_group_ids: self.noise_group_ids,
-            downstream_par_order: self.downstream_par_order,
         }
     }
 }
@@ -1502,7 +1492,7 @@ pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     let mut lag_accumulator = vec![0.0_f64; layout.hydro_count.max(1)];
     let mut lag_weight_accum = vec![0.0_f64; layout.hydro_count.max(1)];
     let incoming_lags = vec![0.0_f64; layout.hydro_count * layout.max_par_order];
-    let ds_par_order = ctx.downstream_par_order;
+    let ds_par_order = training_ctx.study_dims.downstream_par_order;
     let mut ds_accumulator = vec![
         0.0_f64;
         if ds_par_order > 0 {

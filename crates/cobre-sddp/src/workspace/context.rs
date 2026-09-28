@@ -78,11 +78,6 @@ pub struct StageContext<'a> {
     /// forward pass; uniform monthly studies give each stage a unique ID (no
     /// sharing).
     pub noise_group_ids: &'a [u32],
-    /// PAR order for the downstream (coarser-resolution) model. `0` for
-    /// uniform-resolution studies — every downstream accumulation path in
-    /// `accumulate_and_shift_lag_state` is skipped; non-zero (a
-    /// monthly-to-quarterly transition) sizes the downstream scratch buffers.
-    pub downstream_par_order: usize,
 }
 
 impl StageContext<'_> {

@@ -1193,7 +1193,7 @@ mod tests {
 
     /// A [`StageContext`] over empty slices, for pool-sizing tests that never
     /// exercise load buses or geometry.
-    fn empty_stage_ctx(downstream_par_order: usize) -> StageContext<'static> {
+    fn empty_stage_ctx() -> StageContext<'static> {
         StageContext {
             templates: &[],
             state_boxes: &[],
@@ -1210,7 +1210,6 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
-            downstream_par_order,
         }
     }
 
@@ -1221,7 +1220,7 @@ mod tests {
             0,
             4,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1237,7 +1236,7 @@ mod tests {
             0,
             4,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1255,7 +1254,7 @@ mod tests {
             0,
             0,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1269,7 +1268,7 @@ mod tests {
             0,
             1,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1287,7 +1286,7 @@ mod tests {
             0,
             n,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1303,7 +1302,7 @@ mod tests {
             0,
             2,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing {
                 max_openings: 5,
                 ..WorkspaceSizing::default()
@@ -1323,7 +1322,7 @@ mod tests {
         let ctx = TrainingContextFixture::new(state_layout(5, 2)).downstream_par_order(0);
         let scratch = ScratchBuffers::new(
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
         );
         assert!(
@@ -1349,7 +1348,7 @@ mod tests {
         let ctx = TrainingContextFixture::new(state_layout(3, 2)).downstream_par_order(2);
         let scratch = ScratchBuffers::new(
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
         );
         assert_eq!(
@@ -1381,7 +1380,7 @@ mod tests {
             0,
             2,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1652,7 +1651,7 @@ mod tests {
             0,
             4,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing {
                 initial_pool_capacity: 50,
                 ..WorkspaceSizing::default()
@@ -1675,7 +1674,7 @@ mod tests {
             0,
             1,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -1693,7 +1692,7 @@ mod tests {
             /* rank = */ 3,
             /* n_workers = */ 5,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -2698,7 +2697,7 @@ mod tests {
             0,
             2,
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
             || MockSolver,
         );
@@ -2717,7 +2716,7 @@ mod tests {
             MockSolver,
             PatchBuffer::new(ctx.training_ctx().state, &[], &[]),
             &ctx.training_ctx(),
-            &empty_stage_ctx(0),
+            &empty_stage_ctx(),
             WorkspaceSizing::default(),
         );
         assert_eq!(

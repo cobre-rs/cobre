@@ -213,7 +213,6 @@ impl StageSolvePrep {
                     ctx.ncs_stochastic_dense_col,
                     ctx.ncs_stochastic_windows,
                     stage_id,
-                    ctx.block_count(stage),
                 );
             }
         }

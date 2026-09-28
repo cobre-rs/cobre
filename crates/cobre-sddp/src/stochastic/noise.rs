@@ -460,11 +460,6 @@ pub(crate) fn gather_dense_ncs_bounds(
 /// make stage NCS bases diverge. [`gather_dense_ncs_bounds`] forces `[0, 0]`
 /// for a slot dormant at this stage — the "patch NCS identically" contract
 /// shared by every solve site (D15: a divergence understates the bound).
-///
-/// # Panics
-///
-/// Panics in debug builds when `geometry.n_blks != n_blks` — a fixture's
-/// geometry and block count disagree.
 pub(crate) fn apply_ncs_col_bounds<S: SolverInterface>(
     solver: &mut S,
     scratch: &mut ScratchBuffers,
@@ -472,13 +467,8 @@ pub(crate) fn apply_ncs_col_bounds<S: SolverInterface>(
     dense_col: &[usize],
     windows: &[(Option<i32>, Option<i32>)],
     stage_id: i32,
-    n_blks: usize,
 ) {
-    debug_assert_eq!(
-        geometry.n_blks, n_blks,
-        "geometry's own block count must match the passed n_blks",
-    );
-    let expected_len = dense_col.len() * n_blks;
+    let expected_len = dense_col.len() * geometry.n_blks;
     // Rebuild on the geometry's NCS start changing, not length alone: two stages
     // can share a length yet address different columns, so keying on length
     // would set bounds on the previous stage's columns.
@@ -491,7 +481,7 @@ pub(crate) fn apply_ncs_col_bounds<S: SolverInterface>(
     gather_dense_ncs_bounds(
         windows,
         stage_id,
-        n_blks,
+        geometry.n_blks,
         &scratch.ncs_col_lower_buf,
         &scratch.ncs_col_upper_buf,
         &mut scratch.ncs_col_lower_active_buf,
@@ -2530,7 +2520,6 @@ mod tests {
             &dense_col,
             &windows,
             stage_id,
-            n_blks,
         );
 
         assert_eq!(

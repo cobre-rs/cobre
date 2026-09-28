@@ -1305,7 +1305,7 @@ pub(crate) fn apply_training_policy_mode(
     if let Some(ref bp) = config.policy.boundary {
         let recon = reconcile_boundary_policy(setup, system, bp, case_dir)
             .map_err(boundary_cut_error_message)?;
-        inject_boundary_cuts(setup, &recon.cuts);
+        inject_boundary_cuts(setup, &recon.cuts).map_err(boundary_cut_error_message)?;
         let cut_count = recon.cuts.len();
         eprintln!(
             "cobre-python: boundary cuts: {cut_count} loaded from {} (priced at {})",

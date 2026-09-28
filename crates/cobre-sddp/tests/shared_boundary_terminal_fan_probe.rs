@@ -178,7 +178,7 @@ fn single_node_source_injects_into_the_one_pool_every_terminal_fan_leaf_shares()
     assert_eq!(boundary_cuts.len(), 2);
 
     let n_pools_before = setup.fcf.pools.len();
-    inject_boundary_cuts(&mut setup, &boundary_cuts);
+    inject_boundary_cuts(&mut setup, &boundary_cuts).unwrap();
     assert_eq!(
         setup.fcf.pools.len(),
         n_pools_before,

@@ -385,7 +385,7 @@ fn inject_ring_boundary(setup: &mut cobre_sddp::StudySetup, dir: &Path) {
         1.0,
     ))
     .expect("boundary cut must load");
-    inject_boundary_cuts(setup, &boundary_cuts);
+    inject_boundary_cuts(setup, &boundary_cuts).unwrap();
 }
 
 /// Build the terminal pool's FROZEN LP template: the base structural template

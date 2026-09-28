@@ -295,7 +295,7 @@ pub(super) fn apply_training_policy(
         // and injects the same terminal pool.
         let boundary_records = broadcast_value(boundary_records, &ctx.comm)?;
         let validated = ValidatedBoundaryCuts::from_broadcast_records(boundary_records);
-        inject_boundary_cuts(setup, &validated);
+        inject_boundary_cuts(setup, &validated)?;
     }
 
     Ok(())

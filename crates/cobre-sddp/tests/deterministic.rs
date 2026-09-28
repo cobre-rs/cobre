@@ -10528,7 +10528,7 @@ mod water_terminal_fcf_valuation {
             1.0,
         ))
         .expect("boundary cut must load");
-        inject_boundary_cuts(setup, &boundary_cuts);
+        inject_boundary_cuts(setup, &boundary_cuts).unwrap();
     }
 
     /// Build the terminal pool's FROZEN LP template: the base structural

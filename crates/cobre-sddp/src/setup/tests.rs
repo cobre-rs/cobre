@@ -10840,7 +10840,8 @@ fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
     crate::inject_boundary_cuts(
         &mut chain_injected,
         &crate::ValidatedBoundaryCuts::from_broadcast_records(vec![record]),
-    );
+    )
+    .unwrap();
     check(&chain_injected, 1, true);
 
     let fan_plain = test_support::terminal_generated_fan_setup(2, 1);
@@ -10851,6 +10852,7 @@ fn terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan() {
     crate::inject_boundary_cuts(
         &mut fan_injected,
         &crate::ValidatedBoundaryCuts::from_broadcast_records(vec![record]),
-    );
+    )
+    .unwrap();
     check(&fan_injected, 2, true);
 }

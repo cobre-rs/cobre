@@ -1283,7 +1283,7 @@ mod decomp_integration {
             !boundary_records.is_empty(),
             "source stage must have cuts after training"
         );
-        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
+        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records).unwrap();
 
         let terminal_pool_id = setup_c.node_graph.terminal_pool(num_stages).unwrap();
         let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
@@ -3250,7 +3250,7 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
             1.0,
         ))
         .expect("boundary cut must load");
-        inject_boundary_cuts(setup, &boundary_cuts);
+        inject_boundary_cuts(setup, &boundary_cuts).unwrap();
     }
 
     /// Build the terminal pool's frozen LP template: the base structural

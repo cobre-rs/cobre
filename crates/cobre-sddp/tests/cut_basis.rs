@@ -184,7 +184,7 @@ mod boundary_cuts {
             !boundary_records.is_empty(),
             "source stage must have cuts after training"
         );
-        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
+        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records).unwrap();
 
         let terminal_pool_id = setup_c.node_graph.terminal_pool(num_stages).unwrap();
         let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];

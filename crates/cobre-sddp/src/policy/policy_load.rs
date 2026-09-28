@@ -1350,6 +1350,10 @@ impl Deref for ValidatedBoundaryCuts {
 /// mean a bare `Vec<OwnedPolicyCutRecord>`/slice cannot substitute, so an
 /// unvalidated boundary load cannot compile.
 ///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] if the study has no terminal pool.
+///
 /// ```compile_fail
 /// use cobre_sddp::{StudySetup, inject_boundary_cuts};
 ///
@@ -1360,16 +1364,25 @@ impl Deref for ValidatedBoundaryCuts {
 ///     inject_boundary_cuts(setup, records); // bare records, not ValidatedBoundaryCuts
 /// }
 /// ```
-pub fn inject_boundary_cuts(setup: &mut StudySetup, boundary_cuts: &ValidatedBoundaryCuts) {
+pub fn inject_boundary_cuts(
+    setup: &mut StudySetup,
+    boundary_cuts: &ValidatedBoundaryCuts,
+) -> Result<(), SddpError> {
     let terminal_idx = setup
         .node_graph
         .terminal_pool(setup.num_stages())
-        .unwrap_or(usize::MAX);
+        .ok_or_else(|| {
+            SddpError::Validation(
+                "boundary cuts need a terminal pool, but the study has no terminal stage"
+                    .to_string(),
+            )
+        })?;
     let fcf = &mut setup.fcf;
     let state_dimension = fcf.state_dimension;
     let forward_passes = fcf.forward_passes;
     fcf.pools[terminal_idx] =
         CutPool::new_with_warm_start(state_dimension, forward_passes, 0, boundary_cuts);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4113,7 +4126,7 @@ mod tests {
             report: BoundaryReconciliationReport::default(),
         };
 
-        inject_boundary_cuts(&mut setup, &boundary_cuts);
+        inject_boundary_cuts(&mut setup, &boundary_cuts).unwrap();
 
         let pool = &setup.fcf.pools[terminal_idx];
         assert_eq!(pool.warm_start_count as usize, records.len());
@@ -4144,7 +4157,7 @@ mod tests {
             report: BoundaryReconciliationReport::default(),
         };
 
-        inject_boundary_cuts(&mut setup, &boundary_cuts);
+        inject_boundary_cuts(&mut setup, &boundary_cuts).unwrap();
 
         let fixed_active: Vec<(usize, f64, Vec<f64>)> = setup.fcf.pools[terminal_idx]
             .active_cuts()
@@ -4192,8 +4205,8 @@ mod tests {
 
         let mut setup_direct = test_support::oracle_chain_setup(10);
         let mut setup_bcast = test_support::oracle_chain_setup(10);
-        inject_boundary_cuts(&mut setup_direct, &direct);
-        inject_boundary_cuts(&mut setup_bcast, &broadcast);
+        inject_boundary_cuts(&mut setup_direct, &direct).unwrap();
+        inject_boundary_cuts(&mut setup_bcast, &broadcast).unwrap();
 
         let terminal_idx = setup_direct
             .node_graph

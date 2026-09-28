@@ -712,7 +712,7 @@ fn run_injected_decomp() -> f64 {
         );
     }
 
-    inject_boundary_cuts(&mut setup, &cuts);
+    inject_boundary_cuts(&mut setup, &cuts).unwrap();
     let terminal = setup.node_graph.terminal_pool(setup.num_stages()).unwrap();
     assert!(
         setup.fcf.pools[terminal].has_warm_start_cuts(),

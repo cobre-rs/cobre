@@ -3,8 +3,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use cobre_core::temporal::SeasonCycleType::Monthly;
-use cobre_core::temporal::SeasonMap;
 use cobre_core::{
     EntityId, System,
     scenario::{SamplingScheme, ScenarioSource},
@@ -21,20 +19,18 @@ use cobre_io::scenarios::parse_load_factors;
 use cobre_io::scenarios::validate_noise_openings;
 use cobre_stochastic::BlockFactorPair;
 use cobre_stochastic::ClassSchemes;
-use cobre_stochastic::DerivedInflowSeeds;
 use cobre_stochastic::HistoricalScenarioLibrary;
 use cobre_stochastic::PrecomputedPar;
 use cobre_stochastic::build_stochastic_context;
-use cobre_stochastic::derive_inflow_seeds;
 use cobre_stochastic::discover_historical_windows;
 use cobre_stochastic::noise_entity_order;
 use cobre_stochastic::normal::precompute::EntityFactorEntry;
-use cobre_stochastic::par::lag_transition::derive_downstream_par_order;
 use cobre_stochastic::par::lag_transition::precompute_noise_groups;
-use cobre_stochastic::par::lag_transition::precompute_stage_lag_transitions;
 use cobre_stochastic::standardize_historical_windows;
 use cobre_stochastic::{OpeningTreeInputs, StochasticContext, context::OpeningTree};
 
+use super::resolve_inflow_seeds;
+use super::resolve_stage_lag_transitions;
 use super::widen_lag_state_depth;
 use crate::{EstimationPath, EstimationReport, SddpError};
 
@@ -241,26 +237,9 @@ fn build_opening_tree_library(
     );
     // η-inversion rolling chain must match the forward-pass lag accumulator;
     // `max_order` width covers all AR lags.
-    // `precompute_stage_lag_transitions` requires a non-optional &SeasonMap.
-    let noop_season_map = SeasonMap {
-        cycle_type: Monthly,
-        seasons: Vec::new(),
-    };
-    let effective_season_map: &SeasonMap = season_map_ref.unwrap_or(&noop_season_map);
-    let downstream_par_order = derive_downstream_par_order(&study_stages, &par, season_map_ref);
-    let stage_lag_transitions =
-        precompute_stage_lag_transitions(&study_stages, effective_season_map, downstream_par_order);
-    let derived_inflow_seeds = match study_stages.first() {
-        None => DerivedInflowSeeds::zero(hydro_ids.len(), max_order),
-        Some(first_stage) => derive_inflow_seeds(
-            system.inflow_history(),
-            &system.initial_conditions().recent_observations,
-            system.hydros(),
-            first_stage,
-            effective_season_map,
-            max_order,
-        ),
-    };
+    let (downstream_par_order, stage_lag_transitions) =
+        resolve_stage_lag_transitions(&study_stages, &par, season_map_ref);
+    let derived_inflow_seeds = resolve_inflow_seeds(system, max_order);
     standardize_historical_windows(
         &mut lib,
         system.inflow_history(),
@@ -495,7 +474,7 @@ mod tests {
         derive_downstream_par_order, precompute_stage_lag_transitions,
     };
     use cobre_stochastic::{
-        PrecomputedPar,
+        PrecomputedPar, derive_inflow_seeds,
         par::lag_kernel::{DownstreamLagAccum, LagMajor, PrimaryLagAccum, advance_lag_chain},
         solve_par_noise,
     };

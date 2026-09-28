@@ -498,32 +498,7 @@ impl StudySetup {
             boundary.is_present(),
         );
 
-        // The sole `derive_inflow_seeds` call site: every consumer (the lag block
-        // below, `StudySetup::derived_inflow_seeds`) reads this one value — do not
-        // add a second call. Computed locally on every rank from the already-
-        // broadcast `system` rather than carried over the wire: the derivation is
-        // a pure function of `system`, so every rank derives a bit-identical seed
-        // with no extra broadcast.
-        let noop_season_map = SeasonMap {
-            cycle_type: Monthly,
-            seasons: Vec::new(),
-        };
-        let season_map_ref = system
-            .policy_graph()
-            .season_map
-            .as_ref()
-            .unwrap_or(&noop_season_map);
-        let derived_inflow_seeds = match system.stages().iter().find(|s| s.id >= 0) {
-            None => DerivedInflowSeeds::zero(system.hydros().len(), state_layout.max_par_order),
-            Some(first_stage) => derive_inflow_seeds(
-                system.inflow_history(),
-                &system.initial_conditions().recent_observations,
-                system.hydros(),
-                first_stage,
-                season_map_ref,
-                state_layout.max_par_order,
-            ),
-        };
+        let derived_inflow_seeds = resolve_inflow_seeds(system, state_layout.max_par_order);
 
         // Built here, before the stage templates: `TemplateBuildCtx` reads it during
         // `StageLayout::new`, and the SAME value (never rebuilt or cloned) is stored
@@ -559,11 +534,12 @@ impl StudySetup {
             .cloned()
             .collect();
 
-        let LagData {
-            stage_lag_transitions,
-            noise_group_ids,
-            downstream_par_order,
-        } = precompute_lag_data(system, &stages, &stochastic, season_map_ref);
+        let (downstream_par_order, stage_lag_transitions) = resolve_stage_lag_transitions(
+            &stages,
+            stochastic.par(),
+            system.policy_graph().season_map.as_ref(),
+        );
+        let noise_group_ids = precompute_noise_groups(&stages);
 
         let study_dims = build_study_dimensions(
             system,
@@ -1778,38 +1754,47 @@ const FULL_STATE_CONFIG: StageStateConfig = StageStateConfig {
     inflow_lags: true,
 };
 
-/// Grouped output of [`precompute_lag_data`].
-struct LagData {
-    stage_lag_transitions: Vec<StageLagTransition>,
-    noise_group_ids: Vec<u32>,
-    downstream_par_order: usize,
+/// No-op fallback `SeasonMap`, shared by [`resolve_stage_lag_transitions`] and
+/// [`resolve_inflow_seeds`].
+static NOOP_SEASON_MAP: SeasonMap = SeasonMap {
+    cycle_type: Monthly,
+    seasons: Vec::new(),
+};
+
+/// Downstream PAR order and per-stage lag transitions over one `SeasonMap`.
+/// The sole owner of both derivations — `from_broadcast_params` and
+/// `build_opening_tree_library` each call it once, over their own PAR model.
+fn resolve_stage_lag_transitions(
+    stages: &[Stage],
+    par: &PrecomputedPar,
+    season_map: Option<&SeasonMap>,
+) -> (usize, Vec<StageLagTransition>) {
+    let downstream_par_order = derive_downstream_par_order(stages, par, season_map);
+    let effective_season_map = season_map.unwrap_or(&NOOP_SEASON_MAP);
+    let stage_lag_transitions =
+        precompute_stage_lag_transitions(stages, effective_season_map, downstream_par_order);
+    (downstream_par_order, stage_lag_transitions)
 }
 
-/// Precompute per-stage lag accumulation weights, noise-group ids, and the
-/// downstream PAR order. `season_map_ref` is the caller's already-resolved
-/// no-op-fallback season map (see the `from_broadcast_params` hoist).
-fn precompute_lag_data(
-    system: &System,
-    stages: &[Stage],
-    stochastic: &StochasticContext,
-    season_map_ref: &SeasonMap,
-) -> LagData {
-    let downstream_par_order = derive_downstream_par_order(
-        stages,
-        stochastic.par(),
-        system.policy_graph().season_map.as_ref(),
-    );
-    let stage_lag_transitions =
-        precompute_stage_lag_transitions(stages, season_map_ref, downstream_par_order);
-    // Both outputs derive from `stages`, so they cannot disagree about which
-    // stages are in scope; `study_stage_noise_group_ids` re-derives that scope
-    // from `System` and is for callers that have no filtered slice.
-    let noise_group_ids = precompute_noise_groups(stages);
-
-    LagData {
-        stage_lag_transitions,
-        noise_group_ids,
-        downstream_par_order,
+/// Derived per-hydro PAR lag-slot and accumulator seeds from the system's
+/// first study stage. The sole owner — `from_broadcast_params` and
+/// `build_opening_tree_library` each call it once, over their own lag depth.
+fn resolve_inflow_seeds(system: &System, max_par_order: usize) -> DerivedInflowSeeds {
+    let season_map = system
+        .policy_graph()
+        .season_map
+        .as_ref()
+        .unwrap_or(&NOOP_SEASON_MAP);
+    match system.stages().iter().find(|s| s.id >= 0) {
+        None => DerivedInflowSeeds::zero(system.hydros().len(), max_par_order),
+        Some(first_stage) => derive_inflow_seeds(
+            system.inflow_history(),
+            &system.initial_conditions().recent_observations,
+            system.hydros(),
+            first_stage,
+            season_map,
+            max_par_order,
+        ),
     }
 }
 

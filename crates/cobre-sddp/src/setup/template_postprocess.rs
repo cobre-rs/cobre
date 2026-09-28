@@ -108,12 +108,6 @@ pub(crate) fn postprocess_templates(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp
-)]
 mod tests {
     use super::postprocess_templates;
     use crate::lp::builder::StageTemplates;

@@ -3257,7 +3257,6 @@ struct PumpingFixtures {
 
 impl PumpingFixtures {
     fn new(n_pumping: usize, n_stages: usize) -> Self {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let stations = (0..n_pumping)
             .map(|i| PumpingStation {
                 id: EntityId(i as i32),

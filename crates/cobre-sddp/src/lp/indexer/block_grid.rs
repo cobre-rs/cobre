@@ -86,11 +86,6 @@ impl BlockGrid {
     /// Block OUTER (stride `n_planes`), plane INNER — the OPPOSITE nesting of
     /// [`flat`](Self::flat). Advance the base with
     /// [`advance_fpha_base`](Self::advance_fpha_base) after each cell.
-    // Rationale: `self` is unused because this shape's stride is the per-hydro
-    // `n_planes` (passed in), not a grid constant. It stays an instance method,
-    // not an associated fn, so all three shapes share the uniform `grid.shape(..)`
-    // call form.
-    #[allow(clippy::unused_self)]
     #[inline]
     #[must_use]
     pub fn fpha_plane(

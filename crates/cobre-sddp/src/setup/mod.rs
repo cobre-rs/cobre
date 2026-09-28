@@ -1847,9 +1847,6 @@ fn precompute_lag_data(
 // Rationale: mirrors build_historical_inflow_library/build_external_inflow_library's
 // own arity; a context struct would just relocate the arity, not reduce it.
 #[allow(clippy::too_many_arguments)]
-// Rationale: a flat training/simulation x 4-class enumeration; splitting it
-// would relocate the enumeration into a same-shaped helper, not shrink it.
-#[allow(clippy::too_many_lines)]
 fn build_scenario_libraries(
     system: &System,
     stages: &[Stage],

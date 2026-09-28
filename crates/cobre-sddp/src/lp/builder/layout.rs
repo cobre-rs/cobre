@@ -204,9 +204,6 @@ pub(crate) struct AnticipatedLayout {
     pub(crate) row_anticipated_state_out_def_start: usize,
     /// Count of genuine, active decisions this stage (`Some` count of
     /// `anticipated_decision_row_pos`); drives the active-row iteration.
-    // Rationale: read only by cross-module `debug_assert_eq!` guards in the matrix-fill
-    // helpers; dead_code fires because the lint does not see cross-module field access.
-    #[allow(dead_code)]
     pub(crate) n_anticipated_state_out_def_rows: usize,
     /// For each plant (local order), this stage's compact row position
     /// within the deposit-row family, or `None` when the plant has no

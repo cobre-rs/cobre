@@ -155,7 +155,6 @@ pub(crate) fn compute_row_scale(
     let mut row_max = vec![0.0_f64; num_rows];
     let mut row_min = vec![f64::INFINITY; num_rows];
 
-    #[allow(clippy::needless_range_loop)] // j+1 access on col_starts requires index
     for j in 0..num_cols {
         let start = col_starts[j] as usize;
         let end = col_starts[j + 1] as usize;

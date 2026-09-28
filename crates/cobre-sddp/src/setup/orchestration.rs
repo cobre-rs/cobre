@@ -102,12 +102,6 @@ impl StudySetup {
         )
     }
 
-    // Rationale: `solver_profiles` splits `train`'s config-resolved default from
-    // `train_with_solver_profiles`'s explicit override; both public callers stay
-    // at or below the pedantic threshold by fixing `event_sender`/`shutdown_flag`
-    // (the test-support caller has no use for either), so only this shared,
-    // private assembly step carries the full parameter count.
-    #[allow(clippy::too_many_arguments)]
     fn train_inner<S, C: Communicator>(
         &mut self,
         solver: &mut S,

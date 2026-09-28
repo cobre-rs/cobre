@@ -1594,7 +1594,6 @@ pub(super) fn assemble_csc(col_entries: &[Vec<(usize, f64)>]) -> (Vec<i32>, Vec<
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)]
 mod assemble_csc_tests {
     use super::assemble_csc;
 
@@ -1720,7 +1719,6 @@ mod parameter_resolution_tests {
 
     /// Build a one-bus, one-thermal system with `n_stages` stages and one
     /// generic constraint. Each stage has a single block of 744 hours.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn one_thermal_n_stages(
         n_stages: usize,
         thermal_entity_id: EntityId,
@@ -3809,7 +3807,6 @@ mod pumping_water_tests {
             Self::new_full_with_contracts(hydros, stations, buses, thermals, lines, Vec::new())
         }
 
-        #[allow(clippy::too_many_lines)]
         fn new_full_with_contracts(
             mut hydros: Vec<Hydro>,
             mut stations: Vec<PumpingStation>,
@@ -3987,10 +3984,8 @@ mod pumping_water_tests {
         ) -> Self {
             let constraint_id = constraint.id.0;
             let id_map: HashMap<i32, usize> = [(constraint_id, 0)].into_iter().collect();
-            let rows = (0..N_STAGES).map(|s| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                (constraint_id, s as i32, None, None, Some(bound_upper))
-            });
+            let rows =
+                (0..N_STAGES).map(|s| (constraint_id, s as i32, None, None, Some(bound_upper)));
             self.resolved_generic_bounds =
                 ResolvedGenericConstraintBounds::new(&id_map, rows.into_iter());
             self.generic_constraints = vec![constraint];
@@ -4009,7 +4004,6 @@ mod pumping_water_tests {
             let constraint_id = constraint.id.0;
             let id_map: HashMap<i32, usize> = [(constraint_id, 0)].into_iter().collect();
             let rows = (0..N_STAGES).map(|s| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                 (
                     constraint_id,
                     s as i32,

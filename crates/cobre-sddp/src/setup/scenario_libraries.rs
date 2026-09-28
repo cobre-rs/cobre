@@ -118,10 +118,6 @@ fn per_stage_scenario_counts(
 /// # Errors
 ///
 /// Returns `SddpError::Stochastic` on validation failure.
-// Rationale: mirrors standardize_external_inflow's own arity, whose stage-0
-// seed already travels as one `DerivedSeed`; the remaining inputs are
-// independent and still exceed the threshold.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_external_inflow_library(
     external_rows: &[ExternalScenarioRow],
     hydro_ids: &[EntityId],

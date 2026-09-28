@@ -346,8 +346,6 @@ impl StudyParams {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
     use std::sync::{Arc, Mutex};
 
     use cobre_core::{EntityId, ParameterKind, ScalarParameter};

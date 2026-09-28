@@ -206,10 +206,6 @@ pub struct StageGeometry {
     pub fpha: Range<usize>,
     /// Per-stage `σ_fill`-target row range (one row per Filling-phase hydro); empty
     /// `start..start` (not `0..0`) at every non-Filling stage.
-    // Rationale (dead_code): no read site consumes this yet — the per-stage carrier
-    // that keeps `StageGeometry` a faithful mirror of the row shape, the seam the
-    // sibling `σ^{v-}` family extends.
-    #[allow(dead_code)]
     pub filling_target: Range<usize>,
     /// Per-stage `σ_fill`-target slack column range (one column per Filling-phase
     /// hydro); empty `start..start` at every non-Filling stage. Simulation
@@ -218,9 +214,6 @@ pub struct StageGeometry {
     pub filling_target_col: Range<usize>,
     /// Soft `σ^{v-}` operating-floor row range (one row per Operating-phase filling
     /// hydro); empty `start..start` (not `0..0`) at every non-operating stage.
-    // Rationale (dead_code): no read site consumes this yet — the per-stage row-shape
-    // carrier mirroring the `filling_target` seam.
-    #[allow(dead_code)]
     pub filled_min_storage_floor: Range<usize>,
     /// Soft `σ^{v-}` operating-floor slack column range (one column per
     /// Operating-phase filling hydro); empty `start..start` at every non-operating
@@ -1059,10 +1052,6 @@ fn build_template_build_ctx<'a>(
 /// Transpose the per-stage `Vec<StageBuildOutput>` into the parallel per-stage
 /// `Vec`s of [`StageTemplates`], computing the noise-scale, zeta, block-hour,
 /// and hydro-productivity arrays.
-// Rationale: the args have distinct lifetimes and ownership (some borrowed, some
-// owned), so bundling them into one struct would buy nothing on this single-call
-// cold path while obscuring the transpose inputs.
-#[allow(clippy::too_many_arguments)]
 fn assemble_stage_templates_output(
     stage_outputs: Vec<StageBuildOutput>,
     load_bus_indices: Vec<usize>,

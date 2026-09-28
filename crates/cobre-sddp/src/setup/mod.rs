@@ -910,11 +910,11 @@ fn resolve_solver_profiles(
     Ok((backward_profile, forward_profile, simulation_profile))
 }
 
-/// `L_state = max(computed_order, boundary_depth)` — the single widening
-/// every lag-state-slot source (`resolve_state_layout`'s dense stride and
-/// per-hydro activeness mask, `build_opening_tree_library`,
-/// `rebuild_historical_library_non_root`) applies in lockstep so a
-/// boundary-inferred depth never truncates on one source while widening another.
+/// `L_state = max(computed_order, boundary_depth)` — the single widening the
+/// lag-state depth: `resolve_state_layout`'s dense stride and per-hydro
+/// activeness mask, and the seed depth (`resolve_inflow_seeds`). It never
+/// widens a historical library, whose width and coverage are the applied
+/// PAR's own order (`scenario_libraries::build_historical_inflow_library`).
 /// `None` (no boundary) leaves `computed_order` unchanged.
 #[must_use]
 pub fn widen_lag_state_depth(computed_order: usize, boundary_depth: Option<u32>) -> usize {
@@ -1633,8 +1633,9 @@ static NOOP_SEASON_MAP: SeasonMap = SeasonMap {
 };
 
 /// Downstream PAR order and per-stage lag transitions over one `SeasonMap`.
-/// The sole owner of both derivations — `from_broadcast_params` and
-/// `build_opening_tree_library` each call it once, over their own PAR model.
+/// The sole owner of both derivations — `resolve_stage_data` and
+/// `scenario_libraries::build_historical_inflow_library` each call it once,
+/// over their own PAR model.
 fn resolve_stage_lag_transitions(
     stages: &[Stage],
     par: &PrecomputedPar,
@@ -1648,8 +1649,8 @@ fn resolve_stage_lag_transitions(
 }
 
 /// Derived per-hydro PAR lag-slot and accumulator seeds from the system's
-/// first study stage. The sole owner — `from_broadcast_params` and
-/// `build_opening_tree_library` each call it once, over their own lag depth.
+/// first study stage. The sole owner — `resolve_initial_conditions` and the
+/// opening tree each call it once, at the same depth.
 fn resolve_inflow_seeds(system: &System, max_par_order: usize) -> DerivedInflowSeeds {
     let season_map = system
         .policy_graph()
@@ -1846,7 +1847,6 @@ fn build_phase_libraries(
             Some(scenario_libraries::build_historical_inflow_library(
                 system,
                 stochastic.par(),
-                stage_data,
                 seed,
                 source.historical_years.as_ref(),
                 forward_passes,

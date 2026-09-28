@@ -20,17 +20,15 @@ use cobre_io::scenarios::validate_noise_openings;
 use cobre_stochastic::BlockFactorPair;
 use cobre_stochastic::ClassSchemes;
 use cobre_stochastic::HistoricalScenarioLibrary;
-use cobre_stochastic::PrecomputedPar;
+use cobre_stochastic::build_inflow_par;
 use cobre_stochastic::build_stochastic_context;
-use cobre_stochastic::discover_historical_windows;
 use cobre_stochastic::noise_entity_order;
 use cobre_stochastic::normal::precompute::EntityFactorEntry;
 use cobre_stochastic::par::lag_transition::precompute_noise_groups;
-use cobre_stochastic::standardize_historical_windows;
 use cobre_stochastic::{OpeningTreeInputs, StochasticContext, context::OpeningTree};
 
 use super::resolve_inflow_seeds;
-use super::resolve_stage_lag_transitions;
+use super::scenario_libraries;
 use super::widen_lag_state_depth;
 use crate::{EstimationPath, EstimationReport, SddpError};
 
@@ -207,51 +205,16 @@ fn build_opening_tree_library(
     if !needs_historical_tree {
         return Ok(None);
     }
-    let study_stages: Vec<_> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .cloned()
-        .collect();
-    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-    let season_map_ref = system.policy_graph().season_map.as_ref();
-    let cycle_len = season_map_ref.map(|sm| sm.seasons.len());
-    let par = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, cycle_len)?;
-    let max_order = widen_lag_state_depth(par.max_order(), declared_lag_depth);
-    let user_pool = training_source.historical_years.as_ref();
-    let window_years = discover_historical_windows(
-        system.inflow_history(),
-        &hydro_ids,
-        &study_stages,
-        max_order,
-        user_pool,
-        season_map_ref,
+    let par = build_inflow_par(system, class_schemes_for(training_source).inflow)?;
+    let lag_depth = widen_lag_state_depth(par.max_order(), declared_lag_depth);
+    let seeds = resolve_inflow_seeds(system, lag_depth);
+    let lib = scenario_libraries::build_historical_inflow_library(
+        system,
+        &par,
+        seeds.as_seed(lag_depth),
+        training_source.historical_years.as_ref(),
         1,
     )?;
-    let mut lib = HistoricalScenarioLibrary::new(
-        window_years.len(),
-        study_stages.len(),
-        hydro_ids.len(),
-        max_order,
-        window_years.clone(),
-    );
-    // η-inversion rolling chain must match the forward-pass lag accumulator;
-    // `max_order` width covers all AR lags.
-    let (downstream_par_order, stage_lag_transitions) =
-        resolve_stage_lag_transitions(&study_stages, &par, season_map_ref);
-    let derived_inflow_seeds = resolve_inflow_seeds(system, max_order);
-    standardize_historical_windows(
-        &mut lib,
-        system.inflow_history(),
-        &hydro_ids,
-        &study_stages,
-        &par,
-        &window_years,
-        season_map_ref,
-        derived_inflow_seeds.as_seed(max_order),
-        &stage_lag_transitions,
-        downstream_par_order,
-    );
     Ok(Some(lib))
 }
 
@@ -1077,8 +1040,6 @@ mod tests {
     /// both read the SAME applied PAR and the SAME derived seed, so the pool
     /// (and every shared window's eta) can never diverge.
     #[test]
-    #[ignore = "the opening tree discovers windows at the declared lag depth, so its \
-                year pool is smaller than the forward pass's"]
     fn opening_tree_and_forward_libraries_share_windows_and_eta() {
         let system = build_pool_divergence_system();
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
@@ -1258,8 +1219,6 @@ mod tests {
     /// one — otherwise the reconstructed value diverges from the raw
     /// historical observation the tree drew its window from.
     #[test]
-    #[ignore = "the opening tree inverts eta with the fitted PAR, not the PAR the LP applies \
-                under External training"]
     fn opening_tree_inverts_eta_with_the_applied_par_under_external_training() {
         let system = build_external_ar0_system();
         let raw = [120.0, 130.0];
@@ -1456,8 +1415,9 @@ mod tests {
             })
             .collect();
         // `discover_historical_windows` needs one pre-study row per lag season
-        // at width 3 (seasons 8, 9, 10 — see `nonaligned_ring_season_map`).
-        // These values are never read by `standardize_historical_windows`.
+        // at the applied PAR's order, 2 (seasons 9, 10 — see
+        // `nonaligned_ring_season_map`); season 8's filler row is surplus but
+        // harmless. These values are never read by `standardize_historical_windows`.
         for day in 1..=2u32 {
             inflow_history.push(InflowHistoryRow {
                 hydro_id: RING_HYDRO_ID,
@@ -1843,38 +1803,15 @@ mod tests {
         (system, training_source)
     }
 
-    /// Given a declared lag depth (3) greater than the fixture's fitted AR
-    /// order (0), `build_opening_tree_library` must widen the returned
-    /// library's `max_order()` to 3 — matching `resolve_state_layout`'s
-    /// `max_par_order` for the same declared depth — rather than leaving it at
-    /// the un-widened `par.max_order()` (0). A regression that fails if this
-    /// source is left un-widened while another (e.g. `resolve_state_layout`)
-    /// is fixed, exactly the divergent-sources bug these regressions guard against.
-    #[test]
-    fn build_opening_tree_library_widens_max_order_to_declared_depth() {
-        let (system, training_source) = build_ar0_fixture_with_declared_lag_history(3);
-
-        let lib = build_opening_tree_library(&system, &training_source, Some(3))
-            .expect("build_opening_tree_library must succeed with a declared depth")
-            .expect("HistoricalResiduals noise method must build a library");
-
-        assert_eq!(
-            lib.max_order(),
-            3,
-            "library max_order must widen to the declared depth (fixture AR order is 0)"
-        );
-    }
-
     /// Cross-source regression at the SAME declared depth (24, the worked
     /// acceptance example): `resolve_state_layout` (the dense-stride + mask
-    /// source) and `build_opening_tree_library` (the opening-tree historical
-    /// library source) must agree on `L_state`, both widening past the
-    /// fixture's AR(0) order to exactly 24. `rebuild_historical_library_non_root`
-    /// (cobre-cli) is unreachable from this crate and is realigned to the same
-    /// depth-24 fixture in its own test module
-    /// (`rebuild_historical_library_non_root_widens_max_order_to_declared_depth`)
-    /// — no single Rust test spans the crate boundary, but all three sources
-    /// are pinned to the identical value.
+    /// source) still widens past the fixture's AR(0) order to exactly 24, but
+    /// the historical library's width and coverage are the applied PAR's own
+    /// order — the two sources address different facts and no longer agree.
+    /// A forward twin built from the same applied PAR and the same depth-24
+    /// seed (`resolve_inflow_seeds` at `state_layout.max_par_order`, the one
+    /// seed owner at one depth) must be bit-identical to the tree: same
+    /// window years, same `seed_digest()`, same eta.
     #[test]
     fn build_opening_tree_library_and_resolve_state_layout_agree_at_declared_depth() {
         let (system, training_source) = build_ar0_fixture_with_declared_lag_history(24);
@@ -1904,23 +1841,52 @@ mod tests {
         );
         assert_eq!(
             lib.max_order(),
-            24,
-            "build_opening_tree_library must widen to the declared depth"
+            par_lp.max_order(),
+            "the historical library's width is the applied PAR's own order, never the \
+             declared lag depth resolve_state_layout widens its dense stride to"
         );
+
+        let fwd = resolve_inflow_seeds(&system, state_layout.max_par_order);
+        let forward_twin = scenario_libraries::build_historical_inflow_library(
+            &system,
+            &par_lp,
+            fwd.as_seed(24),
+            None,
+            1,
+        )
+        .expect("forward twin must build");
+
+        assert_eq!(lib.n_windows(), forward_twin.n_windows());
+        for w in 0..lib.n_windows() {
+            assert_eq!(
+                lib.window_year(w),
+                forward_twin.window_year(w),
+                "window {w}: the tree and the forward twin must draw the same year pool"
+            );
+        }
         assert_eq!(
-            state_layout.max_par_order,
-            lib.max_order(),
-            "resolve_state_layout and build_opening_tree_library must agree on L_state \
-             at the same declared depth"
+            lib.seed_digest(),
+            forward_twin.seed_digest(),
+            "the tree and the forward twin share one seed owner at one depth"
         );
+        for w in 0..lib.n_windows() {
+            for t in 0..study_stages.len() {
+                assert_eq!(
+                    lib.eta_slice(w, t),
+                    forward_twin.eta_slice(w, t),
+                    "window {w} stage {t}: eta must be bit-identical between the tree and \
+                     the forward twin"
+                );
+            }
+        }
     }
 
     /// Given a declared lag depth (24) exceeding the fitted AR(0) order,
-    /// `derive_inflow_seeds` — the function `build_opening_tree_library` calls
-    /// to build the `DerivedSeed` `run_eta_inversion`'s
-    /// `max_order.min(seed.l_state)` copy loop reads — must actually seed the
-    /// DEEPEST declared lag slot from real history, not merely report a wider
-    /// `max_order()`. Complements
+    /// `derive_inflow_seeds` must actually seed the DEEPEST declared lag slot
+    /// from real history, not merely report a wider `max_order()` — the LP's
+    /// stage-0 seed, `InitialConditions.inflow_seeds.as_seed(state.max_par_order)`,
+    /// is what `run_eta_inversion`'s `max_order.min(seed.l_state)` copy loop
+    /// reads. Complements
     /// `build_opening_tree_library_and_resolve_state_layout_agree_at_declared_depth`'s
     /// dimension-only check with the concrete seeded value.
     #[test]

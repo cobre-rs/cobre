@@ -21,14 +21,17 @@ use cobre_stochastic::{
 use crate::SddpError;
 use crate::lp::builder::models_from_normal;
 
-use super::StageData;
+use super::{resolve_stage_lag_transitions, study_stages_slice};
 
-/// Build and validate a [`HistoricalScenarioLibrary`] for inflow.
+/// Build and validate a [`HistoricalScenarioLibrary`] for inflow — the single
+/// owner of window discovery, allocation, standardization and validation,
+/// shared by the forward pass and the opening tree.
 ///
-/// `seed` ([`DerivedSeed`]) and `stage_data`'s `stage_lag_transitions` seed the
-/// rolling η-inversion chain (mirroring `build_external_inflow_library`), so
-/// every forward pass starting from the same derived seed exactly
-/// reconstructs the raw historical observations.
+/// `par` is the PAR model the LP applies to this η; width and coverage are
+/// `par.max_order()`. `seed` ([`DerivedSeed`]) seeds the rolling η-inversion
+/// chain, so every forward pass starting from the same derived seed exactly
+/// reconstructs the raw historical observations. `min_windows` is the count
+/// below which discovery and V2.6 warn; it never changes the pool.
 ///
 /// # Errors
 ///
@@ -36,17 +39,16 @@ use super::StageData;
 pub(crate) fn build_historical_inflow_library(
     system: &System,
     par: &PrecomputedPar,
-    stage_data: &StageData,
     seed: DerivedSeed<'_>,
     user_pool: Option<&HistoricalYears>,
-    forward_passes: u32,
+    min_windows: u32,
 ) -> Result<HistoricalScenarioLibrary, SddpError> {
     let inflow_history = system.inflow_history();
     let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-    let stages = &stage_data.stages;
+    let stages = study_stages_slice(system);
     let season_map = system.policy_graph().season_map.as_ref();
-    let stage_lag_transitions = &stage_data.stage_lag_transitions;
-    let downstream_par_order = stage_data.study_dims.downstream_par_order;
+    let (downstream_par_order, stage_lag_transitions) =
+        resolve_stage_lag_transitions(stages, par, season_map);
 
     let max_order = par.max_order();
     let window_years = discover_historical_windows(
@@ -56,7 +58,7 @@ pub(crate) fn build_historical_inflow_library(
         max_order,
         user_pool,
         season_map,
-        forward_passes,
+        min_windows,
     )
     .map_err(SddpError::Stochastic)?;
     let mut library = HistoricalScenarioLibrary::new(
@@ -75,7 +77,7 @@ pub(crate) fn build_historical_inflow_library(
         &window_years,
         season_map,
         seed,
-        stage_lag_transitions,
+        &stage_lag_transitions,
         downstream_par_order,
     );
     validate_historical_library(
@@ -85,7 +87,7 @@ pub(crate) fn build_historical_inflow_library(
         stages,
         max_order,
         user_pool,
-        forward_passes,
+        min_windows,
     )
     .map_err(SddpError::Stochastic)?;
     Ok(library)

@@ -8,10 +8,10 @@
 mod common;
 
 use cobre_sddp::StudySetup;
+use cobre_sddp::test_support::decks::{SLOW_DECKS, committed_decks};
 use cobre_sddp::test_support::template_fact_groups;
 
 use common::build_setup_in_code;
-use common::decks::{SLOW_DECKS, committed_decks};
 use common::fresh_setup_with;
 use common::in_code_studies::{
     ChronologicalNoiseSpec, chronological_noise_study, mixed_lead_anticipated_study,

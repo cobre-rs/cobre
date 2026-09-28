@@ -22,13 +22,13 @@ use cobre_sddp::StudySetup;
 use cobre_sddp::indexer::{BlockIdx, BusSys, HydroSys, NcsSys, StateSpace};
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::{NodePos, StageIdx};
+use cobre_sddp::test_support::decks::{SLOW_DECKS, committed_decks};
 use cobre_sddp::test_support::{
     capture_patched_node_template, capture_patched_node_template_at, lower_bound_root_templates,
     node_opening_noise, oracle_initial_state, stage_state_box_bounds, state_space,
 };
 use cobre_solver::{ActiveSolver, StageTemplate};
 
-use common::decks::{SLOW_DECKS, committed_decks};
 use common::in_code_studies::{
     ChronologicalNoiseSpec, chronological_noise_study, mixed_lead_anticipated_study,
     stochastic_parallel_study,

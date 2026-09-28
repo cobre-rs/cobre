@@ -16,10 +16,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cobre_sddp::StudySetup;
+use cobre_sddp::test_support::decks::{Deck, SLOW_DECKS, committed_decks};
 use cobre_sddp::test_support::template_fact_groups;
 use sha2::{Digest, Sha256};
-
-use common::decks::{Deck, SLOW_DECKS, committed_decks};
 
 fn manifest_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/template_snapshot_manifest.tsv")
@@ -225,7 +224,7 @@ mod sim_view {
         if !cfg!(all(feature = "highs", feature = "slow-tests")) {
             return Vec::new();
         }
-        super::common::decks::committed_decks()
+        super::committed_decks()
             .into_iter()
             .filter(|deck| SIM_VIEW_DECKS.contains(&deck.key.as_str()))
             .flat_map(|deck| {

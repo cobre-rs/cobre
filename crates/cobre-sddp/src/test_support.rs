@@ -94,6 +94,8 @@ use cobre_solver::{
     SolverInterface, SolverStatistics, StageTemplate,
 };
 
+pub mod decks;
+
 /// Equipment dimensions for the [`geometry`] / [`study_dims_for`] test builders.
 ///
 /// `Default` sets `max_deficit_segments == 1` (a non-degenerate deficit stride);

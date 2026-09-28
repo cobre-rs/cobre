@@ -12,9 +12,9 @@ mod common;
 use cobre_core::System;
 use cobre_io::Config;
 use cobre_sddp::StudySetup;
+use cobre_sddp::test_support::decks::committed_decks;
 
 use common::cut_oracles::{apply_oracle_config, run_cut_oracles};
-use common::decks::committed_decks;
 use common::in_code_studies::{
     ChronologicalNoiseSpec, chronological_noise_study, discounted_anticipated_study,
     mixed_lead_anticipated_study, parallel_multiblock_evaporation_study, stochastic_parallel_study,

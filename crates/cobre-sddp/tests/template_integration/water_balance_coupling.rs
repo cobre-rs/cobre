@@ -6,7 +6,8 @@
 
 use super::*;
 
-use super::common::decks::{SLOW_DECKS, committed_decks};
+use cobre_sddp::test_support::decks::{SLOW_DECKS, committed_decks};
+
 use super::common::fresh_setup_with;
 
 /// Nonzero-entry count per row across the whole template (every column), used

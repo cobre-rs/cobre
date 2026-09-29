@@ -15,13 +15,20 @@ use std::collections::HashMap;
 use cobre_core::{BlockMode, EntityId, Hydro, Stage, System, window_period_overlaps};
 
 use crate::lead_time::{SpreadResolution, resolve_arrival_density_at, resolve_spread};
+use crate::lp::indexer::HydroSys;
 use crate::time_value::DeliveryCalendar;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TravelTimeArc {
+    pub(crate) upstream: HydroSys,
+    pub(crate) downstream: HydroSys,
+    pub(crate) travel_time_hours: f64,
+}
 
 /// Canonical bucket ordering, global bucket count, and per-stage reachability
 /// mask.
 ///
-/// `n_buckets == 0` exactly when the system declares no travel-time arc
-/// (`travel_time_hours` absent, `0.0`, or missing a `downstream_id`).
+/// `n_buckets == 0` exactly when [`Self::arcs`] is empty.
 #[derive(Debug, Clone)]
 pub(crate) struct TransitBucketTopology {
     /// Global bucket count, `Σ_j per_plant_depth[j]`.
@@ -46,31 +53,48 @@ pub(crate) struct TransitBucketTopology {
     /// Per-declared-arc, per-chronological-arrival-stage delivery density; see
     /// [`build_arc_arrival_density`].
     pub(crate) arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
+    arcs: Vec<TravelTimeArc>,
 }
 
-/// Declared arcs' travel times grouped by downstream plant id. A hydro
-/// declares an arc when `travel_time_hours` is `Some` and `> 0.0` (`0.0` is
-/// undeclared) and `downstream_id` is `Some`.
-fn declared_arcs(system: &System) -> HashMap<EntityId, Vec<f64>> {
-    let mut arcs: HashMap<EntityId, Vec<f64>> = HashMap::new();
-    for hydro in system.hydros() {
-        let Some(t_v) = hydro.travel_time_hours.filter(|&t| t > 0.0) else {
-            continue;
-        };
-        let Some(downstream_id) = hydro.downstream_id else {
-            continue;
-        };
-        arcs.entry(downstream_id).or_default().push(t_v);
+impl TransitBucketTopology {
+    /// Declared upstream→downstream travel-time arcs, in [`System::hydros`]
+    /// order.
+    pub(crate) fn arcs(&self) -> &[TravelTimeArc] {
+        &self.arcs
     }
-    arcs
 }
 
-/// A hydro's declared arc travel time — `Some` only when `travel_time_hours >
-/// 0.0` and `downstream_id` is present, mirroring [`declared_arcs`]'s
-/// per-hydro filter; `None` skips the hydro as an undeclared arc.
-fn declared_travel_time(hydro: &Hydro) -> Option<f64> {
-    hydro.downstream_id?;
-    hydro.travel_time_hours.filter(|&t| t > 0.0)
+/// The one site of the arc rule: a hydro declares an arc when
+/// `travel_time_hours` is `Some` and `> 0.0` (`0.0` is undeclared) and
+/// `downstream_id` is `Some`, in [`System::hydros`] order.
+fn resolve_travel_time_arcs(hydros: &[Hydro]) -> Vec<TravelTimeArc> {
+    let positions: HashMap<EntityId, usize> = hydros
+        .iter()
+        .enumerate()
+        .map(|(idx, h)| (h.id, idx))
+        .collect();
+
+    hydros
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, hydro)| {
+            let travel_time_hours = hydro.travel_time_hours.filter(|&t| t > 0.0)?;
+            let downstream_id = hydro.downstream_id?;
+            let Some(&downstream_idx) = positions.get(&downstream_id) else {
+                debug_assert!(
+                    false,
+                    "downstream_id must resolve to a declared hydro position; cobre-io's \
+                     referential validation guarantees this"
+                );
+                return None;
+            };
+            Some(TravelTimeArc {
+                upstream: HydroSys::new(idx),
+                downstream: HydroSys::new(downstream_idx),
+                travel_time_hours,
+            })
+        })
+        .collect()
 }
 
 /// Extends the base calendar — study stages plus any declared post-study
@@ -135,20 +159,26 @@ pub(crate) fn build_transit_bucket_topology(
     boundary_present: bool,
 ) -> TransitBucketTopology {
     let n_stages = calendar.n_study();
-    let arcs_by_downstream = declared_arcs(system);
+    let arcs = resolve_travel_time_arcs(system.hydros());
 
     let mut per_plant_depth = Vec::new();
     let mut column_order = Vec::new();
     let mut per_stage_mask: Vec<Vec<usize>> = vec![Vec::new(); n_stages];
 
-    for (canonical_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_vs) = arcs_by_downstream.get(&hydro.id) else {
+    for canonical_idx in 0..system.hydros().len() {
+        let downstream = HydroSys::new(canonical_idx);
+        let t_vs: Vec<f64> = arcs
+            .iter()
+            .filter(|arc| arc.downstream == downstream)
+            .map(|arc| arc.travel_time_hours)
+            .collect();
+        if t_vs.is_empty() {
             continue;
-        };
+        }
 
         let mut own_release_by_stage = vec![0_usize; n_stages];
         let mut ic_depth = 0_usize;
-        for &t_v in t_vs {
+        for &t_v in &t_vs {
             let extended = extend_for_resolution(calendar.total_hours(), t_v);
             for (stage, slot) in own_release_by_stage.iter_mut().enumerate() {
                 *slot = (*slot).max(in_study_depth(t_v, stage, &extended));
@@ -187,13 +217,14 @@ pub(crate) fn build_transit_bucket_topology(
 
     let n_buckets = column_order.len();
     debug_assert!(
-        arcs_by_downstream.is_empty() == (n_buckets == 0),
+        arcs.is_empty() == (n_buckets == 0),
         "n_buckets must be zero exactly when no arc is declared"
     );
 
-    let arc_stage_weights = build_arc_stage_weights(system, calendar);
-    let arc_spread_chrono = build_arc_spread_chrono(system, calendar);
-    let arc_arrival_density = build_arc_arrival_density(system, calendar, &arc_stage_weights);
+    let arc_stage_weights = build_arc_stage_weights(&arcs, calendar);
+    let arc_spread_chrono = build_arc_spread_chrono(system, &arcs, calendar);
+    let arc_arrival_density =
+        build_arc_arrival_density(system, &arcs, calendar, &arc_stage_weights);
 
     TransitBucketTopology {
         n_buckets,
@@ -203,6 +234,7 @@ pub(crate) fn build_transit_bucket_topology(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
+        arcs,
     }
 }
 
@@ -211,16 +243,15 @@ pub(crate) fn build_transit_bucket_topology(
 /// `stage_weights` anchored at that in-study stage (`stage_weights[0]` is the
 /// same-stage share); a hydro absent declares no arc.
 pub(crate) fn build_arc_stage_weights(
-    system: &System,
+    arcs: &[TravelTimeArc],
     calendar: &DeliveryCalendar,
 ) -> HashMap<usize, Vec<Vec<f64>>> {
     let n_stages = calendar.n_study();
     let mut arc_stage_weights = HashMap::new();
 
-    for (u_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_v) = declared_travel_time(hydro) else {
-            continue;
-        };
+    for arc in arcs {
+        let u_idx = arc.upstream.get();
+        let t_v = arc.travel_time_hours;
         let extended = extend_for_resolution(calendar.total_hours(), t_v);
         let k_by_stage: Vec<Vec<f64>> = (0..n_stages)
             .map(|stage| resolve_spread(t_v, stage, &extended, None).stage_weights)
@@ -239,6 +270,7 @@ pub(crate) fn build_arc_stage_weights(
 /// stage (no block-resolved routing there).
 pub(crate) fn build_arc_spread_chrono(
     system: &System,
+    arcs: &[TravelTimeArc],
     calendar: &DeliveryCalendar,
 ) -> HashMap<usize, Vec<Option<SpreadResolution>>> {
     let n_stages = calendar.n_study();
@@ -247,10 +279,9 @@ pub(crate) fn build_arc_spread_chrono(
 
     let mut arc_spread_chrono = HashMap::new();
 
-    for (u_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_v) = declared_travel_time(hydro) else {
-            continue;
-        };
+    for arc in arcs {
+        let u_idx = arc.upstream.get();
+        let t_v = arc.travel_time_hours;
         let extended = extend_for_resolution(calendar.total_hours(), t_v);
         let by_stage: Vec<Option<SpreadResolution>> = (0..n_stages)
             .map(|stage_idx| {
@@ -282,6 +313,7 @@ pub(crate) fn build_arc_spread_chrono(
 /// source stage reaches it (total weight `== 0`, e.g. the first stage).
 pub(crate) fn build_arc_arrival_density(
     system: &System,
+    arcs: &[TravelTimeArc],
     calendar: &DeliveryCalendar,
     arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
 ) -> HashMap<usize, Vec<Option<Vec<f64>>>> {
@@ -291,10 +323,9 @@ pub(crate) fn build_arc_arrival_density(
 
     let mut arc_arrival_density = HashMap::new();
 
-    for (u_idx, hydro) in system.hydros().iter().enumerate() {
-        let Some(t_v) = declared_travel_time(hydro) else {
-            continue;
-        };
+    for arc in arcs {
+        let u_idx = arc.upstream.get();
+        let t_v = arc.travel_time_hours;
         let Some(k_by_stage) = arc_stage_weights.get(&u_idx) else {
             continue;
         };
@@ -571,6 +602,42 @@ mod tests {
         assert!(topology.per_plant_depth.is_empty());
     }
 
+    /// The first arc has the longer travel time, so a sort by travel time
+    /// fails this test.
+    #[test]
+    fn travel_time_arcs_skip_undeclared_and_keep_hydro_order() {
+        let system = build_system(
+            vec![
+                hydro(1, None, None),
+                hydro(2, Some(1), Some(100.0)),
+                hydro(3, Some(1), Some(24.0)),
+                hydro(4, Some(1), Some(0.0)),
+                hydro(5, Some(1), None),
+                hydro(6, None, Some(48.0)),
+            ],
+            uniform_stages(3, 24.0),
+        );
+
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
+
+        assert_eq!(
+            topology.arcs(),
+            &[
+                TravelTimeArc {
+                    upstream: HydroSys::new(1),
+                    downstream: HydroSys::new(0),
+                    travel_time_hours: 100.0,
+                },
+                TravelTimeArc {
+                    upstream: HydroSys::new(2),
+                    downstream: HydroSys::new(0),
+                    travel_time_hours: 24.0,
+                },
+            ][..]
+        );
+    }
+
     #[test]
     fn test_zero_travel_time_is_treated_as_undeclared() {
         let downstream = hydro(1, None, None);
@@ -781,10 +848,11 @@ mod tests {
 
         let upstream_idx = 1;
         let calendar = DeliveryCalendar::from_system(&system);
+        let arcs = resolve_travel_time_arcs(system.hydros());
         let topology_on = build_transit_bucket_topology(&system, &calendar, true);
         let topology_off = build_transit_bucket_topology(&system, &calendar, false);
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
-        let arc_spread_chrono = build_arc_spread_chrono(&system, &calendar);
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
+        let arc_spread_chrono = build_arc_spread_chrono(&system, &arcs, &calendar);
 
         let k_by_stage = arc_stage_weights
             .get(&upstream_idx)
@@ -856,8 +924,9 @@ mod tests {
         let upstream = hydro(2, Some(1), None);
         let system = build_system(vec![downstream, upstream], uniform_stages(3, 24.0));
         let calendar = DeliveryCalendar::from_system(&system);
+        let arcs = resolve_travel_time_arcs(system.hydros());
 
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
 
         assert!(arc_stage_weights.is_empty());
     }
@@ -869,8 +938,9 @@ mod tests {
         let system = build_system(vec![downstream, upstream], uniform_stages(10, 24.0));
 
         let calendar = DeliveryCalendar::from_system(&system);
+        let arcs = resolve_travel_time_arcs(system.hydros());
         let topology = build_transit_bucket_topology(&system, &calendar, false);
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
 
         let upstream_idx = 1;
         let k_by_stage = arc_stage_weights
@@ -904,7 +974,8 @@ mod tests {
         );
 
         let calendar = DeliveryCalendar::from_system(&system);
-        let arc_spread_chrono = build_arc_spread_chrono(&system, &calendar);
+        let arcs = resolve_travel_time_arcs(system.hydros());
+        let arc_spread_chrono = build_arc_spread_chrono(&system, &arcs, &calendar);
         let upstream_idx = 1;
         let by_stage = arc_spread_chrono
             .get(&upstream_idx)
@@ -961,8 +1032,10 @@ mod tests {
         );
 
         let calendar = DeliveryCalendar::from_system(&system);
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
-        let arc_arrival_density = build_arc_arrival_density(&system, &calendar, &arc_stage_weights);
+        let arcs = resolve_travel_time_arcs(system.hydros());
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
+        let arc_arrival_density =
+            build_arc_arrival_density(&system, &arcs, &calendar, &arc_stage_weights);
 
         let upstream_idx = 1;
         let density_by_stage = arc_arrival_density
@@ -1007,8 +1080,10 @@ mod tests {
         );
 
         let calendar = DeliveryCalendar::from_system(&system);
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
-        let arc_arrival_density = build_arc_arrival_density(&system, &calendar, &arc_stage_weights);
+        let arcs = resolve_travel_time_arcs(system.hydros());
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
+        let arc_arrival_density =
+            build_arc_arrival_density(&system, &arcs, &calendar, &arc_stage_weights);
 
         let upstream_idx = 1;
         let density_by_stage = arc_arrival_density
@@ -1049,8 +1124,10 @@ mod tests {
         );
 
         let calendar = DeliveryCalendar::from_system(&system);
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
-        let arc_arrival_density = build_arc_arrival_density(&system, &calendar, &arc_stage_weights);
+        let arcs = resolve_travel_time_arcs(system.hydros());
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
+        let arc_arrival_density =
+            build_arc_arrival_density(&system, &arcs, &calendar, &arc_stage_weights);
 
         let mut n_checked = 0;
         for density_by_stage in arc_arrival_density.values() {
@@ -1083,16 +1160,20 @@ mod tests {
         let system_b = build_system(vec![upstream, downstream], stages);
         let calendar_a = DeliveryCalendar::from_system(&system_a);
         let calendar_b = DeliveryCalendar::from_system(&system_b);
+        let arcs_a = resolve_travel_time_arcs(system_a.hydros());
+        let arcs_b = resolve_travel_time_arcs(system_b.hydros());
 
         let density_a = build_arc_arrival_density(
             &system_a,
+            &arcs_a,
             &calendar_a,
-            &build_arc_stage_weights(&system_a, &calendar_a),
+            &build_arc_stage_weights(&arcs_a, &calendar_a),
         );
         let density_b = build_arc_arrival_density(
             &system_b,
+            &arcs_b,
             &calendar_b,
-            &build_arc_stage_weights(&system_b, &calendar_b),
+            &build_arc_stage_weights(&arcs_b, &calendar_b),
         );
 
         assert_eq!(density_a, density_b);
@@ -1164,7 +1245,8 @@ mod tests {
         );
 
         let calendar = DeliveryCalendar::from_system(&system);
-        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arcs = resolve_travel_time_arcs(system.hydros());
+        let arc_stage_weights = build_arc_stage_weights(&arcs, &calendar);
         let upstream_idx = 1;
         let k_by_stage = arc_stage_weights
             .get(&upstream_idx)

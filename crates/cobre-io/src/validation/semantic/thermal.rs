@@ -18,6 +18,7 @@ use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 
 use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 use super::envelope_tolerance;
+use super::travel_time::study_stage_durations;
 use crate::StageIdResolver;
 use crate::resolution::{BoundsEntitySlices, BoundsOverrides, resolve_bounds};
 
@@ -393,19 +394,6 @@ fn collect_anticipated_thermal_ids(data: &ParsedData) -> HashSet<EntityId> {
         .iter()
         .filter(|t| t.anticipated_config.is_some())
         .map(|t| t.id)
-        .collect()
-}
-
-/// Study-stage (`id >= 0`) durations in canonical (ascending `id`) order, each
-/// summed from its blocks. Computed independently of
-/// `travel_time::study_stage_durations` (same shape, own walk) rather than
-/// shared across files.
-fn study_stage_durations(data: &ParsedData) -> Vec<f64> {
-    data.stages
-        .stages
-        .iter()
-        .filter(|s| s.id >= 0)
-        .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
         .collect()
 }
 

@@ -21,7 +21,7 @@ impl<'a> BlockClock<'a> {
     pub(crate) fn new(stage: &'a Stage) -> Self {
         Self {
             blocks: &stage.blocks,
-            total_hours: stage.blocks.iter().map(|b| b.duration_hours).sum::<f64>(),
+            total_hours: stage.total_hours(),
         }
     }
 

@@ -19,7 +19,7 @@
 
 use chrono::NaiveDate;
 use cobre_core::{
-    BlockMode, EntityId, Hydro, window_period_reach_depth, window_reaches_any_period,
+    BlockMode, EntityId, Hydro, Stage, window_period_reach_depth, window_reaches_any_period,
 };
 
 use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
@@ -266,12 +266,12 @@ fn check_chronological_confluence_heterogeneous_travel_time(
 
 /// Study-stage (`id >= 0`) durations in canonical (ascending `id`) order,
 /// each summed from its blocks (blocks sum to the stage duration).
-fn study_stage_durations(data: &ParsedData) -> Vec<f64> {
+pub(super) fn study_stage_durations(data: &ParsedData) -> Vec<f64> {
     data.stages
         .stages
         .iter()
         .filter(|s| s.id >= 0)
-        .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
+        .map(Stage::total_hours)
         .collect()
 }
 

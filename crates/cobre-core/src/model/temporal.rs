@@ -322,6 +322,14 @@ pub struct Stage {
     pub scenario_config: ScenarioSourceConfig,
 }
 
+impl Stage {
+    /// Total duration in hours: the sum of `blocks[].duration_hours`.
+    #[must_use]
+    pub fn total_hours(&self) -> f64 {
+        self.blocks.iter().map(|b| b.duration_hours).sum::<f64>()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SeasonDefinition (SS12.7)
 // ---------------------------------------------------------------------------
@@ -628,6 +636,49 @@ mod tests {
         assert_eq!(
             stage.end_date - stage.start_date,
             chrono::TimeDelta::days(31)
+        );
+    }
+
+    #[test]
+    fn test_stage_total_hours_is_the_left_to_right_block_sum() {
+        let stage = Stage {
+            index: 0,
+            id: 1,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![
+                Block {
+                    index: 0,
+                    name: "BLK0".to_string(),
+                    duration_hours: 0.1,
+                },
+                Block {
+                    index: 1,
+                    name: "BLK1".to_string(),
+                    duration_hours: 0.2,
+                },
+                Block {
+                    index: 2,
+                    name: "BLK2".to_string(),
+                    duration_hours: 0.3,
+                },
+            ],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 50,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        assert_eq!(
+            stage.total_hours().to_bits(),
+            (0.1_f64 + 0.2 + 0.3).to_bits()
         );
     }
 

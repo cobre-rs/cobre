@@ -1153,10 +1153,7 @@ pub(super) fn check_filling_sufficiency(data: &ParsedData, ctx: &mut ValidationC
         .stages
         .stages
         .iter()
-        .map(|s| {
-            let duration_hours: f64 = s.blocks.iter().map(|b| b.duration_hours).sum();
-            (s.id, duration_hours * M3S_TO_HM3)
-        })
+        .map(|s| (s.id, s.total_hours() * M3S_TO_HM3))
         .collect();
 
     let rate_override: HashMap<(i32, i32), f64> = data

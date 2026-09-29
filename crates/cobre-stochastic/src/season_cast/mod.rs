@@ -529,10 +529,7 @@ impl<'a> StageCalendar<'a> {
                 .all(|pair| pair[0].end_date <= pair[1].start_date),
             "StageCalendar stages must be chronologically ordered and non-overlapping"
         );
-        let stage_hours = stages
-            .iter()
-            .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
-            .collect();
+        let stage_hours = stages.iter().map(Stage::total_hours).collect();
         Self {
             stages,
             stage_hours,

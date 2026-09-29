@@ -9,13 +9,13 @@ use std::ops::Range;
 
 use chrono::NaiveDate;
 use cobre_core::{
-    AffineBound, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, CascadeTopology,
-    ConstraintExpression, ContractBlockBounds, ContractType, EntityId, FillingConfig,
-    GenericConstraint, Hydro, HydroBlockBounds, HydroGenerationModel, HydroStageBounds,
-    LineBlockBounds, LinearTerm, NoiseMethod, NonControllableSource, PumpingBlockBounds,
-    PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds, ScenarioSourceConfig,
-    SlackConfig, Stage, StageRiskConfig, StageStateConfig, ThermalBlockBounds, ThermalStageBounds,
-    VariableRef,
+    AffineBound, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, CascadeTopology,
+    ConstraintExpression, ContractBlockBounds, ContractType, EnergyContract, EntityId,
+    FillingConfig, GenericConstraint, Hydro, HydroBlockBounds, HydroGenerationModel,
+    HydroStageBounds, LineBlockBounds, LinearTerm, NoiseMethod, NonControllableSource,
+    PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
+    ScenarioSourceConfig, SlackConfig, Stage, StageRiskConfig, StageStateConfig, Thermal,
+    ThermalBlockBounds, ThermalStageBounds, VariableRef,
 };
 
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
@@ -269,6 +269,55 @@ fn membership_hydro(
     hydro
 }
 
+/// Placeholder thermal at position `idx`, inert past its `id`: these tests
+/// need only the count `ctx.thermals.len()` reserves in `StageLayout`, never
+/// a bound or cost.
+fn dormant_thermal(idx: usize) -> Thermal {
+    Thermal {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        cost_per_mwh: 0.0,
+        min_generation_mw: 0.0,
+        max_generation_mw: 0.0,
+        anticipated_config: None,
+    }
+}
+
+/// Placeholder bus at position `idx`, inert past its `id`: these tests need
+/// only the count `ctx.buses.len()` reserves in `StageLayout`, never a
+/// deficit segment or excess cost.
+fn dormant_bus(idx: usize) -> Bus {
+    Bus {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        deficit_segments: Vec::new(),
+        excess_cost: 0.0,
+    }
+}
+
+/// Placeholder contract at position `idx`, inert past its `id` and
+/// `contract_type`: these tests need only the per-direction counts
+/// `StageLayout` derives from `ctx.contracts`, never a price or MW bound.
+fn dormant_contract(idx: usize, contract_type: ContractType) -> EnergyContract {
+    EnergyContract {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        bus_id: EntityId(0),
+        contract_type,
+        entry_stage_id: None,
+        exit_stage_id: None,
+        price_per_mwh: 0.0,
+        min_mw: 0.0,
+        max_mw: 0.0,
+    }
+}
+
 /// `StageLayout` built from a context with `n_anticipated == 0` has
 /// `n_ant_state == 0`, `n_anticipated == 0`, `k_max == 0`, and
 /// `col_turbine_start == idx.theta + 1` where `idx` is the N=0, L=0 state
@@ -288,7 +337,7 @@ fn stage_layout_zero_anticipated_matches_pre_anticipated_offsets() {
     assert_eq!(layout.state.n_anticipated, 0, "n_anticipated");
     assert_eq!(layout.state.k_max, 0, "k_max");
 
-    let idx = state_layout(ctx.n_hydros, ctx.max_par_order);
+    let idx = state_layout(ctx.hydros.len(), ctx.par_lp.max_order());
     assert_eq!(
         layout.equipment.turbine.start,
         idx.theta + 1,
@@ -488,11 +537,15 @@ impl UsefulVolumeFixtures {
     /// `n_hydros` hydros at ids `1..=n_hydros` (positions `0..n_hydros`), `n_stages`
     /// stages, every entity `min_storage_hm3` defaulted to `0.0` — set per test via
     /// `hydros[pos].min_storage_hm3` (the useful-volume fold's source); `bounds`
-    /// stays available to set a differing per-stage operative value. `ctx()`
-    /// deliberately reports `n_hydros == 0` despite the real `hydros` slice: the
-    /// fold reads `ctx.hydros`/`ctx.hydro_pos` directly, never the layout's
-    /// hydro-column families these tests don't otherwise exercise.
+    /// stays available to set a differing per-stage operative value.
+    /// `production_models`/`evaporation_models`/`cascade`/`hydro_cell_index` are
+    /// sized to the real `hydros` slice (constant-productivity, no evaporation,
+    /// no cascade links) purely so `StageLayout::new`'s hydro-column families
+    /// stay safe to allocate; the fold itself reads `ctx.hydros`/`ctx.positions`
+    /// directly and these tests never assert on hydro-column values.
     fn new(n_hydros: usize, n_stages: usize) -> Self {
+        use crate::hydro_models::{EvaporationModel, ResolvedProductionModel};
+
         let hydros: Vec<Hydro> = (0..n_hydros)
             .map(|i| {
                 membership_hydro(
@@ -503,9 +556,19 @@ impl UsefulVolumeFixtures {
                 )
             })
             .collect();
+        let cascade = CascadeTopology::build(&hydros);
+        let hydro_cell_index = HydroCellIndex::build(&hydros);
+        let constant = ResolvedProductionModel::ConstantProductivity { productivity: 0.0 };
+        let production_models =
+            ProductionModelSet::new(vec![vec![constant; n_stages]; n_hydros], n_hydros, n_stages);
+        let evaporation_models = EvaporationModelSet::new(vec![EvaporationModel::None; n_hydros]);
         Self {
             base: CtxFixture {
                 hydros,
+                cascade,
+                hydro_cell_index,
+                production_models,
+                evaporation_models,
                 bounds: ResolvedBounds::new(
                     &BoundsCountsSpec {
                         n_hydros,
@@ -581,9 +644,7 @@ impl UsefulVolumeFixtures {
     }
 
     fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        ctx.n_hydros = 0;
-        ctx
+        self.base.ctx()
     }
 }
 
@@ -1057,7 +1118,7 @@ fn block_storage_col_resolves_all_boundaries() {
         chrono_k1.equipment.storage_internal_start, chrono_k1.equipment.turbine.start,
         "K = 1 has no interior storage columns"
     );
-    for h in 0..ctx.n_hydros {
+    for h in 0..ctx.hydros.len() {
         assert_eq!(
             chrono_k1.block_storage_col(HydroSys::new(h), Boundary::Incoming),
             chrono_k1.state.storage_in.start + h,
@@ -1167,8 +1228,8 @@ fn chronological_water_balance_row_count() {
 #[test]
 fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
     let mut fixtures = TwoHydroFixtures::new();
-    let mut ctx = fixtures.make_ctx();
-    ctx.n_buses = 3;
+    fixtures.base.buses = vec![dormant_bus(0), dormant_bus(1), dormant_bus(2)];
+    let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
     let n_blks = 3;
 
@@ -1177,7 +1238,7 @@ fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let geometry = layout.geometry(block_mode);
 
-        for h in 0..ctx.n_hydros {
+        for h in 0..ctx.hydros.len() {
             for blk in 0..n_blks {
                 assert_eq!(
                     layout.water_balance_row(HydroSys::new(h), BlockIdx::new(blk)),
@@ -1186,7 +1247,7 @@ fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
                 );
             }
         }
-        for bus in 0..ctx.n_buses {
+        for bus in 0..ctx.buses.len() {
             for blk in 0..n_blks {
                 assert_eq!(
                     layout.load_balance_row(BusSys::new(bus), BlockIdx::new(blk)),
@@ -1216,7 +1277,7 @@ fn parallel_z_inflow_column_enters_each_target_water_row_once() {
     let col_entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     let water_rows = layout.rows.water_balance.range();
 
-    for h in 0..ctx.n_hydros {
+    for h in 0..ctx.hydros.len() {
         let z_h = layout.state.z_inflow.start + h;
         let water_row_entries = col_entries[z_h]
             .iter()
@@ -1795,7 +1856,7 @@ fn stage_layout_operational_violation_rows_are_contiguous_blocks() {
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
-    let n_op = ctx.n_hydros; // n_h * n_blks with n_blks == 1
+    let n_op = ctx.hydros.len(); // n_h * n_blks with n_blks == 1
     assert!(
         n_op > 0,
         "fixture must have hydros so the rows are non-empty"
@@ -1912,9 +1973,9 @@ fn block_strided_addresses_match_their_family_ranges() {
     let fpha_counts = assert_block_strided_addresses(&fpha_layout);
 
     let mut zero_fixtures = ZeroEntityFixtures::new();
-    let mut thermal_ctx = zero_fixtures.make_ctx(0, vec![], &[]);
-    thermal_ctx.n_thermals = 2;
-    thermal_ctx.n_buses = 2;
+    zero_fixtures.base.thermals = vec![dormant_thermal(0), dormant_thermal(1)];
+    zero_fixtures.base.buses = vec![dormant_bus(0), dormant_bus(1)];
+    let thermal_ctx = zero_fixtures.make_ctx(0, vec![], &[]);
     let thermal_stage = stage_with_blocks(BlockMode::Parallel, 4);
     let thermal_state = state_layout_for(&thermal_ctx);
     let thermal_layout = StageLayout::new(&thermal_ctx, &thermal_state, &thermal_stage, 0);
@@ -2126,7 +2187,7 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
     // n_state for this fixture: N*(1+L) + A*K = 0 + 2*3 = 6.
-    let n_state = ctx.n_hydros * (1 + ctx.max_par_order) + n_anticipated * k_max;
+    let n_state = ctx.hydros.len() * (1 + ctx.par_lp.max_order()) + n_anticipated * k_max;
     assert_eq!(n_state, 6);
 
     // num_rows for this zero-hydro fixture: only the anticipated_fishing
@@ -2145,11 +2206,11 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
         "observed + n_state is 8 for this fixture"
     );
     // Structural invariant proving the reduction: row_water_balance_start
-    // equals ctx.n_hydros (no n_state offset). With state-fixing rows it
-    // would be n_state + ctx.n_hydros.
+    // equals ctx.hydros.len() (no n_state offset). With state-fixing rows it
+    // would be n_state + ctx.hydros.len().
     assert_eq!(
         layout.rows.water_balance.start(),
-        ctx.n_hydros,
+        ctx.hydros.len(),
         "row_water_balance_start does not include the n_state offset"
     );
 }
@@ -2794,11 +2855,7 @@ impl PumpingFixtures {
     }
 
     fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        // The slice/position threading is covered by the
-        // `build_template_build_ctx` tests in `template.rs`.
-        ctx.n_pumping = ctx.resolved.bounds.n_pumping();
-        ctx
+        self.base.ctx()
     }
 
     /// Build a stage with `n_blks` equal-duration blocks.
@@ -2848,7 +2905,7 @@ fn pumping_layout_inert_when_no_stations() {
 
     // Pre-existing column starts for the zero-entity, single-block layout:
     // theta == 0, every equipment/slack/NCS region empty starting at theta+1.
-    let idx = state_layout(ctx.n_hydros, ctx.max_par_order);
+    let idx = state_layout(ctx.hydros.len(), ctx.par_lp.max_order());
     let expected_start = idx.theta + 1;
     assert_eq!(layout.equipment.turbine.start, expected_start);
     assert_eq!(layout.equipment.thermal.start, expected_start);
@@ -2919,8 +2976,7 @@ fn contract_columns_empty_keep_generic_slack_at_pumping_end() {
     let n_blks = 3_usize;
     let mut fixtures = PumpingFixtures::new(n_pumping, 3);
     let ctx = fixtures.make_ctx();
-    assert_eq!(ctx.n_contract_import, 0);
-    assert_eq!(ctx.n_contract_export, 0);
+    assert_eq!(ctx.contracts.len(), 0);
 
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
     let state = state_layout_for(&ctx);
@@ -2950,9 +3006,12 @@ fn contract_columns_reserve_import_then_export_blocks() {
     let n_pumping = 2_usize;
     let n_blks = 3_usize;
     let mut fixtures = PumpingFixtures::new(n_pumping, 3);
-    let mut ctx = fixtures.make_ctx();
-    ctx.n_contract_import = 2;
-    ctx.n_contract_export = 1;
+    fixtures.base.contracts = vec![
+        dormant_contract(0, ContractType::Import),
+        dormant_contract(1, ContractType::Import),
+        dormant_contract(2, ContractType::Export),
+    ];
+    let ctx = fixtures.make_ctx();
 
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
     let state = state_layout_for(&ctx);
@@ -2982,9 +3041,12 @@ fn contract_col_covers_each_contract_column_once() {
     let n_pumping = 2_usize;
     let n_blks = 3_usize;
     let mut fixtures = PumpingFixtures::new(n_pumping, 3);
-    let mut ctx = fixtures.make_ctx();
-    ctx.n_contract_import = 2;
-    ctx.n_contract_export = 1;
+    fixtures.base.contracts = vec![
+        dormant_contract(0, ContractType::Import),
+        dormant_contract(1, ContractType::Import),
+        dormant_contract(2, ContractType::Export),
+    ];
+    let ctx = fixtures.make_ctx();
 
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
     let state = state_layout_for(&ctx);
@@ -3239,7 +3301,7 @@ fn withdrawal_and_operational_columns_collapse_onto_evap_col_start_when_no_hydro
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
-    assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
+    assert_eq!(ctx.hydros.len(), 0, "fixture must have zero hydros");
     assert_eq!(
         layout.clock.n_blks(),
         4,
@@ -3293,7 +3355,7 @@ fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
-    assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
+    assert_eq!(ctx.hydros.len(), 0, "fixture must have zero hydros");
     assert_eq!(
         layout.clock.n_blks(),
         4,
@@ -3347,7 +3409,7 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
-    assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
+    assert_eq!(ctx.hydros.len(), 0, "fixture must have zero hydros");
     assert_eq!(
         layout.clock.n_blks(),
         4,
@@ -3916,7 +3978,6 @@ fn column_address_pins_cover_every_family() {
     let mut equipment_ctx = equipment_fixtures.make_ctx(0, vec![], &[]);
     equipment_ctx.non_controllable_sources = &ncs;
     equipment_ctx.pumping_stations = &pumping;
-    equipment_ctx.n_pumping = pumping.len();
     let equipment_state = state_layout_for(&equipment_ctx);
     let equipment_stage = stage_with_blocks(BlockMode::Parallel, 2);
     let equipment_layout = StageLayout::new(&equipment_ctx, &equipment_state, &equipment_stage, 0);

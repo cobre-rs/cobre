@@ -3,10 +3,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{
-    Bus, CascadeTopology, ContractType, EnergyContract, EntityId, GenericConstraint, Hydro, Line,
-    LoadModel, NonControllableSource, PumpingStation, ResolvedBounds,
-    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, Thermal,
+    Bus, CascadeTopology, EnergyContract, EntityId, GenericConstraint, Hydro, Line, LoadModel,
+    NonControllableSource, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
+    ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors, ResolvedPenalties, Thermal,
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
@@ -21,9 +20,9 @@ use crate::time_value::{PostStudyResolved, TimeValue};
 /// test builds one through [`Self::ctx`] instead of hand-writing its own
 /// field-by-field construction — the same shape `columns.rs`'s
 /// `InteriorStorageFixtures` and `generic_constraints::tests::ResolverFixture`
-/// each duplicate independently. `ctx()` derives `positions` and every entity
-/// count from its own slices, the way `build_template_build_ctx` does; every
-/// other field is copied through unchanged.
+/// each duplicate independently. `ctx()` derives `positions` from its own
+/// slices, the way `build_template_build_ctx` does; every other field is
+/// copied through unchanged.
 pub(crate) struct CtxFixture {
     /// Derived fresh, from the slices below, on every [`Self::ctx`] call — the
     /// backing store [`TemplateBuildCtx::positions`] borrows.
@@ -50,7 +49,6 @@ pub(crate) struct CtxFixture {
     pub(crate) pumping_stations: Vec<PumpingStation>,
     pub(crate) contracts: Vec<EnergyContract>,
     pub(crate) diversion_upstream: HashMap<EntityId, Vec<usize>>,
-    pub(crate) max_par_order: usize,
     pub(crate) anticipated_lead_stages: Vec<usize>,
     pub(crate) anticipated_plants: AnticipatedPlants,
     pub(crate) anticipated_resolution: AnticipatedResolution,
@@ -89,7 +87,6 @@ impl Default for CtxFixture {
             pumping_stations: Vec::new(),
             contracts: Vec::new(),
             diversion_upstream: HashMap::new(),
-            max_par_order: 0,
             anticipated_lead_stages: Vec::new(),
             anticipated_plants: AnticipatedPlants::default(),
             anticipated_resolution: AnticipatedResolution::default(),
@@ -111,9 +108,9 @@ impl Default for CtxFixture {
 }
 
 impl CtxFixture {
-    /// Derives `positions` and every entity count from this fixture's own
-    /// slices, the way `build_template_build_ctx` does; every other field is
-    /// copied through unchanged. `&mut self`: `positions` is recomputed into
+    /// Derives `positions` from this fixture's own slices, the way
+    /// `build_template_build_ctx` does; every other field is copied through
+    /// unchanged. `&mut self`: `positions` is recomputed into
     /// `self.positions` on every call, so [`TemplateBuildCtx::positions`] can
     /// borrow a backing store with `self`'s own lifetime. A test whose
     /// original literal set one of the derived fields to a value the slices
@@ -151,24 +148,8 @@ impl CtxFixture {
             generic_constraints: &self.generic_constraints,
             non_controllable_sources: &self.non_controllable_sources,
             pumping_stations: &self.pumping_stations,
-            n_pumping: self.pumping_stations.len(),
             contracts: &self.contracts,
-            n_contract_import: self
-                .contracts
-                .iter()
-                .filter(|c| c.contract_type == ContractType::Import)
-                .count(),
-            n_contract_export: self
-                .contracts
-                .iter()
-                .filter(|c| c.contract_type == ContractType::Export)
-                .count(),
             diversion_upstream: &self.diversion_upstream,
-            n_hydros: self.hydros.len(),
-            n_thermals: self.thermals.len(),
-            n_lines: self.lines.len(),
-            n_buses: self.buses.len(),
-            max_par_order: self.max_par_order,
             n_anticipated: self.anticipated_plants.len(),
             anticipated_lead_stages: self.anticipated_lead_stages.clone(),
             anticipated_plants: &self.anticipated_plants,

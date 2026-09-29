@@ -469,7 +469,7 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -490,7 +490,6 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -516,8 +515,8 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     }
 }
 
-/// `ctx.n_pumping` equals `pumping_stations.len()` and the resolved-bounds
-/// station count, and that count is the source `StageLayout` reserves from.
+/// `ctx.pumping_stations.len()` equals the resolved-bounds station count,
+/// and that count is the source `StageLayout` reserves from.
 #[test]
 fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let stations = vec![fixture_pumping_station(7), fixture_pumping_station(3)];
@@ -533,7 +532,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -554,21 +553,15 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
 
+    assert_eq!(ctx.pumping_stations.len(), 2, "two stations were declared");
     assert_eq!(
-        ctx.n_pumping,
         ctx.pumping_stations.len(),
-        "n_pumping == slice len"
-    );
-    assert_eq!(ctx.n_pumping, 2, "two stations were declared");
-    assert_eq!(
-        ctx.n_pumping,
         ctx.resolved.bounds.n_pumping(),
-        "ctx.n_pumping must agree with the resolved-bounds station count"
+        "ctx.pumping_stations.len() must agree with the resolved-bounds station count"
     );
 
     // Block-major column reservation is pinned separately by the layout-module
@@ -581,7 +574,8 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let state = state_layout_for(&ctx);
     let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
     assert_eq!(
-        layout.equipment.n_pumping, ctx.n_pumping,
+        layout.equipment.n_pumping,
+        ctx.pumping_stations.len(),
         "StageLayout.n_pumping must equal the ctx-sourced count"
     );
 }
@@ -622,7 +616,7 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -643,7 +637,6 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -883,7 +876,7 @@ fn geometry_ncs_family_matches_the_stage_layout() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -904,7 +897,6 @@ fn geometry_ncs_family_matches_the_stage_layout() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1122,7 +1114,7 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -1143,7 +1135,6 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1155,8 +1146,18 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         vec![10, 20],
         "ctx.contracts must be ID-sorted regardless of declaration order"
     );
-    assert_eq!(ctx.n_contract_import, 1);
-    assert_eq!(ctx.n_contract_export, 1);
+    let n_import = ctx
+        .contracts
+        .iter()
+        .filter(|c| c.contract_type == ContractType::Import)
+        .count();
+    let n_export = ctx
+        .contracts
+        .iter()
+        .filter(|c| c.contract_type == ContractType::Export)
+        .count();
+    assert_eq!(n_import, 1);
+    assert_eq!(n_export, 1);
     assert_eq!(ctx.positions.contract(EntityId(10)), Some(0));
     assert_eq!(ctx.positions.contract(EntityId(20)), Some(1));
     for (slot, contract) in ctx.contracts.iter().enumerate() {
@@ -1190,7 +1191,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -1211,7 +1212,6 @@ fn stage_layout_geometry_populates_contract_ranges() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1253,7 +1253,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -1274,7 +1274,6 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1406,7 +1405,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -1427,7 +1426,6 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1490,7 +1488,7 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -1511,7 +1509,6 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1577,7 +1574,7 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -1598,7 +1595,6 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -1989,7 +1985,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -2010,7 +2006,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -2051,7 +2046,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_stage_weights_b,
         arc_spread_chrono_b,
         arc_arrival_density_b,
-        max_par_order_b,
+        _max_par_order_b,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let inputs_b = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let mut ctx_b = super::build_template_build_ctx(
@@ -2069,7 +2064,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_stage_weights_b,
         arc_spread_chrono_b,
         arc_arrival_density_b,
-        max_par_order_b,
         &hydro_cell_index,
         &time_value,
     );
@@ -2433,7 +2427,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -2454,7 +2448,6 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -2485,7 +2478,7 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -2506,7 +2499,6 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -2545,7 +2537,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -2566,7 +2558,6 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -2600,7 +2591,7 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -2621,7 +2612,6 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -2824,7 +2814,7 @@ fn build_post_study_resolved_for(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -2845,7 +2835,6 @@ fn build_post_study_resolved_for(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -3249,7 +3238,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -3274,7 +3263,6 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -3776,7 +3764,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -3797,7 +3785,6 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -3895,7 +3882,7 @@ fn block_layout_and_template(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -3920,7 +3907,6 @@ fn block_layout_and_template(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -4567,7 +4553,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -4588,7 +4574,6 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -5016,7 +5001,7 @@ fn filling_block_layout_and_template(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(system, par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -5041,7 +5026,6 @@ fn filling_block_layout_and_template(
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -5349,7 +5333,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -5370,7 +5354,6 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );
@@ -5439,7 +5422,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
+        _max_par_order,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -5460,7 +5443,6 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         arc_stage_weights,
         arc_spread_chrono,
         arc_arrival_density,
-        max_par_order,
         &hydro_cell_index,
         &time_value,
     );

@@ -80,28 +80,15 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) non_controllable_sources: &'a [NonControllableSource],
     /// Pumping station entities, id-sorted (canonical slot order).
     pub(crate) pumping_stations: &'a [PumpingStation],
-    /// Full station count, asserted `== bounds.n_pumping()` at construction. The
-    /// dense per-stage column-block stride: every station keeps a column at every
-    /// stage, a commissioning-dormant one zeroed to `[0, 0]` rather than omitted.
-    pub(crate) n_pumping: usize,
     /// Energy contract entities, id-sorted (canonical slot order). One slice for
     /// both directions; the import/export split is derived at fill time from
     /// `contract_type`, not pre-partitioned.
     pub(crate) contracts: &'a [EnergyContract],
-    /// Number of import-family contracts; the dense per-stage import-column stride.
-    pub(crate) n_contract_import: usize,
-    /// Number of export-family contracts; the dense per-stage export-column stride.
-    pub(crate) n_contract_export: usize,
     /// Target hydro ID → system indices of hydros diverting to it (each hydro `d`
     /// with `diversion.downstream_id == target_id`). Borrowed from
     /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
     /// (`LpBuildInputs::diversion_upstream`).
     pub(crate) diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
-    pub(crate) n_hydros: usize,
-    pub(crate) n_thermals: usize,
-    pub(crate) n_lines: usize,
-    pub(crate) n_buses: usize,
-    pub(crate) max_par_order: usize,
     /// [`AnticipatedPlants::len`].
     pub(crate) n_anticipated: usize,
     /// Per-plant `lead_stages` (`K_i`), length `n_anticipated`, anticipated-local order.
@@ -779,7 +766,7 @@ fn identify_fpha_hydros(
 ) -> (Vec<HydroSys>, Vec<usize>) {
     let mut fpha_hydro_indices: Vec<HydroSys> = Vec::new();
     let mut fpha_planes_per_hydro: Vec<usize> = Vec::new();
-    for h_idx in 0..ctx.n_hydros {
+    for h_idx in 0..ctx.hydros.len() {
         let hydro = &ctx.hydros[h_idx];
         if matches!(
             hydro_phase(hydro, stage_id),
@@ -806,7 +793,7 @@ fn identify_fpha_hydros(
 /// `Filling`); the two must not be unified. A non-filling hydro with no window is
 /// `Operating` at every stage (parity-neutral).
 fn identify_evap_hydros(ctx: &TemplateBuildCtx<'_>, stage_id: i32) -> Vec<HydroSys> {
-    (0..ctx.n_hydros)
+    (0..ctx.hydros.len())
         .filter(|&h_idx| {
             let hydro = &ctx.hydros[h_idx];
             if matches!(hydro_phase(hydro, stage_id), Phase::PreFilling) {
@@ -832,7 +819,7 @@ fn identify_evap_hydros(ctx: &TemplateBuildCtx<'_>, stage_id: i32) -> Vec<HydroS
 /// [`filling_phase`] (`filled_min_storage_floor` takes over at/after `entry`). A
 /// non-filling hydro is `Operating` at every stage (parity-neutral).
 fn identify_filling_target_hydros(ctx: &TemplateBuildCtx<'_>, stage_id: i32) -> Vec<HydroSys> {
-    (0..ctx.n_hydros)
+    (0..ctx.hydros.len())
         .filter(|&h_idx| {
             let hydro = &ctx.hydros[h_idx];
             hydro.filling.is_some() && matches!(hydro_phase(hydro, stage_id), Phase::Filling)
@@ -858,13 +845,27 @@ fn identify_filled_min_storage_floor_hydros(
     ctx: &TemplateBuildCtx<'_>,
     stage_id: i32,
 ) -> Vec<HydroSys> {
-    (0..ctx.n_hydros)
+    (0..ctx.hydros.len())
         .filter(|&h_idx| {
             let hydro = &ctx.hydros[h_idx];
             matches!(hydro_phase(hydro, stage_id), Phase::Operating) && hydro.filling.is_some()
         })
         .map(HydroSys::new)
         .collect()
+}
+
+/// Per-direction contract counts, in `contracts`' own (id-sorted) slice
+/// order — the dense per-stage import/export column strides.
+fn contract_direction_counts(contracts: &[EnergyContract]) -> (usize, usize) {
+    let n_import = contracts
+        .iter()
+        .filter(|c| c.contract_type == ContractType::Import)
+        .count();
+    let n_export = contracts
+        .iter()
+        .filter(|c| c.contract_type == ContractType::Export)
+        .count();
+    (n_import, n_export)
 }
 
 /// Allocate the slack column index/indices for one generic-constraint row,
@@ -1201,13 +1202,13 @@ impl<'a> StageLayout<'a> {
         let turbine = col.alloc(n_cells * n_blks);
         let spillage = col.alloc(n_h * n_blks);
         let diversion = col.alloc(n_h * n_blks);
-        let thermal = col.alloc(ctx.n_thermals * n_blks);
+        let thermal = col.alloc(ctx.thermals.len() * n_blks);
         let thermal_end = thermal.end;
         col.alloc(state.n_anticipated);
-        let line_fwd = col.alloc(ctx.n_lines * n_blks);
-        let line_rev = col.alloc(ctx.n_lines * n_blks);
-        let deficit = col.alloc(ctx.n_buses * max_deficit_segments * n_blks);
-        let excess = col.alloc(ctx.n_buses * n_blks);
+        let line_fwd = col.alloc(ctx.lines.len() * n_blks);
+        let line_rev = col.alloc(ctx.lines.len() * n_blks);
+        let deficit = col.alloc(ctx.buses.len() * max_deficit_segments * n_blks);
+        let excess = col.alloc(ctx.buses.len() * n_blks);
 
         let has_inflow_penalty = ctx.has_penalty && n_h > 0;
         let inflow_slack = col.alloc(if has_inflow_penalty { n_h } else { 0 });
@@ -1248,7 +1249,7 @@ impl<'a> StageLayout<'a> {
             stage_idx,
         );
         let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
-        let load_balance = BlockRowFamily::per_block(row.alloc(ctx.n_buses * n_blks));
+        let load_balance = BlockRowFamily::per_block(row.alloc(ctx.buses.len() * n_blks));
 
         // Only the end cursor is kept here (the per-hydro ranges live on
         // `StageData.indexer`); `fpha_rows_end` is the evaporation-row start even
@@ -1327,13 +1328,12 @@ impl<'a> StageLayout<'a> {
         // own start does not depend on that length.
         let row_generic_start = row.pos();
 
-        let n_pumping = ctx.n_pumping;
+        let n_pumping = ctx.pumping_stations.len();
         let col_pumping_start = col.alloc(n_pumping * n_blks).start;
 
         // Import then export contract block; both empty leaves
         // col_generic_slack_start at col_pumping_end (parity-neutral).
-        let n_contract_import = ctx.n_contract_import;
-        let n_contract_export = ctx.n_contract_export;
+        let (n_contract_import, n_contract_export) = contract_direction_counts(ctx.contracts);
         let contract_import = col.alloc(n_contract_import * n_blks);
         let contract_export = col.alloc(n_contract_export * n_blks);
 

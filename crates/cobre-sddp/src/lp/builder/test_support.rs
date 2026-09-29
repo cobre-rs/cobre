@@ -69,18 +69,19 @@ pub(super) fn ctx_anticipated_and_mask_inputs(
 /// Per-hydro effective lag-slot count for `ctx` — shared by [`state_layout_for`]
 /// and [`state_layout_with_resolution`].
 fn effective_lag_counts_for(ctx: &TemplateBuildCtx<'_>) -> Vec<usize> {
-    if ctx.max_par_order > 0 {
-        (0..ctx.n_hydros)
+    let max_par_order = ctx.par_lp.max_order();
+    if max_par_order > 0 {
+        (0..ctx.hydros.len())
             .map(|h| {
                 if h < ctx.par_lp.n_hydros() {
                     ctx.par_lp.effective_lag_count(h)
                 } else {
-                    ctx.max_par_order
+                    max_par_order
                 }
             })
             .collect()
     } else {
-        vec![0; ctx.n_hydros]
+        vec![0; ctx.hydros.len()]
     }
 }
 
@@ -95,8 +96,8 @@ pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
     let resolution =
         constant_lead_resolution(&ctx.anticipated_lead_stages, ctx.resolved.bounds.n_stages());
     StateSpace::new(
-        ctx.n_hydros,
-        ctx.max_par_order,
+        ctx.hydros.len(),
+        ctx.par_lp.max_order(),
         0,
         Vec::new(),
         ctx.anticipated_lead_stages.clone(),
@@ -112,8 +113,8 @@ pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
 pub(super) fn state_layout_with_resolution(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
     let effective_lag_counts = effective_lag_counts_for(ctx);
     StateSpace::new(
-        ctx.n_hydros,
-        ctx.max_par_order,
+        ctx.hydros.len(),
+        ctx.par_lp.max_order(),
         0,
         Vec::new(),
         ctx.anticipated_lead_stages.clone(),

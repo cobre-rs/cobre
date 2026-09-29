@@ -22,7 +22,7 @@ use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
     ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro, HydroBlockBounds,
     HydroGenerationModel, HydroPenalties, HydroStageBounds, HydroStorage, HydroUnitGroup,
-    InitialConditions, LineBlockBounds, LineStagePenalties, NcsStagePenalties, NoiseMethod,
+    InitialConditions, Line, LineBlockBounds, LineStagePenalties, NcsStagePenalties, NoiseMethod,
     PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds, ResolvedPenalties,
     ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig, System, SystemBuilder, Thermal,
     ThermalBlockBounds, ThermalStageBounds,
@@ -449,6 +449,41 @@ fn geometry_bus(idx: usize, max_deficit_segments: usize) -> Bus {
     }
 }
 
+/// Fixture thermal at system position `idx`, inert past its `id`: `geometry`
+/// needs only the count `ctx.thermals.len()` reserves, never a bound or cost.
+fn geometry_thermal(idx: usize) -> Thermal {
+    Thermal {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        cost_per_mwh: 0.0,
+        min_generation_mw: 0.0,
+        max_generation_mw: 0.0,
+        anticipated_config: None,
+    }
+}
+
+/// Fixture line at system position `idx`, inert past its `id`: `geometry`
+/// needs only the count `ctx.lines.len()` reserves, never a capacity.
+fn geometry_line(idx: usize) -> Line {
+    Line {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        source_bus_id: EntityId(0),
+        target_bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        direct_capacity_mw: 0.0,
+        reverse_capacity_mw: 0.0,
+        losses_percent: 0.0,
+        exchange_cost: 0.0,
+    }
+}
+
 /// Single-stage [`ProductionModelSet`]: `Fpha` with `fpha_planes[local]` planes at
 /// each `fpha_hydro_indices[local]`, `ConstantProductivity` elsewhere — the exact
 /// classification `StageLayout::new`'s FPHA-membership filter reconstructs from
@@ -567,6 +602,8 @@ pub fn geometry(
 ) -> StageGeometry {
     let hydros: Vec<Hydro> = (0..dims.hydro_count).map(geometry_hydro).collect();
     let hydro_cell_index = HydroCellIndex::build(&hydros);
+    let thermals: Vec<Thermal> = (0..dims.n_thermals).map(geometry_thermal).collect();
+    let lines: Vec<Line> = (0..dims.n_lines).map(geometry_line).collect();
     let buses: Vec<Bus> = (0..dims.n_buses)
         .map(|idx| geometry_bus(idx, dims.max_deficit_segments))
         .collect();
@@ -630,11 +667,12 @@ pub fn geometry(
 
     let mut fixture = CtxFixture {
         hydros,
+        thermals,
+        lines,
         buses,
         hydro_cell_index,
         production_models,
         evaporation_models,
-        max_par_order: dims.max_par_order,
         anticipated_lead_stages: anticipated_lead_stages.clone(),
         anticipated_plants: dims.anticipated_plants.clone(),
         has_penalty: dims.has_inflow_penalty,
@@ -643,14 +681,12 @@ pub fn geometry(
         ..CtxFixture::default()
     };
     let mut ctx = fixture.ctx();
-    // geometry() never resolves an EntityId through a position map, and declares
-    // its thermal/line/anticipated counts independently of the (deliberately
-    // empty) entity slices — restore the empty-positions default over the
-    // derived (non-empty hydro/bus) one.
+    // geometry() never resolves an EntityId through a position map, and
+    // declares its anticipated count independently of anticipated_plants —
+    // restore the empty-positions default over the derived (non-empty
+    // hydro/bus) one.
     let empty_positions = EntityPositions::from_slices([], [], [], [], [], []);
     ctx.positions = &empty_positions;
-    ctx.n_thermals = dims.n_thermals;
-    ctx.n_lines = dims.n_lines;
     ctx.n_anticipated = dims.n_anticipated;
 
     let state = state_layout_full(

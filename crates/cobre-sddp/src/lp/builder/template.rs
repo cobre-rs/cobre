@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use cobre_core::{BlockMode, ContractType, EntityId, Stage, System};
+use cobre_core::{BlockMode, EntityId, Stage, System};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
@@ -626,7 +626,6 @@ pub fn build_stage_templates(
         arc_stage_weights.clone(),
         arc_spread_chrono.clone(),
         arc_arrival_density.clone(),
-        state_layout.max_par_order,
         hydro_cell_index,
         time_value,
     );
@@ -637,10 +636,6 @@ pub fn build_stage_templates(
     debug_assert_eq!(
         ctx.anticipated_lead_stages, state_layout.anticipated_lead_stages,
         "ctx's threaded anticipated_lead_stages must match the state_layout it was built from"
-    );
-    debug_assert_eq!(
-        ctx.max_par_order, state_layout.max_par_order,
-        "ctx's threaded max_par_order must match the state_layout it was built from"
     );
 
     let mut stage_outputs = Vec::with_capacity(study_stages.len());
@@ -745,7 +740,6 @@ fn build_template_build_ctx<'a>(
     arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
     arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
     arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
-    max_par_order: usize,
     hydro_cell_index: &'a HydroCellIndex,
     time_value: &'a TimeValue,
 ) -> TemplateBuildCtx<'a> {
@@ -756,19 +750,8 @@ fn build_template_build_ctx<'a>(
     // Iterate the (ID-sorted) station slice in slot order, NOT declaration order,
     // to uphold the declaration-order bit-determinism rule.
     let pumping_stations = system.pumping_stations();
-    let n_pumping = pumping_stations.len();
 
-    // One id-sorted slice for both directions; the import/export split is derived
-    // here as counts (the dense per-direction column strides) by `contract_type`.
     let contracts = system.contracts();
-    let n_contract_import = contracts
-        .iter()
-        .filter(|c| c.contract_type == ContractType::Import)
-        .count();
-    let n_contract_export = contracts
-        .iter()
-        .filter(|c| c.contract_type == ContractType::Export)
-        .count();
 
     let n_anticipated = anticipated_plants.len();
 
@@ -796,16 +779,8 @@ fn build_template_build_ctx<'a>(
         generic_constraints: system.generic_constraints(),
         non_controllable_sources: system.non_controllable_sources(),
         pumping_stations,
-        n_pumping,
         contracts,
-        n_contract_import,
-        n_contract_export,
         diversion_upstream: &inputs.diversion_upstream,
-        n_hydros,
-        n_thermals: system.thermals().len(),
-        n_lines: system.lines().len(),
-        n_buses: buses.len(),
-        max_par_order,
         n_anticipated,
         anticipated_lead_stages,
         anticipated_plants,

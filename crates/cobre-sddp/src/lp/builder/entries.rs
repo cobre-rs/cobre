@@ -2131,10 +2131,11 @@ mod parameter_resolution_tests {
 )]
 mod zero_cost_tests {
 
+    use chrono::NaiveDate;
     use cobre_core::{
-        BoundsCountsSpec, BoundsDefaults, ContractBlockBounds, HydroBlockBounds, HydroStageBounds,
-        LineBlockBounds, PumpingBlockBounds, ResolvedBounds, Stage, ThermalBlockBounds,
-        ThermalStageBounds,
+        BoundsCountsSpec, BoundsDefaults, ContractBlockBounds, EntityId, HydroBlockBounds,
+        HydroStageBounds, LineBlockBounds, PumpingBlockBounds, ResolvedBounds, Stage, Thermal,
+        ThermalBlockBounds, ThermalStageBounds,
     };
 
     use crate::indexer::{BlockIdx, StateSpace};
@@ -2156,6 +2157,24 @@ mod zero_cost_tests {
         DeliveryRing, build_stage_matrix_entries, fill_anticipated_fishing_entries,
         fill_anticipated_slot_definition_entries, fill_anticipated_state_out_def_entries,
     };
+
+    /// Placeholder thermal at position `idx`, inert past its `id`:
+    /// `make_ctx`'s `n_thermals` needs only the count `ctx.thermals.len()`
+    /// reserves in `StageLayout`, never a bound or cost.
+    fn dormant_thermal(idx: usize) -> Thermal {
+        Thermal {
+            id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+            name: String::new(),
+            operational_start_date: NaiveDate::default(),
+            bus_id: EntityId(0),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            cost_per_mwh: 0.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 0.0,
+            anticipated_config: None,
+        }
+    }
 
     /// Owns data for a context with anticipated thermals and zero other entities.
     struct AntFixtures {
@@ -2237,6 +2256,7 @@ mod zero_cost_tests {
         ) -> TemplateBuildCtx<'_> {
             self.base.anticipated_plants = anticipated_plants_at(anticipated_positions);
             self.base.anticipated_lead_stages = anticipated_lead_stages;
+            self.base.thermals = (0..n_thermals).map(dormant_thermal).collect();
             // Sized to cover every active plant's delivery stage
             // (`stage_idx + K_i < n_stages`); `fill_anticipated_columns`
             // indexes these by delivery stage when pricing the decision column.
@@ -2247,9 +2267,7 @@ mod zero_cost_tests {
                 (0..i32::try_from(self.base.bounds.n_stages() + k_max).unwrap_or(0)).collect(),
                 PostStudyResolved::default(),
             );
-            let mut ctx = self.base.ctx();
-            ctx.n_thermals = n_thermals;
-            ctx
+            self.base.ctx()
         }
     }
 
@@ -2887,13 +2905,13 @@ mod zero_cost_tests {
             },
         );
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             0,
             Vec::new(),
             ctx.anticipated_lead_stages.clone(),
             resolution,
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
 
         for stage_idx in 0..4 {
@@ -3331,8 +3349,8 @@ mod zero_cost_tests {
         // n_hydros = 0 in this fixture these loops execute zero iterations,
         // but the structure documents intent and the same assertion shape
         // catches a regression in any future fixture with non-zero hydros.
-        let n_h = ctx.n_hydros;
-        let lag_order = ctx.max_par_order;
+        let n_h = ctx.hydros.len();
+        let lag_order = ctx.par_lp.max_order();
         for h in 0..n_h {
             let col = layout.state.storage_in.start + h;
             let has_diag = col_entries[col]
@@ -3836,12 +3854,11 @@ mod pumping_water_tests {
             self
         }
 
-        /// Inject a `PrecomputedPar` and align `max_par_order` to its order, so
-        /// the inflow-lag columns are reserved and the `−ζ·ψ` AR-lag water term
-        /// fires. The default fixture carries `PrecomputedPar::default()` (no
-        /// `psi`, `max_par_order: 0`), under which the AR-lag term is dormant.
+        /// Inject a `PrecomputedPar`, whose order (read via `ctx.par_lp.max_order()`)
+        /// sizes the inflow-lag columns so the `−ζ·ψ` AR-lag water term fires. The
+        /// default fixture carries `PrecomputedPar::default()` (order 0), under
+        /// which the AR-lag term is dormant.
         fn with_par_lp(mut self, par_lp: PrecomputedPar) -> Self {
-            self.base.max_par_order = par_lp.max_order();
             self.base.par_lp = par_lp;
             self
         }
@@ -6370,13 +6387,13 @@ mod pumping_water_tests {
 
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
@@ -6479,13 +6496,13 @@ mod pumping_water_tests {
 
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
@@ -6559,13 +6576,13 @@ mod pumping_water_tests {
         ctx.arc_stage_weights = arc_stage_weights;
         ctx.per_stage_mask = vec![vec![1]];
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
 
         // `stage_idx` stays 0 for both builds (the single-stage fixture's
@@ -6677,13 +6694,13 @@ mod pumping_water_tests {
 
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
@@ -6759,8 +6776,8 @@ mod pumping_water_tests {
         ctx.per_stage_mask = vec![vec![3, 1]];
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             4,
             vec![
                 (down3_idx, 1),
@@ -6770,7 +6787,7 @@ mod pumping_water_tests {
             ],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -6893,13 +6910,13 @@ mod pumping_water_tests {
 
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -6973,13 +6990,13 @@ mod pumping_water_tests {
 
         let stage = chronological_stage(0, &block_hours);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
@@ -7102,13 +7119,13 @@ mod pumping_water_tests {
         let mut par_stage = chronological_stage(0, &[720.0]);
         par_stage.block_mode = BlockMode::Parallel;
         let par_state = StateSpace::new(
-            par_ctx.n_hydros,
-            par_ctx.max_par_order,
+            par_ctx.hydros.len(),
+            par_ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             par_ctx.anticipated_lead_stages.clone(),
             par_ctx.anticipated_resolution.clone(),
-            &vec![0; par_ctx.n_hydros],
+            &vec![0; par_ctx.hydros.len()],
         );
         let par_layout = StageLayout::new(&par_ctx, &par_state, &par_stage, 0);
         let par_csc = build_sorted_csc(&par_ctx, &par_stage, 0, &par_layout);
@@ -7122,13 +7139,13 @@ mod pumping_water_tests {
         chr_ctx.per_stage_mask = vec![vec![1]];
         let chr_stage = chronological_stage(0, &[720.0]);
         let chr_state = StateSpace::new(
-            chr_ctx.n_hydros,
-            chr_ctx.max_par_order,
+            chr_ctx.hydros.len(),
+            chr_ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             chr_ctx.anticipated_lead_stages.clone(),
             chr_ctx.anticipated_resolution.clone(),
-            &vec![0; chr_ctx.n_hydros],
+            &vec![0; chr_ctx.hydros.len()],
         );
         let chr_layout = StageLayout::new(&chr_ctx, &chr_state, &chr_stage, 0);
         let chr_csc = build_sorted_csc(&chr_ctx, &chr_stage, 0, &chr_layout);
@@ -7188,13 +7205,13 @@ mod pumping_water_tests {
 
         let stage = chronological_stage(0, &[720.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -7239,13 +7256,13 @@ mod pumping_water_tests {
 
         let stage = chronological_stage(0, &[720.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
@@ -7397,13 +7414,13 @@ mod pumping_water_tests {
 
         let stage = two_block_stage(0, [300.0, 420.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
@@ -7449,13 +7466,13 @@ mod pumping_water_tests {
 
         let stage = chronological_stage(0, &[300.0, 420.0]);
         let state = StateSpace::new(
-            ctx.n_hydros,
-            ctx.max_par_order,
+            ctx.hydros.len(),
+            ctx.par_lp.max_order(),
             1,
             vec![(down_idx, 1)],
             ctx.anticipated_lead_stages.clone(),
             ctx.anticipated_resolution.clone(),
-            &vec![0; ctx.n_hydros],
+            &vec![0; ctx.hydros.len()],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 

@@ -1206,7 +1206,6 @@ fn pumping_no_stations_returns_empty() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let no_stations: Vec<PumpingStation> = Vec::new();
     ctx.pumping_stations = &no_stations;
-    ctx.n_pumping = 0;
     let positions_no_stations = EntityPositions::from_slices(
         ctx.hydros.iter().map(|h| h.id),
         ctx.thermals.iter().map(|t| t.id),

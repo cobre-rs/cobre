@@ -3933,22 +3933,23 @@ mod pumping_water_tests {
             self
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-            let mut ctx = self.base.ctx();
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             // These single-stage fixtures decouple `stage.id` from
             // `stage_idx` (every phase is exercised at `stage_idx = 0` against
             // one bounds row), so the filling window's stage ids all resolve to
             // idx 0. The backward fold reads `stage_zetas[0]` and
             // `hydro_bounds(h, 0)` for every filling stage, matching how each
             // stage is built. Covers ids 0..=8 — wider than any filling window
-            // under test (max entry = 4).
-            ctx.filling_v_target = super::super::template::build_filling_v_target(
+            // under test (max entry = 4). Recomputed on every call (never cached
+            // at construction) so a test's post-construction bounds mutation is
+            // reflected.
+            self.base.filling_v_target = crate::setup::build_filling_v_target(
                 &self.base.hydros,
                 &self.base.bounds,
                 &[744.0 * M3S_TO_HM3; N_STAGES],
                 &(0..=8_i32).map(|id| (id, 0_usize)).collect(),
             );
-            ctx
+            self.base.ctx()
         }
     }
 
@@ -3957,7 +3958,7 @@ mod pumping_water_tests {
     #[test]
     fn pumping_columns_get_flow_bounds_and_zero_cost() {
         let stations = vec![station(10, 1, 2, 5.0, 80.0), station(20, 2, 1, 0.0, 30.0)];
-        let fixtures = PumpFixtures::new(vec![fixture_hydro(1), fixture_hydro(2)], stations);
+        let mut fixtures = PumpFixtures::new(vec![fixture_hydro(1), fixture_hydro(2)], stations);
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = state_layout_for(&ctx);
@@ -4002,7 +4003,7 @@ mod pumping_water_tests {
     #[test]
     fn pumping_water_entries_source_plus_tau_destination_minus_tau() {
         // Station id 10: source hydro id 1 (pos 0), destination hydro id 2 (pos 1).
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station(10, 1, 2, 0.0, 50.0)],
         );
@@ -4037,7 +4038,7 @@ mod pumping_water_tests {
     /// not change the result.
     #[test]
     fn chronological_pumping_entries_land_on_each_hydros_own_block_rows() {
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(3), fixture_hydro(1), fixture_hydro(2)],
             vec![station(20, 3, 1, 0.0, 30.0), station(10, 2, 3, 0.0, 50.0)],
         );
@@ -4068,7 +4069,7 @@ mod pumping_water_tests {
             }
         }
 
-        let reordered = PumpFixtures::new(
+        let mut reordered = PumpFixtures::new(
             vec![fixture_hydro(1), fixture_hydro(2), fixture_hydro(3)],
             vec![station(10, 2, 3, 0.0, 50.0), station(20, 3, 1, 0.0, 30.0)],
         );
@@ -4090,7 +4091,7 @@ mod pumping_water_tests {
     /// side, and touches no other water-balance row.
     #[test]
     fn chronological_pumping_column_shares_block_rows_with_its_hydros_spillage() {
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(3), fixture_hydro(1), fixture_hydro(2)],
             vec![station(20, 3, 1, 0.0, 30.0), station(10, 2, 3, 0.0, 50.0)],
         );
@@ -4161,7 +4162,7 @@ mod pumping_water_tests {
     #[test]
     fn pumping_water_entries_missing_source_skips_only_source() {
         // Source hydro id 99 does NOT exist; destination hydro id 2 (pos 1) does.
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station(10, 99, 2, 0.0, 50.0)],
         );
@@ -4192,7 +4193,7 @@ mod pumping_water_tests {
     #[test]
     fn pumping_water_entries_missing_destination_skips_only_destination() {
         // Source hydro id 1 (pos 0) exists; destination hydro id 99 does NOT.
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station(10, 1, 99, 0.0, 50.0)],
         );
@@ -4224,7 +4225,7 @@ mod pumping_water_tests {
     #[test]
     fn pumping_power_enters_bus_row_with_negative_consumption() {
         // Station id 10 on bus id 1 (pos 0), consumption 0.75 MW per m³/s.
-        let fixtures = PumpFixtures::new_with_buses(
+        let mut fixtures = PumpFixtures::new_with_buses(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station_full(10, 1, 2, 0.0, 50.0, 1, 0.75)],
             vec![fixture_bus(1)],
@@ -4278,7 +4279,7 @@ mod pumping_water_tests {
     /// injection into the bus. This sign is independent of the price sign.
     #[test]
     fn contract_import_enters_bus_row_with_plus_one() {
-        let fixtures = PumpFixtures::new_with_contracts(
+        let mut fixtures = PumpFixtures::new_with_contracts(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![fixture_bus(1)],
             vec![contract(10, 1, ContractType::Import)],
@@ -4308,7 +4309,7 @@ mod pumping_water_tests {
     /// withdrawal from the bus. Flipping this would make an export feed the bus.
     #[test]
     fn contract_export_enters_bus_row_with_minus_one() {
-        let fixtures = PumpFixtures::new_with_contracts(
+        let mut fixtures = PumpFixtures::new_with_contracts(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![fixture_bus(1)],
             vec![contract(10, 1, ContractType::Export)],
@@ -4339,7 +4340,7 @@ mod pumping_water_tests {
     /// `contract_export.start`.
     #[test]
     fn contract_mixed_import_export_use_per_family_bases() {
-        let fixtures = PumpFixtures::new_with_contracts(
+        let mut fixtures = PumpFixtures::new_with_contracts(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![fixture_bus(1)],
             vec![
@@ -4380,7 +4381,7 @@ mod pumping_water_tests {
     /// regression to using `c_sys` instead of `family_slot` would collide them.
     #[test]
     fn contract_second_import_uses_family_slot_one() {
-        let fixtures = PumpFixtures::new_with_contracts(
+        let mut fixtures = PumpFixtures::new_with_contracts(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![fixture_bus(1)],
             vec![
@@ -4419,7 +4420,7 @@ mod pumping_water_tests {
     /// entry and does not panic.
     #[test]
     fn contract_missing_bus_skips_without_panic() {
-        let fixtures = PumpFixtures::new_with_contracts(
+        let mut fixtures = PumpFixtures::new_with_contracts(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![fixture_bus(1)],
             vec![contract(10, 99, ContractType::Import)],
@@ -4469,7 +4470,7 @@ mod pumping_water_tests {
             bound_lower_affine: None,
             bound_upper_affine: None,
         };
-        let fixtures = PumpFixtures::new_with_contracts(
+        let mut fixtures = PumpFixtures::new_with_contracts(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![fixture_bus(1)],
             vec![contract(10, 1, ContractType::Import)],
@@ -4493,7 +4494,7 @@ mod pumping_water_tests {
     #[test]
     fn pumping_power_missing_bus_skips_without_panic() {
         // Station on bus id 99, which is NOT among the fixture buses (only id 1).
-        let fixtures = PumpFixtures::new_with_buses(
+        let mut fixtures = PumpFixtures::new_with_buses(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station_full(10, 1, 2, 0.0, 50.0, 99, 0.5)],
             vec![fixture_bus(1)],
@@ -4523,7 +4524,7 @@ mod pumping_water_tests {
     #[test]
     fn no_pumping_stations_leaves_load_balance_entries_identical() {
         let build = |stations: Vec<PumpingStation>| {
-            let fixtures = PumpFixtures::new_with_buses(
+            let mut fixtures = PumpFixtures::new_with_buses(
                 vec![fixture_hydro(1), fixture_hydro(2)],
                 stations,
                 vec![fixture_bus(1)],
@@ -4570,7 +4571,7 @@ mod pumping_water_tests {
     #[test]
     fn csc_byte_identical_under_permuted_declaration_order() {
         let assemble = |hydros: Vec<Hydro>, stations: Vec<PumpingStation>| {
-            let fixtures = PumpFixtures::new(hydros, stations);
+            let mut fixtures = PumpFixtures::new(hydros, stations);
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
             let state = state_layout_for(&ctx);
@@ -4678,7 +4679,7 @@ mod pumping_water_tests {
         // fixture by reference so the caller can keep it alive and build a layout
         // from it for the offset reads — the per-call `StageLayout` borrows the
         // function-local ctx/state and cannot escape the closure.
-        let assemble = |fixtures: &PumpFixtures| {
+        let assemble = |fixtures: &mut PumpFixtures| {
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
             let state = state_layout_for(&ctx);
@@ -4708,7 +4709,7 @@ mod pumping_water_tests {
 
         // Order A: every family declared ascending. The fixture is kept alive so
         // the order-A layout (for the offset reads below) is built from it.
-        let fixtures_a = PumpFixtures::new_full(
+        let mut fixtures_a = PumpFixtures::new_full(
             vec![fixture_hydro(1), fixture_hydro(2)],
             Vec::new(),
             vec![
@@ -4726,10 +4727,10 @@ mod pumping_water_tests {
             ],
         )
         .with_generic_constraint(make_constraint(), 100.0);
-        let csc_a = assemble(&fixtures_a);
+        let csc_a = assemble(&mut fixtures_a);
 
         // Order B: the identical entities, every family declared in reverse.
-        let fixtures_b = PumpFixtures::new_full(
+        let mut fixtures_b = PumpFixtures::new_full(
             vec![fixture_hydro(2), fixture_hydro(1)],
             Vec::new(),
             vec![
@@ -4747,7 +4748,7 @@ mod pumping_water_tests {
             ],
         )
         .with_generic_constraint(make_constraint(), 100.0);
-        let csc_b = assemble(&fixtures_b);
+        let csc_b = assemble(&mut fixtures_b);
 
         // Order-A layout (held by the test, owning its ctx/state) for the offset
         // reads below. The layout offsets are declaration-order-invariant, so this
@@ -4918,7 +4919,7 @@ mod pumping_water_tests {
         // H_up id 1 sorts to position 0, H_down id 2 to position 1.
         let up = 1;
         let down = 2;
-        let cascade_fixtures = PumpFixtures::new_full(
+        let mut cascade_fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -5051,7 +5052,7 @@ mod pumping_water_tests {
         let psi_val = par_lp.psi_slice(0, down_idx)[0];
         assert_eq!(psi_val, phi, "downstream psi[0] must equal phi exactly");
 
-        let ar_fixtures = PumpFixtures::new_full(
+        let mut ar_fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -5176,7 +5177,7 @@ mod pumping_water_tests {
     /// what the mutation below breaks.
     #[test]
     fn test_water_balance_sums_every_cell_of_a_split_plant() {
-        let fixtures = split_plant_fixture();
+        let mut fixtures = split_plant_fixture();
         let ctx = fixtures.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -5271,7 +5272,7 @@ mod pumping_water_tests {
     /// (downstream) stays single-cell.
     #[test]
     fn test_cascade_release_sums_the_upstream_plants_cells() {
-        let fixtures = split_upstream_cascade_fixture();
+        let mut fixtures = split_upstream_cascade_fixture();
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
         let state = state_layout_for(&ctx);
@@ -5325,7 +5326,7 @@ mod pumping_water_tests {
     /// `(h_idx, cell_idx, blk_idx)` assertion point.
     #[test]
     fn test_operational_violation_power_rows_are_per_cell_not_plant() {
-        let fixtures = split_plant_fixture();
+        let mut fixtures = split_plant_fixture();
         let ctx = fixtures.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -5706,7 +5707,7 @@ mod pumping_water_tests {
             cells: &[usize],
             total_flow: f64,
         ) -> (f64, f64) {
-            let fixtures = PumpFixtures::new(hydros, Vec::new()).with_resolved_penalties();
+            let mut fixtures = PumpFixtures::new(hydros, Vec::new()).with_resolved_penalties();
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
             let state = state_layout_for(&ctx);
@@ -5933,7 +5934,7 @@ mod pumping_water_tests {
             gamma_q: 0.6,
             gamma_s: 0.3,
         };
-        let fixture = split_bus_fixture(split_bus_production_models(vec![plane]));
+        let mut fixture = split_bus_fixture(split_bus_production_models(vec![plane]));
         let ctx = fixture.fixtures.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -6036,7 +6037,7 @@ mod pumping_water_tests {
             2,
             N_STAGES,
         );
-        let fixture = split_bus_fixture(production_models);
+        let mut fixture = split_bus_fixture(production_models);
         let ctx = fixture.fixtures.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -6103,7 +6104,7 @@ mod pumping_water_tests {
             gamma_q: 0.6,
             gamma_s: 0.3,
         };
-        let fixture = split_bus_fixture(split_bus_production_models(vec![plane]));
+        let mut fixture = split_bus_fixture(split_bus_production_models(vec![plane]));
         let ctx = fixture.fixtures.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -6232,7 +6233,7 @@ mod pumping_water_tests {
             1,
             N_STAGES,
         );
-        let fixtures = PumpFixtures::new_with_buses(vec![hydro], Vec::new(), buses)
+        let mut fixtures = PumpFixtures::new_with_buses(vec![hydro], Vec::new(), buses)
             .with_production_models(production_models);
         let ctx = fixtures.make_ctx();
         let stage = three_block_stage(0);
@@ -6339,7 +6340,7 @@ mod pumping_water_tests {
     fn declared_arc_arrival_split_and_single_definition_row() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -6452,7 +6453,7 @@ mod pumping_water_tests {
             filling_min_rate_m3s: 0.0,
         });
         up_hydro.entry_stage_id = Some(5);
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![up_hydro, fixture_hydro_ds(down, None)],
             Vec::new(),
             vec![fixture_bus(1)],
@@ -6536,7 +6537,7 @@ mod pumping_water_tests {
         let down = 2;
         let mut up_hydro = fixture_hydro_ds(up, Some(down));
         up_hydro.exit_stage_id = Some(1);
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![up_hydro, fixture_hydro_ds(down, None)],
             Vec::new(),
             vec![fixture_bus(1)],
@@ -6649,7 +6650,7 @@ mod pumping_water_tests {
         let up_a = 1;
         let up_b = 2;
         let down = 3;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up_a, Some(down)),
                 fixture_hydro_ds(up_b, Some(down)),
@@ -6739,7 +6740,7 @@ mod pumping_water_tests {
         let h_down3 = 10;
         let h_down1 = 20;
         let h_none = 30;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(h_down3, None),
                 fixture_hydro_ds(h_down1, None),
@@ -6805,7 +6806,7 @@ mod pumping_water_tests {
     fn b_zero_water_entries_are_byte_identical_to_undeclared_arc() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -6872,7 +6873,7 @@ mod pumping_water_tests {
     fn declared_arc_non_conserving_k_panics_in_debug() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -6943,7 +6944,7 @@ mod pumping_water_tests {
     fn example_iii_kappa_and_chi_match_worked_numbers() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7097,7 +7098,7 @@ mod pumping_water_tests {
         // always carries 2 blocks) gives a single 720h block so `n_blks == 1`
         // on both sides of the comparison; the mode is then forced back to
         // `Parallel` for this side.
-        let par_fixtures = make_fixtures();
+        let mut par_fixtures = make_fixtures();
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_idx, vec![stage_weights]);
         let mut par_ctx = par_fixtures.make_ctx();
@@ -7121,7 +7122,7 @@ mod pumping_water_tests {
         let par_csc = build_sorted_csc(&par_ctx, &par_stage, 0, &par_layout);
 
         // Chronological build (K=1), same arc data via arc_spread_chrono.
-        let chr_fixtures = make_fixtures();
+        let mut chr_fixtures = make_fixtures();
         let mut arc_spread_chrono = HashMap::new();
         arc_spread_chrono.insert(up_idx, vec![Some(resolution)]);
         let mut chr_ctx = chr_fixtures.make_ctx();
@@ -7167,7 +7168,7 @@ mod pumping_water_tests {
     fn row_8_chrono_stage_clock_sum_panics_on_disagreement() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7221,7 +7222,7 @@ mod pumping_water_tests {
     fn row_9_shared_density_consistency_panics_on_disagreement() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7273,7 +7274,7 @@ mod pumping_water_tests {
     fn resolve_bucket_arrival_density_looks_up_arrival_frame_table() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7309,7 +7310,7 @@ mod pumping_water_tests {
     fn resolve_bucket_arrival_density_falls_back_to_uniform_when_table_entry_absent() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7348,7 +7349,7 @@ mod pumping_water_tests {
         let plain = 0;
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(plain, Some(down)),
                 fixture_hydro_ds(up, Some(down)),
@@ -7387,7 +7388,7 @@ mod pumping_water_tests {
     fn fill_parallel_water_entries_ignores_arc_arrival_density() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7443,7 +7444,7 @@ mod pumping_water_tests {
     fn fill_chronological_water_entries_arrival_density_conservation_panics_on_disagreement() {
         let up = 1;
         let down = 2;
-        let fixtures = PumpFixtures::new_full(
+        let mut fixtures = PumpFixtures::new_full(
             vec![
                 fixture_hydro_ds(up, Some(down)),
                 fixture_hydro_ds(down, None),
@@ -7527,7 +7528,7 @@ mod pumping_water_tests {
             bound_upper_affine: None,
         };
 
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station_full(station_id.0, 1, 2, 0.0, 50.0, 1, consumption)],
         )
@@ -7621,7 +7622,7 @@ mod pumping_water_tests {
             bound_upper_affine: None,
         };
 
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![fixture_hydro(1), fixture_hydro(2)],
             vec![station_full(station_id.0, 1, 2, 0.0, 50.0, 1, 0.5)],
         )
@@ -7822,7 +7823,7 @@ mod pumping_water_tests {
     )]
     fn build_prefilling_upstream_of_filling_case() -> ((Vec<i32>, Vec<i32>, Vec<f64>), PfuOffsets) {
         let stage_id = 2;
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![
                 ret_hydro_start(1, Some(2), Some(5), 3), // U: PreFilling at 0,1,2; Filling at 3,4
                 ret_hydro_start(2, None, Some(4), 2),    // D: Filling at 2,3; downstream of U
@@ -8100,13 +8101,14 @@ mod pumping_water_tests {
             .filling_min_rate_m3s = AC_RATE_M3S;
         // The fixture-default stage_zetas is 744 · M3S_TO_HM3; rebuild the ctx's
         // V_target map with the AC ζ (720 h → ζ = 2.592) so the fold matches the AC.
-        let mut ctx = fixtures.make_ctx();
-        ctx.filling_v_target = super::super::template::build_filling_v_target(
+        let ac_filling_v_target = crate::setup::build_filling_v_target(
             &fixtures.base.hydros,
             &fixtures.base.bounds,
             &[AC_TOTAL_HOURS * M3S_TO_HM3],
             &(0..=8_i32).map(|id| (id, 0_usize)).collect(),
         );
+        let mut ctx = fixtures.make_ctx();
+        ctx.filling_v_target = &ac_filling_v_target;
 
         // V_target[3] (last Filling stage) == min_storage.
         let v_target_last = ctx.filling_v_target[&(h2_idx, RET_FILLING_ID)];
@@ -8154,7 +8156,7 @@ mod pumping_water_tests {
     /// terminal stage — the parity-neutrality contract.
     #[test]
     fn non_filling_system_emits_no_sigma_fill() {
-        let control = PumpFixtures::new(
+        let mut control = PumpFixtures::new(
             vec![
                 ret_hydro(1, Some(2), None, false),
                 ret_hydro(2, None, None, false),
@@ -8395,7 +8397,7 @@ mod pumping_water_tests {
     /// Operating stage — the parity-neutrality contract.
     #[test]
     fn non_filling_system_emits_no_sigma_minus() {
-        let control = PumpFixtures::new(
+        let mut control = PumpFixtures::new(
             vec![
                 ret_hydro(1, Some(2), None, false),
                 ret_hydro(2, None, None, false),
@@ -8750,7 +8752,7 @@ mod pumping_water_tests {
     fn prefilling_incoming_storage_reduced_cost_is_zero() {
         use cobre_solver::{ActiveSolver, SolverInterface};
 
-        let fixtures = PumpFixtures::new(
+        let mut fixtures = PumpFixtures::new(
             vec![
                 ret_hydro(1, Some(2), None, false),
                 ret_hydro(2, Some(3), Some(RET_ENTRY_STAGE_ID), true),
@@ -8810,7 +8812,7 @@ mod pumping_water_tests {
 
         // Control: same topology and stage, but H2 carries no filling ⇒ Operating
         // everywhere ⇒ standard balance row, no short-circuit.
-        let control = PumpFixtures::new(
+        let mut control = PumpFixtures::new(
             vec![
                 ret_hydro(1, Some(2), None, false),
                 ret_hydro(2, Some(3), None, false),
@@ -9919,7 +9921,7 @@ mod pumping_water_tests {
     /// plant that never reaches a stage template today would be.
     #[test]
     fn test_dormant_fpha_plant_is_excluded_from_fpha_index() {
-        let fixture = dormant_fpha_fixture();
+        let mut fixture = dormant_fpha_fixture();
         let ctx = fixture.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -9940,7 +9942,7 @@ mod pumping_water_tests {
     /// `ConstantProductivity` on its frozen turbine column.
     #[test]
     fn test_dormant_fpha_plant_load_balance_contributes_nothing() {
-        let fixture = dormant_fpha_fixture();
+        let mut fixture = dormant_fpha_fixture();
         let ctx = fixture.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);
@@ -9978,7 +9980,7 @@ mod pumping_water_tests {
     /// `var_c` term coupling a column the plant has none of.
     #[test]
     fn test_dormant_fpha_plant_operational_violation_contributes_nothing() {
-        let fixture = dormant_fpha_fixture();
+        let mut fixture = dormant_fpha_fixture();
         let ctx = fixture.make_ctx();
         let stage = three_block_stage(0);
         let state = state_layout_for(&ctx);

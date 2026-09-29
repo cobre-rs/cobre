@@ -170,9 +170,10 @@ pub(crate) fn build_external_inflow_library(
 /// Build and validate an [`ExternalScenarioLibrary`] for load.
 ///
 /// Canonical bus ID list from [`System::load_noise_member_bus_ids`] — the
-/// single membership authority `noise_entity_order` and the LP template
-/// builder's `collect_load_bus_indices` also route through, so a σ=0 or
-/// seasonal-stats-absent bus keeps the same noise-vector slot everywhere.
+/// single membership authority `noise_entity_order` and
+/// [`resolve_lp_build_inputs`](super::lp_build_inputs::resolve_lp_build_inputs)
+/// also route through, so a σ=0 or seasonal-stats-absent bus keeps the same
+/// noise-vector slot everywhere.
 /// `load_scheme` is the CALLING phase's own resolved scheme; a phase whose
 /// scheme diverges from the training-derived noise-vector width is caught by
 /// `assert_external_library_widths`, not here.

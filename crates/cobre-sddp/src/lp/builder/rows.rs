@@ -221,7 +221,7 @@ fn fill_transit_bucket_definition_rows(
 /// **Contract — the RHS is the per-stage `V_target[t]` (backward-anchored), NOT
 /// `min_storage` at every stage.** `V_target[t]` is the precomputed trajectory
 /// folded backward from the dead volume in
-/// [`build_filling_v_target`](super::template::build_filling_v_target), so only the
+/// [`build_filling_v_target`](crate::setup::lp_build_inputs::build_filling_v_target), so only the
 /// LAST Filling stage's floor equals `min_storage_hm3` and earlier floors are
 /// strictly lower. Writing `min_storage_hm3` at every Filling stage would demand
 /// the full dead volume from the FIRST Filling stage — an over-strict floor the

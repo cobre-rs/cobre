@@ -1947,7 +1947,7 @@ fn hydro_inflow_diversion_into_appends_diversion_column() {
     let cascade = make_inflow_cascade();
     let div: HashMap<EntityId, Vec<usize>> = [(EntityId(40), vec![2])].into_iter().collect();
     ctx.cascade = &cascade;
-    ctx.diversion_upstream = div;
+    ctx.diversion_upstream = &div;
 
     let blk = 1;
     let result = call(

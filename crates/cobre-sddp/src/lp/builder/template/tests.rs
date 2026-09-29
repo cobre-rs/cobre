@@ -11,13 +11,13 @@ use chrono::NaiveDate;
 use cobre_core::scenario::SamplingScheme;
 use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
-    ContractBlockBounds, ContractType, DeficitSegment, EnergyContract, EntityId, Hydro,
-    HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds, LineBlockBounds,
-    LineStagePenalties, LoadModel, NcsStagePenalties, NoiseMethod, NonControllableSource,
-    PenaltiesCountsSpec, PenaltiesDefaults, PostStudyStage, PostStudyStages, PostStudyThermalBound,
-    PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
-    SystemBuilder, Thermal, ThermalBlockBounds, ThermalStageBounds,
+    ContractBlockBounds, ContractType, DeficitSegment, EnergyContract, EntityId, FillingConfig,
+    Hydro, HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds,
+    LineBlockBounds, LineStagePenalties, LoadModel, NcsStagePenalties, NoiseMethod,
+    NonControllableSource, PenaltiesCountsSpec, PenaltiesDefaults, PostStudyStage, PostStudyStages,
+    PostStudyThermalBound, PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedNcsBounds,
+    ResolvedNcsFactors, ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig,
+    StageStateConfig, SystemBuilder, Thermal, ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_stochastic::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
@@ -220,22 +220,27 @@ fn system_with_thermals(thermals: Vec<Thermal>) -> cobre_core::System {
 /// `system_with_thermals`'s bus carries a `std_mw == 0.0` load model; its slot
 /// is admitted under `SamplingScheme::External` and excluded under
 /// `SamplingScheme::InSample` (the byte-neutral default every other caller
-/// threads).
+/// threads). The scheme resolves the membership list the caller passes into
+/// `resolve_lp_build_inputs` — its own `load_bus_indices` derivation is a
+/// pure id-to-position map, no scheme of its own.
 #[test]
-fn collect_load_bus_indices_honors_threaded_scheme() {
+fn resolve_lp_build_inputs_load_bus_indices_honors_threaded_scheme() {
     let system = system_with_thermals(vec![]);
-    let bus_pos: std::collections::BTreeMap<EntityId, usize> = system
-        .buses()
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.id, i))
-        .collect();
+    let production_models = ProductionModelSet::new(Vec::new(), 0, 0);
 
-    let external = super::collect_load_bus_indices(&system, &bus_pos, SamplingScheme::External);
-    assert_eq!(external, vec![0]);
+    let external = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &system.load_noise_member_bus_ids(SamplingScheme::External),
+        &production_models,
+    );
+    assert_eq!(external.load_bus_indices, vec![0]);
 
-    let in_sample = super::collect_load_bus_indices(&system, &bus_pos, SamplingScheme::InSample);
-    assert!(in_sample.is_empty());
+    let in_sample = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &system.load_noise_member_bus_ids(SamplingScheme::InSample),
+        &production_models,
+    );
+    assert!(in_sample.load_bus_indices.is_empty());
 }
 
 /// Build empty [`ResolvedParameters`] (no parameters).
@@ -468,11 +473,12 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -485,7 +491,6 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -536,11 +541,12 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -553,7 +559,6 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -625,11 +630,12 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -642,7 +648,6 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -886,11 +891,12 @@ fn geometry_ncs_family_matches_the_stage_layout() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -903,7 +909,6 @@ fn geometry_ncs_family_matches_the_stage_layout() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -1125,11 +1130,12 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -1142,7 +1148,6 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -1192,11 +1197,12 @@ fn stage_layout_geometry_populates_contract_ranges() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -1209,7 +1215,6 @@ fn stage_layout_geometry_populates_contract_ranges() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let stage = system
@@ -1255,11 +1260,12 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -1272,7 +1278,6 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let stage = system
@@ -1408,11 +1413,12 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let _ = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -1425,7 +1431,6 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 }
@@ -1492,11 +1497,12 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -1509,7 +1515,6 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -1579,11 +1584,12 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -1596,7 +1602,6 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -1991,11 +1996,12 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx_a, _, _) = super::build_template_build_ctx(
+    let inputs_a = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx_a = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs_a,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2008,7 +2014,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -2050,11 +2055,12 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_arrival_density_b,
         max_par_order_b,
     ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let (mut ctx_b, _, _) = super::build_template_build_ctx(
+    let inputs_b = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let mut ctx_b = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs_b,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2067,7 +2073,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         arc_arrival_density_b,
         max_par_order_b,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     ctx_b.anticipated_lead_stages = vec![
@@ -2334,7 +2339,6 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let system = discounted_multi_stage_system();
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
-    let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = build_transit_bucket_topology(&system, &calendar, false);
@@ -2343,11 +2347,11 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
     let time_value = build_time_value_for(&system);
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let mut templates = super::build_stage_templates(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        &normal_lp,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2358,7 +2362,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &topology.arc_spread_chrono,
         &topology.arc_arrival_density,
         &hydro_cell_index,
-        SamplingScheme::InSample,
+        inputs,
         &time_value,
     );
 
@@ -2436,11 +2440,12 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2453,7 +2458,6 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -2488,11 +2492,12 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2505,7 +2510,6 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -2548,11 +2552,12 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2565,7 +2570,6 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -2603,11 +2607,12 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2620,7 +2625,6 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
 
@@ -2827,11 +2831,12 @@ fn build_post_study_resolved_for(
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -2844,7 +2849,6 @@ fn build_post_study_resolved_for(
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     ctx.time_value.post_study().clone()
@@ -3252,11 +3256,16 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+    )));
+    let ctx = super::build_template_build_ctx(
         system,
         InflowNonNegativityMethod::None,
         par_lp,
-        system.load_models(),
+        inputs,
         production,
         &hydro_models.evaporation,
         resolved_params,
@@ -3269,7 +3278,6 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
@@ -3622,216 +3630,6 @@ fn relocated_diagnostic_template_operational_violation_correctness() {
     );
 }
 
-// ── build_filling_v_target backward fold ─────────────────────────────────
-
-use cobre_core::FillingConfig;
-use std::collections::HashMap as VTargetMap;
-
-/// A single non-cascade hydro carrying a `FillingConfig`
-/// (`start_stage_id`/`entry_stage_id`), used by the `build_filling_v_target`
-/// fold tests. All other fields are inert.
-fn vtarget_filling_hydro(id: i32, start: i32, entry: i32) -> Hydro {
-    let mut hydro = Hydro {
-        unit_groups: Vec::new(),
-        id: EntityId(id),
-        name: format!("H{id}"),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        downstream_id: None,
-        travel_time_hours: None,
-        entry_stage_id: Some(entry),
-        exit_stage_id: None,
-        min_storage_hm3: 0.0,
-        max_storage_hm3: 100.0,
-        min_outflow_m3s: 0.0,
-        max_outflow_m3s: None,
-        generation_model: HydroGenerationModel::ConstantProductivity,
-        min_turbined_m3s: 0.0,
-        max_turbined_m3s: FIXTURE_NONBINDING_MAX_TURBINED_M3S,
-        specific_productivity_mw_per_m3s_per_m: None,
-        min_generation_mw: 0.0,
-        max_generation_mw: 1_000_000.0,
-        tailrace: None,
-        hydraulic_losses: None,
-        efficiency: None,
-        evaporation_coefficients_mm: None,
-        evaporation_reference_volumes_hm3: None,
-        diversion: None,
-        filling: Some(FillingConfig {
-            start_stage_id: start,
-            filling_min_rate_m3s: 0.0,
-        }),
-        penalties: hydro_penalties_zero(),
-    };
-    hydro.declare_mirror_unit_group(EntityId(1));
-    hydro
-}
-
-/// A `ResolvedBounds` table for one hydro across `n_stages` stages, with every
-/// stage's `min_storage_hm3` and `filling_min_rate_m3s` set to the given values.
-fn vtarget_bounds(n_stages: usize, min_storage: f64, rate: f64) -> ResolvedBounds {
-    let mut bounds = ResolvedBounds::new(
-        &BoundsCountsSpec {
-            n_hydros: 1,
-            n_thermals: 0,
-            n_lines: 0,
-            n_pumping: 0,
-            n_contracts: 0,
-            n_stages,
-            k_max: 0,
-        },
-        &BoundsDefaults {
-            hydro: default_hydro_bounds(),
-            hydro_block: default_hydro_block_bounds(),
-            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
-            thermal_block: ThermalBlockBounds {
-                min_generation_mw: 0.0,
-                max_generation_mw: 0.0,
-            },
-            line_block: LineBlockBounds {
-                direct_mw: 0.0,
-                reverse_mw: 0.0,
-            },
-            pumping_block: PumpingBlockBounds {
-                min_flow_m3s: 0.0,
-                max_flow_m3s: 0.0,
-            },
-            contract_block: ContractBlockBounds {
-                min_mw: 0.0,
-                max_mw: 0.0,
-                price_per_mwh: 0.0,
-            },
-        },
-    );
-    for stage_idx in 0..n_stages {
-        let hb = bounds.hydro_bounds_mut(0, stage_idx);
-        hb.min_storage_hm3 = min_storage;
-        hb.filling_min_rate_m3s = rate;
-    }
-    bounds
-}
-
-/// Identity `stage_id → stage_idx` map for `n_stages` study stages.
-fn vtarget_id_map(n_stages: usize) -> VTargetMap<i32, usize> {
-    (0..n_stages).map(|i| (i as i32, i)).collect()
-}
-
-/// The fixture: `start = 2`, `entry = 4`, `min_storage = 60`, per-stage ζ = 2.592
-/// (`720 * M3S_TO_HM3`), `rate = 5`. The backward fold
-/// pins `V_target[3] = 60` (the dead-volume anchor at L = entry − 1) and
-/// `V_target[2] = 60 − 2.592·5 = 47.04` (one stage of minimum accumulation
-/// below the anchor). No `V_target` is emitted at PreFilling (ids 0, 1) or
-/// Operating (id ≥ 4).
-#[test]
-fn build_filling_v_target_backward_fold_ac_values() {
-    let n_stages = 5;
-    let hydros = vec![vtarget_filling_hydro(1, 2, 4)];
-    let bounds = vtarget_bounds(n_stages, 60.0, 5.0);
-    // ζ = 720·M3S_TO_HM3 = 2.592 at every stage.
-    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
-
-    // L = entry − 1 = 3: anchored at the dead volume.
-    assert!(
-        (v_target[&(0, 3)] - 60.0).abs() < 1e-9,
-        "V_target[3] == min_storage == 60.0, got {}",
-        v_target[&(0, 3)]
-    );
-    // Early Filling stage 2: 60 − 2.592·5 = 47.04.
-    assert!(
-        (v_target[&(0, 2)] - 47.04).abs() < 1e-9,
-        "V_target[2] == 60 − 2.592·5 == 47.04, got {}",
-        v_target[&(0, 2)]
-    );
-    // No entry outside the Filling window {2, 3}.
-    assert!(
-        !v_target.contains_key(&(0, 0)),
-        "no V_target at PreFilling id 0"
-    );
-    assert!(
-        !v_target.contains_key(&(0, 1)),
-        "no V_target at PreFilling id 1"
-    );
-    assert!(
-        !v_target.contains_key(&(0, 4)),
-        "no V_target at Operating id 4"
-    );
-    assert_eq!(v_target.len(), 2, "exactly one V_target per Filling stage");
-}
-
-/// Over-provisioned schedule: a fill rate large enough that the backward fold's
-/// unclipped value would exceed `min_storage` is impossible (non-negative rate
-/// only lowers it); the contract is that EVERY `V_target[t] ≤ min_storage`. With
-/// a wide Filling window (ids 1..=5, entry = 6) and a high rate, every earliest
-/// floor sits strictly below the dead volume and the clip never raises one above
-/// it. The clip is verified to hold at every Filling stage.
-#[test]
-fn build_filling_v_target_clips_at_min_storage_when_over_provisioned() {
-    let n_stages = 7;
-    let min_storage = 30.0;
-    let hydros = vec![vtarget_filling_hydro(1, 1, 6)]; // Filling ids {1,2,3,4,5}.
-    // A high rate (50 m³/s over ζ = 2.592 ⇒ 129.6 hm³/stage) far exceeds the
-    // 30 hm³ dead volume, so the unclipped earliest floors go deeply negative.
-    let bounds = vtarget_bounds(n_stages, min_storage, 50.0);
-    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
-
-    for stage_id in 1..=5 {
-        let v = v_target[&(0, stage_id)];
-        assert!(
-            v <= min_storage + 1e-12,
-            "V_target[{stage_id}] = {v} must not exceed the dead volume {min_storage}"
-        );
-    }
-    assert!(
-        (v_target[&(0, 5)] - min_storage).abs() < 1e-9,
-        "V_target[L] == min_storage (the clip is a no-op at the anchor)"
-    );
-    assert!(
-        v_target[&(0, 1)] < v_target[&(0, 5)],
-        "earliest floor strictly below the anchor"
-    );
-}
-
-/// A zero fill rate makes the trajectory FLAT: every Filling stage's floor
-/// equals `min_storage` (the design's `rate == 0 ⇒ V_target[t] == V_target[t+1]`
-/// degenerate case). The clip is a no-op throughout.
-#[test]
-fn build_filling_v_target_flat_when_rate_is_zero() {
-    let n_stages = 5;
-    let hydros = vec![vtarget_filling_hydro(1, 1, 4)]; // Filling ids {1,2,3}.
-    let bounds = vtarget_bounds(n_stages, 45.0, 0.0);
-    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
-    for stage_id in 1..=3 {
-        assert!(
-            (v_target[&(0, stage_id)] - 45.0).abs() < 1e-9,
-            "flat trajectory: V_target[{stage_id}] == min_storage == 45.0"
-        );
-    }
-}
-
-/// A non-filling hydro (no `FillingConfig`) yields an EMPTY map — the
-/// parity-neutrality contract for the precompute itself.
-#[test]
-fn build_filling_v_target_empty_for_non_filling() {
-    let n_stages = 3;
-    let mut h = vtarget_filling_hydro(1, 1, 2);
-    h.filling = None;
-    h.entry_stage_id = None;
-    let hydros = vec![h];
-    let bounds = vtarget_bounds(n_stages, 50.0, 5.0);
-    let stage_zetas = vec![720.0 * M3S_TO_HM3; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &stage_zetas, &vtarget_id_map(n_stages));
-    assert!(
-        v_target.is_empty(),
-        "non-filling hydro ⇒ empty V_target map"
-    );
-}
-
 /// One-bus, one-hydro FPHA system whose single stage carries `n_blks` blocks
 /// under `block_mode`. The FPHA generation rows put the average-storage `γᵥ/2`
 /// coefficient on both the incoming and outgoing storage columns, so the
@@ -3985,11 +3783,12 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &production,
         &hydro_models.evaporation,
         &resolved_params,
@@ -4002,7 +3801,6 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let state = state_layout_for(&ctx);
@@ -4104,11 +3902,16 @@ fn block_layout_and_template(
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+    )));
+    let ctx = super::build_template_build_ctx(
         system,
         InflowNonNegativityMethod::None,
         par_lp,
-        system.load_models(),
+        inputs,
         production,
         &hydro_models.evaporation,
         resolved_params,
@@ -4121,7 +3924,6 @@ fn block_layout_and_template(
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
@@ -4772,11 +4574,12 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -4789,7 +4592,6 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let state = state_layout_for(&ctx);
@@ -5221,11 +5023,16 @@ fn filling_block_layout_and_template(
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+    )));
+    let ctx = super::build_template_build_ctx(
         system,
         InflowNonNegativityMethod::None,
         par_lp,
-        system.load_models(),
+        inputs,
         production,
         &hydro_models.evaporation,
         resolved_params,
@@ -5238,7 +5045,6 @@ fn filling_block_layout_and_template(
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
@@ -5247,7 +5053,7 @@ fn filling_block_layout_and_template(
 
     let template = super::build_single_stage_template(ctx, state, stage, 0).template;
     let layout = StageLayout::new(ctx, state, stage, 0);
-    (layout, template, ctx.filling_v_target.clone())
+    (layout, template, (*ctx.filling_v_target).clone())
 }
 
 /// D38–D42 preserved per block: at `K ≥ 2` a `PreFilling` hydro's `K`
@@ -5550,11 +5356,12 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -5567,7 +5374,6 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     assert_eq!(
@@ -5667,11 +5473,12 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
+    let ctx = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
-        system.load_models(),
+        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
@@ -5684,7 +5491,6 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         arc_arrival_density,
         max_par_order,
         &hydro_cell_index,
-        SamplingScheme::InSample,
         &time_value,
     );
     assert_eq!(ctx.anticipated_lead_stages, vec![1]);
@@ -5787,7 +5593,6 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
 
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
-    let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = build_transit_bucket_topology(&system, &calendar, false);
@@ -5795,6 +5600,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
         .expect("resolve_state_layout: valid test fixture");
     let per_stage_mask = topology.per_stage_mask;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
@@ -5803,7 +5609,6 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &system,
             InflowNonNegativityMethod::None,
             &par_lp,
-            &normal_lp,
             &hydro_result.production,
             &hydro_result.evaporation,
             &resolved_params,
@@ -5814,7 +5619,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &topology.arc_spread_chrono,
             &topology.arc_arrival_density,
             &hydro_cell_index,
-            SamplingScheme::InSample,
+            inputs,
             &time_value,
         );
     });

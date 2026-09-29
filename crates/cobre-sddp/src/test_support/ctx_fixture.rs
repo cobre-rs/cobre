@@ -184,7 +184,7 @@ impl CtxFixture {
                 .iter()
                 .filter(|c| c.contract_type == ContractType::Export)
                 .count(),
-            diversion_upstream: self.diversion_upstream.clone(),
+            diversion_upstream: &self.diversion_upstream,
             n_hydros: self.hydros.len(),
             n_thermals: self.thermals.len(),
             n_lines: self.lines.len(),
@@ -196,7 +196,7 @@ impl CtxFixture {
             anticipated_resolution: self.anticipated_resolution.clone(),
             has_penalty: self.has_penalty,
             time_value: &self.time_value,
-            filling_v_target: self.filling_v_target.clone(),
+            filling_v_target: &self.filling_v_target,
             arc_stage_weights: self.arc_stage_weights.clone(),
             arc_spread_chrono: self.arc_spread_chrono.clone(),
             arc_arrival_density: self.arc_arrival_density.clone(),

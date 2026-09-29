@@ -106,8 +106,10 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// Number of export-family contracts; the dense per-stage export-column stride.
     pub(crate) n_contract_export: usize,
     /// Target hydro ID → system indices of hydros diverting to it (each hydro `d`
-    /// with `diversion.downstream_id == target_id`).
-    pub(crate) diversion_upstream: HashMap<EntityId, Vec<usize>>,
+    /// with `diversion.downstream_id == target_id`). Borrowed from
+    /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
+    /// (`LpBuildInputs::diversion_upstream`).
+    pub(crate) diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
     pub(crate) n_hydros: usize,
     pub(crate) n_thermals: usize,
     pub(crate) n_lines: usize,
@@ -141,9 +143,11 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// Filling stages; the forbidden alternative — recomputing inside the per-stage
     /// `fill_filling_target_rows` (which sees one stage) — is wrong or re-walks the
     /// schedule on the hot path. `BTreeMap` for determinism, see `hydro_pos`.
-    /// Empty for a non-filling build (parity-neutral). See
-    /// [`build_filling_v_target`](super::template::build_filling_v_target).
-    pub(crate) filling_v_target: BTreeMap<(usize, i32), f64>,
+    /// Empty for a non-filling build (parity-neutral). Borrowed from
+    /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
+    /// (`LpBuildInputs::filling_v_target`,
+    /// [`build_filling_v_target`](crate::setup::lp_build_inputs::build_filling_v_target)).
+    pub(crate) filling_v_target: &'a BTreeMap<(usize, i32), f64>,
     /// Per-declared-arc resolved stage-clock weights, keyed by the arc's
     /// upstream hydro system index (parallel-mode fill; [`Self::arc_spread_chrono`]
     /// carries the chronological block-resolved factors). Absent for an

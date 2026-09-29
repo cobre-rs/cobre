@@ -55,6 +55,7 @@ use crate::simulation::SimulationConfig;
 use crate::solve::solver_phase::{Phase, validate_phase_solver_config};
 use crate::stochastic::noise_key::build_noise_key_table;
 mod accessors;
+pub(crate) mod lp_build_inputs;
 pub mod node_graph;
 mod orchestration;
 pub mod params;
@@ -65,6 +66,9 @@ pub mod stage_data;
 pub mod stochastic_pipeline;
 pub(crate) mod template_postprocess;
 
+#[cfg(test)]
+pub(crate) use lp_build_inputs::build_filling_v_target;
+pub(crate) use lp_build_inputs::resolve_lp_build_inputs;
 pub use node_graph::{
     EnumeratedPlan, NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor,
     OpeningSource, StageIdx, Traversal, TypedVec,
@@ -668,12 +672,13 @@ fn build_energy_and_templates(
 
     let time_value = TimeValue::from_system(system, &layout.anticipated_plants, calendar);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let load_bus_ids = &stochastic.entity_order()[stochastic.class_dimensions().load_bus_range()];
+    let inputs = resolve_lp_build_inputs(system, load_bus_ids, &hydro_models.production);
 
     let mut stage_templates = build_stage_templates(
         system,
         config.inflow_method,
         stochastic.par(),
-        stochastic.normal(),
         &hydro_models.production,
         &hydro_models.evaporation,
         &resolved_parameters,
@@ -684,10 +689,7 @@ fn build_energy_and_templates(
         &topology.arc_spread_chrono,
         &topology.arc_arrival_density,
         &hydro_cell_index,
-        stochastic
-            .provenance()
-            .load_scheme
-            .unwrap_or(SamplingScheme::InSample),
+        inputs,
         &time_value,
     );
 

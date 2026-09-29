@@ -83,7 +83,10 @@ through a node's own `stage` field.
 resolved inputs shared by the stage, training, and simulation contexts,
 disjoint from `fcf` — plus `fcf` and a small number of bare residuals. Context
 constructors (`stage_ctx`, `training_ctx`, `simulation_ctx`) are `SolveInputs`
-methods; `StudySetup` delegates to them unchanged.
+methods; `StudySetup` delegates to them unchanged. `StageData`'s templates are
+built by threading `crate::setup::resolve_lp_build_inputs`'s single resolution
+of the LP builder's study inputs (`LpBuildInputs`) into `build_stage_templates`,
+rather than the builder re-deriving them per stage.
 
 ### Cohesive sub-structs
 

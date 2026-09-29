@@ -11,7 +11,6 @@ use cobre_core::{
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
-use crate::generic_constraints::GenericResolverGeom;
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
 };
@@ -2055,44 +2054,6 @@ impl StageLayout<'_> {
                 .filling
                 .filled_min_storage_floor_hydro_indices
                 .clone(),
-        }
-    }
-
-    /// Borrowed view over this stage's ranges for the generic-constraint
-    /// resolver. Must stay BORROWED — `fill_generic_constraint_entries` builds
-    /// one per stage; owning would clone every range family it lists on that
-    /// path. `hydro_cell_index` is study-scope and threaded in by the caller
-    /// (from `ctx.hydro_cell_index`) rather than stored on `Self`, since no
-    /// other `StageLayout` method needs it.
-    #[must_use]
-    pub(crate) fn resolver_geom<'b>(
-        &'b self,
-        hydro_cell_index: &'b HydroCellIndex,
-    ) -> GenericResolverGeom<'b> {
-        GenericResolverGeom {
-            state: self.state,
-            storage_boundary_grid: self.storage_boundary_grid(),
-            hydro_cell_index,
-            turbine: &self.equipment.turbine,
-            spillage: &self.equipment.spillage,
-            diversion: &self.equipment.diversion,
-            thermal: &self.equipment.thermal,
-            line_fwd: &self.equipment.line_fwd,
-            line_rev: &self.equipment.line_rev,
-            excess: &self.equipment.excess,
-            contract_import: &self.equipment.contract_import,
-            contract_export: &self.equipment.contract_export,
-            generation: &self.equipment.generation,
-            fpha_cell_local_start: &self.fpha_cell_local_start,
-            deficit: &self.equipment.deficit,
-            max_deficit_segments: self.equipment.max_deficit_segments,
-            n_blks: self.n_blks,
-            n_evap_slots: self.n_evap_slots,
-            evap_indices: &self.evap_indices,
-            evap_hydro_indices: &self.evap_hydro_indices,
-            fpha_hydro_indices: &self.fpha_hydro_indices,
-            anticipated_decision_start: self.anticipated.col_anticipated_decision_start,
-            anticipated_local_by_sys_pos: &self.anticipated_local_by_sys_pos,
         }
     }
 }

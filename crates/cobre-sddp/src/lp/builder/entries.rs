@@ -13,9 +13,7 @@ use crate::indexer::{
 use super::delivery_ring::DeliveryRing;
 use super::fpha_cursor::for_each_fpha_plane;
 use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
-use crate::generic_constraints::{
-    CascadeRefs, ContractRefs, EntityPositionMaps, PumpingRefs, contract_family_slot,
-};
+use crate::generic_constraints::contract_family_slot;
 
 use std::ops::Range;
 
@@ -1259,27 +1257,6 @@ pub(super) fn fill_generic_constraint_entries(
     let row_lower = &mut *buffers.row_lower;
     let row_upper = &mut *buffers.row_upper;
 
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let positions = EntityPositionMaps {
-        hydro: &ctx.hydro_pos,
-        thermal: &ctx.thermal_pos,
-        bus: &ctx.bus_pos,
-        line: &ctx.line_pos,
-    };
-    let cascade_refs = CascadeRefs {
-        cascade: ctx.cascade,
-        diversion_upstream: &ctx.diversion_upstream,
-    };
-    let pumping_refs = PumpingRefs {
-        col_pumping_start: layout.equipment.col_pumping_start,
-        pumping_stations: ctx.pumping_stations,
-        pumping_pos: &ctx.pumping_pos,
-    };
-    let contract_refs = ContractRefs {
-        contracts: ctx.contracts,
-        contract_pos: &ctx.contract_pos,
-    };
-
     for (entry_idx, entry) in layout.generic_constraint_rows.iter().enumerate() {
         let row = layout.generic_row(entry_idx);
         let constraint = &ctx.generic_constraints[entry.constraint_idx];
@@ -1299,17 +1276,8 @@ pub(super) fn fill_generic_constraint_entries(
         row_upper[row] = entry.bound_upper.unwrap_or(f64::INFINITY);
 
         for term in &constraint.expression.terms {
-            let pairs = resolve_variable_ref(
-                &term.variable,
-                entry.block_idx,
-                stage_idx,
-                &geom,
-                ctx.production_models,
-                &positions,
-                &cascade_refs,
-                &pumping_refs,
-                &contract_refs,
-            );
+            let pairs =
+                resolve_variable_ref(&term.variable, entry.block_idx, stage_idx, ctx, layout);
             for (col, multiplier) in pairs {
                 let coef = match term.coefficient {
                     CoefficientRef::Literal(v) => v,

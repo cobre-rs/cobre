@@ -17,10 +17,7 @@ use cobre_core::{
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
-use super::{
-    CascadeRefs, ContractRefs, ElementKind, GenericResolverGeom, PumpingRefs, block_col_range,
-    contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent,
-};
+use super::{contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent};
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet, ResolvedProductionModel,
 };
@@ -69,9 +66,8 @@ fn fixture_stage(n_blks: usize) -> Stage {
 
 /// Owns every borrow target for a resolver test's `TemplateBuildCtx`/
 /// `StageLayout`, built through the same [`StageLayout::new`] pipeline
-/// production uses, in place of a hand-assembled [`GenericResolverGeom`].
-/// `max_par_order` is fixed at `0`: no resolver test in this file needs a
-/// nonzero PAR lag order.
+/// production uses. `max_par_order` is fixed at `0`: no resolver test in this
+/// file needs a nonzero PAR lag order.
 struct ResolverFixture {
     hydros: Vec<Hydro>,
     thermals: Vec<Thermal>,
@@ -497,10 +493,6 @@ fn make_hydro(id: i32, downstream_id: Option<i32>) -> Hydro {
     hydro
 }
 
-fn empty_cascade() -> CascadeTopology {
-    CascadeTopology::build(&[])
-}
-
 fn make_production_models() -> ProductionModelSet {
     let fpha_plane = FphaPlane {
         intercept: 0.0,
@@ -526,181 +518,17 @@ fn make_production_models() -> ProductionModelSet {
     ProductionModelSet::new(models, 4, 2)
 }
 
+/// Resolve `var_ref` at `block_idx` (stage 0) against `ctx`/`layout` — the same
+/// pair `resolve_variable_ref` reads in production. A test that needs a cascade,
+/// pumping/contract set, or production-model set different from the fixture's own
+/// overrides the relevant `ctx` field with struct-update syntax before calling.
 fn call(
     var_ref: VariableRef,
     block_idx: usize,
-    geom: &GenericResolverGeom<'_>,
-    production_models: &ProductionModelSet,
-    hydro_pos: &BTreeMap<EntityId, usize>,
-    thermal_pos: &BTreeMap<EntityId, usize>,
-    bus_pos: &BTreeMap<EntityId, usize>,
-    line_pos: &BTreeMap<EntityId, usize>,
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let cascade = empty_cascade();
-    let diversion_upstream: HashMap<EntityId, Vec<usize>> = HashMap::new();
-    call_with_cascade(
-        var_ref,
-        block_idx,
-        geom,
-        production_models,
-        hydro_pos,
-        thermal_pos,
-        bus_pos,
-        line_pos,
-        &cascade,
-        &diversion_upstream,
-    )
-}
-
-fn call_with_cascade(
-    var_ref: VariableRef,
-    block_idx: usize,
-    geom: &GenericResolverGeom<'_>,
-    production_models: &ProductionModelSet,
-    hydro_pos: &BTreeMap<EntityId, usize>,
-    thermal_pos: &BTreeMap<EntityId, usize>,
-    bus_pos: &BTreeMap<EntityId, usize>,
-    line_pos: &BTreeMap<EntityId, usize>,
-    cascade: &CascadeTopology,
-    diversion_upstream: &HashMap<EntityId, Vec<usize>>,
-) -> Vec<(usize, f64)> {
-    let positions = super::EntityPositionMaps {
-        hydro: hydro_pos,
-        thermal: thermal_pos,
-        bus: bus_pos,
-        line: line_pos,
-    };
-    let cascade_refs = CascadeRefs {
-        cascade,
-        diversion_upstream,
-    };
-    let no_stations: Vec<PumpingStation> = Vec::new();
-    let empty_pumping_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let pumping_refs = PumpingRefs {
-        col_pumping_start: 0,
-        pumping_stations: &no_stations,
-        pumping_pos: &empty_pumping_pos,
-    };
-    let no_contracts: Vec<EnergyContract> = Vec::new();
-    let empty_contract_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let contract_refs = ContractRefs {
-        contracts: &no_contracts,
-        contract_pos: &empty_contract_pos,
-    };
-    resolve_variable_ref(
-        &var_ref,
-        block_idx,
-        0, // stage_idx = 0
-        geom,
-        production_models,
-        &positions,
-        &cascade_refs,
-        &pumping_refs,
-        &contract_refs,
-    )
-}
-
-/// Threads real pumping data the way the production `fill_pumping_water_entries`
-/// caller does, so the pumping arms exercise their real column arithmetic and
-/// consumption-rate coefficient instead of the empty fixture used by [`call`].
-fn call_pumping(
-    var_ref: VariableRef,
-    block_idx: usize,
-    geom: &GenericResolverGeom<'_>,
-    production_models: &ProductionModelSet,
-    col_pumping_start: usize,
-    n_blks: usize,
-    pumping_stations: &[PumpingStation],
-    pumping_pos: &BTreeMap<EntityId, usize>,
-) -> Vec<(usize, f64)> {
-    let empty: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let positions = super::EntityPositionMaps {
-        hydro: &empty,
-        thermal: &empty,
-        bus: &empty,
-        line: &empty,
-    };
-    let cascade = empty_cascade();
-    let diversion_upstream: HashMap<EntityId, Vec<usize>> = HashMap::new();
-    let cascade_refs = CascadeRefs {
-        cascade: &cascade,
-        diversion_upstream: &diversion_upstream,
-    };
-    let pumping_refs = PumpingRefs {
-        col_pumping_start,
-        pumping_stations,
-        pumping_pos,
-    };
-    // The pumping column stride comes from the geometry's `BlockGrid`, so the
-    // fixture's declared `n_blks` must match `geom.n_blks` for the asserted
-    // columns to hold.
-    assert_eq!(n_blks, geom.n_blks);
-    let no_contracts: Vec<EnergyContract> = Vec::new();
-    let empty_contract_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let contract_refs = ContractRefs {
-        contracts: &no_contracts,
-        contract_pos: &empty_contract_pos,
-    };
-    resolve_variable_ref(
-        &var_ref,
-        block_idx,
-        0, // stage_idx = 0
-        geom,
-        production_models,
-        &positions,
-        &cascade_refs,
-        &pumping_refs,
-        &contract_refs,
-    )
-}
-
-/// Threads real contract data the way the production
-/// `fill_generic_constraint_entries` caller does, so the contract arms exercise
-/// their real per-family-slot column arithmetic; the column bases ride on
-/// `geom.contract_import`/`contract_export`.
-fn call_contract(
-    var_ref: VariableRef,
-    block_idx: usize,
-    geom: &GenericResolverGeom<'_>,
-    production_models: &ProductionModelSet,
-    contracts: &[EnergyContract],
-    contract_pos: &BTreeMap<EntityId, usize>,
-) -> Vec<(usize, f64)> {
-    let empty: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let positions = super::EntityPositionMaps {
-        hydro: &empty,
-        thermal: &empty,
-        bus: &empty,
-        line: &empty,
-    };
-    let cascade = empty_cascade();
-    let diversion_upstream: HashMap<EntityId, Vec<usize>> = HashMap::new();
-    let cascade_refs = CascadeRefs {
-        cascade: &cascade,
-        diversion_upstream: &diversion_upstream,
-    };
-    let no_stations: Vec<PumpingStation> = Vec::new();
-    let empty_pumping_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let pumping_refs = PumpingRefs {
-        col_pumping_start: 0,
-        pumping_stations: &no_stations,
-        pumping_pos: &empty_pumping_pos,
-    };
-    let contract_refs = ContractRefs {
-        contracts,
-        contract_pos,
-    };
-    resolve_variable_ref(
-        &var_ref,
-        block_idx,
-        0, // stage_idx = 0
-        geom,
-        production_models,
-        &positions,
-        &cascade_refs,
-        &pumping_refs,
-        &contract_refs,
-    )
+    resolve_variable_ref(&var_ref, block_idx, 0, ctx, layout)
 }
 
 /// An energy contract carrying only the `id`/`bus_id`/`contract_type` the
@@ -748,19 +576,13 @@ fn make_pumping_station(
 
 /// `ThermalGeneration` column arithmetic across the `block_id`/position axes
 /// the per-arm coverage requires: one `block_id = None`, one `block_id = Some`,
-/// and one `position != 0`. All resolve through `resolve_block_variable` with
-/// `block_col_range(geom, ElementKind::Thermal).start = 49`, `n_blks = 3`.
+/// and one `position != 0`. All resolve through `resolve_thermal_generation`
+/// with `layout.equipment.thermal.start = 49`, `n_blks = 3`.
 #[test]
 fn thermal_generation_column_arithmetic() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     // (case_name, thermal_id, block_id, block_idx, expected_col)
     let cases: [(&str, EntityId, Option<usize>, usize, usize); 3] = [
@@ -776,12 +598,8 @@ fn thermal_generation_column_arithmetic() {
                 block_id,
             },
             block_idx,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(
             result,
@@ -799,12 +617,6 @@ fn hydro_storage_stage_level_ignores_block() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     for block_idx in [0, 1, 2] {
         let result = call(
@@ -812,12 +624,8 @@ fn hydro_storage_stage_level_ignores_block() {
                 hydro_id: EntityId(10),
             },
             block_idx,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(result, vec![(0, 1.0)], "block_idx={block_idx}");
     }
@@ -827,12 +635,8 @@ fn hydro_storage_stage_level_ignores_block() {
             hydro_id: EntityId(30),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     // storage.start = 0, pos = 2 → column 2
     assert_eq!(result2, vec![(2, 1.0)]);
@@ -847,12 +651,6 @@ fn hydro_outflow_expands_to_turbine_and_spillage() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroOutflow {
@@ -860,12 +658,8 @@ fn hydro_outflow_expands_to_turbine_and_spillage() {
             block_id: None,
         },
         0, // block_idx
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     let turbine_col = 13 + 3 * 3 + 0; // 22
@@ -880,12 +674,6 @@ fn hydro_outflow_block_id_some_uses_explicit_block() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroOutflow {
@@ -893,12 +681,8 @@ fn hydro_outflow_block_id_some_uses_explicit_block() {
             block_id: Some(1),
         },
         0, // block_idx is irrelevant when block_id = Some
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     // hydro pos=0, turbine.start=13, spillage.start=25, block=1, n_blks=3
@@ -914,12 +698,6 @@ fn hydro_generation_constant_productivity_maps_to_turbine() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroGeneration {
@@ -928,12 +706,8 @@ fn hydro_generation_constant_productivity_maps_to_turbine() {
             bus_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(13 + 1 * 3 + 0, 2.5)]);
@@ -946,12 +720,6 @@ fn hydro_generation_fpha_maps_to_generation_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroGeneration {
@@ -960,12 +728,8 @@ fn hydro_generation_fpha_maps_to_generation_column() {
             bus_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(79 + 0 * 3 + 0, 1.0)]);
@@ -978,12 +742,6 @@ fn hydro_generation_fpha_second_hydro_block_2() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroGeneration {
@@ -992,12 +750,8 @@ fn hydro_generation_fpha_second_hydro_block_2() {
             bus_id: None,
         },
         2,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(79 + 1 * 3 + 2, 1.0)]);
@@ -1063,13 +817,8 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
         "cell 2 (ascending bus order) is the SECOND cell under test"
     );
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let n_blks = geom.n_blks;
-    let turbine_start = geom.turbine.start;
-
-    let prod = constant_productivity_models(fx.hydros.len(), 1.0);
-    let hpos = ctx.hydro_pos.clone();
-    let empty_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
+    let n_blks = layout.n_blks;
+    let turbine_start = layout.equipment.turbine.start;
 
     let picked = call(
         VariableRef::HydroTurbined {
@@ -1078,12 +827,8 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
             bus_id: Some(EntityId(20)),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &empty_pos,
-        &empty_pos,
-        &empty_pos,
+        &ctx,
+        &layout,
     );
     assert_eq!(picked, vec![(turbine_start + 2 * n_blks + 3, 1.0)]);
 
@@ -1094,12 +839,8 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
             bus_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &empty_pos,
-        &empty_pos,
-        &empty_pos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         summed,
@@ -1125,9 +866,8 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
     let fx = turbine_bus_selector_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let n_blks = geom.n_blks;
-    let turbine_start = geom.turbine.start;
+    let n_blks = layout.n_blks;
+    let turbine_start = layout.equipment.turbine.start;
 
     let productivity = 2.5;
     let prod = ProductionModelSet::new(
@@ -1138,8 +878,10 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
         fx.hydros.len(),
         1,
     );
-    let hpos = ctx.hydro_pos.clone();
-    let empty_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
+    let ctx = TemplateBuildCtx {
+        production_models: &prod,
+        ..ctx
+    };
 
     let picked = call(
         VariableRef::HydroGeneration {
@@ -1148,12 +890,8 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
             bus_id: Some(EntityId(20)),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &empty_pos,
-        &empty_pos,
-        &empty_pos,
+        &ctx,
+        &layout,
     );
     assert_eq!(picked, vec![(turbine_start + 2 * n_blks + 3, productivity)]);
 
@@ -1164,12 +902,8 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
             bus_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &empty_pos,
-        &empty_pos,
-        &empty_pos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         summed,
@@ -1228,13 +962,8 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
     assert_eq!(ctx.hydro_cell_index.bus_of(HydroCell::new(2)), EntityId(20));
 
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let n_blks = geom.n_blks;
-    let generation_start = geom.generation.start;
-
-    let prod = fpha_bus_selector_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let empty_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
+    let n_blks = layout.n_blks;
+    let generation_start = layout.equipment.generation.start;
 
     let picked = call(
         VariableRef::HydroGeneration {
@@ -1243,12 +972,8 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
             bus_id: Some(EntityId(20)),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &empty_pos,
-        &empty_pos,
-        &empty_pos,
+        &ctx,
+        &layout,
     );
     assert_eq!(picked, vec![(generation_start + 1 * n_blks + 3, 1.0)]);
 
@@ -1259,12 +984,8 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
             bus_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &empty_pos,
-        &empty_pos,
-        &empty_pos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         summed,
@@ -1291,12 +1012,6 @@ fn hydro_evaporation_maps_to_evaporation_flow_col() {
     let fx = evaporation_fixture(1);
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod_models = constant_productivity_models(2, 1.0);
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroEvaporation {
@@ -1304,12 +1019,8 @@ fn hydro_evaporation_maps_to_evaporation_flow_col() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod_models,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(15, 1.0)]);
@@ -1320,12 +1031,6 @@ fn hydro_evaporation_no_evap_model_returns_empty() {
     let fx = evaporation_fixture(1);
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod_models = constant_productivity_models(2, 1.0);
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     // Hydro 20 (pos=1) has no evaporation in evap_hydro_indices=[0]
     let result = call(
@@ -1334,12 +1039,8 @@ fn hydro_evaporation_no_evap_model_returns_empty() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod_models,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(result.is_empty());
@@ -1353,12 +1054,6 @@ fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
     let fx = evaporation_fixture(3);
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod_models = constant_productivity_models(2, 1.0);
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     assert_eq!(
         layout.evap_indices.len(),
@@ -1373,12 +1068,8 @@ fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
                 block_id,
             },
             0,
-            &geom,
-            &prod_models,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         )
     };
 
@@ -1430,23 +1121,17 @@ fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.n_blks;
 
-    let result = call_pumping(
+    let result = call(
         VariableRef::PumpingFlow {
             station_id: EntityId(20),
             block_id: Some(2),
         },
         0, // block_idx — overridden by block_id = Some(2)
-        &geom,
-        &prod,
-        col_pumping_start,
-        n_blks,
-        ctx.pumping_stations,
-        &ctx.pumping_pos,
+        &ctx,
+        &layout,
     );
 
     let expected_col = col_pumping_start + 1 * n_blks + 2;
@@ -1465,37 +1150,27 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.n_blks;
 
     let blk = 1;
-    let power = call_pumping(
+    let power = call(
         VariableRef::PumpingPower {
             station_id: EntityId(10),
             block_id: Some(blk),
         },
         0,
-        &geom,
-        &prod,
-        col_pumping_start,
-        n_blks,
-        ctx.pumping_stations,
-        &ctx.pumping_pos,
+        &ctx,
+        &layout,
     );
-    let flow = call_pumping(
+    let flow = call(
         VariableRef::PumpingFlow {
             station_id: EntityId(10),
             block_id: Some(blk),
         },
         0,
-        &geom,
-        &prod,
-        col_pumping_start,
-        n_blks,
-        ctx.pumping_stations,
-        &ctx.pumping_pos,
+        &ctx,
+        &layout,
     );
 
     let expected_col = col_pumping_start + 0 * n_blks + blk;
@@ -1513,26 +1188,20 @@ fn pumping_flow_none_resolves_per_block() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.n_blks;
     let range = pumping_col_range(&layout);
 
     let per_block: Vec<(usize, f64)> = (0..n_blks)
         .map(|blk| {
-            let r = call_pumping(
+            let r = call(
                 VariableRef::PumpingFlow {
                     station_id: EntityId(10),
                     block_id: None,
                 },
                 blk, // block_idx supplies the effective block
-                &geom,
-                &prod,
-                col_pumping_start,
-                n_blks,
-                ctx.pumping_stations,
-                &ctx.pumping_pos,
+                &ctx,
+                &layout,
             );
             assert_eq!(r.len(), 1);
             assert!(range.contains(&r[0].0));
@@ -1558,26 +1227,20 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.n_blks;
     let range = pumping_col_range(&layout);
 
     let per_block: Vec<(usize, f64)> = (0..n_blks)
         .map(|blk| {
-            let r = call_pumping(
+            let r = call(
                 VariableRef::PumpingPower {
                     station_id: EntityId(20),
                     block_id: None,
                 },
                 blk,
-                &geom,
-                &prod,
-                col_pumping_start,
-                n_blks,
-                ctx.pumping_stations,
-                &ctx.pumping_pos,
+                &ctx,
+                &layout,
             );
             assert_eq!(r.len(), 1);
             assert!(range.contains(&r[0].0));
@@ -1600,10 +1263,6 @@ fn pumping_unknown_station_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let col_pumping_start = layout.equipment.col_pumping_start;
-    let n_blks = layout.n_blks;
 
     for var_ref in [
         VariableRef::PumpingFlow {
@@ -1615,16 +1274,7 @@ fn pumping_unknown_station_returns_empty() {
             block_id: Some(0),
         },
     ] {
-        let result = call_pumping(
-            var_ref,
-            0,
-            &geom,
-            &prod,
-            col_pumping_start,
-            n_blks,
-            ctx.pumping_stations,
-            &ctx.pumping_pos,
-        );
+        let result = call(var_ref, 0, &ctx, &layout);
         assert!(
             result.is_empty(),
             "unknown station must return empty vec, got: {result:?} for {var_ref:?}"
@@ -1633,19 +1283,21 @@ fn pumping_unknown_station_returns_empty() {
 }
 
 /// `n_pumping == 0` (no stations) resolves to `vec![]` — the empty `pumping_pos`
-/// lookup misses before `col_pumping_start` is ever used. Deliberately passes
-/// no stations, overriding the fixture's own declared two.
+/// lookup misses before `col_pumping_start` is ever used. Deliberately overrides
+/// the fixture's own declared two stations with none.
 #[test]
 fn pumping_no_stations_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let col_pumping_start = layout.equipment.col_pumping_start;
-    let n_blks = layout.n_blks;
     let no_stations: Vec<PumpingStation> = Vec::new();
     let empty_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
+    let ctx = TemplateBuildCtx {
+        pumping_stations: &no_stations,
+        pumping_pos: empty_pos,
+        n_pumping: 0,
+        ..ctx
+    };
 
     for var_ref in [
         VariableRef::PumpingFlow {
@@ -1657,16 +1309,7 @@ fn pumping_no_stations_returns_empty() {
             block_id: None,
         },
     ] {
-        let result = call_pumping(
-            var_ref,
-            0,
-            &geom,
-            &prod,
-            col_pumping_start,
-            n_blks,
-            &no_stations,
-            &empty_pos,
-        );
+        let result = call(var_ref, 0, &ctx, &layout);
         assert!(
             result.is_empty(),
             "n_pumping == 0 must return empty vec, got: {result:?} for {var_ref:?}"
@@ -1752,33 +1395,29 @@ fn contract_family_slot_counts_per_direction() {
 
 /// Two imports + one export, on the default fixture's own REAL declared
 /// contracts (`n_contract_import = 2`, `n_contract_export = 1`) and their real
-/// `geom.contract_import`/`geom.contract_export` bases — the second import
-/// (id 30, per-family slot 1) at block 0 is
-/// `grid.flat(import_start, 1, 0) = import_start + n_blks`.
+/// `layout.equipment.contract_import`/`contract_export` bases — the second
+/// import (id 30, per-family slot 1) at block 0 is
+/// `layout.contract_col(Import, 1, 0) = import_start + n_blks`.
 #[test]
 fn contract_import_resolves_to_column_with_unit_coefficient() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
 
-    let result = call_contract(
+    let result = call(
         VariableRef::ContractImport {
             contract_id: EntityId(30),
             block_id: Some(0),
         },
         0,
-        &geom,
-        &prod,
-        ctx.contracts,
-        &ctx.contract_pos,
+        &ctx,
+        &layout,
     );
 
-    let import_start = geom.contract_import.start;
-    let expected_col = import_start + 1 * geom.n_blks + 0;
+    let import_start = layout.equipment.contract_import.start;
+    let expected_col = import_start + 1 * layout.n_blks + 0;
     assert_eq!(result, vec![(expected_col, 1.0)]);
-    assert!(geom.contract_import.contains(&expected_col));
+    assert!(layout.equipment.contract_import.contains(&expected_col));
 }
 
 /// The variable's own coefficient is `+1.0`; the injection/withdrawal sign is
@@ -1790,25 +1429,21 @@ fn contract_export_resolves_to_column_with_unit_coefficient() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
 
-    let result = call_contract(
+    let result = call(
         VariableRef::ContractExport {
             contract_id: EntityId(20),
             block_id: Some(2),
         },
         0,
-        &geom,
-        &prod,
-        ctx.contracts,
-        &ctx.contract_pos,
+        &ctx,
+        &layout,
     );
 
-    let export_start = geom.contract_export.start;
-    let expected_col = export_start + 0 * geom.n_blks + 2;
+    let export_start = layout.equipment.contract_export.start;
+    let expected_col = export_start + 0 * layout.n_blks + 2;
     assert_eq!(result, vec![(expected_col, 1.0)]);
-    assert!(geom.contract_export.contains(&expected_col));
+    assert!(layout.equipment.contract_export.contains(&expected_col));
 }
 
 /// An unknown contract id misses `contract_pos` and resolves to empty — the
@@ -1818,19 +1453,15 @@ fn contract_unknown_id_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
 
-    let result = call_contract(
+    let result = call(
         VariableRef::ContractImport {
             contract_id: EntityId(99),
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        ctx.contracts,
-        &ctx.contract_pos,
+        &ctx,
+        &layout,
     );
 
     assert!(result.is_empty());
@@ -1843,12 +1474,6 @@ fn non_controllable_generation_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::NonControllableGeneration {
@@ -1856,12 +1481,8 @@ fn non_controllable_generation_returns_empty() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(result.is_empty());
@@ -1879,24 +1500,14 @@ fn hydro_withdrawal_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroWithdrawal {
             hydro_id: EntityId(999),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(
@@ -1917,12 +1528,6 @@ fn non_controllable_curtailment_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::NonControllableCurtailment {
@@ -1930,12 +1535,8 @@ fn non_controllable_curtailment_returns_empty() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(
@@ -1952,12 +1553,6 @@ fn missing_entity_id_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::ThermalGeneration {
@@ -1965,12 +1560,8 @@ fn missing_entity_id_returns_empty() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(result.is_empty());
@@ -1985,12 +1576,6 @@ fn bus_deficit_returns_one_entry_per_segment() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::BusDeficit {
@@ -1998,12 +1583,8 @@ fn bus_deficit_returns_one_entry_per_segment() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result.len(), 2);
@@ -2018,12 +1599,6 @@ fn bus_deficit_second_bus_block_1() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::BusDeficit {
@@ -2031,12 +1606,8 @@ fn bus_deficit_second_bus_block_1() {
             block_id: None,
         },
         1,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result.len(), 2);
@@ -2053,12 +1624,6 @@ fn bus_excess_maps_to_excess_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::BusExcess {
@@ -2066,12 +1631,8 @@ fn bus_excess_maps_to_excess_column() {
             block_id: None,
         },
         2,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(73 + 0 * 3 + 2, 1.0)]);
@@ -2086,12 +1647,6 @@ fn line_direct_maps_to_fwd_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::LineDirect {
@@ -2099,12 +1654,8 @@ fn line_direct_maps_to_fwd_column() {
             block_id: None,
         },
         1,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(55 + 0 * 3 + 1, 1.0)]);
@@ -2116,12 +1667,6 @@ fn line_reverse_maps_to_rev_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::LineReverse {
@@ -2129,12 +1674,8 @@ fn line_reverse_maps_to_rev_column() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(58, 1.0)]);
@@ -2152,12 +1693,6 @@ fn line_exchange_maps_to_fwd_and_rev_columns() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::LineExchange {
@@ -2165,12 +1700,8 @@ fn line_exchange_maps_to_fwd_and_rev_columns() {
             block_id: None,
         },
         1,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(56, 1.0), (59, -1.0)]);
@@ -2185,12 +1716,6 @@ fn line_exchange_with_explicit_block() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::LineExchange {
@@ -2198,12 +1723,8 @@ fn line_exchange_with_explicit_block() {
             block_id: Some(0),
         },
         2,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(55, 1.0), (58, -1.0)]);
@@ -2214,12 +1735,6 @@ fn line_exchange_unknown_id_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::LineExchange {
@@ -2227,12 +1742,8 @@ fn line_exchange_unknown_id_returns_empty() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(result.is_empty());
@@ -2254,12 +1765,6 @@ fn anticipated_decision_maps_to_correct_column() {
     let fx = anticipated_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = ProductionModelSet::new(vec![], 0, 1);
-    let hpos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     assert_eq!(
         layout.anticipated.col_anticipated_decision_start, 9,
@@ -2272,12 +1777,8 @@ fn anticipated_decision_maps_to_correct_column() {
             thermal_id: EntityId(6), // sys_pos=1, local anticipated idx=0
         },
         0, // block_idx is ignored for stage-level variable
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(
@@ -2294,12 +1795,6 @@ fn anticipated_decision_ignores_block_idx() {
     let fx = anticipated_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = ProductionModelSet::new(vec![], 0, 1);
-    let hpos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     for block_idx in [0, 1] {
         let result = call(
@@ -2307,12 +1802,8 @@ fn anticipated_decision_ignores_block_idx() {
                 thermal_id: EntityId(6),
             },
             block_idx,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(
             result,
@@ -2329,24 +1820,14 @@ fn anticipated_decision_non_anticipated_thermal_returns_empty() {
     let fx = anticipated_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = ProductionModelSet::new(vec![], 0, 1);
-    let hpos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::AnticipatedDecision {
             thermal_id: EntityId(5), // sys_pos=0, NOT anticipated
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(
@@ -2360,24 +1841,14 @@ fn anticipated_decision_unknown_entity_returns_empty() {
     let fx = anticipated_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = ProductionModelSet::new(vec![], 0, 1);
-    let hpos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::AnticipatedDecision {
             thermal_id: EntityId(999), // unknown
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(
@@ -2386,55 +1857,72 @@ fn anticipated_decision_unknown_entity_returns_empty() {
     );
 }
 
-// ── block_col_range tests ─────────────────────────────────────────────────
+// ── Single-column resolver family/range tests ─────────────────────────────
 
-/// Each equipment/line family maps to its matching `StageLayout` equipment
-/// range, and the two contract families map to their own real
-/// `layout.equipment.contract_import` / `contract_export` ranges. This pins
-/// the family↔range pairing the resolver's `col_start` reads depend on.
+/// Each single-column family's resolver (`resolve_hydro_spillage`,
+/// `resolve_hydro_diversion`, `resolve_thermal_generation`,
+/// `resolve_line_direct`, `resolve_line_reverse`, `resolve_bus_excess`) lands
+/// inside its matching `layout.equipment.<family>` range — the contract
+/// `resolve_block_column` upholds for every one of its six callers.
 #[test]
-fn block_col_range_maps_each_family_to_its_geometry_range() {
+fn single_column_resolvers_land_inside_their_equipment_range() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
 
-    assert_eq!(
-        block_col_range(&geom, ElementKind::Turbine),
-        layout.equipment.turbine
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::Spillage),
-        layout.equipment.spillage
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::Diversion),
-        layout.equipment.diversion
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::Thermal),
-        layout.equipment.thermal
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::LineFwd),
-        layout.equipment.line_fwd
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::LineRev),
-        layout.equipment.line_rev
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::Excess),
-        layout.equipment.excess
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::ContractImport),
-        layout.equipment.contract_import
-    );
-    assert_eq!(
-        block_col_range(&geom, ElementKind::ContractExport),
-        layout.equipment.contract_export
-    );
+    let cases: [(VariableRef, &Range<usize>); 6] = [
+        (
+            VariableRef::HydroSpillage {
+                hydro_id: EntityId(20),
+                block_id: Some(1),
+            },
+            &layout.equipment.spillage,
+        ),
+        (
+            VariableRef::HydroDiversion {
+                hydro_id: EntityId(20),
+                block_id: Some(1),
+            },
+            &layout.equipment.diversion,
+        ),
+        (
+            VariableRef::ThermalGeneration {
+                thermal_id: EntityId(5),
+                block_id: Some(1),
+            },
+            &layout.equipment.thermal,
+        ),
+        (
+            VariableRef::LineDirect {
+                line_id: EntityId(50),
+                block_id: Some(1),
+            },
+            &layout.equipment.line_fwd,
+        ),
+        (
+            VariableRef::LineReverse {
+                line_id: EntityId(50),
+                block_id: Some(1),
+            },
+            &layout.equipment.line_rev,
+        ),
+        (
+            VariableRef::BusExcess {
+                bus_id: EntityId(100),
+                block_id: Some(1),
+            },
+            &layout.equipment.excess,
+        ),
+    ];
+
+    for (var_ref, range) in cases {
+        let result = call(var_ref, 0, &ctx, &layout);
+        assert_eq!(result.len(), 1, "{var_ref:?}");
+        assert!(
+            range.contains(&result[0].0),
+            "{var_ref:?} resolved outside its family range"
+        );
+    }
 }
 
 // ── HydroTurbined / HydroSpillage tests ───────────────────────────────────
@@ -2444,12 +1932,6 @@ fn hydro_turbined_maps_to_turbine_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     // hydro pos=1 (EntityId 20), turbine.start=13, n_blks=3, block=2
     let result = call(
@@ -2459,12 +1941,8 @@ fn hydro_turbined_maps_to_turbine_column() {
             bus_id: None,
         },
         2,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(13 + 1 * 3 + 2, 1.0)]);
@@ -2475,12 +1953,6 @@ fn hydro_spillage_maps_to_spillage_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     // hydro pos=3 (EntityId 40), spillage.start=25, n_blks=3, block=1
     let result = call(
@@ -2489,31 +1961,21 @@ fn hydro_spillage_maps_to_spillage_column() {
             block_id: None,
         },
         1,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(25 + 3 * 3 + 1, 1.0)]);
 }
 
-/// `block_col_range(geom, ElementKind::Diversion).start = 37`. For hydro pos=1
-/// (EntityId 20), n_blks=3, block=2 the flat block-major address is
-/// `37 + 1*3 + 2 = 42` with the unit coefficient.
+/// `layout.equipment.diversion.start = 37`. For hydro pos=1 (EntityId 20),
+/// n_blks=3, block=2 the flat block-major address is `37 + 1*3 + 2 = 42` with
+/// the unit coefficient.
 #[test]
 fn diversion_maps_to_diversion_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroDiversion {
@@ -2521,12 +1983,8 @@ fn diversion_maps_to_diversion_column() {
             block_id: None,
         },
         2,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(result, vec![(37 + 1 * 3 + 2, 1.0)]);
@@ -2556,30 +2014,21 @@ fn hydro_inflow_two_upstream_canonical_order() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
     let cascade = make_inflow_cascade();
-    let div: HashMap<EntityId, Vec<usize>> = HashMap::new();
+    let ctx = TemplateBuildCtx {
+        cascade: &cascade,
+        ..ctx
+    };
 
     let blk = 2;
-    let result = call_with_cascade(
+    let result = call(
         VariableRef::HydroInflow {
             hydro_id: EntityId(40),
             block_id: Some(blk),
         },
         0, // block_idx — overridden by block_id = Some(blk)
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
-        &cascade,
-        &div,
+        &ctx,
+        &layout,
     );
 
     let z_col = 4 + 3; // z_inflow.start + pos_h
@@ -2605,45 +2054,30 @@ fn hydro_inflow_none_matches_some_block_idx() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
     let cascade = make_inflow_cascade();
-    let div: HashMap<EntityId, Vec<usize>> = HashMap::new();
+    let ctx = TemplateBuildCtx {
+        cascade: &cascade,
+        ..ctx
+    };
 
     let blk = 2;
-    let none_result = call_with_cascade(
+    let none_result = call(
         VariableRef::HydroInflow {
             hydro_id: EntityId(40),
             block_id: None,
         },
         blk, // block_idx supplies the effective block
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
-        &cascade,
-        &div,
+        &ctx,
+        &layout,
     );
-    let some_result = call_with_cascade(
+    let some_result = call(
         VariableRef::HydroInflow {
             hydro_id: EntityId(40),
             block_id: Some(blk),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
-        &cascade,
-        &div,
+        &ctx,
+        &layout,
     );
 
     assert_eq!(none_result, some_result);
@@ -2657,30 +2091,23 @@ fn hydro_inflow_diversion_into_appends_diversion_column() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
     let cascade = make_inflow_cascade();
     let div: HashMap<EntityId, Vec<usize>> = [(EntityId(40), vec![2])].into_iter().collect();
+    let ctx = TemplateBuildCtx {
+        cascade: &cascade,
+        diversion_upstream: div,
+        ..ctx
+    };
 
     let blk = 1;
-    let result = call_with_cascade(
+    let result = call(
         VariableRef::HydroInflow {
             hydro_id: EntityId(40),
             block_id: Some(blk),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
-        &cascade,
-        &div,
+        &ctx,
+        &layout,
     );
 
     let z_col = 4 + 3;
@@ -2709,30 +2136,21 @@ fn hydro_inflow_headwater_resolves_to_z_inflow_only() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
     let cascade = make_inflow_cascade();
-    let div: HashMap<EntityId, Vec<usize>> = HashMap::new();
+    let ctx = TemplateBuildCtx {
+        cascade: &cascade,
+        ..ctx
+    };
 
     for block_idx in [0, 1, 2] {
-        let result = call_with_cascade(
+        let result = call(
             VariableRef::HydroInflow {
                 hydro_id: EntityId(30),
                 block_id: None,
             },
             block_idx,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
-            &cascade,
-            &div,
+            &ctx,
+            &layout,
         );
         assert_eq!(result, vec![(6, 1.0)], "block_idx={block_idx}");
     }
@@ -2746,12 +2164,6 @@ fn hydro_inflow_empty_when_no_hydros() {
     let fx = anticipated_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = ProductionModelSet::new(vec![], 0, 1);
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     assert!(
         fx.state.z_inflow.is_empty(),
@@ -2764,12 +2176,8 @@ fn hydro_inflow_empty_when_no_hydros() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(
@@ -2783,12 +2191,6 @@ fn hydro_inflow_unknown_id_returns_empty() {
     let fx = default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let result = call(
         VariableRef::HydroInflow {
@@ -2796,12 +2198,8 @@ fn hydro_inflow_unknown_id_returns_empty() {
             block_id: None,
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
 
     assert!(
@@ -2855,12 +2253,6 @@ fn hydro_storage_boundary_resolves_each_boundary() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
     let storage_internal_start = layout.equipment.storage_internal_start;
 
     // Hydro EntityId(10) at pos 0; K = 3.
@@ -2870,12 +2262,8 @@ fn hydro_storage_boundary_resolves_each_boundary() {
             block_id: Some(0),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         initial_0,
@@ -2889,12 +2277,8 @@ fn hydro_storage_boundary_resolves_each_boundary() {
             block_id: Some(1),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         initial_1,
@@ -2908,12 +2292,8 @@ fn hydro_storage_boundary_resolves_each_boundary() {
             block_id: Some(2),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         final_2,
@@ -2928,12 +2308,6 @@ fn hydro_storage_final_last_block_equals_hydro_storage() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let final_last = call(
         VariableRef::HydroStorageFinal {
@@ -2941,24 +2315,16 @@ fn hydro_storage_final_last_block_equals_hydro_storage() {
             block_id: Some(2),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     let storage = call(
         VariableRef::HydroStorage {
             hydro_id: EntityId(10),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(final_last, storage);
     assert_eq!(final_last, vec![(fx.state.storage.start + 0, 1.0)]);
@@ -2971,12 +2337,6 @@ fn hydro_storage_final_shares_interior_column_with_next_initial() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
     let storage_internal_start = layout.equipment.storage_internal_start;
 
     let final_0 = call(
@@ -2985,12 +2345,8 @@ fn hydro_storage_final_shares_interior_column_with_next_initial() {
             block_id: Some(0),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     let initial_1 = call(
         VariableRef::HydroStorageInitial {
@@ -2998,12 +2354,8 @@ fn hydro_storage_final_shares_interior_column_with_next_initial() {
             block_id: Some(1),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(final_0, initial_1);
     assert_eq!(final_0, vec![(storage_internal_start + 0, 1.0)]);
@@ -3016,12 +2368,6 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     for blk in 0..3 {
         let initial = call(
@@ -3030,17 +2376,13 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
                 block_id: None,
             },
             blk,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(
             initial,
             vec![(
-                geom.block_storage_col(HydroSys::new(0), Boundary::Incoming),
+                layout.block_storage_col(HydroSys::new(0), Boundary::Incoming),
                 1.0
             )]
         );
@@ -3051,17 +2393,13 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
                 block_id: None,
             },
             blk,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(
             final_,
             vec![(
-                geom.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
+                layout.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
                 1.0
             )]
         );
@@ -3073,12 +2411,6 @@ fn hydro_storage_boundary_unknown_id_returns_empty() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     for var_ref in [
         VariableRef::HydroStorageInitial {
@@ -3090,7 +2422,7 @@ fn hydro_storage_boundary_unknown_id_returns_empty() {
             block_id: None,
         },
     ] {
-        let result = call(var_ref, 0, &geom, &prod, &hpos, &tpos, &bpos, &lpos);
+        let result = call(var_ref, 0, &ctx, &layout);
         assert!(result.is_empty(), "unknown id must resolve to empty vec");
     }
 }
@@ -3130,12 +2462,6 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     for block_id in [None, Some(0), Some(1), Some(2)] {
         let useful_initial = call(
@@ -3144,12 +2470,8 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
                 block_id,
             },
             0,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         let storage_initial = call(
             VariableRef::HydroStorageInitial {
@@ -3157,12 +2479,8 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
                 block_id,
             },
             0,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(useful_initial, storage_initial);
 
@@ -3172,12 +2490,8 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
                 block_id,
             },
             0,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         let storage_final = call(
             VariableRef::HydroStorageFinal {
@@ -3185,12 +2499,8 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
                 block_id,
             },
             0,
-            &geom,
-            &prod,
-            &hpos,
-            &tpos,
-            &bpos,
-            &lpos,
+            &ctx,
+            &layout,
         );
         assert_eq!(useful_final, storage_final);
 
@@ -3218,12 +2528,6 @@ fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
     let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = layout.resolver_geom(ctx.hydro_cell_index);
-    let prod = make_production_models();
-    let hpos = ctx.hydro_pos.clone();
-    let tpos = ctx.thermal_pos.clone();
-    let bpos = ctx.bus_pos.clone();
-    let lpos = ctx.line_pos.clone();
 
     let useful_initial = call(
         VariableRef::HydroUsefulVolumeInitial {
@@ -3231,12 +2535,8 @@ fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
             block_id: Some(0),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         useful_initial,
@@ -3250,12 +2550,8 @@ fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
             block_id: Some(2),
         },
         0,
-        &geom,
-        &prod,
-        &hpos,
-        &tpos,
-        &bpos,
-        &lpos,
+        &ctx,
+        &layout,
     );
     assert_eq!(
         useful_final,

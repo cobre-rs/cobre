@@ -64,7 +64,8 @@ pub use template::{StageGeometry, StageTemplates, build_stage_templates};
 
 // --- Crate-internal re-exports ---
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
+pub(crate) use layout::ResolvedTables;
+pub(crate) use layout::{StageLayout, TemplateBuildCtx};
 pub(crate) use layout::{evaporation_slot, evaporation_slot_count};
 pub(crate) use scaling::{
     apply_col_scale, apply_commitment_hold_col_scale_unscale, apply_row_scale, compute_col_scale,

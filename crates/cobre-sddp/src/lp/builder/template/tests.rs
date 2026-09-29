@@ -2035,67 +2035,48 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             .anticipated_plants
             .thermal_of(AnticipatedLocal::new(0)),
     ]);
-    let ctx_b = super::super::layout::TemplateBuildCtx {
-        hydros: ctx_a.hydros,
-        thermals: ctx_a.thermals,
-        lines: ctx_a.lines,
-        buses: ctx_a.buses,
-        load_models: ctx_a.load_models,
-        cascade: ctx_a.cascade,
-        hydro_cell_index: ctx_a.hydro_cell_index,
-        resolved: super::super::layout::ResolvedTables {
-            bounds: ctx_a.resolved.bounds,
-            penalties: ctx_a.resolved.penalties,
-            resolved_generic_bounds: ctx_a.resolved.resolved_generic_bounds,
-            resolved_load_factors: ctx_a.resolved.resolved_load_factors,
-            resolved_ncs_bounds: ctx_a.resolved.resolved_ncs_bounds,
-            resolved_ncs_factors: ctx_a.resolved.resolved_ncs_factors,
-            resolved_parameters: ctx_a.resolved.resolved_parameters,
-        },
-        hydro_pos: ctx_a.hydro_pos.clone(),
-        thermal_pos: ctx_a.thermal_pos.clone(),
-        line_pos: ctx_a.line_pos.clone(),
-        bus_pos: ctx_a.bus_pos.clone(),
-        par_lp: ctx_a.par_lp,
-        production_models: ctx_a.production_models,
-        evaporation_models: ctx_a.evaporation_models,
-        generic_constraints: ctx_a.generic_constraints,
-        non_controllable_sources: ctx_a.non_controllable_sources,
-        pumping_stations: ctx_a.pumping_stations,
-        pumping_pos: ctx_a.pumping_pos.clone(),
-        n_pumping: ctx_a.n_pumping,
-        contracts: ctx_a.contracts,
-        contract_pos: ctx_a.contract_pos.clone(),
-        n_contract_import: ctx_a.n_contract_import,
-        n_contract_export: ctx_a.n_contract_export,
-        diversion_upstream: ctx_a.diversion_upstream.clone(),
-        n_hydros: ctx_a.n_hydros,
-        n_thermals: ctx_a.n_thermals,
-        n_lines: ctx_a.n_lines,
-        n_buses: ctx_a.n_buses,
-        max_par_order: ctx_a.max_par_order,
-        n_anticipated: ctx_a.n_anticipated,
-        anticipated_lead_stages: vec![
-            ctx_a.anticipated_lead_stages[1],
-            ctx_a.anticipated_lead_stages[0],
+    let (
+        anticipated_resolution_b,
+        anticipated_lead_stages_b,
+        per_stage_mask_b,
+        arc_stage_weights_b,
+        arc_spread_chrono_b,
+        arc_arrival_density_b,
+        max_par_order_b,
+    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (mut ctx_b, _, _) = super::build_template_build_ctx(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        system.load_models(),
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+        anticipated_resolution_b,
+        anticipated_lead_stages_b,
+        &anticipated_plants,
+        per_stage_mask_b,
+        arc_stage_weights_b,
+        arc_spread_chrono_b,
+        arc_arrival_density_b,
+        max_par_order_b,
+        &hydro_cell_index,
+        SamplingScheme::InSample,
+        &time_value,
+    );
+    ctx_b.anticipated_lead_stages = vec![
+        ctx_a.anticipated_lead_stages[1],
+        ctx_a.anticipated_lead_stages[0],
+    ];
+    ctx_b.anticipated_plants = &ctx_b_anticipated_plants;
+    ctx_b.anticipated_windows = vec![ctx_a.anticipated_windows[1], ctx_a.anticipated_windows[0]];
+    ctx_b.anticipated_resolution = AnticipatedResolution {
+        per_plant: vec![
+            ctx_a.anticipated_resolution.per_plant[1].clone(),
+            ctx_a.anticipated_resolution.per_plant[0].clone(),
         ],
-        anticipated_plants: &ctx_b_anticipated_plants,
-        anticipated_windows: vec![ctx_a.anticipated_windows[1], ctx_a.anticipated_windows[0]],
-        anticipated_resolution: AnticipatedResolution {
-            per_plant: vec![
-                ctx_a.anticipated_resolution.per_plant[1].clone(),
-                ctx_a.anticipated_resolution.per_plant[0].clone(),
-            ],
-            k_max: ctx_a.anticipated_resolution.k_max,
-            max_fanout: ctx_a.anticipated_resolution.max_fanout,
-        },
-        has_penalty: ctx_a.has_penalty,
-        time_value: ctx_a.time_value,
-        filling_v_target: ctx_a.filling_v_target.clone(),
-        arc_stage_weights: ctx_a.arc_stage_weights.clone(),
-        arc_spread_chrono: ctx_a.arc_spread_chrono.clone(),
-        arc_arrival_density: ctx_a.arc_arrival_density.clone(),
-        per_stage_mask: ctx_a.per_stage_mask.clone(),
+        k_max: ctx_a.anticipated_resolution.k_max,
+        max_fanout: ctx_a.anticipated_resolution.max_fanout,
     };
 
     assert_eq!(

@@ -11,7 +11,7 @@
 
 #![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -20,13 +20,12 @@ use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel, SamplingSch
 use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, StageLagTransition, Transition};
 use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
-    CascadeTopology, ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro,
-    HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds, HydroStorage,
-    HydroUnitGroup, InitialConditions, LineBlockBounds, LineStagePenalties, NcsStagePenalties,
-    NoiseMethod, PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
-    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig, System,
-    SystemBuilder, Thermal, ThermalBlockBounds, ThermalStageBounds,
+    ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro, HydroBlockBounds,
+    HydroGenerationModel, HydroPenalties, HydroStageBounds, HydroStorage, HydroUnitGroup,
+    InitialConditions, LineBlockBounds, LineStagePenalties, NcsStagePenalties, NoiseMethod,
+    PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds, ResolvedPenalties,
+    ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig, System, SystemBuilder, Thermal,
+    ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_io::StageIdResolver;
 use cobre_io::config::{
@@ -40,7 +39,6 @@ use cobre_io::{
     EntitySlot, GraphManifest, ManifestEdge, ManifestNode, PolicyCutRecord, ProducerBlock,
     StageCutsPayload, decode_slot_date, encode_slot_date, write_policy_checkpoint,
 };
-use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::{
     ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
@@ -58,8 +56,8 @@ use crate::hydro_models::{
 use crate::lead_time::AnticipatedResolution;
 use crate::lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound};
 use crate::lp::builder::{
-    FactGroups, PatchBuffer, ResolvedTables, StageGeometry, StageLayout, StageTemplates, StateBox,
-    TemplateBuildCtx, encode_stage_templates_facts, encode_time_value_facts,
+    FactGroups, PatchBuffer, StageGeometry, StageLayout, StageTemplates, StateBox,
+    encode_stage_templates_facts, encode_time_value_facts,
 };
 #[cfg(test)]
 use crate::lp::indexer::HydroSys;
@@ -71,7 +69,6 @@ use crate::noise::{DownstreamAccumState, LagAccumState};
 use crate::policy::policy_load::{
     FullFcf, POLICY_COBRE_VERSION, PolicyLoadProof, PolicyStageManifest, validate_policy_load,
 };
-use crate::resolved_parameters::ResolvedParameters;
 use crate::risk_measure::BackwardOutcome;
 use crate::setup::node_graph::{
     NodeGraph, NodeId, NodePos, OpeningSource, StageIdx, build_node_graph,
@@ -79,7 +76,6 @@ use crate::setup::node_graph::{
 };
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
-use crate::time_value::{PostStudyResolved, TimeValue};
 use crate::training::backward::{
     extract_state_duals_only, fill_external_opening_noise, write_opening_outcome,
 };
@@ -95,6 +91,9 @@ use cobre_solver::{
 };
 
 pub mod decks;
+
+pub(crate) mod ctx_fixture;
+use ctx_fixture::CtxFixture;
 
 /// Equipment dimensions for the [`geometry`] / [`study_dims_for`] test builders.
 ///
@@ -523,79 +522,31 @@ pub fn geometry(
         geometry_production_models(dims.hydro_count, &fpha_hydro_indices, fpha_planes);
     let evaporation_models = geometry_evaporation_models(dims.hydro_count, &evap_hydro_indices);
 
-    let bounds = ResolvedBounds::empty();
-    let penalties = ResolvedPenalties::empty();
-    let resolved_generic_bounds = ResolvedGenericConstraintBounds::empty();
-    let resolved_load_factors = ResolvedLoadFactors::empty();
-    let resolved_ncs_bounds = ResolvedNcsBounds::empty();
-    let resolved_ncs_factors = ResolvedNcsFactors::empty();
-    let resolved_parameters = ResolvedParameters {
-        per_param: vec![],
-        id_to_slot: vec![],
-        cost_scale_factor: 1_000_000.0,
-    };
-    let cascade = CascadeTopology::build(&[]);
-    let par_lp = PrecomputedPar::default();
     let anticipated_lead_stages = vec![dims.lead_stages; dims.n_anticipated];
 
-    let ctx = TemplateBuildCtx {
-        hydros: &hydros,
-        thermals: &[],
-        lines: &[],
-        buses: &buses,
-        load_models: &[],
-        cascade: &cascade,
-        hydro_cell_index: &hydro_cell_index,
-        resolved: ResolvedTables {
-            bounds: &bounds,
-            penalties: &penalties,
-            resolved_generic_bounds: &resolved_generic_bounds,
-            resolved_load_factors: &resolved_load_factors,
-            resolved_ncs_bounds: &resolved_ncs_bounds,
-            resolved_ncs_factors: &resolved_ncs_factors,
-            resolved_parameters: &resolved_parameters,
-        },
-        hydro_pos: BTreeMap::new(),
-        thermal_pos: BTreeMap::new(),
-        line_pos: BTreeMap::new(),
-        bus_pos: BTreeMap::new(),
-        par_lp: &par_lp,
-        production_models: &production_models,
-        evaporation_models: &evaporation_models,
-        generic_constraints: &[],
-        non_controllable_sources: &[],
-        pumping_stations: &[],
-        pumping_pos: BTreeMap::new(),
-        n_pumping: 0,
-        contracts: &[],
-        contract_pos: BTreeMap::new(),
-        n_contract_import: 0,
-        n_contract_export: 0,
-        diversion_upstream: HashMap::new(),
-        n_hydros: dims.hydro_count,
-        n_thermals: dims.n_thermals,
-        n_lines: dims.n_lines,
-        n_buses: dims.n_buses,
+    let fixture = CtxFixture {
+        hydros,
+        buses,
+        hydro_cell_index,
+        production_models,
+        evaporation_models,
         max_par_order: dims.max_par_order,
-        n_anticipated: dims.n_anticipated,
         anticipated_lead_stages: anticipated_lead_stages.clone(),
-        anticipated_plants: &dims.anticipated_plants,
+        anticipated_plants: dims.anticipated_plants.clone(),
         anticipated_windows: vec![(None, None); dims.n_anticipated],
-        anticipated_resolution: AnticipatedResolution::default(),
         has_penalty: dims.has_inflow_penalty,
-        time_value: &TimeValue::from_parts(
-            vec![],
-            vec![1.0],
-            vec![744.0],
-            vec![0],
-            PostStudyResolved::default(),
-        ),
-        filling_v_target: BTreeMap::new(),
-        arc_stage_weights: HashMap::new(),
-        arc_spread_chrono: HashMap::new(),
-        arc_arrival_density: HashMap::new(),
-        per_stage_mask: Vec::new(),
+        ..CtxFixture::default()
     };
+    let mut ctx = fixture.ctx();
+    // geometry() never resolves an EntityId through a position map, and declares
+    // its thermal/line/anticipated counts independently of the (deliberately
+    // empty) entity slices — restore the fixture's own values over the derived
+    // ones.
+    ctx.hydro_pos = BTreeMap::new();
+    ctx.bus_pos = BTreeMap::new();
+    ctx.n_thermals = dims.n_thermals;
+    ctx.n_lines = dims.n_lines;
+    ctx.n_anticipated = dims.n_anticipated;
 
     let state = state_layout_full(
         dims.hydro_count,

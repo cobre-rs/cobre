@@ -9,26 +9,23 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
+use super::{contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent};
+use crate::hydro_models::{
+    EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet, ResolvedProductionModel,
+};
+use crate::lead_time::AnticipatedResolution;
+use crate::lp::builder::{StageLayout, TemplateBuildCtx};
+use crate::lp::indexer::{
+    AnticipatedPlants, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
+};
+use crate::test_support::ctx_fixture::CtxFixture;
+use crate::test_support::{geometry_hydro, geometry_hydro_with_groups, make_unit_group};
 use cobre_core::entities::{HydroGenerationModel, HydroPenalties};
 use cobre_core::{
     AnticipatedConfig, Block, BlockMode, Bus, CascadeTopology, ContractType, DeficitSegment,
     EnergyContract, EntityId, Hydro, Line, NoiseMethod, PumpingStation, ScenarioSourceConfig,
     Stage, StageRiskConfig, StageStateConfig, Thermal, VariableRef,
 };
-use cobre_stochastic::par::precompute::PrecomputedPar;
-
-use super::{contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent};
-use crate::hydro_models::{
-    EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet, ResolvedProductionModel,
-};
-use crate::lead_time::AnticipatedResolution;
-use crate::lp::builder::{ResolvedTables, StageLayout, TemplateBuildCtx};
-use crate::lp::indexer::{
-    AnticipatedPlants, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
-};
-use crate::resolved_parameters::ResolvedParameters;
-use crate::test_support::{geometry_hydro, geometry_hydro_with_groups, make_unit_group};
-use crate::time_value::{PostStudyResolved, TimeValue};
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -65,32 +62,11 @@ fn fixture_stage(n_blks: usize) -> Stage {
 }
 
 /// Owns every borrow target for a resolver test's `TemplateBuildCtx`/
-/// `StageLayout`, built through the same [`StageLayout::new`] pipeline
-/// production uses. `max_par_order` is fixed at `0`: no resolver test in this
-/// file needs a nonzero PAR lag order.
+/// `StageLayout`, through a [`CtxFixture`] plus the `state`/`stage` values
+/// `StageLayout::new` also needs. `max_par_order` is fixed at `0`: no
+/// resolver test in this file needs a nonzero PAR lag order.
 struct ResolverFixture {
-    hydros: Vec<Hydro>,
-    thermals: Vec<Thermal>,
-    lines: Vec<Line>,
-    buses: Vec<Bus>,
-    pumping_stations: Vec<PumpingStation>,
-    contracts: Vec<EnergyContract>,
-    hydro_cell_index: HydroCellIndex,
-    cascade: CascadeTopology,
-    production_models: ProductionModelSet,
-    evaporation_models: EvaporationModelSet,
-    anticipated_plants: AnticipatedPlants,
-    anticipated_lead_stages: Vec<usize>,
-    anticipated_windows: Vec<(Option<i32>, Option<i32>)>,
-    bounds: cobre_core::ResolvedBounds,
-    penalties: cobre_core::ResolvedPenalties,
-    resolved_generic_bounds: cobre_core::ResolvedGenericConstraintBounds,
-    resolved_load_factors: cobre_core::ResolvedLoadFactors,
-    resolved_ncs_bounds: cobre_core::ResolvedNcsBounds,
-    resolved_ncs_factors: cobre_core::ResolvedNcsFactors,
-    resolved_parameters: ResolvedParameters,
-    par_lp: PrecomputedPar,
-    time_value: TimeValue,
+    base: CtxFixture,
     state: StateSpace,
     stage: Stage,
 }
@@ -136,138 +112,29 @@ impl ResolverFixture {
         );
         let stage = fixture_stage(n_blks);
         Self {
-            hydros,
-            thermals,
-            lines,
-            buses,
-            pumping_stations,
-            contracts,
-            hydro_cell_index,
-            cascade,
-            production_models,
-            evaporation_models,
-            anticipated_plants,
-            anticipated_windows: vec![(None, None); n_anticipated],
-            anticipated_lead_stages,
-            bounds: cobre_core::ResolvedBounds::empty(),
-            penalties: cobre_core::ResolvedPenalties::empty(),
-            resolved_generic_bounds: cobre_core::ResolvedGenericConstraintBounds::empty(),
-            resolved_load_factors: cobre_core::ResolvedLoadFactors::empty(),
-            resolved_ncs_bounds: cobre_core::ResolvedNcsBounds::empty(),
-            resolved_ncs_factors: cobre_core::ResolvedNcsFactors::empty(),
-            resolved_parameters: ResolvedParameters {
-                per_param: vec![],
-                id_to_slot: vec![],
-                cost_scale_factor: 1_000_000.0,
+            base: CtxFixture {
+                hydros,
+                thermals,
+                lines,
+                buses,
+                pumping_stations,
+                contracts,
+                hydro_cell_index,
+                cascade,
+                production_models,
+                evaporation_models,
+                anticipated_plants,
+                anticipated_windows: vec![(None, None); n_anticipated],
+                anticipated_lead_stages,
+                ..CtxFixture::default()
             },
-            par_lp: PrecomputedPar::default(),
-            time_value: TimeValue::from_parts(
-                vec![],
-                vec![1.0],
-                vec![744.0],
-                vec![0],
-                PostStudyResolved::default(),
-            ),
             state,
             stage,
         }
     }
 
-    /// Build the `TemplateBuildCtx` borrowing this fixture, with position maps
-    /// derived from `hydros`/`thermals`/`lines`/`buses` (each entity's index in
-    /// its slice), matching `EntityId -> slot` the way `System`'s canonical
-    /// order does.
     fn ctx(&self) -> TemplateBuildCtx<'_> {
-        TemplateBuildCtx {
-            hydros: &self.hydros,
-            thermals: &self.thermals,
-            lines: &self.lines,
-            buses: &self.buses,
-            load_models: &[],
-            cascade: &self.cascade,
-            hydro_cell_index: &self.hydro_cell_index,
-            resolved: ResolvedTables {
-                bounds: &self.bounds,
-                penalties: &self.penalties,
-                resolved_generic_bounds: &self.resolved_generic_bounds,
-                resolved_load_factors: &self.resolved_load_factors,
-                resolved_ncs_bounds: &self.resolved_ncs_bounds,
-                resolved_ncs_factors: &self.resolved_ncs_factors,
-                resolved_parameters: &self.resolved_parameters,
-            },
-            hydro_pos: self
-                .hydros
-                .iter()
-                .enumerate()
-                .map(|(i, h)| (h.id, i))
-                .collect(),
-            thermal_pos: self
-                .thermals
-                .iter()
-                .enumerate()
-                .map(|(i, t)| (t.id, i))
-                .collect(),
-            line_pos: self
-                .lines
-                .iter()
-                .enumerate()
-                .map(|(i, l)| (l.id, i))
-                .collect(),
-            bus_pos: self
-                .buses
-                .iter()
-                .enumerate()
-                .map(|(i, b)| (b.id, i))
-                .collect(),
-            par_lp: &self.par_lp,
-            production_models: &self.production_models,
-            evaporation_models: &self.evaporation_models,
-            generic_constraints: &[],
-            non_controllable_sources: &[],
-            pumping_stations: &self.pumping_stations,
-            pumping_pos: self
-                .pumping_stations
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (p.id, i))
-                .collect(),
-            n_pumping: self.pumping_stations.len(),
-            contracts: &self.contracts,
-            contract_pos: self
-                .contracts
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (c.id, i))
-                .collect(),
-            n_contract_import: self
-                .contracts
-                .iter()
-                .filter(|c| c.contract_type == ContractType::Import)
-                .count(),
-            n_contract_export: self
-                .contracts
-                .iter()
-                .filter(|c| c.contract_type == ContractType::Export)
-                .count(),
-            diversion_upstream: HashMap::new(),
-            n_hydros: self.hydros.len(),
-            n_thermals: self.thermals.len(),
-            n_lines: self.lines.len(),
-            n_buses: self.buses.len(),
-            max_par_order: 0,
-            n_anticipated: self.anticipated_lead_stages.len(),
-            anticipated_lead_stages: self.anticipated_lead_stages.clone(),
-            anticipated_plants: &self.anticipated_plants,
-            anticipated_windows: self.anticipated_windows.clone(),
-            anticipated_resolution: AnticipatedResolution::default(),
-            has_penalty: false,
-            time_value: &self.time_value,
-            filling_v_target: BTreeMap::new(),
-            arc_stage_weights: HashMap::new(),
-            arc_spread_chrono: HashMap::new(),
-            arc_arrival_density: HashMap::new(),
-            per_stage_mask: Vec::new(),
-        }
+        self.base.ctx()
     }
 }
 
@@ -822,7 +689,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
 
     let picked = call(
         VariableRef::HydroTurbined {
-            hydro_id: fx.hydros[1].id,
+            hydro_id: fx.base.hydros[1].id,
             block_id: Some(3),
             bus_id: Some(EntityId(20)),
         },
@@ -834,7 +701,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
 
     let summed = call(
         VariableRef::HydroTurbined {
-            hydro_id: fx.hydros[1].id,
+            hydro_id: fx.base.hydros[1].id,
             block_id: Some(3),
             bus_id: None,
         },
@@ -864,7 +731,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
 #[test]
 fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
     let fx = turbine_bus_selector_fixture();
-    let ctx = fx.ctx();
+    let mut ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let n_blks = layout.clock.n_blks();
     let turbine_start = layout.equipment.turbine.start;
@@ -875,17 +742,14 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
             vec![ResolvedProductionModel::ConstantProductivity { productivity: 1.0 }],
             vec![ResolvedProductionModel::ConstantProductivity { productivity }],
         ],
-        fx.hydros.len(),
+        fx.base.hydros.len(),
         1,
     );
-    let ctx = TemplateBuildCtx {
-        production_models: &prod,
-        ..ctx
-    };
+    ctx.production_models = &prod;
 
     let picked = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.hydros[1].id,
+            hydro_id: fx.base.hydros[1].id,
             block_id: Some(3),
             bus_id: Some(EntityId(20)),
         },
@@ -897,7 +761,7 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
 
     let summed = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.hydros[1].id,
+            hydro_id: fx.base.hydros[1].id,
             block_id: Some(3),
             bus_id: None,
         },
@@ -967,7 +831,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 
     let picked = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.hydros[1].id,
+            hydro_id: fx.base.hydros[1].id,
             block_id: Some(3),
             bus_id: Some(EntityId(20)),
         },
@@ -979,7 +843,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 
     let summed = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.hydros[1].id,
+            hydro_id: fx.base.hydros[1].id,
             block_id: Some(3),
             bus_id: None,
         },
@@ -1288,16 +1152,12 @@ fn pumping_unknown_station_returns_empty() {
 #[test]
 fn pumping_no_stations_returns_empty() {
     let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let no_stations: Vec<PumpingStation> = Vec::new();
-    let empty_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
-    let ctx = TemplateBuildCtx {
-        pumping_stations: &no_stations,
-        pumping_pos: empty_pos,
-        n_pumping: 0,
-        ..ctx
-    };
+    ctx.pumping_stations = &no_stations;
+    ctx.pumping_pos = BTreeMap::new();
+    ctx.n_pumping = 0;
 
     for var_ref in [
         VariableRef::PumpingFlow {
@@ -2012,13 +1872,10 @@ fn make_inflow_cascade() -> CascadeTopology {
 #[test]
 fn hydro_inflow_two_upstream_canonical_order() {
     let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
-    let ctx = TemplateBuildCtx {
-        cascade: &cascade,
-        ..ctx
-    };
+    ctx.cascade = &cascade;
 
     let blk = 2;
     let result = call(
@@ -2052,13 +1909,10 @@ fn hydro_inflow_two_upstream_canonical_order() {
 #[test]
 fn hydro_inflow_none_matches_some_block_idx() {
     let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
-    let ctx = TemplateBuildCtx {
-        cascade: &cascade,
-        ..ctx
-    };
+    ctx.cascade = &cascade;
 
     let blk = 2;
     let none_result = call(
@@ -2089,15 +1943,12 @@ fn hydro_inflow_none_matches_some_block_idx() {
 #[test]
 fn hydro_inflow_diversion_into_appends_diversion_column() {
     let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
     let div: HashMap<EntityId, Vec<usize>> = [(EntityId(40), vec![2])].into_iter().collect();
-    let ctx = TemplateBuildCtx {
-        cascade: &cascade,
-        diversion_upstream: div,
-        ..ctx
-    };
+    ctx.cascade = &cascade;
+    ctx.diversion_upstream = div;
 
     let blk = 1;
     let result = call(
@@ -2134,13 +1985,10 @@ fn hydro_inflow_diversion_into_appends_diversion_column() {
 #[test]
 fn hydro_inflow_headwater_resolves_to_z_inflow_only() {
     let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
-    let ctx = TemplateBuildCtx {
-        cascade: &cascade,
-        ..ctx
-    };
+    ctx.cascade = &cascade;
 
     for block_idx in [0, 1, 2] {
         let result = call(

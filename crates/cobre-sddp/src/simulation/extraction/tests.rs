@@ -5,7 +5,7 @@
     clippy::cast_precision_loss
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
@@ -16,28 +16,25 @@ use super::{
     extract_stub_collections,
 };
 use cobre_core::{
-    Block, BlockMode, CascadeTopology, ConstraintExpression, GenericConstraint, NoiseMethod,
-    ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds,
-    ResolvedNcsFactors, ResolvedPenalties, ScenarioSourceConfig, SlackConfig, Stage,
-    StageRiskConfig, StageStateConfig,
+    Block, BlockMode, ConstraintExpression, GenericConstraint, NoiseMethod,
+    ResolvedGenericConstraintBounds, ScenarioSourceConfig, SlackConfig, Stage, StageRiskConfig,
+    StageStateConfig,
 };
-use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::energy_conversion::EnergyConversionSet;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::lead_time::{AnticipatedResolution, PointResolution};
 use crate::lp::builder::{
-    GenericConstraintRowEntry, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
-    evaporation_slot_count,
+    GenericConstraintRowEntry, StageGeometry, StageLayout, evaporation_slot_count,
 };
 use crate::lp::indexer::{
     AnticipatedPlants, BlockRowFamily, FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex,
     HydroSys, StateSpace, StudyDimensions,
 };
-use crate::resolved_parameters::ResolvedParameters;
 use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 use crate::test_support;
 use crate::test_support::anticipated_plants_at;
+use crate::test_support::ctx_fixture::CtxFixture;
 use crate::time_value::{PostStudyResolved, TimeValue};
 
 // -------------------------------------------------------------------------
@@ -7455,88 +7452,28 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         bound_lower_affine: None,
         bound_upper_affine: None,
     };
-    let generic_constraints = [constraint];
 
     let id_map: HashMap<i32, usize> = [(1, 0)].into_iter().collect();
     let raw_bounds = vec![(1i32, 0i32, Some(0i32), Some(5.0_f64), Some(20.0_f64))];
     let resolved_generic_bounds =
         ResolvedGenericConstraintBounds::new(&id_map, raw_bounds.into_iter());
 
-    let bounds = ResolvedBounds::empty();
-    let penalties = ResolvedPenalties::empty();
-    let resolved_load_factors = ResolvedLoadFactors::empty();
-    let resolved_ncs_bounds = ResolvedNcsBounds::empty();
-    let resolved_ncs_factors = ResolvedNcsFactors::empty();
-    let resolved_parameters = ResolvedParameters {
-        per_param: vec![],
-        id_to_slot: vec![],
-        cost_scale_factor: 1_000_000.0,
-    };
-    let cascade = CascadeTopology::build(&[]);
-    let par_lp = PrecomputedPar::default();
-    let hydro_cell_index = test_support::identity_hydro_cell_index(0);
-    let production_models = ProductionModelSet::new(Vec::new(), 0, 1);
-    let evaporation_models = EvaporationModelSet::new(Vec::new());
-    let anticipated_plants = AnticipatedPlants::default();
-
-    let ctx = TemplateBuildCtx {
-        hydros: &[],
-        thermals: &[],
-        lines: &[],
-        buses: &[],
-        load_models: &[],
-        cascade: &cascade,
-        hydro_cell_index: &hydro_cell_index,
-        resolved: ResolvedTables {
-            bounds: &bounds,
-            penalties: &penalties,
-            resolved_generic_bounds: &resolved_generic_bounds,
-            resolved_load_factors: &resolved_load_factors,
-            resolved_ncs_bounds: &resolved_ncs_bounds,
-            resolved_ncs_factors: &resolved_ncs_factors,
-            resolved_parameters: &resolved_parameters,
-        },
-        hydro_pos: BTreeMap::new(),
-        thermal_pos: BTreeMap::new(),
-        line_pos: BTreeMap::new(),
-        bus_pos: BTreeMap::new(),
-        par_lp: &par_lp,
-        production_models: &production_models,
-        evaporation_models: &evaporation_models,
-        generic_constraints: &generic_constraints,
-        non_controllable_sources: &[],
-        pumping_stations: &[],
-        pumping_pos: BTreeMap::new(),
-        n_pumping: 0,
-        contracts: &[],
-        contract_pos: BTreeMap::new(),
-        n_contract_import: 0,
-        n_contract_export: 0,
-        diversion_upstream: HashMap::new(),
-        n_hydros: 0,
-        n_thermals: 0,
-        n_lines: 0,
-        n_buses: 0,
-        max_par_order: 0,
-        n_anticipated: 0,
-        anticipated_lead_stages: vec![],
-        anticipated_plants: &anticipated_plants,
-        anticipated_windows: vec![],
-        anticipated_resolution: AnticipatedResolution::default(),
-        has_penalty: false,
-        time_value: &TimeValue::from_parts(
+    let fixture = CtxFixture {
+        hydro_cell_index: test_support::identity_hydro_cell_index(0),
+        production_models: ProductionModelSet::new(Vec::new(), 0, 1),
+        evaporation_models: EvaporationModelSet::new(Vec::new()),
+        generic_constraints: vec![constraint],
+        resolved_generic_bounds,
+        time_value: TimeValue::from_parts(
             vec![],
             vec![1.0],
             vec![730.0],
             vec![0],
             PostStudyResolved::default(),
         ),
-        filling_v_target: BTreeMap::new(),
-        arc_stage_weights: HashMap::new(),
-        arc_spread_chrono: HashMap::new(),
-        arc_arrival_density: HashMap::new(),
-        per_stage_mask: Vec::new(),
+        ..CtxFixture::default()
     };
+    let ctx = fixture.ctx();
 
     let state = test_support::state_layout(0, 0);
     let stage = Stage {

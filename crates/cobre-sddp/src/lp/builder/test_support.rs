@@ -13,6 +13,7 @@ use crate::bucket_topology::build_transit_bucket_topology;
 use crate::indexer::{AnticipatedPlants, StateSpace};
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::setup::resolve_anticipated_commitments_core;
+use crate::test_support::constant_lead_resolution;
 use crate::time_value::DeliveryCalendar;
 
 use super::layout::TemplateBuildCtx;
@@ -68,7 +69,10 @@ pub(super) fn ctx_anticipated_and_mask_inputs(
 /// Build the role-(a) [`StateSpace`] a `StageLayout` borrows, from a test
 /// [`TemplateBuildCtx`]. Mirrors `crate::setup::resolve_state_layout` (same state
 /// dimensions and PAR-derived lag counts), so the handle is byte-identical to
-/// production's.
+/// production's. Attaches the [`constant_lead_resolution`] over the ctx's own
+/// study horizon, the resolution `anticipated_resolution_for` falls back to when
+/// none is attached; a caller needing the ctx's own attached resolution uses
+/// [`state_layout_with_resolution`] instead.
 pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
     let effective_lag_counts: Vec<usize> = if ctx.max_par_order > 0 {
         (0..ctx.n_hydros)
@@ -83,22 +87,27 @@ pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
     } else {
         vec![0; ctx.n_hydros]
     };
-    StateSpace::new(
+    let resolution =
+        constant_lead_resolution(&ctx.anticipated_lead_stages, ctx.resolved.bounds.n_stages());
+    let k_max = resolution.ring_size(&ctx.anticipated_lead_stages);
+    let mut state = StateSpace::new(
         ctx.n_hydros,
         ctx.max_par_order,
         0,
         Vec::new(),
         ctx.n_anticipated,
-        ctx.anticipated_resolution
-            .ring_size(&ctx.anticipated_lead_stages),
+        k_max,
         ctx.anticipated_lead_stages.clone(),
         &effective_lag_counts,
-    )
+    );
+    state.set_anticipated_resolution(resolution);
+    state
 }
 
-/// [`state_layout_for`] plus the ctx's attached `AnticipatedResolution`. Tests
-/// asserting `anticipated_resolution_for` byte-identity with production must build
-/// through this — [`state_layout_for`] leaves the constant-lead fallback active.
+/// [`state_layout_for`] with the ctx's own attached `AnticipatedResolution`
+/// substituted for the saturating default [`state_layout_for`] attaches.
+/// Tests asserting `anticipated_resolution_for` byte-identity with production
+/// must build through this.
 pub(super) fn state_layout_with_resolution(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
     let mut state = state_layout_for(ctx);
     state.set_anticipated_resolution(ctx.anticipated_resolution.clone());

@@ -21,13 +21,13 @@ use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, entity_flat};
 use super::{GenericConstraintRowEntry, StateBox, columns, entries, rows, scaling};
+#[cfg(any(test, feature = "test-support"))]
+use crate::bucket_topology::build_transit_bucket_topology;
 use crate::lp::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
     EvaporationIndices, FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, NcsSys,
     PumpingSys, StateSpace, StorageBoundaryGrid,
 };
-#[cfg(any(test, feature = "test-support"))]
-use crate::setup::bucket_topology::build_transit_bucket_topology;
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::resolve_state_layout;
 

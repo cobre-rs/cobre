@@ -152,14 +152,14 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// upstream hydro system index (parallel-mode fill; [`Self::arc_spread_chrono`]
     /// carries the chronological block-resolved factors). Absent for an
     /// undeclared arc — the fill's `k_0 = 1`, no-deposit branch. See
-    /// [`build_arc_stage_weights`](crate::setup::bucket_topology::build_arc_stage_weights).
+    /// [`build_arc_stage_weights`](crate::bucket_topology::build_arc_stage_weights).
     pub(crate) arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
     /// Per-declared-arc, per-chronological-stage full [`SpreadResolution`]
     /// (`block_deposits`/`within_stage_routing`/`arrival_density`), keyed
     /// like [`Self::arc_stage_weights`].
     /// `by_stage[stage_idx]` is `None` when that study stage's own `block_mode`
     /// is `Parallel` (the parallel fill reads [`Self::arc_stage_weights`] instead).
-    /// See [`build_arc_spread_chrono`](crate::setup::bucket_topology::build_arc_spread_chrono).
+    /// See [`build_arc_spread_chrono`](crate::bucket_topology::build_arc_spread_chrono).
     pub(crate) arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
     /// Per-declared-arc, per-chronological-arrival-stage blend of every
     /// contributing source stage's arrival density (ρ in the methodology),
@@ -168,13 +168,13 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// also `None` (a `Parallel` arrival stage), or where no in-study source
     /// stage reaches it. Looked up directly by the chronological water fill's
     /// `resolve_chrono_arrival_density`. See
-    /// [`build_arc_arrival_density`](crate::setup::bucket_topology::build_arc_arrival_density).
+    /// [`build_arc_arrival_density`](crate::bucket_topology::build_arc_arrival_density).
     pub(crate) arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
     /// `per_stage_mask[stage_idx]` holds the max reachable lag per declared
     /// downstream plant, discovery order (mirrors
-    /// [`TransitBucketTopology::per_plant_depth`](crate::setup::bucket_topology::TransitBucketTopology::per_plant_depth)).
+    /// [`TransitBucketTopology::per_plant_depth`](crate::bucket_topology::TransitBucketTopology::per_plant_depth)).
     /// Gates which bucket-definition rows [`StageLayout::new`] emits; see
-    /// [`crate::setup::bucket_topology::TransitBucketTopology::per_stage_mask`].
+    /// [`crate::bucket_topology::TransitBucketTopology::per_stage_mask`].
     pub(crate) per_stage_mask: Vec<Vec<usize>>,
 }
 
@@ -553,7 +553,7 @@ struct GenericConstraintLayout {
 /// `None` when `lag` exceeds `per_stage_mask[stage_idx]`'s max reachable lag
 /// for that plant. `column_order` groups contiguously by plant in the SAME
 /// discovery order `per_stage_mask` indexes
-/// ([`crate::setup::bucket_topology::build_transit_bucket_topology`]), so a plant
+/// ([`crate::bucket_topology::build_transit_bucket_topology`]), so a plant
 /// transition in the scan advances the mask index. Returns the mapping and the
 /// reachable count (`transit_bucket_definition`'s row length).
 fn build_transit_bucket_row_pos(

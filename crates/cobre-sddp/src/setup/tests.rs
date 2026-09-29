@@ -10882,7 +10882,7 @@ fn test_single_arc_unroll_matches_ac1() {
     );
 
     let calendar = DeliveryCalendar::from_system(&system);
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+    let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
@@ -10915,7 +10915,7 @@ fn test_mid_horizon_entrant_zero_history_zero_seeds_stage_0_transit_buckets() {
     );
 
     let calendar = DeliveryCalendar::from_system(&system);
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+    let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
@@ -10944,7 +10944,7 @@ fn test_confluence_aggregates_two_upstreams_into_shared_transit_buckets() {
     );
 
     let calendar = DeliveryCalendar::from_system(&system);
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+    let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
@@ -10993,9 +10993,9 @@ fn test_seed_is_declaration_order_invariant() {
     let calendar_a = DeliveryCalendar::from_system(&system_a);
     let calendar_b = DeliveryCalendar::from_system(&system_b);
     let topology_a =
-        super::bucket_topology::build_transit_bucket_topology(&system_a, &calendar_a, false);
+        crate::bucket_topology::build_transit_bucket_topology(&system_a, &calendar_a, false);
     let topology_b =
-        super::bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
+        crate::bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
     let seed_a = super::build_initial_transit_bucket_state(&system_a, &topology_a);
     let seed_b = super::build_initial_transit_bucket_state(&system_b, &topology_b);
 
@@ -11017,7 +11017,7 @@ fn test_seed_len_matches_n_buckets() {
         vec![bucket_seed_defluence_window(2, 0.0, 24.0, 100.0)],
     );
     let calendar = DeliveryCalendar::from_system(&system);
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+    let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
     assert_eq!(seed.len(), topology.n_buckets);
 
@@ -11028,7 +11028,7 @@ fn test_seed_len_matches_n_buckets() {
         vec![],
     );
     let no_arc_calendar = DeliveryCalendar::from_system(&no_arc_system);
-    let no_arc_topology = super::bucket_topology::build_transit_bucket_topology(
+    let no_arc_topology = crate::bucket_topology::build_transit_bucket_topology(
         &no_arc_system,
         &no_arc_calendar,
         false,
@@ -11062,7 +11062,7 @@ fn test_gapped_windows_contribute_additively() {
 
     let delivery_calendar = DeliveryCalendar::from_system(&system);
     let topology =
-        super::bucket_topology::build_transit_bucket_topology(&system, &delivery_calendar, false);
+        crate::bucket_topology::build_transit_bucket_topology(&system, &delivery_calendar, false);
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
 
     let vol_recent = 24.0 * M3S_TO_HM3 * 100.0;

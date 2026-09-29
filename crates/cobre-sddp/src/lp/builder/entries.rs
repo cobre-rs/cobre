@@ -744,7 +744,7 @@ fn fill_arc_release_chrono_block_entries(
 
 /// Resolve this stage's incoming maturing bucket `arrival_density` (fixed-delivery-density
 /// contract): a lookup of the setup-precomputed per-`(arc, arrival stage)` blend
-/// ([`build_arc_arrival_density`](crate::setup::bucket_topology::build_arc_arrival_density)),
+/// ([`build_arc_arrival_density`](crate::bucket_topology::build_arc_arrival_density)),
 /// already resolved in this arrival stage's own frame. Falls back to duration-weighted
 /// uniform only where the table holds no blend (the study's first stage) or the plant has
 /// no travel-time upstream.

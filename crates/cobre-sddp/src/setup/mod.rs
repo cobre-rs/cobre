@@ -47,6 +47,7 @@ use cobre_stochastic::par::lag_transition::precompute_stage_lag_transitions;
 use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 
 use crate::StageTemplates;
+use crate::bucket_topology;
 use crate::config::LoopParams;
 use crate::resolved_parameters::{ResolvedParameters, build_resolved_parameters};
 use crate::scaling_report::ScalingReport;
@@ -54,7 +55,6 @@ use crate::simulation::SimulationConfig;
 use crate::solve::solver_phase::{Phase, validate_phase_solver_config};
 use crate::stochastic::noise_key::build_noise_key_table;
 mod accessors;
-pub(crate) mod bucket_topology;
 pub mod node_graph;
 mod orchestration;
 pub mod params;
@@ -2834,7 +2834,8 @@ mod transit_seed_round_trip_tests {
     };
     use cobre_core::{EntityId, HydroPastDefluence, InitialConditions, System, SystemBuilder};
 
-    use super::{TransitSeedArc, bucket_topology, build_initial_transit_bucket_state};
+    use super::{TransitSeedArc, build_initial_transit_bucket_state};
+    use crate::bucket_topology;
     use crate::simulation::extraction::build_transit_seed;
     use crate::simulation::types::{SimulationHydroResult, SimulationStageResult};
     use crate::time_value::DeliveryCalendar;

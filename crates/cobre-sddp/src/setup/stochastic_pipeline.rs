@@ -1813,7 +1813,7 @@ mod tests {
             .expect("PrecomputedPar must build");
         let calendar = crate::time_value::DeliveryCalendar::from_system(&system);
         let topology =
-            crate::setup::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+            crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
         let layout = crate::setup::resolve_state_layout(
             &system,
             &calendar,

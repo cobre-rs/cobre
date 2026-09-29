@@ -9,9 +9,9 @@ use cobre_core::{
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
+use crate::bucket_topology::build_transit_bucket_topology;
 use crate::indexer::{AnticipatedPlants, StateSpace};
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
-use crate::setup::bucket_topology::build_transit_bucket_topology;
 use crate::setup::resolve_anticipated_commitments_core;
 use crate::time_value::DeliveryCalendar;
 

@@ -24,6 +24,7 @@ use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
 use crate::block_clock::M3S_TO_HM3;
+use crate::bucket_topology::build_transit_bucket_topology;
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
@@ -33,7 +34,6 @@ use crate::indexer::{
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
 use crate::resolved_parameters::ResolvedParameters;
-use crate::setup::bucket_topology::build_transit_bucket_topology;
 use crate::setup::template_postprocess::postprocess_templates;
 use crate::setup::{resolve_anticipated_commitments, resolve_state_layout};
 use crate::test_support::{assert_templates_byte_identical, state_layout_full};

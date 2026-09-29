@@ -7,6 +7,21 @@ use cobre_stochastic::season_cast::post_study_calendar_stages;
 use crate::block_clock::BlockClock;
 use crate::lp::indexer::{AnticipatedLocal, AnticipatedPlants};
 
+/// The study's post-study delivery calendar ([`post_study_calendar_stages`]),
+/// empty when none is declared. Appended after the study stages to extend the
+/// ring's dating calendar so a slot maturing past the horizon dates onto its
+/// real post-study stage. Shared by `build_extended_delivery_anchors` and
+/// the policy manifest builder `build_stage_entity_manifest`, so every
+/// delivery-dating site derives one calendar. The synthetic `Stage::id`
+/// restarts at `0` and collides with study ids — only
+/// `start_date`/`end_date` are ever read.
+pub(crate) fn post_study_delivery_calendar(system: &System) -> Vec<Stage> {
+    system
+        .post_study_stages()
+        .map(|post_study| post_study_calendar_stages(&post_study.stages))
+        .unwrap_or_default()
+}
+
 /// Compute per-stage one-step discount factors from study stages and a policy graph.
 ///
 /// `discount_factors[t] = 1 / (1 + r_t)^(Dt / 365.25)` where `r_t` is the annual

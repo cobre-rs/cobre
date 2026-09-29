@@ -44,7 +44,7 @@ use cobre_stochastic::noise_entity_order;
 use cobre_stochastic::par::lag_transition::derive_downstream_par_order;
 use cobre_stochastic::par::lag_transition::precompute_noise_groups;
 use cobre_stochastic::par::lag_transition::precompute_stage_lag_transitions;
-use cobre_stochastic::season_cast::{DatedWindow, StageCalendar, post_study_calendar_stages};
+use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 
 use crate::StageTemplates;
 use crate::config::LoopParams;
@@ -115,7 +115,7 @@ use crate::{
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
     stopping_rule::{StoppingRule, StoppingRuleSet},
-    time_value::TimeValue,
+    time_value::{TimeValue, post_study_delivery_calendar},
     workspace::CapturedBasis,
 };
 
@@ -1049,21 +1049,6 @@ pub(crate) fn year_month_day_anchor(date: NaiveDate) -> i32 {
     use chrono::Datelike;
     // `month()` is 1..=12, so the conversion never fails.
     date.year() * 10_000 + i32::try_from(date.month()).unwrap_or(1) * 100 + 1
-}
-
-/// The study's post-study delivery calendar ([`post_study_calendar_stages`]),
-/// empty when none is declared. Appended after the study stages to extend the
-/// ring's dating calendar so a slot maturing past the horizon dates onto its
-/// real post-study stage. Shared by [`build_extended_delivery_anchors`] and
-/// the policy manifest builder `build_stage_entity_manifest`, so every
-/// delivery-dating site derives one calendar. The synthetic `Stage::id`
-/// restarts at `0` and collides with study ids — only
-/// `start_date`/`end_date` are ever read.
-pub(crate) fn post_study_delivery_calendar(system: &System) -> Vec<Stage> {
-    system
-        .post_study_stages()
-        .map(|post_study| post_study_calendar_stages(&post_study.stages))
-        .unwrap_or_default()
 }
 
 /// The study's boundary date: the last study stage's (`id >= 0`, highest

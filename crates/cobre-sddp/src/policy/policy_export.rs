@@ -29,7 +29,8 @@ use crate::lp::indexer::{
     AnticipatedPlants, CutSlot, CutStateProjection, StateRegion, StateSpace,
     for_each_live_commitment_slot,
 };
-use crate::setup::{NodeGraph, NodePos, extended_delivery_stages, post_study_delivery_calendar};
+use crate::setup::{NodeGraph, NodePos, extended_delivery_stages};
+use crate::time_value::post_study_delivery_calendar;
 use crate::training::TrainingResult;
 
 /// The sentinel-or-dated `(interval_start, interval_end)` pair for a resolved
@@ -778,9 +779,10 @@ mod tests {
     use crate::lp::indexer::{AnticipatedPlants, CutStateProjection, StateSpace};
     use crate::setup::{
         NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
-        StageIdx, extended_delivery_stages, post_study_delivery_calendar, year_month_day_anchor,
+        StageIdx, extended_delivery_stages, year_month_day_anchor,
     };
     use crate::test_support::{self, anticipated_slot};
+    use crate::time_value::post_study_delivery_calendar;
     use crate::visited_states::VisitedStatesArchive;
     use cobre_core::commissioning::hydro_operating_active;
     use cobre_core::temporal::StageStateConfig;

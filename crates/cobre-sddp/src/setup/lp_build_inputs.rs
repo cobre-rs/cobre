@@ -11,7 +11,9 @@ use cobre_io::StageIdResolver;
 use crate::block_clock::BlockClock;
 use crate::hydro_models::{ProductionModelSet, ResolvedProductionModel};
 use crate::lp::builder::LpBuildInputs;
-use crate::lp::indexer::EntityPositions;
+use crate::lp::indexer::{EntityPositions, HydroCellIndex, StudyDimensions};
+use crate::resolved_parameters::ResolvedParameters;
+use crate::time_value::TimeValue;
 
 /// Precompute the per-stage minimum target-storage trajectory `V_target[t]` for
 /// every filling hydro, keyed `(hydro_idx, stage_id) → V_target` \[hm³\].
@@ -161,12 +163,18 @@ fn resolve_hydro_productivities_per_stage(
 /// consumes already-resolved input instead of re-deriving it per stage.
 /// `load_bus_ids` is the stochastic owner's load-noise membership list (the
 /// caller's single authority — this function resolves no membership of its
-/// own).
-pub(crate) fn resolve_lp_build_inputs(
+/// own). `study_dims`/`time_value`/`hydro_cell_index`/`resolved_parameters`
+/// are borrowed through unchanged, from the same `resolve_stage_data` step
+/// that built them.
+pub(crate) fn resolve_lp_build_inputs<'a>(
     system: &System,
     load_bus_ids: &[EntityId],
     production_models: &ProductionModelSet,
-) -> LpBuildInputs {
+    study_dims: &'a StudyDimensions,
+    time_value: &'a TimeValue,
+    hydro_cell_index: &'a HydroCellIndex,
+    resolved_parameters: &'a ResolvedParameters,
+) -> LpBuildInputs<'a> {
     let n_study = system.stages().iter().filter(|s| s.id >= 0).count();
     LpBuildInputs {
         positions: EntityPositions::build(system),
@@ -179,6 +187,10 @@ pub(crate) fn resolve_lp_build_inputs(
             system.hydros().len(),
             production_models,
         ),
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_parameters,
     }
 }
 

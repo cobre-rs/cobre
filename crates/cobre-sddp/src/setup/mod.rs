@@ -110,7 +110,7 @@ use crate::{
     horizon_mode::HorizonMode,
     hydro_models::PrepareHydroModelsResult,
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution},
-    lp::builder::{StageGeometry, StateBox, build_stage_templates},
+    lp::builder::{LpBuildInputs, StageGeometry, StateBox, build_stage_templates},
     lp::indexer::{
         AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
         StateSpace, StudyDimensions, ThermalSys,
@@ -631,94 +631,40 @@ fn build_ncs_entity_data(
     })
 }
 
-/// Grouped output of [`build_energy_and_templates`].
-struct EnergyAndTemplates {
-    energy_conversion: EnergyConversionSet,
-    stage_templates: StageTemplates,
-    scaling_report: ScalingReport,
-    resolved_parameters: ResolvedParameters,
-    time_value: TimeValue,
-    hydro_cell_index: HydroCellIndex,
-    study_dims: StudyDimensions,
-    stage_lag_transitions: Vec<StageLagTransition>,
-    stages: Vec<Stage>,
-}
-
-/// Build the energy-conversion set, the resolved parameter table, the study
-/// dimensions, and the post-processed stage LP templates.
-///
-/// The energy-conversion set, the resolved parameter table and
-/// [`StudyDimensions`] are built before the LP templates: the builder can
-/// then resolve `CoefficientRef::Parameter` values, and `ctx.study_dims`
-/// carries `has_inflow_penalty`/`max_deficit_segments`/`anticipated_plants`
-/// instead of the builder re-deriving them. Seasonless stages collapse to
-/// season 0, consistent with every other season-indexed lookup.
+/// Build the stage LP templates and post-process them (scaling, state boxes).
 ///
 /// # Errors
 ///
-/// - [`SddpError::Validation`] — on energy-conversion / resolved-parameter
-///   construction failure, or when the post-processed template list is empty.
-fn build_energy_and_templates(
+/// [`SddpError::Validation`] when the post-processed template list is empty.
+fn build_postprocessed_templates(
     system: &System,
-    config: &StudyParams,
     stochastic: &StochasticContext,
     hydro_models: &PrepareHydroModelsResult,
-    layout: &ResolvedStateLayout,
+    state: &StateSpace,
     topology: &bucket_topology::TransitBucketTopology,
-    calendar: DeliveryCalendar,
-) -> Result<EnergyAndTemplates, SddpError> {
-    let (energy_conversion, resolved_parameters) = build_energy_conversion_and_resolved_parameters(
-        system,
-        hydro_models,
-        &config.scalar_parameters,
-        config.cost_scale_factor,
-    )?;
-
-    let stages: Vec<Stage> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .cloned()
-        .collect();
-    let (downstream_par_order, stage_lag_transitions) = resolve_stage_lag_transitions(
-        &stages,
-        stochastic.par(),
-        system.policy_graph().season_map.as_ref(),
-    );
-    let study_dims = build_study_dimensions(
-        system,
-        config.inflow_method,
-        layout.state.hydro_count,
-        layout.anticipated_plants.clone(),
-        downstream_par_order,
-    );
-
-    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let load_bus_ids = &stochastic.entity_order()[stochastic.class_dimensions().load_bus_range()];
-    let inputs = resolve_lp_build_inputs(system, load_bus_ids, &hydro_models.production);
+    inputs: LpBuildInputs<'_>,
+) -> Result<(StageTemplates, ScalingReport), SddpError> {
+    let resolved_parameters = inputs.resolved_parameters;
+    let study_dims = inputs.study_dims;
+    let time_value = inputs.time_value;
 
     let mut stage_templates = build_stage_templates(
         system,
         stochastic.par(),
         &hydro_models.production,
         &hydro_models.evaporation,
-        &resolved_parameters,
-        &layout.state,
-        &study_dims,
+        state,
         topology,
-        &hydro_cell_index,
         inputs,
-        &time_value,
     );
 
     let scaling_report = template_postprocess::postprocess_templates(
         &mut stage_templates,
         system,
-        &layout.state,
+        state,
         &study_dims.anticipated_plants,
-        config.cost_scale_factor,
-        &time_value,
+        resolved_parameters.cost_scale_factor,
+        time_value,
     );
 
     if stage_templates.templates.is_empty() {
@@ -727,22 +673,12 @@ fn build_energy_and_templates(
         ));
     }
 
-    Ok(EnergyAndTemplates {
-        energy_conversion,
-        stage_templates,
-        scaling_report,
-        resolved_parameters,
-        time_value,
-        hydro_cell_index,
-        study_dims,
-        stage_lag_transitions,
-        stages,
-    })
+    Ok((stage_templates, scaling_report))
 }
 
 /// Build the energy-conversion set and the resolved-parameter table, then fail
 /// loud on a generic constraint that references an unresolved scalar-parameter
-/// id — the shared prefix of [`build_energy_and_templates`] and the
+/// id — the shared prefix of [`resolve_stage_data`] and the
 /// validate-time [`validate_generic_constraint_parameters`].
 ///
 /// # Errors
@@ -1630,7 +1566,7 @@ static NOOP_SEASON_MAP: SeasonMap = SeasonMap {
 };
 
 /// Downstream PAR order and per-stage lag transitions over one `SeasonMap`.
-/// The sole owner of both derivations — `build_energy_and_templates` and
+/// The sole owner of both derivations — `resolve_stage_data` and
 /// `scenario_libraries::build_historical_inflow_library` each call it once,
 /// over their own PAR model.
 pub(crate) fn resolve_stage_lag_transitions(
@@ -1711,8 +1647,8 @@ fn resolve_initial_conditions(
 ///
 /// # Errors
 ///
-/// Propagates [`resolve_state_layout`]'s and [`build_energy_and_templates`]'s
-/// errors.
+/// Propagates [`resolve_state_layout`]'s, [`build_energy_conversion_and_resolved_parameters`]'s
+/// and [`build_postprocessed_templates`]'s errors.
 fn resolve_stage_data(
     system: &System,
     config: &StudyParams,
@@ -1751,24 +1687,52 @@ fn resolve_stage_data(
         config.boundary.is_present(),
     );
 
-    let EnergyAndTemplates {
-        energy_conversion,
-        stage_templates,
-        scaling_report,
-        resolved_parameters,
-        time_value,
-        hydro_cell_index,
-        study_dims,
-        stage_lag_transitions,
-        stages,
-    } = build_energy_and_templates(
+    let (energy_conversion, resolved_parameters) = build_energy_conversion_and_resolved_parameters(
         system,
-        config,
+        hydro_models,
+        &config.scalar_parameters,
+        config.cost_scale_factor,
+    )?;
+
+    let stages: Vec<Stage> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let (downstream_par_order, stage_lag_transitions) = resolve_stage_lag_transitions(
+        &stages,
+        stochastic.par(),
+        system.policy_graph().season_map.as_ref(),
+    );
+    let study_dims = build_study_dimensions(
+        system,
+        config.inflow_method,
+        layout.state.hydro_count,
+        layout.anticipated_plants.clone(),
+        downstream_par_order,
+    );
+
+    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let load_bus_ids = &stochastic.entity_order()[stochastic.class_dimensions().load_bus_range()];
+    let inputs = resolve_lp_build_inputs(
+        system,
+        load_bus_ids,
+        &hydro_models.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_parameters,
+    );
+
+    let (stage_templates, scaling_report) = build_postprocessed_templates(
+        system,
         stochastic,
         hydro_models,
-        &layout,
+        &layout.state,
         &transit_bucket_topology,
-        calendar,
+        inputs,
     )?;
 
     let noise_group_ids = precompute_noise_groups(&stages);

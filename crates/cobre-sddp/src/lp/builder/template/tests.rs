@@ -29,7 +29,7 @@ use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
     FillingTargetLocal, FloorLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys, PumpingSys,
-    StateSpace, ThermalSys, anticipated_resolution_for,
+    StateSpace, StudyDimensions, ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -225,11 +225,19 @@ fn system_with_thermals(thermals: Vec<Thermal>) -> cobre_core::System {
 fn resolve_lp_build_inputs_load_bus_indices_honors_threaded_scheme() {
     let system = system_with_thermals(vec![]);
     let production_models = ProductionModelSet::new(Vec::new(), 0, 0);
+    let study_dims = StudyDimensions::default();
+    let time_value = build_time_value_for(&system);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let resolved_params = empty_resolved_params();
 
     let external = crate::setup::resolve_lp_build_inputs(
         &system,
         &system.load_noise_member_bus_ids(SamplingScheme::External),
         &production_models,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
     );
     assert_eq!(external.load_bus_indices, vec![0]);
 
@@ -237,6 +245,10 @@ fn resolve_lp_build_inputs_load_bus_indices_honors_threaded_scheme() {
         &system,
         &system.load_noise_member_bus_ids(SamplingScheme::InSample),
         &production_models,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
     );
     assert!(in_sample.load_bus_indices.is_empty());
 }
@@ -463,7 +475,6 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -471,18 +482,23 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     let ids: Vec<i32> = ctx.pumping_stations.iter().map(|p| p.id.0).collect();
@@ -519,7 +535,6 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -527,18 +542,23 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     assert_eq!(ctx.pumping_stations.len(), 2, "two stations were declared");
@@ -595,7 +615,6 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -603,18 +622,23 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
@@ -847,7 +871,6 @@ fn geometry_ncs_family_matches_the_stage_layout() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -855,18 +878,23 @@ fn geometry_ncs_family_matches_the_stage_layout() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
@@ -1077,7 +1105,6 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1085,18 +1112,23 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     assert_eq!(ctx.contracts.len(), 2);
@@ -1147,7 +1179,6 @@ fn stage_layout_geometry_populates_contract_ranges() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1155,18 +1186,23 @@ fn stage_layout_geometry_populates_contract_ranges() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     let stage = system
         .stages()
@@ -1201,7 +1237,6 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1209,18 +1244,23 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     let stage = system
         .stages()
@@ -1345,7 +1385,6 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1353,18 +1392,23 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let _ = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 }
 
@@ -1421,7 +1465,6 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1429,18 +1472,23 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     assert_eq!(ctx.study_dims.anticipated_plants.len(), 2, "n_anticipated");
@@ -1504,7 +1552,6 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1512,18 +1559,23 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     assert_eq!(ctx.study_dims.anticipated_plants.len(), 0, "n_anticipated");
@@ -1912,7 +1964,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs_a = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims_a = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -1920,18 +1971,23 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs_a = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims_a,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx_a = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs_a,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims_a,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs_a,
     );
 
     assert_eq!(ctx_a.study_dims.anticipated_plants.len(), 2);
@@ -2005,7 +2061,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         ctx_b_resolution,
         &effective_lag_counts,
     );
-    let inputs_b = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims_b = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2013,18 +2068,23 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         ctx_b_anticipated_plants.clone(),
         0,
     );
+    let inputs_b = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims_b,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx_b = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs_b,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &ctx_b_state,
-        &study_dims_b,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs_b,
     );
 
     assert_eq!(
@@ -2291,7 +2351,6 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2299,18 +2358,23 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         layout.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let mut templates = super::build_stage_templates(
         &system,
         &par_lp,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &layout.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
         inputs,
-        &time_value,
     );
 
     let _report = postprocess_templates(
@@ -2378,7 +2442,6 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2386,18 +2449,23 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     let study_stage_ids: Vec<i32> = system
@@ -2422,7 +2490,6 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2430,18 +2497,23 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     let study_stage_ids: Vec<i32> = system
@@ -2474,7 +2546,6 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2482,18 +2553,23 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     assert_eq!(
@@ -2521,7 +2597,6 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2529,18 +2604,23 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -2737,7 +2817,6 @@ fn build_post_study_resolved_for(
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -2745,18 +2824,23 @@ fn build_post_study_resolved_for(
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     ctx.time_value.post_study().clone()
 }
@@ -3156,11 +3240,6 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
     let resolved = Box::leak(Box::new(resolved));
     let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
     let time_value = Box::leak(Box::new(build_time_value_for(system)));
-    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
-        system,
-        &[],
-        production,
-    )));
     let study_dims = Box::leak(Box::new(crate::setup::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
@@ -3168,18 +3247,23 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         resolved.anticipated_plants.clone(),
         0,
     )));
+    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_params,
+    )));
     let ctx = super::build_template_build_ctx(
         system,
         par_lp,
-        inputs,
         production,
         &hydro_models.evaporation,
-        resolved_params,
         &resolved.state,
-        study_dims,
         topology,
-        hydro_cell_index,
-        time_value,
+        inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
     let state = ctx.state;
@@ -3675,7 +3759,6 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -3683,18 +3766,23 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &production,
         &hydro_models.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     let stage = &system.stages()[0];
     super::build_single_stage_template(&ctx, ctx.state, stage, 0).template
@@ -3787,11 +3875,6 @@ fn block_layout_and_template(
     let resolved = Box::leak(Box::new(resolved));
     let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
     let time_value = Box::leak(Box::new(build_time_value_for(system)));
-    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
-        system,
-        &[],
-        production,
-    )));
     let study_dims = Box::leak(Box::new(crate::setup::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
@@ -3799,18 +3882,23 @@ fn block_layout_and_template(
         resolved.anticipated_plants.clone(),
         0,
     )));
+    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_params,
+    )));
     let ctx = super::build_template_build_ctx(
         system,
         par_lp,
-        inputs,
         production,
         &hydro_models.evaporation,
-        resolved_params,
         &resolved.state,
-        study_dims,
         topology,
-        hydro_cell_index,
-        time_value,
+        inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
     let state = ctx.state;
@@ -4451,7 +4539,6 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -4459,18 +4546,23 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
 
     let mut saw_populated_filling_target = false;
@@ -4893,11 +4985,6 @@ fn filling_block_layout_and_template(
     let resolved = Box::leak(Box::new(resolved));
     let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
     let time_value = Box::leak(Box::new(build_time_value_for(system)));
-    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
-        system,
-        &[],
-        production,
-    )));
     let study_dims = Box::leak(Box::new(crate::setup::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
@@ -4905,18 +4992,23 @@ fn filling_block_layout_and_template(
         resolved.anticipated_plants.clone(),
         0,
     )));
+    let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_params,
+    )));
     let ctx = super::build_template_build_ctx(
         system,
         par_lp,
-        inputs,
         production,
         &hydro_models.evaporation,
-        resolved_params,
         &resolved.state,
-        study_dims,
         topology,
-        hydro_cell_index,
-        time_value,
+        inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
     let state = ctx.state;
@@ -5218,7 +5310,6 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -5226,18 +5317,23 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     assert_eq!(
         ctx.state
@@ -5302,7 +5398,6 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -5310,18 +5405,23 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         resolved.anticipated_plants.clone(),
         0,
     );
+    let inputs = crate::setup::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
     let ctx = super::build_template_build_ctx(
         &system,
         &par_lp,
-        &inputs,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
         &resolved.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
-        &time_value,
+        &inputs,
     );
     assert_eq!(ctx.state.anticipated_lead_stages, vec![1]);
 
@@ -5428,7 +5528,6 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let layout = resolve_state_layout(&system, &calendar, &par_lp, &topology, None)
         .expect("resolve_state_layout: valid test fixture");
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
     let study_dims = crate::setup::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
@@ -5440,18 +5539,23 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
         let time_value = build_time_value_for(&system);
+        let inputs = crate::setup::resolve_lp_build_inputs(
+            &system,
+            &[],
+            &hydro_result.production,
+            &study_dims,
+            &time_value,
+            &hydro_cell_index,
+            &resolved_params,
+        );
         let _ = super::build_stage_templates(
             &system,
             &par_lp,
             &hydro_result.production,
             &hydro_result.evaporation,
-            &resolved_params,
             &layout.state,
-            &study_dims,
             &topology,
-            &hydro_cell_index,
             inputs,
-            &time_value,
         );
     });
 

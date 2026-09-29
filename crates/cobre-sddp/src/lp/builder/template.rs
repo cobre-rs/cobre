@@ -12,19 +12,22 @@ use crate::error::SddpError;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 #[cfg(any(test, feature = "test-support"))]
 use crate::inflow_method::InflowNonNegativityMethod;
+#[cfg(any(test, feature = "test-support"))]
 use crate::resolved_parameters::ResolvedParameters;
 #[cfg(any(test, feature = "test-support"))]
 use crate::time_value::DeliveryCalendar;
+#[cfg(any(test, feature = "test-support"))]
 use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, entity_flat};
 use super::{GenericConstraintRowEntry, LpBuildInputs, StateBox, columns, entries, rows, scaling};
 #[cfg(any(test, feature = "test-support"))]
 use crate::bucket_topology::build_transit_bucket_topology;
+#[cfg(any(test, feature = "test-support"))]
+use crate::lp::indexer::HydroCellIndex;
 use crate::lp::indexer::{
     AnticipatedLocal, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
-    FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, NcsSys, PumpingSys, StateSpace,
-    StorageBoundaryGrid, StudyDimensions,
+    FillingTargetLocal, FloorLocal, HydroSys, NcsSys, PumpingSys, StateSpace, StorageBoundaryGrid,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::setup::{
@@ -572,10 +575,6 @@ pub(crate) fn models_from_normal<M>(
 /// `row_lower == row_upper == intercept_m3s`.
 ///
 #[expect(
-    clippy::too_many_arguments,
-    reason = "each parameter threads one single-owner value the caller resolved; a wrapper would rename the derivation, not remove it"
-)]
-#[expect(
     private_interfaces,
     reason = "time_value borrows the crate-private owner until this function's visibility narrows"
 )]
@@ -585,13 +584,9 @@ pub fn build_stage_templates(
     par_lp: &PrecomputedPar,
     production_models: &ProductionModelSet,
     evaporation_models: &EvaporationModelSet,
-    resolved_parameters: &ResolvedParameters,
     state_layout: &StateSpace,
-    study_dims: &StudyDimensions,
     topology: &TransitBucketTopology,
-    hydro_cell_index: &HydroCellIndex,
-    inputs: LpBuildInputs,
-    time_value: &TimeValue,
+    inputs: LpBuildInputs<'_>,
 ) -> StageTemplates {
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let n_hydros = system.hydros().len();
@@ -607,21 +602,17 @@ pub fn build_stage_templates(
     );
 
     if study_stages.is_empty() {
-        return StageTemplates::empty(resolved_parameters.cost_scale_factor);
+        return StageTemplates::empty(inputs.resolved_parameters.cost_scale_factor);
     }
 
     let ctx = build_template_build_ctx(
         system,
         par_lp,
-        &inputs,
         production_models,
         evaporation_models,
-        resolved_parameters,
         state_layout,
-        study_dims,
         topology,
-        hydro_cell_index,
-        time_value,
+        &inputs,
     );
 
     let mut stage_outputs = Vec::with_capacity(study_stages.len());
@@ -640,7 +631,7 @@ pub fn build_stage_templates(
         inputs.diversion_upstream,
         inputs.hydro_productivities_per_stage,
         &study_stages,
-        resolved_parameters.cost_scale_factor,
+        inputs.resolved_parameters.cost_scale_factor,
     )
 }
 
@@ -691,6 +682,10 @@ pub fn build_stage_templates_resolving_layout(
         system,
         &crate::setup::lp_build_inputs::resolve_in_sample_load_bus_ids(system),
         production_models,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        resolved_parameters,
     );
     debug_assert_eq!(
         normal_lp.n_entities(),
@@ -702,56 +697,36 @@ pub fn build_stage_templates_resolving_layout(
         par_lp,
         production_models,
         evaporation_models,
-        resolved_parameters,
         &layout.state,
-        &study_dims,
         &topology,
-        &hydro_cell_index,
         inputs,
-        &time_value,
     ))
 }
 
 /// Build the [`TemplateBuildCtx`] shared across all per-stage builds, from
 /// `system`'s own slices plus every field it borrows from `inputs` (the
-/// resolved positions, load models, filling target, and diversion map).
+/// resolved positions, load models, filling target, diversion map, study
+/// dimensions, time value, hydro-cell index, and resolved parameters).
 ///
 /// Called once per `build_stage_templates` invocation, after the early-return
 /// guard for empty systems.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each parameter threads one single-owner value into the shared build context"
-)]
 fn build_template_build_ctx<'a>(
     system: &'a System,
     par_lp: &'a PrecomputedPar,
-    inputs: &'a LpBuildInputs,
     production_models: &'a ProductionModelSet,
     evaporation_models: &'a EvaporationModelSet,
-    resolved_parameters: &'a ResolvedParameters,
     state: &'a StateSpace,
-    study_dims: &'a StudyDimensions,
     topology: &'a TransitBucketTopology,
-    hydro_cell_index: &'a HydroCellIndex,
-    time_value: &'a TimeValue,
+    inputs: &'a LpBuildInputs<'a>,
 ) -> TemplateBuildCtx<'a> {
-    let hydros = system.hydros();
-    let buses = system.buses();
-
-    // Iterate the (ID-sorted) station slice in slot order, NOT declaration order,
-    // to uphold the declaration-order bit-determinism rule.
-    let pumping_stations = system.pumping_stations();
-
-    let contracts = system.contracts();
-
     TemplateBuildCtx {
-        hydros,
+        hydros: system.hydros(),
         thermals: system.thermals(),
         lines: system.lines(),
-        buses,
+        buses: system.buses(),
         load_models: &inputs.deterministic_load_models,
         cascade: system.cascade(),
-        hydro_cell_index,
+        hydro_cell_index: inputs.hydro_cell_index,
         resolved: ResolvedTables {
             bounds: system.bounds(),
             penalties: system.penalties(),
@@ -759,7 +734,7 @@ fn build_template_build_ctx<'a>(
             resolved_load_factors: system.resolved_load_factors(),
             resolved_ncs_bounds: system.resolved_ncs_bounds(),
             resolved_ncs_factors: system.resolved_ncs_factors(),
-            resolved_parameters,
+            resolved_parameters: inputs.resolved_parameters,
         },
         positions: &inputs.positions,
         par_lp,
@@ -767,12 +742,14 @@ fn build_template_build_ctx<'a>(
         evaporation_models,
         generic_constraints: system.generic_constraints(),
         non_controllable_sources: system.non_controllable_sources(),
-        pumping_stations,
-        contracts,
+        // Iterate the (ID-sorted) station slice in slot order, NOT declaration
+        // order, to uphold the declaration-order bit-determinism rule.
+        pumping_stations: system.pumping_stations(),
+        contracts: system.contracts(),
         diversion_upstream: &inputs.diversion_upstream,
         state,
-        study_dims,
-        time_value,
+        study_dims: inputs.study_dims,
+        time_value: inputs.time_value,
         filling_v_target: &inputs.filling_v_target,
         topology,
     }

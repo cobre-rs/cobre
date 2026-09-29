@@ -148,7 +148,7 @@ fn fill_chronological_water_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     for h_idx in 0..layout.state.hydro_count {
         if super::entries::is_prefilling(ctx, stage, h_idx) {
             for blk in 0..n_blks {
@@ -317,7 +317,7 @@ fn fill_load_balance_rows(
             .iter()
             .find(|lm| lm.bus_id == bus.id && lm.stage_id == stage.id)
             .map_or(0.0, |lm| lm.mean_mw);
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let factor = ctx
                 .resolved
                 .resolved_load_factors
@@ -442,7 +442,7 @@ pub(super) fn fill_operational_violation_rows(
     // row-region order so the write order stays auditable against the layout.
     for h_idx in 0..layout.state.hydro_count {
         let hydro_sys = HydroSys::new(h_idx);
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let b = BlockIdx::new(blk);
             let hb = ctx
                 .resolved
@@ -467,7 +467,7 @@ pub(super) fn fill_operational_violation_rows(
         }
 
         let hydro = &ctx.hydros[h_idx];
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let lookup =
                 GroupBoundLookup::new(ctx.resolved.bounds.group_overlay(), h_idx, stage_idx, blk);
             for cell_idx in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {

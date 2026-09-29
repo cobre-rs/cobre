@@ -29,6 +29,10 @@ impl<'a> BlockClock<'a> {
         self.total_hours
     }
 
+    pub(crate) fn n_blks(self) -> usize {
+        self.blocks.len()
+    }
+
     pub(crate) fn zeta(self) -> f64 {
         self.total_hours * M3S_TO_HM3
     }
@@ -92,6 +96,13 @@ mod tests {
         let summed_taus =
             clock.tau(BlockIdx::new(0)) + clock.tau(BlockIdx::new(1)) + clock.tau(BlockIdx::new(2));
         assert_ne!(clock.zeta().to_bits(), summed_taus.to_bits());
+    }
+
+    #[test]
+    fn n_blks_is_the_stage_block_count() {
+        let stage = stage_with_hours([0.1, 0.2, 0.3]);
+        let clock = BlockClock::new(&stage);
+        assert_eq!(clock.n_blks(), 3);
     }
 
     #[test]

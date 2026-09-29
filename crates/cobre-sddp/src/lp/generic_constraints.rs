@@ -310,9 +310,9 @@ fn resolve_hydro_storage_boundary(
     if let Some(&pos) = ctx.hydro_pos.get(&hydro_id) {
         let k = match block_id {
             Some(k) => k + boundary_offset,
-            None => boundary_offset * layout.n_blks,
+            None => boundary_offset * layout.clock.n_blks(),
         };
-        let boundary = Boundary::from_index(k, layout.n_blks);
+        let boundary = Boundary::from_index(k, layout.clock.n_blks());
         vec![(layout.block_storage_col(HydroSys::new(pos), boundary), 1.0)]
     } else {
         vec![]
@@ -380,9 +380,13 @@ fn resolve_hydro_inflow(
     }
 
     if let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(pos_h)) {
-        let rho =
-            resolve_bucket_arrival_density(ctx, layout.clock, stage_idx, hydro_id, layout.n_blks)
-                [blk.get()];
+        let rho = resolve_bucket_arrival_density(
+            ctx,
+            layout.clock,
+            stage_idx,
+            hydro_id,
+            layout.clock.n_blks(),
+        )[blk.get()];
         if rho != 0.0 {
             result.push((col, rho / layout.clock.tau(blk)));
         }
@@ -455,7 +459,7 @@ fn push_release_columns(
 
 /// Resolve `HydroEvaporation` to the evaporation-outflow column for the matching
 /// hydro; empty vec when the hydro has no linearized evaporation at this stage, or
-/// when `block_id` names a block `>= layout.n_blks`. `None` maps to block 0. On a
+/// when `block_id` names a block `>= layout.clock.n_blks()`. `None` maps to block 0. On a
 /// chronological stage each block resolves to its own slot; `None` in `K > 1`
 /// (where blocks differ) is rejected upstream by generic-constraint validation, so
 /// it is not reached here for a valid study. On a parallel stage `None`/`Some(0)`
@@ -482,7 +486,7 @@ fn resolve_hydro_evaporation(
         return vec![];
     };
     let blk = block_id.unwrap_or(0);
-    if blk >= layout.n_blks {
+    if blk >= layout.clock.n_blks() {
         return vec![];
     }
     let slot = evaporation_slot(layout.n_evap_slots, BlockIdx::new(blk));

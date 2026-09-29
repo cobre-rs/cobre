@@ -1283,7 +1283,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
     let state = state_layout_for(&ctx);
     let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
     let col_pumping_end =
-        layout.equipment.col_pumping_start + layout.equipment.n_pumping * layout.n_blks;
+        layout.equipment.col_pumping_start + layout.equipment.n_pumping * layout.clock.n_blks();
     let geometry = layout.geometry(stage.block_mode);
 
     assert!(geometry.contract_import.is_empty());
@@ -4565,7 +4565,7 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
         layout.filled_min_storage_floor_col(),
         "filled_min_storage_floor_col"
     );
-    assert_eq!(geometry.n_blks, layout.n_blks, "n_blks");
+    assert_eq!(geometry.n_blks, layout.clock.n_blks(), "n_blks");
     assert_eq!(geometry.block_mode, BlockMode::Chronological, "block_mode");
     assert_eq!(
         geometry.fpha_hydro_indices, layout.fpha_hydro_indices,

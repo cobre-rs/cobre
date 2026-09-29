@@ -482,8 +482,6 @@ pub(crate) struct StageLayout<'a> {
     /// accessors read through it rather than re-deriving offsets per stage. The
     /// dependency is one-directional (geometry → `StateSpace`), never the reverse.
     pub(crate) state: &'a StateSpace,
-    /// Block count for this stage.
-    pub(crate) n_blks: usize,
     /// In-study anticipated-ring column/row offsets (see [`AnticipatedLayout`]).
     pub(crate) anticipated: AnticipatedLayout,
     /// Equipment column ranges (see [`EquipmentColumns`]).
@@ -1166,7 +1164,8 @@ impl<'a> StageLayout<'a> {
         stage: &'a Stage,
         stage_idx: usize,
     ) -> Self {
-        let n_blks = stage.blocks.len();
+        let clock = BlockClock::new(stage);
+        let n_blks = clock.n_blks();
         let n_h = state.hydro_count;
 
         let (fpha_hydro_indices, fpha_planes_per_hydro) =
@@ -1373,7 +1372,6 @@ impl<'a> StageLayout<'a> {
         let num_cols = col.pos();
         row.alloc(generic.n_generic_rows);
         let num_rows = row.pos();
-        let clock = BlockClock::new(stage);
 
         let anticipated = AnticipatedLayout {
             col_anticipated_decision_start: thermal_end,
@@ -1445,7 +1443,6 @@ impl<'a> StageLayout<'a> {
 
         Self {
             state,
-            n_blks,
             anticipated,
             equipment,
             slack,
@@ -1481,7 +1478,7 @@ impl<'a> StageLayout<'a> {
     #[inline]
     #[must_use]
     pub(crate) fn block_grid(&self) -> BlockGrid {
-        BlockGrid::new(self.n_blks, self.equipment.max_deficit_segments)
+        BlockGrid::new(self.clock.n_blks(), self.equipment.max_deficit_segments)
     }
 }
 
@@ -1823,7 +1820,7 @@ impl StageLayout<'_> {
     #[inline]
     #[must_use]
     pub(crate) fn storage_boundary_grid(&self) -> StorageBoundaryGrid {
-        StorageBoundaryGrid::new(self.equipment.storage_internal_start, self.n_blks)
+        StorageBoundaryGrid::new(self.equipment.storage_internal_start, self.clock.n_blks())
     }
 
     /// Storage column at chronological `boundary` for hydro `h`; delegates to
@@ -1903,20 +1900,24 @@ impl StageLayout<'_> {
         )
     }
 
-    /// Hydro `h`'s water-balance row for block `blk`, striding by `self.n_blks`
+    /// Hydro `h`'s water-balance row for block `blk`, striding by `self.clock.n_blks()`
     /// per [`BlockRowFamily::row`]: its own block row in chronological mode, its
     /// single stage row in parallel mode (every block collapses to that row).
     #[inline]
     #[must_use]
     pub(crate) fn water_balance_row(&self, h: HydroSys, blk: BlockIdx) -> usize {
-        self.rows.water_balance.row(h.get(), blk, self.n_blks)
+        self.rows
+            .water_balance
+            .row(h.get(), blk, self.clock.n_blks())
     }
 
-    /// Bus `bus`'s load-balance row for block `blk`, striding by `self.n_blks`.
+    /// Bus `bus`'s load-balance row for block `blk`, striding by `self.clock.n_blks()`.
     #[inline]
     #[must_use]
     pub(crate) fn load_balance_row(&self, bus: BusSys, blk: BlockIdx) -> usize {
-        self.rows.load_balance.row(bus.get(), blk, self.n_blks)
+        self.rows
+            .load_balance
+            .row(bus.get(), blk, self.clock.n_blks())
     }
 
     /// Hydro `h`'s z-inflow definition row.
@@ -1997,10 +1998,10 @@ impl StageLayout<'_> {
     #[must_use]
     pub(crate) fn geometry(&self, block_mode: BlockMode) -> StageGeometry {
         debug_assert_eq!(
-            self.rows.water_balance.rows_per_entity(self.n_blks),
+            self.rows.water_balance.rows_per_entity(self.clock.n_blks()),
             match block_mode {
                 BlockMode::Parallel => 1,
-                BlockMode::Chronological => self.n_blks,
+                BlockMode::Chronological => self.clock.n_blks(),
             }
         );
         StageGeometry {
@@ -2015,9 +2016,9 @@ impl StageLayout<'_> {
             excess: self.equipment.excess.clone(),
             generation: self.equipment.generation.clone(),
             ncs_generation: self.equipment.col_ncs_start
-                ..self.equipment.col_ncs_start + self.equipment.n_ncs * self.n_blks,
+                ..self.equipment.col_ncs_start + self.equipment.n_ncs * self.clock.n_blks(),
             pumping_flow: self.equipment.col_pumping_start
-                ..self.equipment.col_pumping_start + self.equipment.n_pumping * self.n_blks,
+                ..self.equipment.col_pumping_start + self.equipment.n_pumping * self.clock.n_blks(),
             evap_indices: self.evap_indices.clone(),
             inflow_slack: self.slack.inflow_slack.clone(),
             withdrawal_slack_neg: self.slack.withdrawal_slack_neg.clone(),
@@ -2035,7 +2036,7 @@ impl StageLayout<'_> {
             filling_target_col: self.filling_target_col(),
             filled_min_storage_floor: self.filled_min_storage_floor(),
             filled_min_storage_floor_col: self.filled_min_storage_floor_col(),
-            n_blks: self.n_blks,
+            n_blks: self.clock.n_blks(),
             storage_boundary_grid: self.storage_boundary_grid(),
             block_mode,
             fpha_hydro_indices: self.fpha_hydro_indices.clone(),

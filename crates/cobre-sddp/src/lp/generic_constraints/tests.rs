@@ -817,7 +817,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
         "cell 2 (ascending bus order) is the SECOND cell under test"
     );
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let turbine_start = layout.equipment.turbine.start;
 
     let picked = call(
@@ -866,7 +866,7 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
     let fx = turbine_bus_selector_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let turbine_start = layout.equipment.turbine.start;
 
     let productivity = 2.5;
@@ -962,7 +962,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
     assert_eq!(ctx.hydro_cell_index.bus_of(HydroCell::new(2)), EntityId(20));
 
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let generation_start = layout.equipment.generation.start;
 
     let picked = call(
@@ -1110,7 +1110,7 @@ fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
 /// every resolved `PumpingFlow`/`PumpingPower` column must fall inside.
 fn pumping_col_range(layout: &StageLayout<'_>) -> Range<usize> {
     let start = layout.equipment.col_pumping_start;
-    start..start + layout.equipment.n_pumping * layout.n_blks
+    start..start + layout.equipment.n_pumping * layout.clock.n_blks()
 }
 
 /// `PumpingFlow{station, Some(blk)}` → the block-major flow column × 1.0.
@@ -1122,7 +1122,7 @@ fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
 
     let result = call(
         VariableRef::PumpingFlow {
@@ -1151,7 +1151,7 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
 
     let blk = 1;
     let power = call(
@@ -1189,7 +1189,7 @@ fn pumping_flow_none_resolves_per_block() {
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let range = pumping_col_range(&layout);
 
     let per_block: Vec<(usize, f64)> = (0..n_blks)
@@ -1228,7 +1228,7 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let range = pumping_col_range(&layout);
 
     let per_block: Vec<(usize, f64)> = (0..n_blks)
@@ -1415,7 +1415,7 @@ fn contract_import_resolves_to_column_with_unit_coefficient() {
     );
 
     let import_start = layout.equipment.contract_import.start;
-    let expected_col = import_start + 1 * layout.n_blks + 0;
+    let expected_col = import_start + 1 * layout.clock.n_blks() + 0;
     assert_eq!(result, vec![(expected_col, 1.0)]);
     assert!(layout.equipment.contract_import.contains(&expected_col));
 }
@@ -1441,7 +1441,7 @@ fn contract_export_resolves_to_column_with_unit_coefficient() {
     );
 
     let export_start = layout.equipment.contract_export.start;
-    let expected_col = export_start + 0 * layout.n_blks + 2;
+    let expected_col = export_start + 0 * layout.clock.n_blks() + 2;
     assert_eq!(result, vec![(expected_col, 1.0)]);
     assert!(layout.equipment.contract_export.contains(&expected_col));
 }

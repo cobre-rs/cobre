@@ -117,7 +117,7 @@ fn fill_storage_columns(
         // Interior Sᵏ reuse the outgoing column's EXACT bounds, floor_off included: the
         // frozen-identity chain pins each interior to the inert IC, so a hard floor above
         // IC would reject the pin.
-        for k in 1..layout.n_blks {
+        for k in 1..layout.clock.n_blks() {
             let col = layout.block_storage_col(HydroSys::new(h_idx), Boundary::Interior(k));
             bufs.col_lower[col] = storage_lower;
             bufs.col_upper[col] = hb.max_storage_hm3;
@@ -347,7 +347,7 @@ fn fill_turbine_columns(
         );
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let model = ctx.production_models.model(h_idx, stage_idx);
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let hb = ctx
                 .resolved
                 .bounds
@@ -411,7 +411,7 @@ fn fill_spillage_columns(
             Phase::PreFilling
         );
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let col = layout.spillage_col(HydroSys::new(h_idx), BlockIdx::new(blk));
             let (min_spill, max_spill) = if prefilling {
                 (0.0, 0.0)
@@ -460,7 +460,7 @@ fn fill_diversion_columns(
             Phase::PreFilling | Phase::Filling
         );
         let dormant = hydro.filling.is_some() || suspended;
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             // CONTRACT: read the per-stage RESOLVED bounds, NOT the declaration-time
             // `hydro.diversion.max_flow_m3s` — the entity read silently drops any wired
             // per-stage (or per-block) override (mirrors every sibling column family).
@@ -534,7 +534,7 @@ pub(super) fn fill_thermal_columns(
                         .flatten()
                         .is_some()
                 });
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let tb = ctx
                 .resolved
                 .bounds
@@ -692,7 +692,7 @@ fn fill_line_columns(
     for (l_idx, line) in ctx.lines.iter().enumerate() {
         let active = commissioning_active(line.entry_stage_id, line.exit_stage_id, stage.id);
         let lp = ctx.resolved.penalties.line_penalties(l_idx, stage_idx);
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let lb = ctx
                 .resolved
                 .bounds
@@ -728,14 +728,14 @@ fn fill_deficit_and_excess_columns(
     for (b_idx, bus) in ctx.buses.iter().enumerate() {
         let bp = ctx.resolved.penalties.bus_penalties(b_idx, stage_idx);
         for (seg_idx, segment) in bus.deficit_segments.iter().enumerate() {
-            for blk in 0..layout.n_blks {
+            for blk in 0..layout.clock.n_blks() {
                 let col_def = layout.deficit_col(b_idx, seg_idx, BlockIdx::new(blk));
                 let block_hours = stage.blocks[blk].duration_hours;
                 bufs.col_upper[col_def] = segment.depth_mw.unwrap_or(f64::INFINITY);
                 bufs.objective[col_def] = segment.cost_per_mwh * block_hours;
             }
         }
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let col_exc = layout.excess_col(BusSys::new(b_idx), BlockIdx::new(blk));
             let block_hours = stage.blocks[blk].duration_hours;
             bufs.col_upper[col_exc] = f64::INFINITY;
@@ -820,7 +820,7 @@ fn fill_fpha_generation_columns(
         let local_idx = FphaLocal::new(local_idx);
         let hydro = &ctx.hydros[h.get()];
         let fpha_cell_base = layout.fpha_local_first_cell(local_idx).get();
-        for blk in (0..layout.n_blks).map(BlockIdx::new) {
+        for blk in (0..layout.clock.n_blks()).map(BlockIdx::new) {
             let hb = ctx
                 .resolved
                 .bounds
@@ -1030,7 +1030,7 @@ fn fill_block_family(
             BlockSlackFamily::OutflowBelow => hp.outflow_violation_below_cost,
             BlockSlackFamily::OutflowAbove => hp.outflow_violation_above_cost,
         };
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let hb = ctx
                 .resolved
                 .bounds
@@ -1073,7 +1073,7 @@ fn fill_cell_block_family(
             CellSlackFamily::TurbineBelow => hp.turbined_violation_below_cost,
             CellSlackFamily::GenerationBelow => hp.generation_violation_below_cost,
         };
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let lookup =
                 GroupBoundLookup::new(ctx.resolved.bounds.group_overlay(), h_idx, stage_idx, blk);
             let block_hours = stage.blocks[blk].duration_hours;
@@ -1125,7 +1125,7 @@ fn fill_ncs_columns(
             .resolved_ncs_bounds
             .available_generation(ncs_sys_idx, stage_idx);
         let np = ctx.resolved.penalties.ncs_penalties(ncs_sys_idx, stage_idx);
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let col = layout.ncs_generation_col(NcsSys::new(ncs_sys_idx), BlockIdx::new(blk));
             if active {
                 let factor = ctx
@@ -1160,7 +1160,7 @@ pub(super) fn fill_pumping_columns(
 ) {
     for (p_sys, station) in ctx.pumping_stations.iter().enumerate() {
         let active = commissioning_active(station.entry_stage_id, station.exit_stage_id, stage.id);
-        for blk in (0..layout.n_blks).map(BlockIdx::new) {
+        for blk in (0..layout.clock.n_blks()).map(BlockIdx::new) {
             let pb = ctx
                 .resolved
                 .bounds
@@ -1211,7 +1211,7 @@ fn fill_contract_columns(
             family_slot < family_count,
             "contract family slot {family_slot} out of range {family_count} at stage {stage_idx}"
         );
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let cb = ctx
                 .resolved
                 .bounds
@@ -1705,7 +1705,7 @@ mod interior_storage_bound_tests {
             &template.col_starts,
             &template.values,
         );
-        for k in 1..layout.n_blks {
+        for k in 1..layout.clock.n_blks() {
             let col = layout.block_storage_col(HydroSys::new(0), Boundary::Interior(k));
             assert_eq!(
                 col_scale[col], 1.0,
@@ -2141,7 +2141,7 @@ mod diversion_bound_tests {
         (
             col_lower,
             col_upper,
-            layout.n_blks,
+            layout.clock.n_blks(),
             layout.equipment.diversion.start,
         )
     }
@@ -2634,7 +2634,7 @@ mod filling_phase_gating_tests {
             col_lower,
             col_upper,
             layout.equipment.spillage.start,
-            layout.n_blks,
+            layout.clock.n_blks(),
         )
     }
 
@@ -3633,7 +3633,7 @@ mod anticipated_objective_tests {
         let (_col_lower, col_upper, objective) =
             fill_stage_columns(&ctx, &stage, STAGE_IDX, &layout);
 
-        let n_blks = layout.n_blks;
+        let n_blks = layout.clock.n_blks();
         // Anticipated thermal (t_idx 0) objective stays at the 0.0 default; its
         // per-block bounds are still written by fill_thermal_columns.
         for blk in 0..n_blks {
@@ -4819,7 +4819,7 @@ mod block_family_slack_tests {
 
         // The block loop iterates BLOCK_HOURS directly; assert the layout agrees so a
         // fixture/layout block-count drift cannot silently skip blocks.
-        assert_eq!(layout.n_blks, BLOCK_HOURS.len());
+        assert_eq!(layout.clock.n_blks(), BLOCK_HOURS.len());
         for family in &hydro_families {
             let name = family.name;
             for (h_idx, spec) in specs.iter().enumerate() {
@@ -5215,16 +5215,16 @@ mod evaporation_slack_objective_tests {
             objective: &mut objective,
         };
         fill_evaporation_columns(&ctx, stage, STAGE_IDX, &layout, &mut bufs);
-        let f_plus = (0..layout.n_blks)
+        let f_plus = (0..layout.clock.n_blks())
             .map(|blk| objective[layout.evap_f_plus_col(EvapLocal::new(0), BlockIdx::new(blk))])
             .collect();
-        let f_minus = (0..layout.n_blks)
+        let f_minus = (0..layout.clock.n_blks())
             .map(|blk| objective[layout.evap_f_minus_col(EvapLocal::new(0), BlockIdx::new(blk))])
             .collect();
         EvapFill {
             f_plus,
             f_minus,
-            n_blks: layout.n_blks,
+            n_blks: layout.clock.n_blks(),
         }
     }
 
@@ -6492,7 +6492,7 @@ mod line_contract_pumping_block_bound_tests {
             pumping_start: layout.equipment.col_pumping_start,
             contract_import_start: layout.equipment.contract_import.start,
             contract_export_start: layout.equipment.contract_export.start,
-            n_blks: layout.n_blks,
+            n_blks: layout.clock.n_blks(),
         };
 
         FillResult {
@@ -7264,7 +7264,7 @@ mod hydro_block_bound_tests {
             max_outflow_row: layout.slack.oper_violation.max_outflow_rows.start,
             min_turbine_row: layout.slack.oper_violation.min_turbine_rows.start,
             min_generation_row: layout.slack.oper_violation.min_generation_rows.start,
-            n_blks: layout.n_blks,
+            n_blks: layout.clock.n_blks(),
         };
 
         FillResult {
@@ -9319,7 +9319,7 @@ mod ncs_objective_tests {
 
         let offsets = FillOffsets {
             col_ncs_start: layout.equipment.col_ncs_start,
-            n_blks: layout.n_blks,
+            n_blks: layout.clock.n_blks(),
         };
 
         FillResult { objective, offsets }

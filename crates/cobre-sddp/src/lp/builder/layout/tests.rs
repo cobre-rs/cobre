@@ -2286,7 +2286,7 @@ fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
         range.len()
     }
 
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let geometry = layout.geometry(BlockMode::Parallel);
     let oper = &layout.slack.oper_violation;
 
@@ -2338,7 +2338,8 @@ fn block_strided_addresses_match_their_family_ranges() {
     let thermal_state = state_layout_for(&thermal_ctx);
     let thermal_layout = StageLayout::new(&thermal_ctx, &thermal_state, &thermal_stage, 0);
     assert_eq!(
-        thermal_layout.n_blks, 4,
+        thermal_layout.clock.n_blks(),
+        4,
         "fixture must build a 4-block layout"
     );
     let thermal_counts = assert_block_strided_addresses(&thermal_layout);
@@ -3645,7 +3646,7 @@ fn column_accessors_match_open_coded_formulas() {
     };
     let state = state_layout_for(&ctx);
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     assert_eq!(n_blks, 4, "fixture must build a 4-block layout");
 
     // Generic block_flat against its definition, across a grid that makes the
@@ -3793,7 +3794,11 @@ fn withdrawal_and_operational_columns_collapse_onto_evap_col_start_when_no_hydro
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
     assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
-    assert_eq!(layout.n_blks, 4, "fixture must build a 4-block layout");
+    assert_eq!(
+        layout.clock.n_blks(),
+        4,
+        "fixture must build a 4-block layout"
+    );
 
     let post_equipment = layout.equipment.evap_col_start;
     assert_eq!(
@@ -3843,7 +3848,11 @@ fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
     assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
-    assert_eq!(layout.n_blks, 4, "fixture must build a 4-block layout");
+    assert_eq!(
+        layout.clock.n_blks(),
+        4,
+        "fixture must build a 4-block layout"
+    );
 
     let post_equipment = layout.row_evap_start();
     assert_eq!(
@@ -3893,7 +3902,11 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
     assert_eq!(ctx.n_hydros, 0, "fixture must have zero hydros");
-    assert_eq!(layout.n_blks, 4, "fixture must build a 4-block layout");
+    assert_eq!(
+        layout.clock.n_blks(),
+        4,
+        "fixture must build a 4-block layout"
+    );
 
     // Column cursor: the eight column accessors collapse onto `evap_col_start`
     // with no hydros, and that cursor is provably positive (theta + state
@@ -4555,7 +4568,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
         counts.filled_min_storage_floor_slack += 1;
     }
     for i in 0..layout.equipment.n_ncs {
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let blk = BlockIdx::new(blk);
             assert_eq!(
                 geom.ncs_generation_col(NcsSys::new(i), blk),
@@ -4566,7 +4579,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
         }
     }
     for i in 0..layout.equipment.n_pumping {
-        for blk in 0..layout.n_blks {
+        for blk in 0..layout.clock.n_blks() {
             let blk = BlockIdx::new(blk);
             assert_eq!(
                 geom.pumping_flow_col(PumpingSys::new(i), blk),

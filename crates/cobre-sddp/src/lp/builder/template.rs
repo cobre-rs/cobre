@@ -15,6 +15,8 @@ use crate::hydro_models::{EvaporationModelSet, ProductionModelSet, ResolvedProdu
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::resolved_parameters::ResolvedParameters;
+#[cfg(any(test, feature = "test-support"))]
+use crate::time_value::DeliveryCalendar;
 use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, entity_flat};
@@ -733,7 +735,11 @@ pub fn build_stage_templates_resolving_layout(
     let topology = build_transit_bucket_topology(system, false);
     let layout = resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = TimeValue::from_system(system, &layout.anticipated_plants);
+    let time_value = TimeValue::from_system(
+        system,
+        &layout.anticipated_plants,
+        DeliveryCalendar::from_system(system),
+    );
     Ok(build_stage_templates(
         system,
         inflow_method,

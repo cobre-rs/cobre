@@ -38,7 +38,7 @@ use crate::setup::template_postprocess::postprocess_templates;
 use crate::setup::{resolve_anticipated_commitments, resolve_state_layout};
 use crate::test_support::{assert_templates_byte_identical, state_layout_full};
 use crate::time_value::{
-    PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
+    DeliveryCalendar, PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
     compute_per_stage_discount_factors, resolve_post_study_artifacts,
 };
 
@@ -49,7 +49,11 @@ use super::super::test_support::{ctx_anticipated_and_mask_inputs, state_layout_f
 /// point (`TimeValue::from_system`) rather than hand-assembled.
 fn build_time_value_for(system: &cobre_core::System) -> TimeValue {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
-    TimeValue::from_system(system, &anticipated_plants)
+    TimeValue::from_system(
+        system,
+        &anticipated_plants,
+        DeliveryCalendar::from_system(system),
+    )
 }
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -2864,8 +2868,14 @@ fn build_post_study_resolved_for(
 /// table, never a panic.
 #[test]
 fn post_study_artifacts_none_returns_default_and_empty_table() {
-    let resolved =
-        resolve_post_study_artifacts(None, &[], &cobre_core::HorizonGraph::default(), 1.0, 1.0);
+    let resolved = resolve_post_study_artifacts(
+        None,
+        &[],
+        &cobre_core::HorizonGraph::default(),
+        1.0,
+        1.0,
+        &[],
+    );
 
     assert_eq!(resolved, PostStudyResolved::default());
     assert_eq!(

@@ -115,7 +115,7 @@ use crate::{
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
     stopping_rule::{StoppingRule, StoppingRuleSet},
-    time_value::{TimeValue, post_study_delivery_calendar},
+    time_value::{DeliveryCalendar, TimeValue, post_study_delivery_calendar},
     workspace::CapturedBasis,
 };
 
@@ -655,6 +655,7 @@ fn build_energy_and_templates(
     hydro_models: &PrepareHydroModelsResult,
     layout: &ResolvedStateLayout,
     topology: &bucket_topology::TransitBucketTopology,
+    calendar: DeliveryCalendar,
 ) -> Result<EnergyAndTemplates, SddpError> {
     let (energy_conversion, resolved_parameters) = build_energy_conversion_and_resolved_parameters(
         system,
@@ -663,7 +664,7 @@ fn build_energy_and_templates(
         config.cost_scale_factor,
     )?;
 
-    let time_value = TimeValue::from_system(system, &layout.anticipated_plants);
+    let time_value = TimeValue::from_system(system, &layout.anticipated_plants, calendar);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
     let mut stage_templates = build_stage_templates(
@@ -1722,6 +1723,7 @@ fn resolve_stage_data(
     ),
     SddpError,
 > {
+    let calendar = DeliveryCalendar::from_system(system);
     let transit_bucket_topology =
         bucket_topology::build_transit_bucket_topology(system, config.boundary.is_present());
 
@@ -1752,6 +1754,7 @@ fn resolve_stage_data(
         hydro_models,
         &layout,
         &transit_bucket_topology,
+        calendar,
     )?;
 
     let stages: Vec<Stage> = system

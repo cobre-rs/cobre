@@ -122,9 +122,6 @@ impl PostStudyThermalLookup {
 /// unchanged.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct PostStudyResolved {
-    /// Post-study stage `j`'s own duration in hours
-    /// (`PostStudyStage::duration_hours` verbatim).
-    pub(crate) total_hours: Vec<f64>,
     /// Cumulative discount factor continued past the study horizon — the exact
     /// values [`compute_cumulative_discount_factors`] would hold for these
     /// stages had the horizon been extended to cover them (the study's last
@@ -153,7 +150,6 @@ pub(crate) struct PostStudyResolved {
 /// one encoder call site.
 #[cfg(any(test, feature = "test-support"))]
 type PostStudyResolvedCanonicalFields<'a> = (
-    &'a [f64],
     &'a [f64],
     &'a PostStudyThermalLookup,
     &'a [Option<(f64, f64, f64)>],
@@ -187,14 +183,12 @@ impl PostStudyResolved {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn canonical_fields(&self) -> PostStudyResolvedCanonicalFields<'_> {
         let Self {
-            total_hours,
             cumulative_discount_factors,
             thermal_bounds,
             anticipated_bounds,
             anticipated_bounds_stride,
         } = self;
         (
-            total_hours,
             cumulative_discount_factors,
             thermal_bounds,
             anticipated_bounds,
@@ -203,10 +197,10 @@ impl PostStudyResolved {
     }
 }
 
-/// Resolve `System::post_study_stages` into the setup-side artifacts:
-/// post-study `total_hours`, the discount continuation, the per-thermal
-/// cost/bounds lookup, and its dense anticipated-local projection. `None`/empty
-/// `post_study` returns [`PostStudyResolved::default`] — inert.
+/// Resolve `System::post_study_stages` into the setup-side artifacts: the
+/// discount continuation, the per-thermal cost/bounds lookup, and its dense
+/// anticipated-local projection. `None`/empty `post_study` returns
+/// [`PostStudyResolved::default`] — inert.
 ///
 /// `anticipated_thermal_ids` is the anticipated plants' `EntityId`s in
 /// anticipated-local order — `resolve_state_layout`'s own
@@ -225,12 +219,17 @@ impl PostStudyResolved {
 /// stage's (`* per_stage_post[0]`): the continuation must equal what
 /// `cumulative_discount_factors` would hold had the horizon been extended to
 /// cover the post-study stages.
+///
+/// `post_study_stages` is [`DeliveryCalendar::post_study_stages`] — the dated
+/// calendar the caller already resolved, handed in rather than re-derived via
+/// [`post_study_calendar_stages`] here.
 pub(crate) fn resolve_post_study_artifacts(
     post_study: Option<&PostStudyStages>,
     anticipated_thermal_ids: &[EntityId],
     pg: &HorizonGraph,
     last_real_cumulative: f64,
     last_real_per_stage: f64,
+    post_study_stages: &[Stage],
 ) -> PostStudyResolved {
     let Some(post_study) = post_study else {
         return PostStudyResolved::default();
@@ -239,9 +238,6 @@ pub(crate) fn resolve_post_study_artifacts(
         return PostStudyResolved::default();
     }
 
-    let total_hours: Vec<f64> = post_study.stages.iter().map(|s| s.duration_hours).collect();
-
-    let calendar_stages = post_study_calendar_stages(&post_study.stages);
     // `PostStudyStage` declares no rate-override field (unlike a dispatched
     // `Stage`); a `HorizonGraph` carrying only `annual_discount_rate` keeps this
     // call from resolving a synthetic post-study stage id against a REAL study
@@ -250,7 +246,7 @@ pub(crate) fn resolve_post_study_artifacts(
         annual_discount_rate: pg.annual_discount_rate,
         ..HorizonGraph::default()
     };
-    let calendar_stage_refs: Vec<&Stage> = calendar_stages.iter().collect();
+    let calendar_stage_refs: Vec<&Stage> = post_study_stages.iter().collect();
     let per_stage_post = compute_per_stage_discount_factors(&calendar_stage_refs, &rate_graph);
 
     let mut cumulative_discount_factors = Vec::with_capacity(per_stage_post.len());
@@ -266,7 +262,7 @@ pub(crate) fn resolve_post_study_artifacts(
     // built once here so the ring fill (`fill_anticipated_columns`) never
     // reconstructs an `EntityId` from an anticipated-local index or re-searches
     // `thermal_bounds` per fill call.
-    let anticipated_bounds_stride = total_hours.len();
+    let anticipated_bounds_stride = post_study_stages.len();
     let mut anticipated_bounds =
         Vec::with_capacity(anticipated_thermal_ids.len() * anticipated_bounds_stride);
     for &thermal_id in anticipated_thermal_ids {
@@ -282,11 +278,156 @@ pub(crate) fn resolve_post_study_artifacts(
     );
 
     PostStudyResolved {
-        total_hours,
         cumulative_discount_factors,
         thermal_bounds,
         anticipated_bounds,
         anticipated_bounds_stride,
+    }
+}
+
+/// The delivery axis — study stages then post-study stages — resolved once
+/// from `system` and shared by [`TimeValue`] and ring sizing
+/// (`setup::bucket_topology`), so neither derives it a second time. Stores no
+/// count: [`Self::n_study`]/[`Self::n_post`]/[`Self::n_delivery`] read slice
+/// lengths.
+#[derive(Debug, Clone)]
+pub(crate) struct DeliveryCalendar {
+    /// Σ block hours per delivery stage: study stages'
+    /// [`Stage::total_hours`], then each post-study stage's own
+    /// `duration_hours`.
+    total_hours: Vec<f64>,
+    /// `study_stage_ids` continued past the horizon by a synthetic id
+    /// sequence, length `n_study + n_post`; indexed by delivery stage.
+    stage_ids: Vec<i32>,
+    /// The dated post-study calendar ([`post_study_delivery_calendar`]),
+    /// empty when none is declared.
+    post_study_stages: Vec<Stage>,
+}
+
+impl DeliveryCalendar {
+    /// Resolve the whole delivery calendar directly from `system`: the study
+    /// stages' (`id >= 0`) total hours, each declared post-study stage's own
+    /// duration, the synthetic continued delivery ids, and the dated
+    /// post-study calendar.
+    pub(crate) fn from_system(system: &System) -> Self {
+        let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
+        let study_total_hours: Vec<f64> = study_stages
+            .iter()
+            .map(|s| BlockClock::new(s).total_hours())
+            .collect();
+        let post_study = system.post_study_stages();
+        let post_study_total_hours: Vec<f64> = post_study
+            .map(|p| p.stages.iter().map(|s| s.duration_hours).collect())
+            .unwrap_or_default();
+        let total_hours: Vec<f64> = study_total_hours
+            .iter()
+            .copied()
+            .chain(post_study_total_hours.iter().copied())
+            .collect();
+
+        let study_stage_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
+        // Synthetic continuation from `study_stage_ids.last()`, never
+        // `post_study_calendar_stages`'s own `Stage::id`: those restart at `0`
+        // and would make a post-study delivery compare as an early study stage.
+        let n_post = post_study_total_hours.len();
+        let next_delivery_id = study_stage_ids.last().map_or(0, |&last| last + 1);
+        let end_delivery_id =
+            next_delivery_id.saturating_add(i32::try_from(n_post).unwrap_or(i32::MAX));
+        let stage_ids: Vec<i32> = study_stage_ids
+            .iter()
+            .copied()
+            .chain(next_delivery_id..end_delivery_id)
+            .collect();
+
+        let post_study_stages = post_study_delivery_calendar(system);
+        debug_assert_eq!(
+            post_study_stages.len(),
+            n_post,
+            "post_study_stages must have one dated entry per declared post-study stage"
+        );
+
+        let n_delivery = study_stage_ids.len() + n_post;
+        debug_assert_eq!(
+            total_hours.len(),
+            n_delivery,
+            "total_hours length must equal n_study_stages + n_post"
+        );
+        debug_assert_eq!(
+            stage_ids.len(),
+            n_delivery,
+            "stage_ids length must equal n_study_stages + n_post"
+        );
+        debug_assert!(
+            stage_ids.windows(2).all(|w| w[0] < w[1]),
+            "stage_ids must be strictly increasing — commissioning_active's \
+             monotonicity depends on it"
+        );
+
+        let this = Self {
+            total_hours,
+            stage_ids,
+            post_study_stages,
+        };
+        debug_assert_eq!(
+            this.study_total_hours().len() + this.post_study_total_hours().len(),
+            this.n_delivery(),
+            "study_total_hours and post_study_total_hours must partition total_hours exactly"
+        );
+        this
+    }
+
+    /// Σ block hours of every delivery stage, study then post-study.
+    pub(crate) fn total_hours(&self) -> &[f64] {
+        &self.total_hours
+    }
+
+    /// `study_stage_ids` continued past the horizon by a synthetic id
+    /// sequence; indexed by delivery stage.
+    pub(crate) fn stage_ids(&self) -> &[i32] {
+        &self.stage_ids
+    }
+
+    /// Study-only prefix of [`Self::total_hours`].
+    pub(crate) fn study_total_hours(&self) -> &[f64] {
+        &self.total_hours[..self.n_study()]
+    }
+
+    /// Post-study suffix of [`Self::total_hours`].
+    pub(crate) fn post_study_total_hours(&self) -> &[f64] {
+        &self.total_hours[self.n_study()..]
+    }
+
+    /// The dated post-study calendar, empty when none is declared.
+    pub(crate) fn post_study_stages(&self) -> &[Stage] {
+        &self.post_study_stages
+    }
+
+    /// Declared post-study stage count.
+    pub(crate) fn n_post(&self) -> usize {
+        self.post_study_stages.len()
+    }
+
+    /// Study (in-horizon, decision) stage count.
+    pub(crate) fn n_study(&self) -> usize {
+        self.total_hours.len() - self.n_post()
+    }
+
+    /// `n_study() + n_post()`.
+    pub(crate) fn n_delivery(&self) -> usize {
+        self.total_hours.len()
+    }
+
+    /// Every field, in declaration order, for the canonical byte-encoding
+    /// snapshot — the no-`..` destructure fails to compile the moment a field
+    /// is added, so the digest cannot silently drop it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn canonical_fields(&self) -> (&[f64], &[i32], &[Stage]) {
+        let Self {
+            total_hours,
+            stage_ids,
+            post_study_stages,
+        } = self;
+        (total_hours, stage_ids, post_study_stages)
     }
 }
 
@@ -297,31 +438,30 @@ pub(crate) struct TimeValue {
     /// Study one-step discount factors, length `n_study_stages`.
     discount_factors: Vec<f64>,
     delivery_cumulative_discount_factors: Vec<f64>,
-    delivery_total_hours: Vec<f64>,
-    delivery_stage_ids: Vec<i32>,
+    calendar: DeliveryCalendar,
     post_study: PostStudyResolved,
 }
 
 impl TimeValue {
     /// Resolve the whole delivery calendar directly from `system`: derives the
-    /// study stages (`id >= 0`) and their total hours (via [`BlockClock`]),
-    /// the anticipated thermal ids (projected from `anticipated_plants`,
-    /// [`crate::indexer::AnticipatedPlants`]'s canonical order), the
-    /// post-study calendar and the policy graph, then delegates to
-    /// [`Self::resolve`].
-    pub(crate) fn from_system(system: &System, anticipated_plants: &AnticipatedPlants) -> Self {
+    /// study stages (`id >= 0`), the anticipated thermal ids (projected from
+    /// `anticipated_plants`, [`crate::indexer::AnticipatedPlants`]'s canonical
+    /// order) and the policy graph, then delegates to [`Self::resolve`].
+    /// `calendar` is resolved once by the caller (`crate::setup::resolve_stage_data`),
+    /// not re-derived here.
+    pub(crate) fn from_system(
+        system: &System,
+        anticipated_plants: &AnticipatedPlants,
+        calendar: DeliveryCalendar,
+    ) -> Self {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
-        let study_total_hours: Vec<f64> = study_stages
-            .iter()
-            .map(|s| BlockClock::new(s).total_hours())
-            .collect();
         let anticipated_thermal_ids: Vec<EntityId> = anticipated_plants
             .thermals()
             .map(|t| system.thermals()[t.get()].id)
             .collect();
         Self::resolve(
             &study_stages,
-            &study_total_hours,
+            calendar,
             system.post_study_stages(),
             &anticipated_thermal_ids,
             system.policy_graph(),
@@ -330,11 +470,11 @@ impl TimeValue {
 
     /// Resolve the whole delivery calendar: the study's own one-step and
     /// cumulative discount factors, [`resolve_post_study_artifacts`]'s
-    /// post-study continuation, and the concatenated delivery hours,
-    /// cumulative-discount and synthetic-id vectors.
+    /// post-study continuation, and the concatenated cumulative-discount
+    /// vector. `calendar` already holds the delivery hours and ids.
     fn resolve(
         study_stages: &[&Stage],
-        study_total_hours: &[f64],
+        calendar: DeliveryCalendar,
         post_study: Option<&PostStudyStages>,
         anticipated_thermal_ids: &[EntityId],
         pg: &HorizonGraph,
@@ -353,18 +493,9 @@ impl TimeValue {
             pg,
             cumulative.last().copied().unwrap_or(1.0),
             discount_factors.last().copied().unwrap_or(1.0),
+            calendar.post_study_stages(),
         );
 
-        let study_stage_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
-
-        // Concatenate rather than recompute: `resolve_post_study_artifacts` already
-        // establishes that the post-study half continues the study recurrence, so a
-        // second derivation would risk diverging from it.
-        let delivery_total_hours: Vec<f64> = study_total_hours
-            .iter()
-            .copied()
-            .chain(post_study_resolved.total_hours.iter().copied())
-            .collect();
         let delivery_cumulative_discount_factors: Vec<f64> = cumulative
             .iter()
             .copied()
@@ -375,52 +506,23 @@ impl TimeValue {
                     .copied(),
             )
             .collect();
-        // Synthetic continuation from `study_stage_ids.last()`, never
-        // `post_study_calendar_stages`'s own `Stage::id`: those restart at `0`
-        // and would make a post-study delivery compare as an early study stage.
-        let n_post = post_study_resolved.total_hours.len();
-        let next_delivery_id = study_stage_ids.last().map_or(0, |&last| last + 1);
-        let end_delivery_id =
-            next_delivery_id.saturating_add(i32::try_from(n_post).unwrap_or(i32::MAX));
-        let delivery_stage_ids: Vec<i32> = study_stage_ids
-            .iter()
-            .copied()
-            .chain(next_delivery_id..end_delivery_id)
-            .collect();
-
-        let n_delivery = study_stage_ids.len() + n_post;
-        debug_assert_eq!(
-            delivery_total_hours.len(),
-            n_delivery,
-            "delivery_total_hours length must equal n_study_stages + n_post"
-        );
         debug_assert_eq!(
             delivery_cumulative_discount_factors.len(),
-            n_delivery,
+            calendar.n_delivery(),
             "delivery_cumulative_discount_factors length must equal n_study_stages + n_post"
-        );
-        debug_assert_eq!(
-            delivery_stage_ids.len(),
-            n_delivery,
-            "delivery_stage_ids length must equal n_study_stages + n_post"
-        );
-        debug_assert!(
-            delivery_stage_ids.windows(2).all(|w| w[0] < w[1]),
-            "delivery_stage_ids must be strictly increasing — commissioning_active's \
-             monotonicity depends on it"
         );
 
         Self {
             discount_factors,
             delivery_cumulative_discount_factors,
-            delivery_total_hours,
-            delivery_stage_ids,
+            calendar,
             post_study: post_study_resolved,
         }
     }
 
     /// Test/fixture constructor: carries the literal delivery vectors over
-    /// verbatim, with no post-study derivation.
+    /// verbatim, with no post-study derivation. Builds a study-only
+    /// [`DeliveryCalendar`] with no dated post-study stages.
     #[cfg(any(test, feature = "test-support"))]
     #[expect(
         clippy::float_cmp,
@@ -457,11 +559,15 @@ impl TimeValue {
              delivery_cumulative_discount_factors — cumulative_discount_factors() slices \
              the latter by the former's length"
         );
+        let calendar = DeliveryCalendar {
+            total_hours: delivery_total_hours,
+            stage_ids: delivery_stage_ids,
+            post_study_stages: Vec::new(),
+        };
         Self {
             discount_factors,
             delivery_cumulative_discount_factors,
-            delivery_total_hours,
-            delivery_stage_ids,
+            calendar,
             post_study,
         }
     }
@@ -481,13 +587,18 @@ impl TimeValue {
 
     /// Σ `block.duration_hours` at DELIVERY stage `delivery`.
     pub(crate) fn delivery_total_hours(&self, delivery: usize) -> f64 {
-        self.delivery_total_hours[delivery]
+        self.calendar().total_hours()[delivery]
     }
 
     /// `study_stage_ids` continued past the horizon by a synthetic id
     /// sequence, length `n_study_stages + n_post`; indexed by DELIVERY stage.
     pub(crate) fn delivery_stage_ids(&self) -> &[i32] {
-        &self.delivery_stage_ids
+        self.calendar().stage_ids()
+    }
+
+    /// The resolved delivery calendar.
+    pub(crate) fn calendar(&self) -> &DeliveryCalendar {
+        &self.calendar
     }
 
     /// Resolved post-study boundary artifacts.
@@ -506,19 +617,19 @@ impl TimeValue {
     /// snapshot — the no-`..` destructure fails to compile the moment a field
     /// is added, so the digest cannot silently drop it.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn canonical_fields(&self) -> (&[f64], &[f64], &[f64], &[i32], &PostStudyResolved) {
+    pub(crate) fn canonical_fields(
+        &self,
+    ) -> (&[f64], &[f64], &DeliveryCalendar, &PostStudyResolved) {
         let Self {
             discount_factors,
             delivery_cumulative_discount_factors,
-            delivery_total_hours,
-            delivery_stage_ids,
+            calendar,
             post_study,
         } = self;
         (
             discount_factors,
             delivery_cumulative_discount_factors,
-            delivery_total_hours,
-            delivery_stage_ids,
+            calendar,
             post_study,
         )
     }
@@ -526,7 +637,9 @@ impl TimeValue {
 
 #[cfg(test)]
 mod tests {
-    use super::{PostStudyResolved, TimeValue};
+    use super::{DeliveryCalendar, PostStudyResolved, PostStudyStages, TimeValue, stage};
+    use crate::test_support::ymd;
+    use cobre_core::{Block, PostStudyStage, SystemBuilder};
 
     fn fixture() -> Vec<f64> {
         vec![1.0, 0.9, 0.81, 0.729]
@@ -587,6 +700,50 @@ mod tests {
         let expected: Vec<u64> = recomputed.iter().map(|v| v.to_bits()).collect();
         assert_eq!(actual, expected);
     }
+
+    /// The new owner: `DeliveryCalendar::from_system` splits a deck's study
+    /// and post-study hours into disjoint prefix/suffix slices, and the split
+    /// point matches `n_study`/`n_post`.
+    #[test]
+    fn delivery_calendar_splits_study_and_post_study_hours() {
+        let mut s0 = stage(0, ymd(2024, 1, 1), ymd(2024, 2, 1));
+        s0.blocks = vec![Block {
+            index: 0,
+            name: "BLK0".to_string(),
+            duration_hours: 744.0,
+        }];
+        let mut s1 = stage(1, ymd(2024, 2, 1), ymd(2024, 3, 1));
+        s1.blocks = vec![Block {
+            index: 0,
+            name: "BLK0".to_string(),
+            duration_hours: 696.0,
+        }];
+        let system = SystemBuilder::new()
+            .stages(vec![s0, s1])
+            .post_study_stages(Some(PostStudyStages {
+                stages: vec![
+                    PostStudyStage {
+                        start_date: ymd(2024, 3, 1),
+                        duration_hours: 720.0,
+                    },
+                    PostStudyStage {
+                        start_date: ymd(2024, 4, 1),
+                        duration_hours: 744.0,
+                    },
+                ],
+                thermal_bounds: vec![],
+            }))
+            .build()
+            .expect("two-study-stage, two-post-study-stage system must build");
+
+        let calendar = DeliveryCalendar::from_system(&system);
+
+        assert_eq!(calendar.n_study(), 2);
+        assert_eq!(calendar.n_post(), 2);
+        assert_eq!(calendar.n_delivery(), 4);
+        assert_eq!(calendar.study_total_hours(), &[744.0, 696.0]);
+        assert_eq!(calendar.post_study_total_hours(), &[720.0, 744.0]);
+    }
 }
 
 #[cfg(test)]
@@ -619,7 +776,7 @@ fn stage(id: i32, start: chrono::NaiveDate, end: chrono::NaiveDate) -> Stage {
 
 #[cfg(test)]
 mod from_system_tests {
-    use super::{AnticipatedPlants, TimeValue, stage};
+    use super::{AnticipatedPlants, DeliveryCalendar, TimeValue, stage};
     use crate::test_support::ymd;
     use cobre_core::{AnticipatedConfig, Bus, DeficitSegment, EntityId, SystemBuilder, Thermal};
 
@@ -661,7 +818,8 @@ mod from_system_tests {
             .expect("minimal two-stage anticipated system must build");
 
         let anticipated_plants = AnticipatedPlants::build(system.thermals());
-        let tv = TimeValue::from_system(&system, &anticipated_plants);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let tv = TimeValue::from_system(&system, &anticipated_plants, calendar);
 
         assert_eq!(tv.delivery_stage_ids(), &[0, 1]);
     }
@@ -714,7 +872,8 @@ mod post_study_resolution_tests {
 
     #[test]
     fn post_study_absent_returns_default() {
-        let resolved = resolve_post_study_artifacts(None, &[], &HorizonGraph::default(), 1.0, 1.0);
+        let resolved =
+            resolve_post_study_artifacts(None, &[], &HorizonGraph::default(), 1.0, 1.0, &[]);
         assert_eq!(resolved, PostStudyResolved::default());
     }
 
@@ -724,33 +883,28 @@ mod post_study_resolution_tests {
             stages: Vec::new(),
             thermal_bounds: Vec::new(),
         };
-        let resolved =
-            resolve_post_study_artifacts(Some(&empty), &[], &HorizonGraph::default(), 1.0, 1.0);
-        assert_eq!(resolved, PostStudyResolved::default());
-    }
-
-    #[test]
-    fn total_hours_matches_declared_duration() {
-        let post_study = two_stage_post_study();
         let resolved = resolve_post_study_artifacts(
-            Some(&post_study),
+            Some(&empty),
             &[],
             &HorizonGraph::default(),
             1.0,
             1.0,
+            &[],
         );
-        assert_eq!(resolved.total_hours, vec![720.0, 744.0]);
+        assert_eq!(resolved, PostStudyResolved::default());
     }
 
     #[test]
     fn continued_cumulative_discount_is_seed_at_zero_rate() {
         let post_study = two_stage_post_study();
+        let calendar_stages = post_study_calendar_stages(&post_study.stages);
         let resolved = resolve_post_study_artifacts(
             Some(&post_study),
             &[],
             &HorizonGraph::default(),
             0.9,
             1.0,
+            &calendar_stages,
         );
         assert_eq!(resolved.cumulative_discount_factors, vec![0.9, 0.9]);
     }
@@ -758,6 +912,7 @@ mod post_study_resolution_tests {
     #[test]
     fn continued_cumulative_discount_matches_extended_horizon() {
         let post_study = two_stage_post_study();
+        let calendar_stages = post_study_calendar_stages(&post_study.stages);
         let pg = HorizonGraph {
             annual_discount_rate: 0.08,
             ..HorizonGraph::default()
@@ -776,13 +931,13 @@ mod post_study_resolution_tests {
             &pg,
             last_real_cumulative,
             last_real_per_stage,
+            &calendar_stages,
         );
 
         // Ground truth: extend the horizon with the post-study stages, take the
         // cumulative product over the whole thing, and read off the post-study
         // tail. A resolver that bridged by `per_stage_post[0]` instead of the
         // last study factor would diverge here.
-        let calendar_stages = post_study_calendar_stages(&post_study.stages);
         let calendar_stage_refs: Vec<_> = calendar_stages.iter().collect();
         let per_stage_post = compute_per_stage_discount_factors(&calendar_stage_refs, &pg);
         let mut extended_per_stage = study_per_stage.to_vec();
@@ -798,12 +953,14 @@ mod post_study_resolution_tests {
     #[test]
     fn thermal_bound_lookup_returns_declared_triple() {
         let post_study = two_stage_post_study();
+        let calendar_stages = post_study_calendar_stages(&post_study.stages);
         let resolved = resolve_post_study_artifacts(
             Some(&post_study),
             &[],
             &HorizonGraph::default(),
             1.0,
             1.0,
+            &calendar_stages,
         );
 
         assert_eq!(
@@ -949,11 +1106,12 @@ mod discount_factor_tests {
 #[cfg(test)]
 mod resolve_tests {
     use super::{
-        TimeValue, compute_cumulative_discount_factors, compute_per_stage_discount_factors,
-        resolve_post_study_artifacts, stage,
+        DeliveryCalendar, TimeValue, compute_cumulative_discount_factors,
+        compute_per_stage_discount_factors, resolve_post_study_artifacts, stage,
     };
     use crate::test_support::ymd;
     use cobre_core::{HorizonGraph, PostStudyStage, PostStudyStages, Stage};
+    use cobre_stochastic::season_cast::post_study_calendar_stages;
 
     /// `resolve` concatenates the study and post-study hours, cumulative
     /// factors and synthetic ids bit-exactly, for a deck with two post-study
@@ -963,7 +1121,7 @@ mod resolve_tests {
         let s0 = stage(0, ymd(2024, 1, 1), ymd(2024, 2, 1));
         let s1 = stage(1, ymd(2024, 2, 1), ymd(2024, 3, 1));
         let study_stages: Vec<&Stage> = vec![&s0, &s1];
-        let study_total_hours = vec![744.0, 696.0];
+        let study_total_hours = [744.0, 696.0];
         let pg = HorizonGraph {
             annual_discount_rate: 0.08,
             ..HorizonGraph::default()
@@ -981,14 +1139,9 @@ mod resolve_tests {
             ],
             thermal_bounds: vec![],
         };
-
-        let tv = TimeValue::resolve(
-            &study_stages,
-            &study_total_hours,
-            Some(&post_study),
-            &[],
-            &pg,
-        );
+        let post_study_durations: Vec<f64> =
+            post_study.stages.iter().map(|s| s.duration_hours).collect();
+        let post_study_dated = post_study_calendar_stages(&post_study.stages);
 
         let per_stage = compute_per_stage_discount_factors(&study_stages, &pg);
         let cumulative = compute_cumulative_discount_factors(&per_stage);
@@ -998,12 +1151,24 @@ mod resolve_tests {
             &pg,
             cumulative.last().copied().unwrap_or(1.0),
             per_stage.last().copied().unwrap_or(1.0),
+            &post_study_dated,
         );
+
+        let calendar = DeliveryCalendar {
+            total_hours: study_total_hours
+                .iter()
+                .copied()
+                .chain(post_study_durations.iter().copied())
+                .collect(),
+            stage_ids: vec![0, 1, 2, 3],
+            post_study_stages: post_study_dated,
+        };
+        let tv = TimeValue::resolve(&study_stages, calendar, Some(&post_study), &[], &pg);
 
         let expected_hours: Vec<f64> = study_total_hours
             .iter()
             .copied()
-            .chain(post_study_resolved.total_hours.iter().copied())
+            .chain(post_study_durations.iter().copied())
             .collect();
         let expected_cumulative: Vec<f64> = cumulative
             .iter()
@@ -1040,10 +1205,14 @@ mod resolve_tests {
         let s0 = stage(0, ymd(2024, 1, 1), ymd(2024, 2, 1));
         let s1 = stage(1, ymd(2024, 2, 1), ymd(2024, 3, 1));
         let study_stages: Vec<&Stage> = vec![&s0, &s1];
-        let study_total_hours = vec![744.0, 696.0];
+        let calendar = DeliveryCalendar {
+            total_hours: vec![744.0, 696.0],
+            stage_ids: vec![0, 1],
+            post_study_stages: Vec::new(),
+        };
         let pg = HorizonGraph::default();
 
-        let tv = TimeValue::resolve(&study_stages, &study_total_hours, None, &[], &pg);
+        let tv = TimeValue::resolve(&study_stages, calendar, None, &[], &pg);
 
         let study_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
         assert_eq!(tv.delivery_stage_ids(), study_ids.as_slice());

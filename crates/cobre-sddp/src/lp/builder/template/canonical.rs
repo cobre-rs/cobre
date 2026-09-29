@@ -433,13 +433,8 @@ fn put_option_triple(buf: &mut Vec<u8>, value: Option<(f64, f64, f64)>) {
 /// [`TimeValue::cumulative_discount_factors`] (the prefix accessor), never
 /// recomputed, so it stays the single derivation.
 pub(crate) fn encode_time_value_facts(time_value: &TimeValue, groups: &mut FactGroups) {
-    let (
-        discount_factors,
-        delivery_cumulative_discount_factors,
-        delivery_total_hours,
-        delivery_stage_ids,
-        post_study,
-    ) = time_value.canonical_fields();
+    let (discount_factors, delivery_cumulative_discount_factors, calendar, post_study) =
+        time_value.canonical_fields();
 
     put_f64_slice(
         group(groups, "time_value.discount_factors"),
@@ -453,24 +448,24 @@ pub(crate) fn encode_time_value_facts(time_value: &TimeValue, groups: &mut FactG
         group(groups, "time_value.delivery_cumulative_discount_factors"),
         delivery_cumulative_discount_factors,
     );
+
+    // Dates are not LP facts; their sole LP effect, the post-study discount
+    // continuation, is already digested via `post_study` below.
+    let (total_hours, stage_ids, _post_study_stages) = calendar.canonical_fields();
     put_f64_slice(
         group(groups, "time_value.delivery_total_hours"),
-        delivery_total_hours,
+        total_hours,
     );
-    put_i32_slice(
-        group(groups, "time_value.delivery_stage_ids"),
-        delivery_stage_ids,
-    );
+    put_i32_slice(group(groups, "time_value.delivery_stage_ids"), stage_ids);
 
     let (
-        total_hours,
         post_study_cumulative_discount_factors,
         thermal_bounds,
         anticipated_bounds,
         anticipated_bounds_stride,
     ) = post_study.canonical_fields();
     let buf = group(groups, "time_value.post_study");
-    put_f64_slice(buf, total_hours);
+    put_f64_slice(buf, calendar.post_study_total_hours());
     put_f64_slice(buf, post_study_cumulative_discount_factors);
     let bounds = thermal_bounds.canonical_fields();
     put_usize(buf, bounds.len());

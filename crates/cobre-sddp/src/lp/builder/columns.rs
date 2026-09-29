@@ -3402,6 +3402,7 @@ mod anticipated_objective_tests {
         ResolvedNcsFactors, ResolvedPenalties, Thermal, ThermalBlockBounds, ThermalStageBounds,
     };
     use cobre_stochastic::par::precompute::PrecomputedPar;
+    use cobre_stochastic::season_cast::post_study_calendar_stages;
 
     use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
@@ -4053,12 +4054,14 @@ mod anticipated_objective_tests {
                 )
                 .collect(),
         };
+        let post_study_stages = post_study_calendar_stages(&post_study.stages);
         resolve_post_study_artifacts(
             Some(&post_study),
             &[PSA_THERMAL_ID],
             &HorizonGraph::default(),
             last_real_cumulative,
             last_real_per_stage,
+            &post_study_stages,
         )
     }
 
@@ -4112,7 +4115,7 @@ mod anticipated_objective_tests {
             let delivery_hours: Vec<f64> = study_hours
                 .iter()
                 .copied()
-                .chain(post_study_resolved.total_hours.iter().copied())
+                .chain(std::iter::repeat_n(PSA_STUDY_HOURS, n_post))
                 .collect();
             let delivery_discount: Vec<f64> = study_discount
                 .iter()

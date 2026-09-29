@@ -28,8 +28,8 @@ use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResol
 use crate::resolved_parameters::ResolvedParameters;
 use crate::test_support::ctx_fixture::CtxFixture;
 use crate::test_support::{
-    anticipated_plants_at, make_unit_group, state_layout, state_layout_full,
-    state_layout_with_transit_buckets,
+    anticipated_plants_at, constant_lead_resolution, make_unit_group, state_layout,
+    state_layout_full, state_layout_with_transit_buckets,
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 
@@ -2248,22 +2248,45 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
 
 // ── Ring-axis excision: per-plant physical-target mapping ────────────────
 
-/// Hand-derived pre-excision reference: `n_anticipated = 2`, `k_max = 3`,
-/// leads `[1, 2]`, 5 study stages, no attached resolution — the fallback
-/// `anticipated_resolution_for` resolves an identity delivery axis
-/// (`n_decision == n_delivery`, so `g == 0` for both plants), matching the
-/// retired raw-delivery-axis sweep exactly. Pinned per `stage_idx` as a
-/// literal, not recomputed by the ring-axis formula under test.
+/// Hand-derived pre-excision reference: `n_anticipated = 2`, leads `[1, 2]`,
+/// 5 study stages, an identity resolution (`n_decision == n_delivery == 5`,
+/// so `g == 0` for both plants) — the resolution the retired fallback
+/// `anticipated_resolution_for` used to compute on the fly, now attached
+/// explicitly, so `k_max = ring_size(&[1, 2]) == 2`. `g == 0` collapses
+/// `ring_index`/`physical_target` to the identity, matching the retired
+/// raw-delivery-axis sweep exactly.
+///
+/// Derivation (`decider_0 = [None, 0, 1, 2, 3]` for lead 1,
+/// `decider_1 = [None, None, 0, 1, 2]` for lead 2; `row_pos` indexed
+/// `slot * 2 + plant`; a residue is a deposit iff `decider[m] ==
+/// Some(stage_idx)`, else a carry when ready, else absent):
+///
+/// | `stage_idx` | plant 0 (`m = stage_idx+1`) | plant 1 (`m = stage_idx+1`) | plant 0 (`m = stage_idx+2`) | plant 1 (`m = stage_idx+2`) |
+/// | --- | --- | --- | --- | --- |
+/// | 0 | `m=1` deposit | `m=1` carry → slot 1 | `m=2` not ready | `m=2` deposit |
+/// | 1 | `m=2` deposit | `m=2` carry → slot 0 | `m=3` not ready | `m=3` deposit |
+/// | 2 | `m=3` deposit | `m=3` carry → slot 1 | `m=4` not ready | `m=4` deposit |
+/// | 3 | `m=4` deposit | `m=4` carry → slot 0 | `m=5` beyond `n_delivery` | `m=5` beyond `n_delivery` |
+/// | 4 | `m=5` beyond `n_delivery` | `m=5` beyond `n_delivery` | `m=6` beyond `n_delivery` | `m=6` beyond `n_delivery` |
+///
+/// Each carry is the sole reachable entry at its stage (`n_reachable == 1`,
+/// `0` at stage 4), landing at `slot * 2 + 1` (plant 1 is always the carry).
 #[test]
 fn anticipated_slot_row_pos_identity_axis_matches_the_recorded_pre_excision_mapping() {
-    let state = StateSpace::new(0, 0, 0, Vec::new(), 2, 3, vec![1, 2], &[]);
+    let leads = vec![1, 2];
+    let mut state = StateSpace::new(0, 0, 0, Vec::new(), 2, 2, leads.clone(), &[]);
+    state.set_anticipated_resolution(constant_lead_resolution(&leads, 5));
+    assert_eq!(
+        state.k_max, 2,
+        "fixture sanity: ring_size(&[1, 2]) must be 2"
+    );
 
     let expected: [(Vec<Option<usize>>, usize); 5] = [
-        (vec![None, None, None, Some(0), None, None], 1),
-        (vec![None, None, None, None, None, Some(0)], 1),
-        (vec![None, Some(0), None, None, None, None], 1),
-        (vec![None, None, None, Some(0), None, None], 1),
-        (vec![None, None, None, None, None, None], 0),
+        (vec![None, None, None, Some(0)], 1),
+        (vec![None, Some(0), None, None], 1),
+        (vec![None, None, None, Some(0)], 1),
+        (vec![None, Some(0), None, None], 1),
+        (vec![None, None, None, None], 0),
     ];
 
     for (stage_idx, (expected_row_pos, expected_n_reachable)) in expected.into_iter().enumerate() {

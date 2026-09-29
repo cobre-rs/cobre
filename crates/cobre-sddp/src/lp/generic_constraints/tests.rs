@@ -19,12 +19,17 @@ use crate::lp::indexer::{
     AnticipatedPlants, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
 };
 use crate::test_support::ctx_fixture::CtxFixture;
-use crate::test_support::{geometry_hydro, geometry_hydro_with_groups, make_unit_group};
+use crate::test_support::{
+    constant_lead_resolution, geometry_hydro, geometry_hydro_with_groups, make_unit_group,
+};
+use crate::time_value::{PostStudyResolved, TimeValue};
 use cobre_core::entities::{HydroGenerationModel, HydroPenalties};
 use cobre_core::{
-    AnticipatedConfig, Block, BlockMode, Bus, CascadeTopology, ContractType, DeficitSegment,
-    EnergyContract, EntityId, Hydro, Line, NoiseMethod, PumpingStation, ScenarioSourceConfig,
-    Stage, StageRiskConfig, StageStateConfig, Thermal, VariableRef,
+    AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, CascadeTopology,
+    ContractBlockBounds, ContractType, DeficitSegment, EnergyContract, EntityId, Hydro,
+    HydroBlockBounds, HydroStageBounds, Line, LineBlockBounds, NoiseMethod, PumpingBlockBounds,
+    PumpingStation, ResolvedBounds, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
+    Thermal, ThermalBlockBounds, ThermalStageBounds, VariableRef,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────
@@ -100,7 +105,8 @@ impl ResolverFixture {
         debug_assert_eq!(anticipated_plants.len(), n_anticipated);
         let k_max = AnticipatedResolution::default().ring_size(&anticipated_lead_stages);
         let n_hydros = hydros.len();
-        let state = StateSpace::new(
+        let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+        let mut state = StateSpace::new(
             n_hydros,
             0,
             0,
@@ -110,7 +116,60 @@ impl ResolverFixture {
             anticipated_lead_stages.clone(),
             &vec![0; n_hydros],
         );
+        state.set_anticipated_resolution(constant_lead_resolution(
+            &anticipated_lead_stages,
+            n_stages,
+        ));
         let stage = fixture_stage(n_blks);
+        // Delivery axis wide enough to cover stage 0 + the widest declared
+        // lead, matching state.n_delivery above — otherwise a
+        // genuinely-reachable delivery stage indexes past
+        // CtxFixture::default's 1-long bounds/time_value axis.
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 0,
+                n_thermals: 0,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages,
+                k_max: 0,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 0.0,
+                    filling_min_rate_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                hydro_block: HydroBlockBounds::default(),
+                thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+                thermal_block: ThermalBlockBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 0.0,
+                },
+                line_block: LineBlockBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping_block: PumpingBlockBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract_block: ContractBlockBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let time_value = TimeValue::from_parts(
+            Vec::new(),
+            vec![1.0; n_stages],
+            vec![744.0; n_stages],
+            (0..i32::try_from(n_stages).unwrap_or(0)).collect(),
+            PostStudyResolved::default(),
+        );
         Self {
             base: CtxFixture {
                 hydros,
@@ -119,12 +178,14 @@ impl ResolverFixture {
                 buses,
                 cascade,
                 hydro_cell_index,
+                bounds,
                 production_models,
                 evaporation_models,
                 pumping_stations,
                 contracts,
                 anticipated_lead_stages,
                 anticipated_plants,
+                time_value,
                 ..CtxFixture::default()
             },
             state,

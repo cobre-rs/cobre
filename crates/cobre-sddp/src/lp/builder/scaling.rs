@@ -384,6 +384,7 @@ mod tests {
     }
 
     use crate::indexer::StateSpace;
+    use crate::test_support::constant_lead_resolution;
 
     // =========================================================================
     // Commitment-hold col_scale=1.0 override
@@ -395,7 +396,8 @@ mod tests {
     /// while leaving every other index byte-identical to its seed.
     #[test]
     fn apply_commitment_hold_col_scale_unscale_forces_hold_to_one() {
-        let state_layout = StateSpace::new(2, 0, 0, vec![], 1, 2, vec![2], &[0, 0]);
+        let mut state_layout = StateSpace::new(2, 0, 0, vec![], 1, 2, vec![2], &[0, 0]);
+        state_layout.set_anticipated_resolution(constant_lead_resolution(&[2], 4));
 
         assert_eq!(state_layout.commit_out, 2..4);
         assert_eq!(state_layout.commit_in, 8..10);

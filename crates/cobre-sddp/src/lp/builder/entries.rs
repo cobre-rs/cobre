@@ -2140,8 +2140,8 @@ mod zero_cost_tests {
     use crate::indexer::{BlockIdx, StateSpace};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 
-    use crate::test_support::anticipated_plants_at;
     use crate::test_support::ctx_fixture::CtxFixture;
+    use crate::test_support::{anticipated_plants_at, constant_lead_resolution};
     use crate::time_value::{PostStudyResolved, TimeValue};
 
     use super::super::columns::{ColumnBufs, fill_stage_columns, fill_thermal_columns};
@@ -2485,26 +2485,27 @@ mod zero_cost_tests {
     }
 
     /// C13 regression: `build_anticipated_fishing_row_pos` gates a plant's
-    /// fishing row on `k_max >= 1`, not merely `n_anticipated >= 1`.
-    /// `anticipated_lead_stages = vec![1]` (not `vec![0]`, the `K = 0`
-    /// self-delivery case
-    /// `k0_sub_stage_lead_emits_no_anticipated_rows_or_fishing_coupling` above
-    /// covers) makes the plant genuinely in-flight via a pre-study (`None`)
-    /// decider, so `is_anticipated_at` would still be `true` on an empty ring
-    /// absent the guard. `fill_anticipated_fishing_entries` must reach the
-    /// final line without panicking and without writing any coupling.
+    /// fishing row on `k_max >= 1`, not merely `n_anticipated >= 1`. A lead-0
+    /// plant (`K = 0` self-delivery) is the only state production can build
+    /// with `k_max == 0` (`ring_size(&[0]) == 0`), and it reaches this same
+    /// guard: `fill_anticipated_fishing_entries` must reach the final line
+    /// without panicking and without writing any coupling.
     #[test]
     fn fishing_fill_on_an_empty_ring_does_not_divide_by_zero() {
         let mut fixtures = AntFixtures::new();
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(1, 0, 1);
-        let ctx = fixtures.make_ctx(0, vec![1], &[0], 1);
+        let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        // Bypasses state_layout_for's owner-derived k_max (ring_size would widen
-        // it to 1, matching anticipated_lead_stages) to keep the ring itself
-        // starved at k_max=0 — the exact "absent the guard" input the C13
-        // regression above needs; StateSpace::new's own k_max stays a free
-        // parameter for this.
-        let state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![1], &[]);
+        let mut state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![0], &[]);
+        state.set_anticipated_resolution(constant_lead_resolution(&[0], 1));
+        assert_eq!(
+            state.n_anticipated, 1,
+            "fixture sanity: one anticipated plant"
+        );
+        assert_eq!(
+            state.k_max, 0,
+            "fixture sanity: a lead-0 plant's ring is empty"
+        );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
@@ -2937,12 +2938,8 @@ mod zero_cost_tests {
         }
     }
 
-    /// Three-family collapse (C13 guard): `anticipated_lead_stages = vec![1]`
-    /// genuinely fishes at stage 0 (`m = 0`'s decider is `None`, pre-study)
-    /// AND genuinely decides at stage 0 (`m = 1`'s decider is `Some(0)`) —
-    /// absent the `k_max >= 1` guard, both `build_anticipated_fishing_row_pos`
-    /// and `build_anticipated_decision_row_pos` would produce a `Some`
-    /// position on this empty (`k_max == 0`) ring. All three row
+    /// Three-family collapse (C13 guard): a lead-0 plant's ring is the only
+    /// `k_max == 0` state production can build. All three row
     /// families — fishing, deposit, and interior carry — collapse to zero,
     /// and none of the three entry-fill functions panics or writes a
     /// coupling.
@@ -2950,14 +2947,18 @@ mod zero_cost_tests {
     fn empty_ring_collapses_all_three_anticipated_row_families() {
         let mut fixtures = AntFixtures::new();
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(2, 0, 1);
-        let ctx = fixtures.make_ctx(0, vec![1], &[0], 1);
+        let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        // Bypasses state_layout_for's owner-derived k_max (ring_size would widen
-        // it to 1, matching anticipated_lead_stages) to keep the ring itself
-        // starved at k_max=0 — the exact "absent the guard" input the C13
-        // regression above needs; StateSpace::new's own k_max stays a free
-        // parameter for this.
-        let state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![1], &[]);
+        let mut state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![0], &[]);
+        state.set_anticipated_resolution(constant_lead_resolution(&[0], 2));
+        assert_eq!(
+            state.n_anticipated, 1,
+            "fixture sanity: one anticipated plant"
+        );
+        assert_eq!(
+            state.k_max, 0,
+            "fixture sanity: a lead-0 plant's ring is empty"
+        );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         assert_eq!(

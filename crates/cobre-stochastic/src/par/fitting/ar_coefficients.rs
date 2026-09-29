@@ -43,9 +43,10 @@ pub struct ArCoefficientEstimate {
 /// Pre-computed lookups for season-aware PAR estimation functions.
 ///
 /// Both [`estimate_ar_coefficients_with_season_map`] and
-/// [`estimate_correlation_with_season_map`] require the same date-to-season
-/// mapping, stats lookups, and per-entity observation indices. This struct
-/// is built once and shared to avoid code duplication.
+/// [`estimate_correlation_with_season_map`](super::correlation::estimate_correlation_with_season_map)
+/// require the same date-to-season mapping, stats lookups, and per-entity
+/// observation indices. This struct is built once and shared to avoid code
+/// duplication.
 pub(super) struct SeasonLookups<'a> {
     pub(super) stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)>,
     pub(super) stats_lookup: HashMap<(EntityId, usize), &'a SeasonalStats>,

@@ -288,8 +288,7 @@ mod constant_lead_resolution_tests {
     /// Every plant reaches every ring slot through its own depth-0
     /// (next-stage) term alone as `stage_idx` sweeps `0..n_stages`, so a
     /// margin of `max(lead) + 2` saturates the commitment-hold mask to the
-    /// whole region — byte-identical to the retired provisional
-    /// whole-region default.
+    /// whole region.
     #[test]
     fn constant_lead_resolution_marks_every_ring_slot_live() {
         for lead_stages in [vec![1_usize], vec![3], vec![1, 3], vec![2, 2]] {

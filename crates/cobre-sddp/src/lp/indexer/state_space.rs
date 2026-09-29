@@ -1431,11 +1431,9 @@ mod tests {
         assert_eq!(mask_tail, expected);
     }
 
-    /// A single shared lead across every plant reproduces the retired rule's
-    /// own outcome: over `n_decision = 4` stages `(>= k_max = 2)`, each plant
-    /// cycles through every residue, so the commitment-hold tail of the mask
-    /// is the whole region — the same mask the retired per-plant-lead-bounded
-    /// rule produced for a single-lead study.
+    /// A single shared lead across every plant: over `n_decision = 4` stages
+    /// `(>= k_max = 2)`, each plant cycles through every residue, so the
+    /// commitment-hold tail of the mask is the whole region.
     #[test]
     fn single_lead_nonzero_mask_keeps_the_whole_commitment_region() {
         let resolution = AnticipatedResolution::resolve(

@@ -2244,13 +2244,12 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
 
 // ── Ring-axis excision: per-plant physical-target mapping ────────────────
 
-/// Hand-derived pre-excision reference: `n_anticipated = 2`, leads `[1, 2]`,
-/// 5 study stages, an identity resolution (`n_decision == n_delivery == 5`,
-/// so `g == 0` for both plants) — the resolution the retired fallback
-/// `anticipated_resolution_for` used to compute on the fly, now attached
-/// explicitly, so `k_max = ring_size(&[1, 2]) == 2`. `g == 0` collapses
-/// `ring_index`/`physical_target` to the identity, matching the retired
-/// raw-delivery-axis sweep exactly.
+/// Hand-derived raw delivery-axis reference: `n_anticipated = 2`, leads
+/// `[1, 2]`, 5 study stages, an identity resolution (`n_decision ==
+/// n_delivery == 5`, so `g == 0` for both plants), so `k_max = ring_size(&[1,
+/// 2]) == 2`. `g == 0` collapses `ring_index`/`physical_target` to the
+/// identity, so the ring-axis mapping must equal the raw delivery-axis sweep
+/// derived below.
 ///
 /// Derivation (`decider_0 = [None, 0, 1, 2, 3]` for lead 1,
 /// `decider_1 = [None, None, 0, 1, 2]` for lead 2; `row_pos` indexed

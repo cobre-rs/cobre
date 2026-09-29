@@ -53,7 +53,7 @@ use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, FphaPlane, PrepareHydroModelsResult, ProductionModelSet,
     ResolvedProductionModel,
 };
-use crate::lead_time::AnticipatedResolution;
+use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
 use crate::lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound};
 use crate::lp::builder::{
     FactGroups, PatchBuffer, StageGeometry, StageLayout, StageTemplates, StateBox,
@@ -76,6 +76,7 @@ use crate::setup::node_graph::{
 };
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
+use crate::time_value::{PostStudyResolved, TimeValue};
 use crate::training::backward::{
     extract_state_duals_only, fill_external_opening_noise, write_opening_outcome,
 };
@@ -256,6 +257,60 @@ pub fn anticipated_plants_at(positions: &[usize]) -> AnticipatedPlants {
         })
         .collect();
     AnticipatedPlants::build(&thermals)
+}
+
+/// Resolve `lead_stages` (anticipated-local order, one constant per-plant
+/// lead each) over a synthetic `n_stages`-long delivery axis with no
+/// post-study continuation (`n_delivery == n_stages`) — the fixture
+/// substitute for a real study's calendar-derived resolution, built through
+/// [`AnticipatedResolution::resolve`] the same way
+/// [`crate::setup::resolve_anticipated_commitments_core`] builds its axis.
+#[must_use]
+pub fn constant_lead_resolution(lead_stages: &[usize], n_stages: usize) -> AnticipatedResolution {
+    let leads: Vec<LeadTime> = lead_stages
+        .iter()
+        .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
+        .collect();
+    AnticipatedResolution::resolve(
+        &leads,
+        DeliveryAxis {
+            stage_lengths_hours: &[],
+            n_decision: n_stages,
+            n_delivery: n_stages,
+        },
+    )
+}
+
+#[cfg(test)]
+mod constant_lead_resolution_tests {
+    use super::{StateDim, StateSpace, constant_lead_resolution};
+
+    /// Every plant reaches every ring slot through its own depth-0
+    /// (next-stage) term alone as `stage_idx` sweeps `0..n_stages`, so a
+    /// margin of `max(lead) + 2` saturates the commitment-hold mask to the
+    /// whole region — byte-identical to the retired provisional
+    /// whole-region default.
+    #[test]
+    fn constant_lead_resolution_marks_every_ring_slot_live() {
+        for lead_stages in [vec![1_usize], vec![3], vec![1, 3], vec![2, 2]] {
+            let k_max = lead_stages.iter().copied().max().unwrap_or(0);
+            let n_stages = k_max + 2;
+            let resolution = constant_lead_resolution(&lead_stages, n_stages);
+            let n_anticipated = lead_stages.len();
+            let mut state =
+                StateSpace::new(0, 0, 0, Vec::new(), n_anticipated, k_max, lead_stages, &[]);
+            state.set_anticipated_resolution(resolution);
+
+            let start = state.commit_out.start;
+            let expected: Vec<StateDim> = (start..start + n_anticipated * k_max)
+                .map(StateDim::new)
+                .collect();
+            assert_eq!(
+                state.nonzero_state_indices, expected,
+                "n_anticipated={n_anticipated} k_max={k_max}: mask must saturate to the whole region"
+            );
+        }
+    }
 }
 
 /// All-zero [`HydroPenalties`] for [`geometry_hydro`] — no fixture-side penalty
@@ -524,6 +579,58 @@ pub fn geometry(
 
     let anticipated_lead_stages = vec![dims.lead_stages; dims.n_anticipated];
 
+    // Delivery axis wide enough to cover stage 0 + the widest declared lead,
+    // matching state_layout_with_transit_buckets's own margin (mirrors
+    // AntFixtures::bounds_with_n_stages's widening in entries.rs) — otherwise
+    // a genuinely-reachable delivery stage indexes past CtxFixture::default's
+    // 1-long bounds/time_value axis.
+    let delivery_axis_len = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 0,
+            n_thermals: 0,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: delivery_axis_len,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 0.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds::default(),
+            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    let time_value = TimeValue::from_parts(
+        Vec::new(),
+        vec![1.0; delivery_axis_len],
+        vec![744.0; delivery_axis_len],
+        (0..i32::try_from(delivery_axis_len).unwrap_or(0)).collect(),
+        PostStudyResolved::default(),
+    );
+
     let fixture = CtxFixture {
         hydros,
         buses,
@@ -534,6 +641,8 @@ pub fn geometry(
         anticipated_lead_stages: anticipated_lead_stages.clone(),
         anticipated_plants: dims.anticipated_plants.clone(),
         has_penalty: dims.has_inflow_penalty,
+        bounds,
+        time_value,
         ..CtxFixture::default()
     };
     let mut ctx = fixture.ctx();
@@ -945,7 +1054,11 @@ pub fn state_layout_full(
 /// Build a finalized [`StateSpace`] with a declared travel-time bucket block
 /// (`transit_buckets_out`/`transit_buckets_in`), optionally combined with anticipated
 /// thermals. `effective_lag_count` is dense (full `max_par_order` for every
-/// hydro), matching [`state_layout_full`].
+/// hydro), matching [`state_layout_full`]. Attaches a [`constant_lead_resolution`]
+/// over a margin wide enough (`max(lead) + 2`) to saturate the commitment-hold
+/// mask to the whole region, byte-identical to the retired provisional
+/// whole-region default; a caller needing a specific reachability shape
+/// attaches its own resolution afterward.
 #[must_use]
 pub fn state_layout_with_transit_buckets(
     hydro_count: usize,
@@ -956,16 +1069,21 @@ pub fn state_layout_with_transit_buckets(
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
     let effective_lag_count = vec![max_par_order; hydro_count];
-    StateSpace::new(
+    let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+    let resolution = constant_lead_resolution(&anticipated_lead_stages, n_stages);
+    let k_max = resolution.ring_size(&anticipated_lead_stages);
+    let mut state = StateSpace::new(
         hydro_count,
         max_par_order,
         n_buckets,
         transit_bucket_column_order,
         n_anticipated,
-        AnticipatedResolution::default().ring_size(&anticipated_lead_stages),
+        k_max,
         anticipated_lead_stages,
         &effective_lag_count,
-    )
+    );
+    state.set_anticipated_resolution(resolution);
+    state
 }
 
 /// Per-hydro inflow `extract_hydros`/`extract_hydro_bus_generation` read from

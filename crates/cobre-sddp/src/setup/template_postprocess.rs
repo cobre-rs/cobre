@@ -111,7 +111,9 @@ mod tests {
     use super::postprocess_templates;
     use crate::lp::builder::StageTemplates;
     use crate::lp::indexer::{AnticipatedPlants, StateSpace};
-    use crate::test_support::{equipment_free_geometry, state_layout_full};
+    use crate::test_support::{
+        constant_lead_resolution, equipment_free_geometry, state_layout_full,
+    };
     use crate::time_value::{PostStudyResolved, TimeValue};
     use chrono::NaiveDate;
     use cobre_core::temporal::{
@@ -225,11 +227,16 @@ mod tests {
     /// re-derivation would silently discount the wrong column.
     #[test]
     fn theta_discount_lands_on_the_state_theta_column_with_anticipated_thermals() {
-        let state_layout: StateSpace = state_layout_full(0, 0, 1, vec![1]);
+        let mut state_layout: StateSpace = state_layout_full(0, 0, 1, vec![1]);
         assert_eq!(
             state_layout.theta, 2,
             "fixture sanity: theta must sit past commit_out/commit_in"
         );
+        // Matches this fixture's own 2-stage system, not
+        // state_layout_full's own wider internal margin — the retired
+        // fallback (no resolution attached) resolved exactly this axis via
+        // its own n_stages argument.
+        state_layout.set_anticipated_resolution(constant_lead_resolution(&[1], 2));
 
         let bus = Bus {
             id: EntityId(1),

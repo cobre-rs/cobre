@@ -4673,7 +4673,14 @@ mod tests {
         )
         .ncs_stochastic_dense_col(&setup.inputs.ncs.stochastic_dense_col)
         .ncs_stochastic_windows(&setup.inputs.ncs.stochastic_windows)
-        .anticipated_windows(&setup.inputs.anticipated_windows)
+        .anticipated_windows(
+            setup
+                .inputs
+                .stage_data
+                .study_dims
+                .anticipated_plants
+                .windows(),
+        )
         .study_stage_ids(&setup.inputs.study_stage_ids)
         .ncs_max_gen(&setup.inputs.ncs.max_gen)
         .ncs_allow_curtailment(&setup.inputs.ncs.allow_curtailment)

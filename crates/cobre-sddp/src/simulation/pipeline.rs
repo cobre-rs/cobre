@@ -20,7 +20,7 @@ use crate::error::SddpError::Infeasible;
 use crate::error::SddpError::Solver;
 use crate::lp::builder::GenericConstraintRowEntry;
 use crate::lp::builder::StageGeometry;
-use crate::lp::indexer::{BlockIdx, BlockRowFamily, StudyDimensions};
+use crate::lp::indexer::{AnticipatedPlants, BlockIdx, BlockRowFamily, StudyDimensions};
 use crate::noise::DownstreamAccumState;
 use crate::noise::LagAccumState;
 use crate::stage_solve::StageInputs;
@@ -39,9 +39,9 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            HydroReverseLookup, SolutionView, StageExtractionSpec, ThermalReverseLookup,
-            TransitSeedArc, accumulate_category_costs, build_transit_seed,
-            extract_anticipated_lanes, extract_stage_result_with_lookups,
+            HydroReverseLookup, SolutionView, StageExtractionSpec, TransitSeedArc,
+            accumulate_category_costs, build_transit_seed, extract_anticipated_lanes,
+            extract_stage_result_with_lookups,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
@@ -303,28 +303,29 @@ impl<'a> SimScenarioLoadSpec<'a> {
 /// every per-stage extraction call to eliminate per-`(scenario, stage)`
 /// allocations on the hot path.
 ///
-/// Thermal membership is study-invariant (one table); FPHA/evaporation membership
-/// is per-`(hydro, stage)`, so a single global hydro lookup would misclassify any
-/// stage whose membership differs from stage 0's.
+/// Thermal (anticipated-plant) membership is study-invariant (one owner);
+/// FPHA/evaporation membership is per-`(hydro, stage)`, so a single global
+/// hydro lookup would misclassify any stage whose membership differs from
+/// stage 0's.
 pub(crate) struct SimLookups {
-    /// Reverse-lookup table for anticipated thermal indices (study-invariant).
-    pub(crate) thermal: ThermalReverseLookup,
+    /// The study's anticipated-plant set (study-invariant).
+    pub(crate) anticipated_plants: AnticipatedPlants,
     /// Per-stage hydro FPHA/evaporation lookups, indexed by stage.
     pub(crate) hydro_per_stage: Vec<HydroReverseLookup>,
 }
 
 impl SimLookups {
-    /// Build the reverse-lookup tables from study dimensions, the per-stage
-    /// geometry table, and entity counts.
+    /// Build the per-stage hydro lookups and clone the study's anticipated-plant
+    /// set, from study dimensions, the per-stage geometry table, and entity
+    /// counts.
     pub(crate) fn build(
         study_dims: &StudyDimensions,
         geometry_per_stage: &[StageGeometry],
         hydro_cell_index: &HydroCellIndex,
-        n_thermals: usize,
         n_hydros: usize,
     ) -> Self {
         Self {
-            thermal: ThermalReverseLookup::build(study_dims, n_thermals),
+            anticipated_plants: study_dims.anticipated_plants.clone(),
             hydro_per_stage: HydroReverseLookup::build_per_stage(
                 geometry_per_stage,
                 hydro_cell_index,
@@ -713,7 +714,7 @@ pub(crate) fn extract_sim_stage_result(
         ids.stage_id_u32,
         ids.node_id,
         hydro_lookup,
-        &lookups.thermal,
+        &lookups.anticipated_plants,
     );
     result.anticipated_lanes = extract_anticipated_lanes(
         &view,

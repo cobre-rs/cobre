@@ -3328,7 +3328,7 @@ mod anticipated_closed_form_lb_k1_single_thermal {
     //! therefore emitted at stage 0 as well, and `fill_thermal_columns` skips the
     //! per-block cost of the anticipated column at stage 0 (never written, leaving
     //! it at zero; the anticipated thermal is detected via
-    //! `anticipated_local_by_sys_pos`, same always-active path). See the K=1
+    //! `AnticipatedPlants::local_of`, same always-active path). See the K=1
     //! sign-chain table for the cut-coefficient sign convention that applies
     //! here.
     //!
@@ -4216,7 +4216,7 @@ mod anticipated_numerical_reconciliation_k2 {
     //! The anticipated thermal delivers `committed_t = d_{t-K} = 150 MW = load`.
     //! Per-block cost on the anticipated thermal at delivery stages is skipped in
     //! `fill_thermal_columns` (never written; the anticipated thermal is detected
-    //! via `anticipated_local_by_sys_pos`), so delivered generation costs $0
+    //! via `AnticipatedPlants::local_of`), so delivered generation costs $0
     //! in the objective. No backup needed since 150 MW = load exactly.
     //!
     //! **Zone C — Pre-horizon stages (t ∈ {0, 1}):**
@@ -4782,7 +4782,7 @@ mod anticipated_bridge_st_cruz_nova_k1 {
     //! The fishing constraint is always active for every anticipated plant, so a
     //! fishing row is emitted at every stage. The anticipated plant's delivery-stage
     //! per-block thermal cost is skipped in `fill_thermal_columns` (the plant is
-    //! detected via `anticipated_local_by_sys_pos`), so those columns are consumed
+    //! detected via `AnticipatedPlants::local_of`), so those columns are consumed
     //! at zero cost.
     //!
     //! The 60-series entity IDs are distinct from the other anticipated tests so

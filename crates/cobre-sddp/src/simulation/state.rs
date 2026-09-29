@@ -451,7 +451,6 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
         params.training_ctx.study_dims,
         params.ctx.geometry_per_stage,
         params.output.hydro_cell_index,
-        params.output.entity_counts.thermal_ids.len(),
         params.output.entity_counts.hydro_ids.len(),
     );
 

@@ -2167,7 +2167,7 @@ fn extract_thermals_per_block_committed_at_delivery_stage() {
     let obj = vec![0.0_f64; n_cols];
 
     let study_dims = test_support::study_dims_for(&anticipated_committed_counts_k2_3blks());
-    let lookup = super::ThermalReverseLookup::build(&study_dims, 1);
+    let anticipated_plants = &study_dims.anticipated_plants;
     let spec = StageExtractionSpec {
         study_dims: &study_dims,
         geometry: &indexer,
@@ -2216,7 +2216,7 @@ fn extract_thermals_per_block_committed_at_delivery_stage() {
     };
 
     assert_eq!(
-        super::compute_anticipated_committed_mw(&view, &spec, &lookup, 0),
+        super::compute_anticipated_committed_mw(&view, &spec, anticipated_plants, 0),
         Some(42.0),
         "helper: expected slot-0 value 42.0, NOT a per-block thermal value"
     );
@@ -2522,7 +2522,7 @@ fn extract_thermals_committed_at_delivery_is_zero_when_slot0_seeded() {
     let study_dims = test_support::study_dims_for(&eq_counts);
     let state = test_support::state_layout_full(0, 0, 1, vec![1]);
 
-    let lookup = super::ThermalReverseLookup::build(&study_dims, 1);
+    let anticipated_plants = &study_dims.anticipated_plants;
     let spec_delivery = StageExtractionSpec {
         study_dims: &study_dims,
         geometry: &indexer,
@@ -2575,7 +2575,12 @@ fn extract_thermals_committed_at_delivery_is_zero_when_slot0_seeded() {
         row_lower: &[],
     };
     assert_eq!(
-        super::compute_anticipated_committed_mw(&view_helper, &spec_delivery, &lookup, 0),
+        super::compute_anticipated_committed_mw(
+            &view_helper,
+            &spec_delivery,
+            anticipated_plants,
+            0
+        ),
         Some(0.0),
         "consolidated helper: expected Some(0.0) at delivery stage (slot-0 = incoming = 0.0)"
     );
@@ -2687,13 +2692,12 @@ fn extract_thermals_committed_reads_slot0_when_seed_zero() {
     );
 }
 
-/// Regression guard: verify that using a pre-built
-/// [`ThermalReverseLookup`] via `extract_stage_result_with_lookups`
-/// produces bit-for-bit identical results to the standard
-/// [`extract_stage_result`] path (which builds the lookup internally).
+/// Regression guard: verify that using a pre-built [`HydroReverseLookup`] via
+/// `extract_stage_result_with_lookups` produces bit-for-bit identical results
+/// to the standard [`extract_stage_result`] path (which builds it internally).
 #[test]
 fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
-    use super::{HydroReverseLookup, ThermalReverseLookup, extract_stage_result_with_lookups};
+    use super::{HydroReverseLookup, extract_stage_result_with_lookups};
     use crate::setup::NodeId;
 
     let eq_counts = test_support::GeometryDims {
@@ -2781,7 +2785,6 @@ fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
 
     let result_standard = extract_stage_result(&view, &spec, 2);
 
-    let thermal_lookup = ThermalReverseLookup::build(&study_dims, counts.thermal_ids.len());
     let hydro_lookup =
         HydroReverseLookup::build(spec.geometry, spec.hydro_cell_index, counts.hydro_ids.len());
     let result_prebuilt = extract_stage_result_with_lookups(
@@ -2790,7 +2793,7 @@ fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
         2,
         NodeId(2),
         &hydro_lookup,
-        &thermal_lookup,
+        &study_dims.anticipated_plants,
     );
 
     assert_eq!(

@@ -2027,14 +2027,20 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
 
     // Both anticipated arrays must be permuted in lockstep to preserve the
     // (thermal_idx, K_i) pairing.
-    let ctx_b_anticipated_plants = AnticipatedPlants::from_positions_for_test(vec![
-        ctx_a
-            .anticipated_plants
-            .thermal_of(AnticipatedLocal::new(1)),
-        ctx_a
-            .anticipated_plants
-            .thermal_of(AnticipatedLocal::new(0)),
-    ]);
+    let ctx_b_anticipated_plants = AnticipatedPlants::from_positions_for_test(
+        vec![
+            ctx_a
+                .anticipated_plants
+                .thermal_of(AnticipatedLocal::new(1)),
+            ctx_a
+                .anticipated_plants
+                .thermal_of(AnticipatedLocal::new(0)),
+        ],
+        vec![
+            ctx_a.anticipated_plants.windows()[1],
+            ctx_a.anticipated_plants.windows()[0],
+        ],
+    );
     let (
         anticipated_resolution_b,
         anticipated_lead_stages_b,
@@ -2069,7 +2075,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         ctx_a.anticipated_lead_stages[0],
     ];
     ctx_b.anticipated_plants = &ctx_b_anticipated_plants;
-    ctx_b.anticipated_windows = vec![ctx_a.anticipated_windows[1], ctx_a.anticipated_windows[0]];
     ctx_b.anticipated_resolution = AnticipatedResolution {
         per_plant: vec![
             ctx_a.anticipated_resolution.per_plant[1].clone(),

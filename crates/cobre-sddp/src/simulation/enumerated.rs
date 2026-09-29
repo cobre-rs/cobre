@@ -447,7 +447,6 @@ where
         training_ctx.study_dims,
         inputs.ctx.geometry_per_stage,
         inputs.output.hydro_cell_index,
-        inputs.output.entity_counts.thermal_ids.len(),
         inputs.output.entity_counts.hydro_ids.len(),
     );
     let load_spec = SimScenarioLoadSpec {
@@ -608,7 +607,6 @@ mod tests {
             training_ctx.study_dims,
             stage_ctx.geometry_per_stage,
             output.hydro_cell_index,
-            output.entity_counts.thermal_ids.len(),
             output.entity_counts.hydro_ids.len(),
         );
         let load_spec = SimScenarioLoadSpec {

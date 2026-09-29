@@ -1963,7 +1963,6 @@ mod dcs_simulation {
             &study_dims,
             ctx.geometry_per_stage,
             &test_support::identity_hydro_cell_index(256),
-            0,
             1,
         );
 
@@ -2375,7 +2374,6 @@ mod anticipated_ring_matches_forward_propagation {
             training_ctx.study_dims,
             ctx.geometry_per_stage,
             &test_support::identity_hydro_cell_index(256),
-            0,
             0,
         );
 

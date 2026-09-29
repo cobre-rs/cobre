@@ -519,21 +519,20 @@ pub(super) fn fill_thermal_columns(
             .bounds
             .thermal_bounds(t_idx, stage_idx)
             .cost_per_mwh;
-        // Indexed via `.get` rather than `[local_idx]`: `build_anticipated_fishing_row_pos`
-        // returns an empty vec whenever `k_max == 0`, regardless of `n_anticipated`.
-        let is_anticipated =
-            layout
-                .anticipated_local_by_sys_pos
-                .get(&t_idx)
-                .is_some_and(|&local_idx| {
-                    layout
-                        .anticipated
-                        .anticipated_fishing_row_pos
-                        .get(local_idx)
-                        .copied()
-                        .flatten()
-                        .is_some()
-                });
+        // `build_anticipated_fishing_row_pos` returns an empty vec whenever
+        // `k_max == 0`, regardless of `n_anticipated`.
+        let is_anticipated = ctx
+            .anticipated_plants
+            .local_of(ThermalSys::new(t_idx))
+            .is_some_and(|local| {
+                layout
+                    .anticipated
+                    .anticipated_fishing_row_pos
+                    .get(local.get())
+                    .copied()
+                    .flatten()
+                    .is_some()
+            });
         for blk in 0..layout.clock.n_blks() {
             let tb = ctx
                 .resolved
@@ -624,7 +623,7 @@ pub(super) fn fill_anticipated_columns(
             AnticipatedLocal::new(res.plant),
             delivery_stage,
             n_delivery,
-            &ctx.anticipated_windows,
+            ctx.anticipated_plants.windows(),
             ctx.time_value.delivery_stage_ids(),
         ) {
             active_count += 1;
@@ -3220,10 +3219,6 @@ mod anticipated_objective_tests {
                     thermals,
                     bounds,
                     anticipated_lead_stages: vec![K_MAX],
-                    // Windowless single plant: the decision gate reduces to the
-                    // strict horizon clause, which stays in range against
-                    // `ctx.time_value.delivery_stage_ids()`.
-                    anticipated_windows: vec![(None, None)],
                     anticipated_plants,
                     time_value: TimeValue::from_parts(
                         vec![],
@@ -3440,7 +3435,6 @@ mod anticipated_objective_tests {
                     thermals,
                     bounds,
                     anticipated_lead_stages: vec![k_max],
-                    anticipated_windows: vec![(None, None)],
                     anticipated_plants,
                     time_value,
                     ..CtxFixture::default()
@@ -3723,7 +3717,6 @@ mod anticipated_objective_tests {
                     thermals,
                     bounds,
                     anticipated_lead_stages: vec![usize::try_from(PSA_LEAD).unwrap()],
-                    anticipated_windows: vec![(None, None)],
                     anticipated_resolution: resolution,
                     anticipated_plants,
                     time_value,

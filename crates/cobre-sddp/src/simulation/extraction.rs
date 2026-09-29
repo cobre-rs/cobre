@@ -29,9 +29,10 @@ use crate::lp::builder::{
     GenericConstraintRowEntry, StageGeometry, evaporation_slot, evaporation_slot_count,
 };
 use crate::lp::indexer::{
-    AnticipatedLocal, BlockGrid, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal,
-    FloorLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys, PumpingSys, StateSpace,
-    StudyDimensions, anticipated_resolution_for, is_anticipated_decision_active_for_delivery,
+    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, Boundary, BusSys, EvapLocal,
+    FillingTargetLocal, FloorLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys,
+    PumpingSys, StateSpace, StudyDimensions, ThermalSys, anticipated_resolution_for,
+    is_anticipated_decision_active_for_delivery,
 };
 use crate::setup::NodeId;
 use crate::simulation::types::{
@@ -169,30 +170,6 @@ fn read_floor_slack_primal(
     primal[col]
 }
 
-/// Reverse lookup from system thermal index to anticipated-local index. Depends
-/// only on the study-invariant [`StudyDimensions`], so it is built once per run.
-///
-/// Entry `t` is `Some(local_anticipated_idx)` — the position of `t` within
-/// `study_dims.anticipated_plants`, used to address anticipated-decision
-/// columns — when thermal `t` is anticipated, `None` otherwise.
-pub(crate) struct ThermalReverseLookup {
-    /// Anticipated-local slot per thermal, `None` if not anticipated.
-    pub(crate) thermal_is_anticipated: Vec<Option<AnticipatedLocal>>,
-}
-
-impl ThermalReverseLookup {
-    /// Build the reverse lookup table for anticipated thermal indices.
-    pub(crate) fn build(study_dims: &StudyDimensions, n_thermals: usize) -> Self {
-        let mut thermal_is_anticipated = vec![None; n_thermals];
-        for (local, sys) in study_dims.anticipated_plants.thermals().enumerate() {
-            thermal_is_anticipated[sys.get()] = Some(AnticipatedLocal::new(local));
-        }
-        Self {
-            thermal_is_anticipated,
-        }
-    }
-}
-
 /// Primal of a thermal's anticipated-decision column, or `None` when the
 /// thermal is not anticipated, has no in-study decision at this stage, or the
 /// decision is inactive at its delivery stage.
@@ -215,10 +192,10 @@ impl ThermalReverseLookup {
 fn compute_anticipated_decision_mw(
     view: &SolutionView<'_>,
     spec: &StageExtractionSpec<'_>,
-    lookup: &ThermalReverseLookup,
+    anticipated_plants: &AnticipatedPlants,
     thermal_local: usize,
 ) -> Option<f64> {
-    let local_idx = lookup.thermal_is_anticipated[thermal_local]?;
+    let local_idx = anticipated_plants.local_of(ThermalSys::new(thermal_local))?;
     let resolution = anticipated_resolution_for(spec.state, local_idx, spec.n_stages);
     let mut genuine = resolution.genuine_decisions_at(spec.stage_index);
     let delivery_stage = genuine.next()?;
@@ -263,10 +240,10 @@ fn compute_anticipated_decision_mw(
 fn compute_anticipated_committed_mw(
     view: &SolutionView<'_>,
     spec: &StageExtractionSpec<'_>,
-    lookup: &ThermalReverseLookup,
+    anticipated_plants: &AnticipatedPlants,
     thermal_local: usize,
 ) -> Option<f64> {
-    let local_idx = lookup.thermal_is_anticipated[thermal_local]?;
+    let local_idx = anticipated_plants.local_of(ThermalSys::new(thermal_local))?;
     // Ring buffer lives in the stage-invariant state region, so the base is the
     // role-(a) `StateSpace`, not the geometry indexer.
     let col = spec
@@ -1200,15 +1177,17 @@ fn extract_thermals(
     view: &SolutionView<'_>,
     spec: &StageExtractionSpec<'_>,
     stage_id: u32,
-    lookup: &ThermalReverseLookup,
+    anticipated_plants: &AnticipatedPlants,
 ) -> Vec<SimulationThermalResult> {
     let n_blks = spec.n_blks;
     let grid = spec.block_grid();
     let mut results = Vec::with_capacity(spec.entity_counts.thermal_ids.len() * n_blks);
     for (t, &thermal_id) in spec.entity_counts.thermal_ids.iter().enumerate() {
-        let is_anticipated = lookup.thermal_is_anticipated[t].is_some();
-        let anticipated_decision_mw = compute_anticipated_decision_mw(view, spec, lookup, t);
-        let anticipated_committed_mw = compute_anticipated_committed_mw(view, spec, lookup, t);
+        let is_anticipated = anticipated_plants.local_of(ThermalSys::new(t)).is_some();
+        let anticipated_decision_mw =
+            compute_anticipated_decision_mw(view, spec, anticipated_plants, t);
+        let anticipated_committed_mw =
+            compute_anticipated_committed_mw(view, spec, anticipated_plants, t);
         for b in 0..n_blks {
             let col = grid.flat(spec.geometry.thermal.start, t, BlockIdx::new(b));
             let gen_mw = view.primal[col];
@@ -1338,8 +1317,8 @@ fn extract_buses(
 ///
 /// # Performance
 ///
-/// Builds the reverse-lookup tables on every call. On the hot path use
-/// `extract_stage_result_with_lookups` with pre-built lookups instead.
+/// Builds the hydro reverse-lookup table on every call. On the hot path use
+/// `extract_stage_result_with_lookups` with a pre-built `hydro_lookup` instead.
 ///
 /// The visited node id defaults to `stage_id` — the chain-degenerate node id
 /// (`node_graph.node_ids[t] == t` on a chain). A branching walk supplies its own
@@ -1352,42 +1331,41 @@ pub fn extract_stage_result(
     stage_id: u32,
 ) -> SimulationStageResult {
     let n_hydros = spec.entity_counts.hydro_ids.len();
-    let n_thermals = spec.entity_counts.thermal_ids.len();
     let hydro_lookup = HydroReverseLookup::build(spec.geometry, spec.hydro_cell_index, n_hydros);
-    let thermal_lookup = ThermalReverseLookup::build(spec.study_dims, n_thermals);
     extract_stage_result_with_lookups(
         view,
         spec,
         stage_id,
         NodeId(stage_id as i32),
         &hydro_lookup,
-        &thermal_lookup,
+        &spec.study_dims.anticipated_plants,
     )
 }
 
-/// Extract a [`SimulationStageResult`] using pre-built reverse-lookup tables.
+/// Extract a [`SimulationStageResult`] using a pre-built hydro reverse-lookup
+/// table.
 ///
 /// Identical to [`extract_stage_result`] but avoids building the
-/// [`HydroReverseLookup`] and [`ThermalReverseLookup`] tables on every call.
+/// [`HydroReverseLookup`] table on every call.
 ///
-/// `thermal_lookup` is study-invariant (one for the whole run); `hydro_lookup` is
-/// the lookup for **this stage** (FPHA/evap membership is per-`(hydro, stage)`).
-/// Build the thermal lookup and the per-stage hydro lookups once per simulation
-/// run (or per worker thread) and pass the stage's entries by reference here to
-/// eliminate per-`(scenario, stage)` allocations on the hot path.
+/// `anticipated_plants` is the study-invariant anticipated-plant set
+/// (typically `spec.study_dims.anticipated_plants`); `hydro_lookup` is the
+/// lookup for **this stage** (FPHA/evap membership is per-`(hydro, stage)`).
+/// Build the per-stage hydro lookups once per simulation run (or per worker
+/// thread) and pass them by reference here to eliminate per-`(scenario,
+/// stage)` allocations on the hot path.
 ///
 /// # Preconditions
 ///
 /// Same as [`extract_stage_result`] plus:
 /// - `hydro_lookup` was built from this stage's [`StageGeometry`] and `n_hydros`.
-/// - `thermal_lookup` was built from the same `(study_dims, n_thermals)` pair used here.
 pub(crate) fn extract_stage_result_with_lookups(
     view: &SolutionView<'_>,
     spec: &StageExtractionSpec<'_>,
     stage_id: u32,
     node_id: NodeId,
     hydro_lookup: &HydroReverseLookup,
-    thermal_lookup: &ThermalReverseLookup,
+    anticipated_plants: &AnticipatedPlants,
 ) -> SimulationStageResult {
     let state = spec.state;
     debug_assert!(
@@ -1447,7 +1425,7 @@ pub(crate) fn extract_stage_result_with_lookups(
         costs,
         hydros: extract_hydros(view, spec, stage_id, hydro_lookup),
         hydro_bus_generation: extract_hydro_bus_generation(view, spec, stage_id, hydro_lookup),
-        thermals: extract_thermals(view, spec, stage_id, thermal_lookup),
+        thermals: extract_thermals(view, spec, stage_id, anticipated_plants),
         exchanges: extract_exchanges(view, spec, stage_id),
         buses: extract_buses(view, spec, stage_id),
         pumping_stations,

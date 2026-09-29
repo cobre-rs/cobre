@@ -36,10 +36,6 @@ pub struct SolveInputs {
     pub(crate) initial: InitialConditions,
     /// Per-stage and per-slot NCS entity data.
     pub(crate) ncs: NcsEntityData,
-    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per anticipated thermal,
-    /// in anticipated-local order matching
-    /// `stage_data.study_dims.anticipated_plants`.
-    pub(crate) anticipated_windows: Vec<(Option<i32>, Option<i32>)>,
     /// `study_stage_ids[t] = stage.id` per study stage index.
     pub(crate) study_stage_ids: Vec<i32>,
     /// Study horizon mode (finite vs. infinite-horizon approximation).
@@ -65,7 +61,7 @@ impl SolveInputs {
             load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,
             ncs_stochastic_dense_col: &self.ncs.stochastic_dense_col,
             ncs_stochastic_windows: &self.ncs.stochastic_windows,
-            anticipated_windows: &self.anticipated_windows,
+            anticipated_windows: self.stage_data.study_dims.anticipated_plants.windows(),
             study_stage_ids: &self.study_stage_ids,
             ncs_max_gen: &self.ncs.max_gen,
             ncs_allow_curtailment: &self.ncs.allow_curtailment,

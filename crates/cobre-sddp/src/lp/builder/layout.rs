@@ -117,13 +117,10 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) n_anticipated: usize,
     /// Per-plant `lead_stages` (`K_i`), length `n_anticipated`, anticipated-local order.
     pub(crate) anticipated_lead_stages: Vec<usize>,
-    /// The study's anticipated-plant set.
-    pub(crate) anticipated_plants: &'a AnticipatedPlants,
-    /// Per-plant commissioning window `(entry_stage_id, exit_stage_id)`, length
-    /// `n_anticipated`, anticipated-local order. The decision gate keys on the
-    /// DELIVERY stage's operation window
+    /// The study's anticipated-plant set, including each plant's commissioning
+    /// window (`AnticipatedPlants::windows`) the decision gate keys on
     /// (`is_anticipated_decision_active_for_delivery`).
-    pub(crate) anticipated_windows: Vec<(Option<i32>, Option<i32>)>,
+    pub(crate) anticipated_plants: &'a AnticipatedPlants,
     /// Delivery-anchored resolution, threaded from setup's single owner
     /// (`crate::setup::resolve_state_layout`) — the same resolution the role-(a)
     /// `StateSpace` this build receives already carries.
@@ -522,11 +519,6 @@ pub(crate) struct StageLayout<'a> {
     /// Per-row metadata for active generic constraint rows, one per active
     /// `(constraint, block)` pair in constraint-index-major order.
     pub(crate) generic_constraint_rows: Vec<GenericConstraintRowEntry>,
-
-    // ── Role-(b) anticipated identity maps (own fields) ──────────────────────
-    /// Reverse map: global thermal position → anticipated-local index. Built once
-    /// for O(1) resolution in the generic-constraint `AnticipatedDecision` arm.
-    pub(crate) anticipated_local_by_sys_pos: HashMap<usize, usize>,
 }
 
 // ── Private helper return structs ─────────────────────────────────────────────
@@ -1324,7 +1316,7 @@ impl<'a> StageLayout<'a> {
                 state,
                 n_stages,
                 stage_idx,
-                &ctx.anticipated_windows,
+                ctx.anticipated_plants.windows(),
                 ctx.time_value.delivery_stage_ids(),
             );
         let row_anticipated_state_out_def_start = row.alloc(n_anticipated_state_out_def_rows).start;
@@ -1385,13 +1377,6 @@ impl<'a> StageLayout<'a> {
             n_anticipated_slot_definition_rows,
             anticipated_slot_row_pos,
         };
-
-        let anticipated_local_by_sys_pos = ctx
-            .anticipated_plants
-            .thermals()
-            .enumerate()
-            .map(|(local, sys_pos)| (sys_pos.get(), local))
-            .collect();
 
         let equipment = EquipmentColumns {
             storage_internal_start,
@@ -1458,7 +1443,6 @@ impl<'a> StageLayout<'a> {
             evap_hydro_indices,
             evap_indices,
             generic_constraint_rows: generic.generic_constraint_rows,
-            anticipated_local_by_sys_pos,
         }
     }
 

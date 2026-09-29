@@ -29,8 +29,8 @@ use cobre_core::{
 
 use crate::hydro_models::ResolvedProductionModel;
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FphaCellLocal, HydroCell, HydroSys,
-    LineSys, PumpingSys, ThermalSys,
+    BlockIdx, Boundary, BusSys, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, PumpingSys,
+    ThermalSys,
 };
 use crate::lp::builder::{
     StageLayout, TemplateBuildCtx, evaporation_slot, maturing_bucket_in_col,
@@ -605,12 +605,12 @@ fn resolve_bus_deficit(
     }
 }
 
-/// Resolve `AnticipatedDecision` to `layout.anticipated_decision_col(local_idx)`,
+/// Resolve `AnticipatedDecision` to `layout.anticipated_decision_col(local)`,
 /// the per-plant stage-level decision column.
 ///
 /// Returns an empty vec when `thermal_id` is not in `ctx.thermal_pos`, or the
-/// thermal's position is not in `layout.anticipated_local_by_sys_pos` (the thermal
-/// is not anticipated) — both defense-in-depth past semantic validation
+/// thermal is not in `ctx.anticipated_plants` (`AnticipatedPlants::local_of`
+/// returns `None`) — both defense-in-depth past semantic validation
 /// (`check_anticipated_decision_target_is_anticipated`).
 fn resolve_anticipated_decision(
     thermal_id: EntityId,
@@ -620,11 +620,8 @@ fn resolve_anticipated_decision(
     let Some(&sys_pos) = ctx.thermal_pos.get(&thermal_id) else {
         return vec![];
     };
-    if let Some(&local_idx) = layout.anticipated_local_by_sys_pos.get(&sys_pos) {
-        vec![(
-            layout.anticipated_decision_col(AnticipatedLocal::new(local_idx)),
-            1.0,
-        )]
+    if let Some(local) = ctx.anticipated_plants.local_of(ThermalSys::new(sys_pos)) {
+        vec![(layout.anticipated_decision_col(local), 1.0)]
     } else {
         vec![]
     }

@@ -422,8 +422,6 @@ impl StudySetup {
             config.cut_selection.as_ref(),
         )?;
 
-        let anticipated_windows =
-            build_anticipated_windows(system, &stage_data.study_dims.anticipated_plants);
         let extended_delivery_anchors = build_extended_delivery_anchors(
             system,
             &stage_data.state,
@@ -439,7 +437,6 @@ impl StudySetup {
                 node_graph,
                 initial,
                 ncs,
-                anticipated_windows,
                 study_stage_ids,
                 horizon,
                 inflow_method: config.inflow_method,
@@ -2511,25 +2508,6 @@ fn build_contract_is_import(system: &System) -> Vec<bool> {
         .collect()
 }
 
-/// Build the per-plant commissioning windows for the anticipated thermals.
-///
-/// In anticipated-local declaration order — the same order `anticipated_plants`
-/// and the LP-builder `anticipated_windows` use, so the simulation decision
-/// gate reads the matching window per index. Empty when there are no
-/// anticipated thermals.
-fn build_anticipated_windows(
-    system: &System,
-    anticipated_plants: &AnticipatedPlants,
-) -> Vec<(Option<i32>, Option<i32>)> {
-    anticipated_plants
-        .thermals()
-        .map(|t| {
-            let thermal = &system.thermals()[t.get()];
-            (thermal.entry_stage_id, thermal.exit_stage_id)
-        })
-        .collect()
-}
-
 /// Map each entity's declared numeric ID to its position in a canonically
 /// ordered slice (`System::hydros()` / `System::thermals()`).
 ///
@@ -2635,11 +2613,10 @@ fn build_initial_state(
                 // production.
                 continue;
             };
-            // O(n) over the small `n_anticipated` list, not a map.
             let Some(local_idx) = study_dims
                 .anticipated_plants
-                .thermals()
-                .position(|t| t == ThermalSys::new(global_idx))
+                .local_of(ThermalSys::new(global_idx))
+                .map(AnticipatedLocal::get)
             else {
                 // Not one of AnticipatedPlants::build's plants — skip.
                 continue;

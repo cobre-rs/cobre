@@ -932,13 +932,6 @@ fn build_template_build_ctx<'a>(
 
     let load_bus_indices = collect_load_bus_indices(system, &bus_pos, load_scheme);
 
-    let anticipated_windows: Vec<(Option<i32>, Option<i32>)> = anticipated_plants
-        .thermals()
-        .map(|t| {
-            let thermal = &system.thermals()[t.get()];
-            (thermal.entry_stage_id, thermal.exit_stage_id)
-        })
-        .collect();
     let n_anticipated = anticipated_plants.len();
 
     // Cloned so the map serves both LP construction (ctx) and the simulation
@@ -1024,7 +1017,6 @@ fn build_template_build_ctx<'a>(
         n_anticipated,
         anticipated_lead_stages,
         anticipated_plants,
-        anticipated_windows,
         anticipated_resolution,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
         time_value,

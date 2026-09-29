@@ -533,7 +533,6 @@ pub fn geometry(
         max_par_order: dims.max_par_order,
         anticipated_lead_stages: anticipated_lead_stages.clone(),
         anticipated_plants: dims.anticipated_plants.clone(),
-        anticipated_windows: vec![(None, None); dims.n_anticipated],
         has_penalty: dims.has_inflow_penalty,
         ..CtxFixture::default()
     };

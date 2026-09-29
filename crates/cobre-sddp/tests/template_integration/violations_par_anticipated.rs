@@ -755,7 +755,7 @@ fn test_anticipated_delivery_thermal_cost_is_zero() {
 
 /// The anticipated thermal's per-block cost is 0.0 at EVERY stage. The fishing
 /// constraint is always active for an anticipated plant, so `fill_thermal_columns`
-/// skips its per-block objective (via `anticipated_local_by_sys_pos`) at every
+/// skips its per-block objective (via `AnticipatedPlants::local_of`) at every
 /// stage — including pre-horizon stages before K_i matures — leaving the cost at
 /// its 0.0 initialization default.
 #[test]

@@ -30,7 +30,6 @@ pub(crate) fn postprocess_templates(
     // as the unscaled trial state (`fill_unscaled` in
     // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
     let bounds = system.bounds();
-    let anticipated_windows = super::build_anticipated_windows(system, anticipated_plants);
 
     debug_assert_eq!(
         time_value.discount_factors().len(),
@@ -60,7 +59,7 @@ pub(crate) fn postprocess_templates(
             stage_idx,
             bounds,
             anticipated_plants,
-            &anticipated_windows,
+            anticipated_plants.windows(),
             time_value,
         );
         stage_templates.state_boxes.push(state_box);

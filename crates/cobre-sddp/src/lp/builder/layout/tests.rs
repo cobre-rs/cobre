@@ -181,11 +181,6 @@ impl ZeroEntityFixtures {
         let mut ctx = self.base.ctx();
         ctx.generic_constraints = &[];
         ctx.n_anticipated = n_anticipated;
-        // Windowless: one `(None, None)` per anticipated plant. With no
-        // window the operation-window clause is identically true, so the
-        // decision gate reduces to the strict horizon clause, which stays
-        // in range against `ctx.time_value.delivery_stage_ids()`.
-        ctx.anticipated_windows = vec![(None, None); n_anticipated];
         ctx.anticipated_lead_stages = anticipated_lead_stages;
         ctx
     }
@@ -2613,10 +2608,6 @@ impl AntFixturesWithNStages {
         self.base.anticipated_plants = anticipated_plants_at(anticipated_positions);
         let mut ctx = self.base.ctx();
         ctx.n_anticipated = n_anticipated;
-        // Windowless: one `(None, None)` per plant, so the decision gate
-        // reduces to the strict horizon clause, which stays in range
-        // against `ctx.time_value.delivery_stage_ids()`.
-        ctx.anticipated_windows = vec![(None, None); n_anticipated];
         ctx.anticipated_lead_stages = anticipated_lead_stages;
         ctx
     }

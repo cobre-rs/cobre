@@ -50,7 +50,6 @@ pub(crate) struct CtxFixture {
     pub(crate) max_par_order: usize,
     pub(crate) anticipated_lead_stages: Vec<usize>,
     pub(crate) anticipated_plants: AnticipatedPlants,
-    pub(crate) anticipated_windows: Vec<(Option<i32>, Option<i32>)>,
     pub(crate) anticipated_resolution: AnticipatedResolution,
     pub(crate) has_penalty: bool,
     pub(crate) time_value: TimeValue,
@@ -89,7 +88,6 @@ impl Default for CtxFixture {
             max_par_order: 0,
             anticipated_lead_stages: Vec::new(),
             anticipated_plants: AnticipatedPlants::default(),
-            anticipated_windows: Vec::new(),
             anticipated_resolution: AnticipatedResolution::default(),
             has_penalty: false,
             time_value: TimeValue::from_parts(
@@ -195,7 +193,6 @@ impl CtxFixture {
             n_anticipated: self.anticipated_plants.len(),
             anticipated_lead_stages: self.anticipated_lead_stages.clone(),
             anticipated_plants: &self.anticipated_plants,
-            anticipated_windows: self.anticipated_windows.clone(),
             anticipated_resolution: self.anticipated_resolution.clone(),
             has_penalty: self.has_penalty,
             time_value: &self.time_value,

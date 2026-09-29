@@ -165,8 +165,8 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// resolved in that arrival stage's own frame; keyed like
     /// [`Self::arc_stage_weights`]. `None` where [`Self::arc_spread_chrono`] is
     /// also `None` (a `Parallel` arrival stage), or where no in-study source
-    /// stage reaches it. Looked up directly by the chronological water fill's
-    /// `resolve_chrono_arrival_density`. See
+    /// stage reaches it. Looked up directly by `resolve_bucket_arrival_density`,
+    /// which the chronological water fill and the generic hydro-inflow term read. See
     /// [`build_arc_arrival_density`](crate::bucket_topology::build_arc_arrival_density).
     pub(crate) arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
     /// `per_stage_mask[stage_idx]` holds the max reachable lag per declared

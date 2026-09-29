@@ -274,7 +274,7 @@ row positions (`None` = masked). Then:
   the state variable, and the bucket state is already a volume (hm³), so no `τ`
   scaling. Under chronological blocks the maturing mass instead spreads across the
   arrival stage's block rows by a fixed, `block_mode`-independent arrival density
-  `ρ` looked up from a setup-precomputed table (`resolve_chrono_arrival_density`).
+  `ρ` looked up from a setup-precomputed table (`resolve_bucket_arrival_density`).
 
 ### 2.5 Seed and rolling output
 

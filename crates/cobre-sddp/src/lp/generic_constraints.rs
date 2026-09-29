@@ -191,10 +191,6 @@ pub(crate) struct ContractRefs<'a> {
 /// a stub entity with no LP columns (contracts, non-controllable sources,
 /// withdrawal).
 #[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one exhaustive arm per VariableRef variant keeps the closed-set dispatch in one match"
-)]
 pub(crate) fn resolve_variable_ref(
     var_ref: &VariableRef,
     block_idx: usize,
@@ -246,14 +242,9 @@ pub(crate) fn resolve_variable_ref(
             *hydro_id, *block_id, *bus_id, block_idx, grid, geom, hydro_pos, 1.0,
         ),
 
-        VariableRef::HydroSpillage { hydro_id, block_id } => resolve_block_variable(
-            *hydro_id,
-            *block_id,
-            block_idx,
-            grid,
-            block_col_range(geom, ElementKind::Spillage).start,
-            hydro_pos,
-        ),
+        VariableRef::HydroSpillage { hydro_id, block_id } => {
+            resolve_hydro_spillage(*hydro_id, *block_id, block_idx, grid, geom, hydro_pos)
+        }
 
         VariableRef::HydroOutflow { hydro_id, block_id } => {
             resolve_hydro_outflow(*hydro_id, *block_id, block_idx, grid, geom, hydro_pos)
@@ -278,32 +269,15 @@ pub(crate) fn resolve_variable_ref(
         VariableRef::ThermalGeneration {
             thermal_id,
             block_id,
-        } => resolve_block_variable(
-            *thermal_id,
-            *block_id,
-            block_idx,
-            grid,
-            block_col_range(geom, ElementKind::Thermal).start,
-            thermal_pos,
-        ),
+        } => resolve_thermal_generation(*thermal_id, *block_id, block_idx, grid, geom, thermal_pos),
 
-        VariableRef::LineDirect { line_id, block_id } => resolve_block_variable(
-            *line_id,
-            *block_id,
-            block_idx,
-            grid,
-            block_col_range(geom, ElementKind::LineFwd).start,
-            line_pos,
-        ),
+        VariableRef::LineDirect { line_id, block_id } => {
+            resolve_line_direct(*line_id, *block_id, block_idx, grid, geom, line_pos)
+        }
 
-        VariableRef::LineReverse { line_id, block_id } => resolve_block_variable(
-            *line_id,
-            *block_id,
-            block_idx,
-            grid,
-            block_col_range(geom, ElementKind::LineRev).start,
-            line_pos,
-        ),
+        VariableRef::LineReverse { line_id, block_id } => {
+            resolve_line_reverse(*line_id, *block_id, block_idx, grid, geom, line_pos)
+        }
 
         VariableRef::LineExchange { line_id, block_id } => {
             resolve_line_exchange(*line_id, *block_id, block_idx, grid, geom, line_pos)
@@ -313,23 +287,13 @@ pub(crate) fn resolve_variable_ref(
             resolve_bus_deficit(*bus_id, *block_id, block_idx, grid, geom, bus_pos)
         }
 
-        VariableRef::BusExcess { bus_id, block_id } => resolve_block_variable(
-            *bus_id,
-            *block_id,
-            block_idx,
-            grid,
-            block_col_range(geom, ElementKind::Excess).start,
-            bus_pos,
-        ),
+        VariableRef::BusExcess { bus_id, block_id } => {
+            resolve_bus_excess(*bus_id, *block_id, block_idx, grid, geom, bus_pos)
+        }
 
-        VariableRef::HydroDiversion { hydro_id, block_id } => resolve_block_variable(
-            *hydro_id,
-            *block_id,
-            block_idx,
-            grid,
-            block_col_range(geom, ElementKind::Diversion).start,
-            hydro_pos,
-        ),
+        VariableRef::HydroDiversion { hydro_id, block_id } => {
+            resolve_hydro_diversion(*hydro_id, *block_id, block_idx, grid, geom, hydro_pos)
+        }
 
         VariableRef::AnticipatedDecision { thermal_id } => {
             resolve_anticipated_decision(*thermal_id, geom, thermal_pos)
@@ -939,6 +903,120 @@ fn resolve_contract_column(
     let eff_blk = block_id.unwrap_or(block_idx);
     let col = grid.flat(base, family_slot, BlockIdx::new(eff_blk));
     vec![(col, 1.0)]
+}
+
+/// Resolve `HydroSpillage` via the single-column dispatcher.
+fn resolve_hydro_spillage(
+    hydro_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    grid: BlockGrid,
+    geom: &GenericResolverGeom<'_>,
+    hydro_pos: &BTreeMap<EntityId, usize>,
+) -> Vec<(usize, f64)> {
+    resolve_block_variable(
+        hydro_id,
+        block_id,
+        block_idx,
+        grid,
+        block_col_range(geom, ElementKind::Spillage).start,
+        hydro_pos,
+    )
+}
+
+/// Resolve `HydroDiversion` via the single-column dispatcher.
+fn resolve_hydro_diversion(
+    hydro_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    grid: BlockGrid,
+    geom: &GenericResolverGeom<'_>,
+    hydro_pos: &BTreeMap<EntityId, usize>,
+) -> Vec<(usize, f64)> {
+    resolve_block_variable(
+        hydro_id,
+        block_id,
+        block_idx,
+        grid,
+        block_col_range(geom, ElementKind::Diversion).start,
+        hydro_pos,
+    )
+}
+
+/// Resolve `ThermalGeneration` via the single-column dispatcher.
+fn resolve_thermal_generation(
+    thermal_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    grid: BlockGrid,
+    geom: &GenericResolverGeom<'_>,
+    thermal_pos: &BTreeMap<EntityId, usize>,
+) -> Vec<(usize, f64)> {
+    resolve_block_variable(
+        thermal_id,
+        block_id,
+        block_idx,
+        grid,
+        block_col_range(geom, ElementKind::Thermal).start,
+        thermal_pos,
+    )
+}
+
+/// Resolve `LineDirect` via the single-column dispatcher.
+fn resolve_line_direct(
+    line_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    grid: BlockGrid,
+    geom: &GenericResolverGeom<'_>,
+    line_pos: &BTreeMap<EntityId, usize>,
+) -> Vec<(usize, f64)> {
+    resolve_block_variable(
+        line_id,
+        block_id,
+        block_idx,
+        grid,
+        block_col_range(geom, ElementKind::LineFwd).start,
+        line_pos,
+    )
+}
+
+/// Resolve `LineReverse` via the single-column dispatcher.
+fn resolve_line_reverse(
+    line_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    grid: BlockGrid,
+    geom: &GenericResolverGeom<'_>,
+    line_pos: &BTreeMap<EntityId, usize>,
+) -> Vec<(usize, f64)> {
+    resolve_block_variable(
+        line_id,
+        block_id,
+        block_idx,
+        grid,
+        block_col_range(geom, ElementKind::LineRev).start,
+        line_pos,
+    )
+}
+
+/// Resolve `BusExcess` via the single-column dispatcher.
+fn resolve_bus_excess(
+    bus_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    grid: BlockGrid,
+    geom: &GenericResolverGeom<'_>,
+    bus_pos: &BTreeMap<EntityId, usize>,
+) -> Vec<(usize, f64)> {
+    resolve_block_variable(
+        bus_id,
+        block_id,
+        block_idx,
+        grid,
+        block_col_range(geom, ElementKind::Excess).start,
+        bus_pos,
+    )
 }
 
 /// Resolve a block-level LP variable to its `(column_index, 1.0)` pair via the

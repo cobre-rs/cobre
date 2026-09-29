@@ -3,7 +3,7 @@
     {
       "id": 1,
       "name": "min_total_inflow_H1",
-      "description": "Lower bound on the total realized inflow into downstream hydro H1 (id 1). Total inflow = incremental z_inflow(1) + upstream H0 (id 0) turbine + spillage at each block. The bound is above H1's standalone incremental inflow in every stage, so the upstream cascade release columns are load-bearing for a slack-free solve.",
+      "description": "Lower bound on the total realized inflow into downstream hydro H1 (id 1): its incremental z_inflow plus the upstream H0 (id 0) release the water balance credits to H1 in each block, including H0's transit water that matures this stage. The bound is above H1's standalone incremental inflow in every stage.",
       "expression": "hydro_inflow(1)",
       "slack": {
         "enabled": true,

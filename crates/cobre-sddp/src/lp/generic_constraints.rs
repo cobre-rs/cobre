@@ -32,7 +32,10 @@ use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FphaCellLocal, HydroCell, HydroSys,
     LineSys, PumpingSys, ThermalSys,
 };
-use crate::lp::builder::{StageLayout, TemplateBuildCtx, evaporation_slot};
+use crate::lp::builder::{
+    StageLayout, TemplateBuildCtx, evaporation_slot, maturing_bucket_in_col,
+    resolve_bucket_arrival_density,
+};
 
 /// Map a [`VariableRef`] and block index to LP column indices with multipliers.
 ///
@@ -74,7 +77,7 @@ pub(crate) fn resolve_variable_ref(
         }
 
         VariableRef::HydroInflow { hydro_id, block_id } => {
-            resolve_hydro_inflow(*hydro_id, at(*block_id), ctx, layout)
+            resolve_hydro_inflow(*hydro_id, at(*block_id), stage_idx, ctx, layout)
         }
 
         VariableRef::HydroTurbined {
@@ -317,8 +320,10 @@ fn resolve_hydro_storage_boundary(
 }
 
 /// Resolve `HydroInflow` to the cascade total-inflow expression at `blk`: the
-/// incremental (local) `z_inflow` column plus immediately-upstream releases (turbine
-/// + spillage) plus plants diverting into `h`, all coefficient `+1.0`.
+/// incremental (local) `z_inflow` column, plants diverting into `h`, each
+/// upstream release weighted — for an operating reservoir — by the share the
+/// downstream balance row credits to this block, and the maturing transit water
+/// entering as a rate.
 ///
 /// This is an instantaneous **rate** identity (m³/s), **not** the `−τ`-weighted (hm³)
 /// storage-balance row — the `−τ` sign and `τ` weighting belong to storage balance
@@ -337,6 +342,7 @@ fn resolve_hydro_storage_boundary(
 fn resolve_hydro_inflow(
     hydro_id: EntityId,
     blk: BlockIdx,
+    stage_idx: usize,
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
@@ -353,21 +359,14 @@ fn resolve_hydro_inflow(
         .get(&hydro_id)
         .map_or(&[][..], Vec::as_slice);
 
-    let mut result = Vec::with_capacity(1 + 2 * upstream.len() + diversion_into.len());
+    let mut result = Vec::with_capacity(2 + 2 * upstream.len() + diversion_into.len());
 
     result.push((layout.state.z_inflow_col(HydroSys::new(pos_h)).get(), 1.0));
 
-    // Upstream releases (turbine + spillage): same column set as the storage-balance
-    // inflow side but coefficient +1.0 (rate), not −τ (volume). Turbine sums every
-    // one of the upstream plant's cells; spillage stays plant-keyed (unsplit).
     if !layout.equipment.turbine.is_empty() && !layout.equipment.spillage.is_empty() {
         for &up_id in upstream {
             if let Some(&pos_up) = ctx.hydro_pos.get(&up_id) {
-                let sys_up = HydroSys::new(pos_up);
-                for cell in ctx.hydro_cell_index.cells_of(sys_up) {
-                    result.push((layout.turbine_col(HydroCell::new(cell), blk), 1.0));
-                }
-                result.push((layout.spillage_col(sys_up, blk), 1.0));
+                push_upstream_release_rate(pos_up, blk, stage_idx, ctx, layout, &mut result);
             }
         }
     }
@@ -380,7 +379,78 @@ fn resolve_hydro_inflow(
         }
     }
 
+    if let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(pos_h)) {
+        let rho =
+            resolve_bucket_arrival_density(ctx, layout.clock, stage_idx, hydro_id, layout.n_blks)
+                [blk.get()];
+        if rho != 0.0 {
+            result.push((col, rho / layout.clock.tau(blk)));
+        }
+    }
+
     result
+}
+
+/// Push arc `u_idx → h`'s per-block release rate onto `out`, mirroring the water
+/// balance's own branch (D2, `lp/builder/entries.rs`'s `fill_arc_release_block_entries`
+/// / `fill_arc_release_chrono_block_entries`): a chronological spread entry routes
+/// each source block's share; a stage-clock-weights entry uses its same-block share
+/// `k_0` bare (the balance's own `τ_b · k_0` product, never re-multiplied); absent
+/// either, the whole release lands at `blk` (today's `+1.0`, the zero-lag reduction).
+fn push_upstream_release_rate(
+    u_idx: usize,
+    blk: BlockIdx,
+    stage_idx: usize,
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout<'_>,
+    out: &mut Vec<(usize, f64)>,
+) {
+    if let Some(res) = ctx
+        .arc_spread_chrono
+        .get(&u_idx)
+        .and_then(|by_stage| by_stage[stage_idx].as_ref())
+    {
+        for src in 0..=blk.get() {
+            let j = blk.get() - src;
+            let Some(&r) = res.within_stage_routing[src].get(j) else {
+                continue;
+            };
+            if r == 0.0 {
+                continue;
+            }
+            let coeff = r * layout.clock.tau(BlockIdx::new(src)) / layout.clock.tau(blk);
+            push_release_columns(u_idx, BlockIdx::new(src), coeff, ctx, layout, out);
+        }
+        return;
+    }
+
+    let Some(k_by_stage) = ctx.arc_stage_weights.get(&u_idx) else {
+        push_release_columns(u_idx, blk, 1.0, ctx, layout, out);
+        return;
+    };
+    let k0 = k_by_stage[stage_idx][0];
+    if k0 != 0.0 {
+        push_release_columns(u_idx, blk, k0, ctx, layout, out);
+    }
+}
+
+/// Push plant `u_idx`'s release columns (every cell's turbine column, then
+/// spillage) onto `out` at `coeff`: a plant's release is `Σ_c q_c + s` over a
+/// disjoint cell partition, so `coeff` is replicated across cells, never divided
+/// (mirrors `push_plant_release` in `lp/builder/entries.rs`).
+fn push_release_columns(
+    u_idx: usize,
+    blk: BlockIdx,
+    coeff: f64,
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout<'_>,
+    out: &mut Vec<(usize, f64)>,
+) {
+    let sys_up = HydroSys::new(u_idx);
+    for cell in ctx.hydro_cell_index.cells_of(sys_up) {
+        out.push((layout.turbine_col(HydroCell::new(cell), blk), coeff));
+    }
+    out.push((layout.spillage_col(sys_up, blk), coeff));
 }
 
 /// Resolve `HydroEvaporation` to the evaporation-outflow column for the matching

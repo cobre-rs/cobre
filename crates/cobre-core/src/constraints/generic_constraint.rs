@@ -256,11 +256,14 @@ pub enum VariableRef {
     ///
     /// Local natural inflow PLUS the immediately-upstream cascade releases
     /// (turbined + spilled + diverted) routed down — the inflow side of the water
-    /// balance, not the `z_inflow` column alone. Coefficients are unit `+1.0` on
-    /// every rate column (rate identity in m³/s, NOT the `−τ` volume weighting of
-    /// the storage-balance row). Block-dependent (upstream releases are per-block
-    /// LP columns), so `None` always expands to one row per block, never a
-    /// collapsed stage-level row.
+    /// balance, not the `z_inflow` column alone. For an operating reservoir, an
+    /// upstream release enters with the share of it that the water balance credits
+    /// to this block. That is the whole release when the arc has no water travel
+    /// time. The upstream transit water that matures into this block also enters,
+    /// as a rate. Pumping into the plant is not part of the term. This is a rate
+    /// identity in m³/s, NOT the `−τ` volume weighting of the storage-balance row.
+    /// Block-dependent (upstream releases are per-block LP columns), so `None`
+    /// always expands to one row per block, never a collapsed stage-level row.
     ///
     /// Appended at the END of the enum to preserve every existing variant's
     /// postcard discriminant.

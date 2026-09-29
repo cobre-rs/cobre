@@ -1,9 +1,8 @@
-//! `hydro_inflow` mislays a traveling upstream release: it counts the full
-//! upstream turbine/spillage rate as this stage's inflow and carries no term
-//! for the maturing travel-time bucket, while the water-balance row it
-//! mirrors defers part of that release to a later stage. Pins the defect as
-//! an ignored red test against the case with no travel time, which the
-//! identity holds for exactly.
+//! `hydro_inflow` equals the water balance's inflow side: each upstream
+//! release is weighted by the share the downstream balance row credits to
+//! this block, and the maturing transit bucket enters as a rate. Checked
+//! without travel time (every share is `1.0`), with travel time on a
+//! parallel stage, and with travel time on a chronological stage.
 
 #![allow(
     clippy::unwrap_used,
@@ -57,7 +56,7 @@ const TRAVEL_TIME_HOURS: f64 = 372.0;
 const FORCED_RELEASE_M3S: f64 = 100.0;
 const NON_BINDING_BOUND: f64 = 1.0e6;
 
-fn stages() -> Vec<Stage> {
+fn stages(block_mode: BlockMode) -> Vec<Stage> {
     let base = NaiveDate::from_ymd_opt(2024, 1, 1).expect("2024-01-01 is a valid date");
     (0..N_STAGES)
         .map(|i| {
@@ -79,7 +78,7 @@ fn stages() -> Vec<Stage> {
                             duration_hours: BLOCK_HOURS[1],
                         },
                     ],
-                    block_mode: BlockMode::Parallel,
+                    block_mode,
                     state_config: StageStateConfig {
                         storage: true,
                         inflow_lags: false,
@@ -224,7 +223,7 @@ fn downstream_inflow_constraint() -> (GenericConstraint, ResolvedGenericConstrai
 /// `VariableRef::HydroInflow { hydro_id: DOWNSTREAM_ID, block_id: None }` at a
 /// non-binding upper bound active at stage 1. `travel_time_hours` toggles the
 /// arc's travel-time bucket between present and absent.
-fn build_system(travel_time_hours: Option<f64>) -> System {
+fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System {
     let bus = make_bus(
         EntityId(BUS_ID),
         BusSpec {
@@ -265,7 +264,7 @@ fn build_system(travel_time_hours: Option<f64>) -> System {
         },
     );
 
-    let stages = stages();
+    let stages = stages(block_mode);
     let n_stages = stages.len();
 
     let inflow_models: Vec<InflowModel> = (0..n_stages)
@@ -389,11 +388,25 @@ fn spillage_col(geom: &StageGeometry, hydro_pos: usize, block: usize) -> usize {
     BlockGrid::new(geom.n_blks, 0).flat(geom.spillage.start, hydro_pos, BlockIdx::new(block))
 }
 
+/// Every nonzero column of generic constraint row `row` must be one of
+/// `allowed` — a stray pair breaks the closed-column-set contract this test
+/// pins.
+fn assert_generic_row_columns_are_closed(tpl: &StageTemplate, row: usize, allowed: &[usize]) {
+    for col in 0..tpl.num_cols {
+        let entry = matrix_entry(tpl, row, col);
+        assert!(
+            entry == 0.0 || allowed.contains(&col),
+            "row {row}: unexpected nonzero column {col} (value {entry}) outside the checked set"
+        );
+    }
+}
+
 /// For downstream hydro 2 at `stage`, checks that the per-block `k`-weighted
 /// `hydro_inflow` rate matches the water-balance row's own inflow-side volume,
 /// for every column the balance row's inflow side reads: hydro 2's own
 /// `z_inflow`, hydro 1's turbine/spillage columns in every block, and every
-/// `transit_buckets_in` column the balance row actually reads.
+/// `transit_buckets_in` column the balance row actually reads. Every other
+/// column of each generic row must be zero (the closed-set contract).
 fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
     let templates = &setup.inputs.stage_data.stage_templates;
     let tpl = &templates.templates[stage];
@@ -435,18 +448,76 @@ fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
             1e-9 * scale
         );
     }
+
+    for b in 0..n_blks {
+        assert_generic_row_columns_are_closed(tpl, g_row(b), &columns);
+    }
+}
+
+/// For downstream hydro 2 at `stage`, checks each block's own chronological
+/// water-balance row against `hydro_inflow`'s per-block generic row: for
+/// every inflow-side column `c`, `τ_b · g[b, c] == -w_b[c]`. Every other
+/// column of each generic row must be zero (the closed-set contract).
+fn assert_hydro_inflow_matches_each_chronological_water_balance_row(
+    setup: &StudySetup,
+    stage: usize,
+) {
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let tpl = &templates.templates[stage];
+    let geom = &templates.geometry_per_stage[stage];
+    let state_space = setup.stage_state();
+    let n_blks = geom.n_blks;
+
+    let g_row_start = generic_row_start(templates, stage);
+    let g_row = |b: usize| g_row_start + b;
+    let w_row = |b: usize| geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(b));
+
+    let mut columns: Vec<usize> = vec![state_space.z_inflow.start + DOWNSTREAM_POS];
+    for b in 0..n_blks {
+        columns.push(turbine_col(geom, UPSTREAM_POS, b));
+        columns.push(spillage_col(geom, UPSTREAM_POS, b));
+    }
+    let bucket_columns: Vec<usize> = state_space
+        .transit_buckets_in
+        .clone()
+        .filter(|&c| (0..n_blks).any(|b| matrix_entry(tpl, w_row(b), c) != 0.0))
+        .collect();
+    columns.extend(&bucket_columns);
+
+    for b in 0..n_blks {
+        let row_w = w_row(b);
+        let row_g = g_row(b);
+        let tau_b = matrix_entry(tpl, row_w, turbine_col(geom, DOWNSTREAM_POS, b));
+
+        for &c in &columns {
+            let lhs = tau_b * matrix_entry(tpl, row_g, c);
+            let w_entry = matrix_entry(tpl, row_w, c);
+            let rhs = -w_entry;
+            let scale = 1.0_f64.max(w_entry.abs());
+            assert!(
+                (lhs - rhs).abs() <= 1e-9 * scale,
+                "stage {stage} block {b} column {c}: hydro_inflow={lhs} does not match \
+                 -water_balance[{row_w}, {c}]={rhs} (tol {})",
+                1e-9 * scale
+            );
+        }
+
+        assert_generic_row_columns_are_closed(tpl, row_g, &columns);
+    }
 }
 
 #[test]
 fn hydro_inflow_rows_match_the_water_balance_inflow_side_without_travel_time() {
-    let setup = build_setup_in_code(build_system(None), &config());
+    let setup = build_setup_in_code(build_system(None, BlockMode::Parallel), &config());
     assert_hydro_inflow_matches_water_balance(&setup, 1);
 }
 
 #[test]
-#[ignore = "hydro_inflow counts the full upstream release in the same stage and omits the maturing transit water"]
 fn hydro_inflow_rows_match_the_water_balance_inflow_side_with_travel_time() {
-    let setup = build_setup_in_code(build_system(Some(TRAVEL_TIME_HOURS)), &config());
+    let setup = build_setup_in_code(
+        build_system(Some(TRAVEL_TIME_HOURS), BlockMode::Parallel),
+        &config(),
+    );
     let templates = &setup.inputs.stage_data.stage_templates;
     let tpl = &templates.templates[1];
     let geom = &templates.geometry_per_stage[1];
@@ -472,4 +543,43 @@ fn hydro_inflow_rows_match_the_water_balance_inflow_side_with_travel_time() {
     );
 
     assert_hydro_inflow_matches_water_balance(&setup, 1);
+}
+
+/// A release in block 0 (0-300h) arrives at 372-672h, all of it within the
+/// same stage's block 1. A block-1 release (300-744h local) arrives at
+/// 672-1116h, so part of it lands past the stage and matures into stage 1 —
+/// exercising the crossing deposit into the bucket, then the bucket's
+/// per-block arrival density on the receiving side.
+#[test]
+fn hydro_inflow_rows_match_each_chronological_water_balance_row_with_travel_time() {
+    let setup = build_setup_in_code(
+        build_system(Some(TRAVEL_TIME_HOURS), BlockMode::Chronological),
+        &config(),
+    );
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let tpl = &templates.templates[1];
+    let geom = &templates.geometry_per_stage[1];
+    let state = setup.stage_state();
+
+    let w_row_1 = geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(1));
+    assert!(
+        matrix_entry(tpl, w_row_1, turbine_col(geom, UPSTREAM_POS, 0)) != 0.0,
+        "power guard: hydro 1's block-0 turbine column must have a nonzero entry \
+         on downstream balance row 1"
+    );
+
+    let has_bucket_contribution = (0..geom.n_blks).any(|b| {
+        let w_row = geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(b));
+        state
+            .transit_buckets_in
+            .clone()
+            .any(|c| matrix_entry(tpl, w_row, c) != 0.0)
+    });
+    assert!(
+        has_bucket_contribution,
+        "power guard: some transit_buckets_in column must be nonzero on some \
+         downstream balance row"
+    );
+
+    assert_hydro_inflow_matches_each_chronological_water_balance_row(&setup, 1);
 }

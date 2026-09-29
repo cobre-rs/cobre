@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A generic constraint's `hydro_inflow` term now accounts for water travel
+  time.** It used to add the whole same-block turbined and spilled flow of an
+  upstream plant, even when that water takes hours to arrive. It also left out
+  the transit water arriving from earlier stages. The upstream release and the
+  transit water it counts now match what the downstream reservoir's water
+  balance receives in that block. Studies without water travel time are
+  unchanged.
+
 - **A pumping station on a chronological stage with two or more blocks now
   moves water between its own source and destination reservoirs in each
   block.** In 0.16.0 each block's pumped volume was written into another

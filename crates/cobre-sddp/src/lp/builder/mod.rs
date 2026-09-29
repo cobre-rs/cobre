@@ -63,6 +63,7 @@ pub use template::build_stage_templates_resolving_layout;
 pub use template::{StageGeometry, StageTemplates, build_stage_templates};
 
 // --- Crate-internal re-exports ---
+pub(crate) use entries::{maturing_bucket_in_col, resolve_bucket_arrival_density};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use layout::ResolvedTables;
 pub(crate) use layout::{StageLayout, TemplateBuildCtx};

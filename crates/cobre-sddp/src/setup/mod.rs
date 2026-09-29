@@ -653,8 +653,7 @@ fn build_energy_and_templates(
     config: &StudyParams,
     stochastic: &StochasticContext,
     hydro_models: &PrepareHydroModelsResult,
-    state_layout: &StateSpace,
-    anticipated_plants: &AnticipatedPlants,
+    layout: &ResolvedStateLayout,
     topology: &bucket_topology::TransitBucketTopology,
 ) -> Result<EnergyAndTemplates, SddpError> {
     let (energy_conversion, resolved_parameters) = build_energy_conversion_and_resolved_parameters(
@@ -664,7 +663,7 @@ fn build_energy_and_templates(
         config.cost_scale_factor,
     )?;
 
-    let time_value = TimeValue::from_system(system, anticipated_plants);
+    let time_value = TimeValue::from_system(system, &layout.anticipated_plants);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
     let mut stage_templates = build_stage_templates(
@@ -675,8 +674,8 @@ fn build_energy_and_templates(
         &hydro_models.production,
         &hydro_models.evaporation,
         &resolved_parameters,
-        state_layout,
-        anticipated_plants,
+        &layout.state,
+        &layout.anticipated_plants,
         &topology.per_stage_mask,
         &topology.arc_stage_weights,
         &topology.arc_spread_chrono,
@@ -692,8 +691,8 @@ fn build_energy_and_templates(
     let scaling_report = template_postprocess::postprocess_templates(
         &mut stage_templates,
         system,
-        state_layout,
-        anticipated_plants,
+        &layout.state,
+        &layout.anticipated_plants,
         config.cost_scale_factor,
         &time_value,
     );
@@ -921,12 +920,18 @@ pub fn widen_lag_state_depth(computed_order: usize, boundary_depth: Option<u32>)
     boundary_depth.map_or(computed_order, |d| computed_order.max(d as usize))
 }
 
+/// Grouped output of [`resolve_state_layout`].
+pub(crate) struct ResolvedStateLayout {
+    pub(crate) state: StateSpace,
+    pub(crate) anticipated_plants: AnticipatedPlants,
+}
+
 /// Resolve every anticipated thermal's delivery-anchored commitment and
 /// construct the single role-(a) [`StateSpace`] — before stage templates
 /// exist, since none of the state dimensions depend on the built LP.
 ///
-/// The returned `hydro_count` and `anticipated_plants` are the exact
-/// values the layout was built from; [`build_study_dimensions`] takes them as
+/// The returned `anticipated_plants` is the exact value the layout was built
+/// from; [`build_study_dimensions`] takes it (and `state.hydro_count`) as
 /// parameters instead of re-deriving them from the built templates.
 ///
 /// # Errors
@@ -939,7 +944,7 @@ pub(crate) fn resolve_state_layout(
     par_lp: &PrecomputedPar,
     transit_bucket_topology: &bucket_topology::TransitBucketTopology,
     inflow_lag_depth: Option<u32>,
-) -> Result<(StateSpace, usize, AnticipatedPlants), SddpError> {
+) -> Result<ResolvedStateLayout, SddpError> {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
     let n_anticipated = anticipated_plants.len();
 
@@ -1035,7 +1040,10 @@ pub(crate) fn resolve_state_layout(
         anticipated_plants.len(),
         "state and the anticipated-plant set must agree on n_anticipated"
     );
-    Ok((state, hydro_count, anticipated_plants))
+    Ok(ResolvedStateLayout {
+        state,
+        anticipated_plants,
+    })
 }
 
 /// Canonical absolute delivery/arrival calendar date of a stage `start_date`,
@@ -1717,7 +1725,7 @@ fn resolve_stage_data(
     let transit_bucket_topology =
         bucket_topology::build_transit_bucket_topology(system, config.boundary.is_present());
 
-    let (state_layout, hydro_count, anticipated_plants) = resolve_state_layout(
+    let layout = resolve_state_layout(
         system,
         stochastic.par(),
         &transit_bucket_topology,
@@ -1725,8 +1733,8 @@ fn resolve_stage_data(
     )?;
     warn_on_boundary_absent_post_study_delivery(
         system,
-        &anticipated_plants,
-        &state_layout.anticipated_resolution,
+        &layout.anticipated_plants,
+        &layout.state.anticipated_resolution,
         config.boundary.is_present(),
     );
 
@@ -1742,8 +1750,7 @@ fn resolve_stage_data(
         config,
         stochastic,
         hydro_models,
-        &state_layout,
-        &anticipated_plants,
+        &layout,
         &transit_bucket_topology,
     )?;
 
@@ -1765,14 +1772,14 @@ fn resolve_stage_data(
         system,
         &stage_templates,
         config.inflow_method,
-        hydro_count,
-        anticipated_plants,
+        layout.state.hydro_count,
+        layout.anticipated_plants,
         downstream_par_order,
     );
 
     let initial = resolve_initial_conditions(
         system,
-        &state_layout,
+        &layout.state,
         &study_dims,
         &transit_bucket_topology,
         stage_templates.state_boxes.first(),
@@ -1788,7 +1795,7 @@ fn resolve_stage_data(
         contract_is_import: build_contract_is_import(system),
         stage_templates,
         time_value,
-        state: state_layout,
+        state: layout.state,
         study_dims,
         hydro_cell_index,
         stages,

@@ -1812,7 +1812,7 @@ mod tests {
         let par_lp = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, None)
             .expect("PrecomputedPar must build");
         let topology = crate::setup::bucket_topology::build_transit_bucket_topology(&system, false);
-        let (state_layout, _, _) =
+        let layout =
             crate::setup::resolve_state_layout(&system, &par_lp, &topology, declared_depth)
                 .expect("resolve_state_layout must succeed with a declared depth");
 
@@ -1821,7 +1821,7 @@ mod tests {
             .expect("HistoricalResiduals noise method must build a library");
 
         assert_eq!(
-            state_layout.max_par_order, 24,
+            layout.state.max_par_order, 24,
             "resolve_state_layout must widen to the declared depth"
         );
         assert_eq!(
@@ -1831,7 +1831,7 @@ mod tests {
              declared lag depth resolve_state_layout widens its dense stride to"
         );
 
-        let fwd = resolve_inflow_seeds(&system, state_layout.max_par_order);
+        let fwd = resolve_inflow_seeds(&system, layout.state.max_par_order);
         let forward_twin = scenario_libraries::build_historical_inflow_library(
             &system,
             &par_lp,

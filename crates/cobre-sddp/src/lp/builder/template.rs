@@ -731,10 +731,9 @@ pub fn build_stage_templates_resolving_layout(
     resolved_parameters: &ResolvedParameters,
 ) -> Result<StageTemplates, SddpError> {
     let topology = build_transit_bucket_topology(system, false);
-    let (state_layout, _, anticipated_plants) =
-        resolve_state_layout(system, par_lp, &topology, None)?;
+    let layout = resolve_state_layout(system, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = TimeValue::from_system(system, &anticipated_plants);
+    let time_value = TimeValue::from_system(system, &layout.anticipated_plants);
     Ok(build_stage_templates(
         system,
         inflow_method,
@@ -743,8 +742,8 @@ pub fn build_stage_templates_resolving_layout(
         production_models,
         evaporation_models,
         resolved_parameters,
-        &state_layout,
-        &anticipated_plants,
+        &layout.state,
+        &layout.anticipated_plants,
         &topology.per_stage_mask,
         &topology.arc_stage_weights,
         &topology.arc_spread_chrono,

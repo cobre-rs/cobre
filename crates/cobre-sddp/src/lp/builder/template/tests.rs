@@ -2347,9 +2347,8 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
     let topology = build_transit_bucket_topology(&system, false);
-    let (state_layout, _, anticipated_plants) =
-        resolve_state_layout(&system, &par_lp, &topology, None)
-            .expect("resolve_state_layout: valid test fixture");
+    let layout = resolve_state_layout(&system, &par_lp, &topology, None)
+        .expect("resolve_state_layout: valid test fixture");
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
     let time_value = build_time_value_for(&system);
@@ -2361,8 +2360,8 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        &state_layout,
-        &anticipated_plants,
+        &layout.state,
+        &layout.anticipated_plants,
         &topology.per_stage_mask,
         &topology.arc_stage_weights,
         &topology.arc_spread_chrono,
@@ -2375,8 +2374,8 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let _report = postprocess_templates(
         &mut templates,
         &system,
-        &state_layout,
-        &anticipated_plants,
+        &layout.state,
+        &layout.anticipated_plants,
         DEFAULT_COST_SCALE_FACTOR,
         &time_value,
     );
@@ -5788,9 +5787,8 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
     let topology = build_transit_bucket_topology(&system, false);
-    let (state_layout, _, anticipated_plants) =
-        resolve_state_layout(&system, &par_lp, &topology, None)
-            .expect("resolve_state_layout: valid test fixture");
+    let layout = resolve_state_layout(&system, &par_lp, &topology, None)
+        .expect("resolve_state_layout: valid test fixture");
     let per_stage_mask = topology.per_stage_mask;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
@@ -5805,8 +5803,8 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &hydro_result.production,
             &hydro_result.evaporation,
             &resolved_params,
-            &state_layout,
-            &anticipated_plants,
+            &layout.state,
+            &layout.anticipated_plants,
             &per_stage_mask,
             &topology.arc_stage_weights,
             &topology.arc_spread_chrono,

@@ -7,6 +7,7 @@
 )]
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 
 use cobre_core::entities::{HydroGenerationModel, HydroPenalties};
 use cobre_core::{
@@ -27,7 +28,6 @@ use crate::lead_time::AnticipatedResolution;
 use crate::lp::builder::{ResolvedTables, StageLayout, TemplateBuildCtx};
 use crate::lp::indexer::{
     AnticipatedPlants, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
-    StorageBoundaryGrid,
 };
 use crate::resolved_parameters::ResolvedParameters;
 use crate::test_support::{geometry_hydro, geometry_hydro_with_groups, make_unit_group};
@@ -36,11 +36,10 @@ use crate::time_value::{PostStudyResolved, TimeValue};
 // ── Test helpers ──────────────────────────────────────────────────────────
 
 /// A single-stage `Stage` fixture: `n_blks` parallel-mode blocks. Every
-/// resolver test in this file uses [`BlockMode::Parallel`]; the chronological
-/// storage-boundary tests instead override
-/// [`GenericResolverGeom::storage_boundary_grid`] on top of it (see
-/// `chronological_override`), so no fixture here ever builds a chronological
-/// `Stage`.
+/// resolver test in this file uses this [`BlockMode::Parallel`] shape except
+/// the chronological storage-boundary tests, which flip `ResolverFixture`'s
+/// `stage.block_mode` after construction (see `chronological_default_fixture`)
+/// to give the interior-boundary family a genuinely non-empty column range.
 fn fixture_stage(n_blks: usize) -> Stage {
     Stage {
         index: 0,
@@ -78,6 +77,8 @@ struct ResolverFixture {
     thermals: Vec<Thermal>,
     lines: Vec<Line>,
     buses: Vec<Bus>,
+    pumping_stations: Vec<PumpingStation>,
+    contracts: Vec<EnergyContract>,
     hydro_cell_index: HydroCellIndex,
     cascade: CascadeTopology,
     production_models: ProductionModelSet,
@@ -99,11 +100,11 @@ struct ResolverFixture {
 }
 
 impl ResolverFixture {
-    /// `hydros`/`thermals`/`lines`/`buses` must already be in id-ascending
-    /// (canonical) order — `ctx()` derives every position map by enumeration,
-    /// mirroring `System`'s own canonical sort. `anticipated_lead_stages` is
-    /// anticipated-local (length must equal the number of `thermals` carrying
-    /// an `anticipated_config`).
+    /// `hydros`/`thermals`/`lines`/`buses`/`pumping_stations`/`contracts` must
+    /// already be in id-ascending (canonical) order — `ctx()` derives every
+    /// position map by enumeration, mirroring `System`'s own canonical sort.
+    /// `anticipated_lead_stages` is anticipated-local (length must equal the
+    /// number of `thermals` carrying an `anticipated_config`).
     #[expect(
         clippy::similar_names,
         reason = "state next to stage: both names are established (the StageLayout/StageData field is state, the per-stage input is stage), so renaming either would obscure intent rather than clarify it — mirrors test_support::geometry"
@@ -117,6 +118,8 @@ impl ResolverFixture {
         production_models: ProductionModelSet,
         evaporation_models: EvaporationModelSet,
         anticipated_lead_stages: Vec<usize>,
+        pumping_stations: Vec<PumpingStation>,
+        contracts: Vec<EnergyContract>,
     ) -> Self {
         let hydro_cell_index = HydroCellIndex::build(&hydros);
         let cascade = CascadeTopology::build(&hydros);
@@ -141,6 +144,8 @@ impl ResolverFixture {
             thermals,
             lines,
             buses,
+            pumping_stations,
+            contracts,
             hydro_cell_index,
             cascade,
             production_models,
@@ -223,13 +228,31 @@ impl ResolverFixture {
             evaporation_models: &self.evaporation_models,
             generic_constraints: &[],
             non_controllable_sources: &[],
-            pumping_stations: &[],
-            pumping_pos: BTreeMap::new(),
-            n_pumping: 0,
-            contracts: &[],
-            contract_pos: BTreeMap::new(),
-            n_contract_import: 0,
-            n_contract_export: 0,
+            pumping_stations: &self.pumping_stations,
+            pumping_pos: self
+                .pumping_stations
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.id, i))
+                .collect(),
+            n_pumping: self.pumping_stations.len(),
+            contracts: &self.contracts,
+            contract_pos: self
+                .contracts
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.id, i))
+                .collect(),
+            n_contract_import: self
+                .contracts
+                .iter()
+                .filter(|c| c.contract_type == ContractType::Import)
+                .count(),
+            n_contract_export: self
+                .contracts
+                .iter()
+                .filter(|c| c.contract_type == ContractType::Export)
+                .count(),
             diversion_upstream: HashMap::new(),
             n_hydros: self.hydros.len(),
             n_thermals: self.thermals.len(),
@@ -339,6 +362,9 @@ fn constant_productivity_models(n_hydros: usize, productivity: f64) -> Productio
 ///   generation: [79, 79+2*3) = 79..85  (2 FPHA hydros * 3 blocks)
 ///   evap: none
 ///   withdrawal_slack_neg: [85, 89)  withdrawal_slack_pos: [89, 93) (4 hydros)
+///   pumping:    [93, 93+2*3) = 93..99   (2 stations * 3 blocks)
+///   contract_import: [99, 99+2*3) = 99..105   (2 import contracts * 3 blocks)
+///   contract_export: [105, 105+1*3) = 105..108 (1 export contract * 3 blocks)
 fn default_fixture() -> ResolverFixture {
     let hydros = vec![
         make_hydro(10, None),
@@ -349,6 +375,15 @@ fn default_fixture() -> ResolverFixture {
     let thermals = vec![make_thermal(5, None), make_thermal(6, None)];
     let lines = vec![make_line(50)];
     let buses = vec![make_bus(100, 2), make_bus(200, 2)];
+    let pumping_stations = vec![
+        make_pumping_station(10, 2.5, EntityId(10), EntityId(20)),
+        make_pumping_station(20, 0.75, EntityId(30), EntityId(40)),
+    ];
+    let contracts = vec![
+        make_contract(10, ContractType::Import),
+        make_contract(30, ContractType::Import),
+        make_contract(20, ContractType::Export),
+    ];
     ResolverFixture::new(
         hydros,
         thermals,
@@ -358,6 +393,8 @@ fn default_fixture() -> ResolverFixture {
         make_production_models(),
         EvaporationModelSet::new(vec![EvaporationModel::None; 4]),
         vec![],
+        pumping_stations,
+        contracts,
     )
 }
 
@@ -381,6 +418,8 @@ fn evaporation_fixture(n_blks: usize) -> ResolverFixture {
         constant_productivity_models(2, 1.0),
         evaporation_models,
         vec![],
+        vec![],
+        vec![],
     )
 }
 
@@ -400,6 +439,8 @@ fn anticipated_fixture() -> ResolverFixture {
         ProductionModelSet::new(vec![], 0, 1),
         EvaporationModelSet::new(vec![]),
         vec![2],
+        vec![],
+        vec![],
     )
 }
 
@@ -679,16 +720,22 @@ fn make_contract(id: i32, contract_type: ContractType) -> EnergyContract {
     }
 }
 
-/// A pumping station carrying a `consumption_mw_per_m3s` rate; every other
+/// A pumping station carrying a `consumption_mw_per_m3s` rate and its
+/// source/destination hydro references (naming fixture hydros); every other
 /// field is an inert value the resolver does not read.
-fn make_pumping_station(id: i32, consumption_mw_per_m3s: f64) -> PumpingStation {
+fn make_pumping_station(
+    id: i32,
+    consumption_mw_per_m3s: f64,
+    source_hydro_id: EntityId,
+    destination_hydro_id: EntityId,
+) -> PumpingStation {
     PumpingStation {
         id: EntityId(id),
         name: String::new(),
         operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
         bus_id: EntityId(0),
-        source_hydro_id: EntityId(0),
-        destination_hydro_id: EntityId(0),
+        source_hydro_id,
+        destination_hydro_id,
         entry_stage_id: None,
         exit_stage_id: None,
         consumption_mw_per_m3s,
@@ -991,6 +1038,8 @@ fn turbine_bus_selector_fixture() -> ResolverFixture {
         constant_productivity_models(n, 1.0),
         EvaporationModelSet::new(vec![EvaporationModel::None; n]),
         vec![],
+        vec![],
+        vec![],
     )
 }
 
@@ -1170,6 +1219,8 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
         4,
         fpha_bus_selector_production_models(),
         EvaporationModelSet::new(vec![EvaporationModel::None; 2]),
+        vec![],
+        vec![],
         vec![],
     );
     let ctx = fx.ctx();
@@ -1356,27 +1407,24 @@ fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
 
 // ── Pumping tests ─────────────────────────────────────────────────────────
 //
-// Shared layout: two stations id 10 (p_idx 0, consumption 2.5 MW/(m³/s)) and
-// id 20 (p_idx 1, consumption 0.75), n_blks = 3, col_pumping_start = 100.
-// Block-major column = col_pumping_start + p_idx * n_blks + blk.
+// `default_fixture` declares two real pumping stations, id 10 (p_idx 0,
+// consumption 2.5 MW/(m³/s), pumping hydro 10 into hydro 20) and id 20
+// (p_idx 1, consumption 0.75, pumping hydro 30 into hydro 40) — real fixture
+// hydro references, not the inert `EntityId(0)` placeholder. Block-major
+// column = col_pumping_start + p_idx * n_blks + blk, read from the real
+// layout, never a hand-picked base.
 
-const PUMP_COL_START: usize = 100;
-const PUMP_N_BLKS: usize = 3;
-
-/// Two pumping stations and the matching `pumping_pos`, in ID-sorted slot order.
-fn make_pumping_fixture() -> (Vec<PumpingStation>, BTreeMap<EntityId, usize>) {
-    let stations = vec![
-        make_pumping_station(10, 2.5),
-        make_pumping_station(20, 0.75),
-    ];
-    let pumping_pos: BTreeMap<EntityId, usize> =
-        [(EntityId(10), 0), (EntityId(20), 1)].into_iter().collect();
-    (stations, pumping_pos)
+/// The pumping-flow column family's full extent for this stage
+/// (`col_pumping_start .. col_pumping_start + n_pumping * n_blks`) — the range
+/// every resolved `PumpingFlow`/`PumpingPower` column must fall inside.
+fn pumping_col_range(layout: &StageLayout<'_>) -> Range<usize> {
+    let start = layout.equipment.col_pumping_start;
+    start..start + layout.equipment.n_pumping * layout.n_blks
 }
 
 /// `PumpingFlow{station, Some(blk)}` → the block-major flow column × 1.0.
 ///
-/// Station id 20 at p_idx 1, blk 2: col = 100 + 1*3 + 2 = 105, coeff 1.0.
+/// Station id 20 at p_idx 1, blk 2: col = col_pumping_start + 1*n_blks + 2.
 #[test]
 fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
     let fx = default_fixture();
@@ -1384,7 +1432,8 @@ fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let (stations, ppos) = make_pumping_fixture();
+    let col_pumping_start = layout.equipment.col_pumping_start;
+    let n_blks = layout.n_blks;
 
     let result = call_pumping(
         VariableRef::PumpingFlow {
@@ -1394,20 +1443,23 @@ fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
         0, // block_idx — overridden by block_id = Some(2)
         &geom,
         &prod,
-        PUMP_COL_START,
-        PUMP_N_BLKS,
-        &stations,
-        &ppos,
+        col_pumping_start,
+        n_blks,
+        ctx.pumping_stations,
+        &ctx.pumping_pos,
     );
 
-    assert_eq!(result, vec![(PUMP_COL_START + 1 * PUMP_N_BLKS + 2, 1.0)]);
+    let expected_col = col_pumping_start + 1 * n_blks + 2;
+    assert_eq!(result, vec![(expected_col, 1.0)]);
+    assert!(pumping_col_range(&layout).contains(&expected_col));
 }
 
 /// `PumpingPower{station, Some(blk)}` → the SAME flow column × consumption.
 ///
-/// Station id 10 at p_idx 0, blk 1: col = 100 + 0*3 + 1 = 101, coeff = 2.5.
-/// The column is identical to `PumpingFlow` for the same (station, blk) — the
-/// power term aliases the flow column, it is not a separate column.
+/// Station id 10 at p_idx 0, blk 1: col = col_pumping_start + 0*n_blks + 1,
+/// coeff = 2.5. The column is identical to `PumpingFlow` for the same
+/// (station, blk) — the power term aliases the flow column, it is not a
+/// separate column.
 #[test]
 fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
     let fx = default_fixture();
@@ -1415,7 +1467,8 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let (stations, ppos) = make_pumping_fixture();
+    let col_pumping_start = layout.equipment.col_pumping_start;
+    let n_blks = layout.n_blks;
 
     let blk = 1;
     let power = call_pumping(
@@ -1426,10 +1479,10 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
         0,
         &geom,
         &prod,
-        PUMP_COL_START,
-        PUMP_N_BLKS,
-        &stations,
-        &ppos,
+        col_pumping_start,
+        n_blks,
+        ctx.pumping_stations,
+        &ctx.pumping_pos,
     );
     let flow = call_pumping(
         VariableRef::PumpingFlow {
@@ -1439,16 +1492,17 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
         0,
         &geom,
         &prod,
-        PUMP_COL_START,
-        PUMP_N_BLKS,
-        &stations,
-        &ppos,
+        col_pumping_start,
+        n_blks,
+        ctx.pumping_stations,
+        &ctx.pumping_pos,
     );
 
-    let expected_col = PUMP_COL_START + 0 * PUMP_N_BLKS + blk;
+    let expected_col = col_pumping_start + 0 * n_blks + blk;
     assert_eq!(power, vec![(expected_col, 2.5)]);
     // Same column as flow — PumpingPower must alias, not allocate a new column.
     assert_eq!(power[0].0, flow[0].0);
+    assert!(pumping_col_range(&layout).contains(&expected_col));
 }
 
 /// `PumpingFlow{station, None}` with `block_idx = k` resolves the single
@@ -1461,9 +1515,11 @@ fn pumping_flow_none_resolves_per_block() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let (stations, ppos) = make_pumping_fixture();
+    let col_pumping_start = layout.equipment.col_pumping_start;
+    let n_blks = layout.n_blks;
+    let range = pumping_col_range(&layout);
 
-    let per_block: Vec<(usize, f64)> = (0..PUMP_N_BLKS)
+    let per_block: Vec<(usize, f64)> = (0..n_blks)
         .map(|blk| {
             let r = call_pumping(
                 VariableRef::PumpingFlow {
@@ -1473,12 +1529,13 @@ fn pumping_flow_none_resolves_per_block() {
                 blk, // block_idx supplies the effective block
                 &geom,
                 &prod,
-                PUMP_COL_START,
-                PUMP_N_BLKS,
-                &stations,
-                &ppos,
+                col_pumping_start,
+                n_blks,
+                ctx.pumping_stations,
+                &ctx.pumping_pos,
             );
             assert_eq!(r.len(), 1);
+            assert!(range.contains(&r[0].0));
             r[0]
         })
         .collect();
@@ -1486,16 +1543,16 @@ fn pumping_flow_none_resolves_per_block() {
     assert_eq!(
         per_block,
         vec![
-            (PUMP_COL_START + 0, 1.0),
-            (PUMP_COL_START + 1, 1.0),
-            (PUMP_COL_START + 2, 1.0),
+            (col_pumping_start + 0, 1.0),
+            (col_pumping_start + 1, 1.0),
+            (col_pumping_start + 2, 1.0),
         ]
     );
 }
 
 /// `PumpingPower{station, None}` resolves to the per-block column × consumption.
 ///
-/// Station id 20 at p_idx 1, consumption 0.75: per-block cols 103, 104, 105.
+/// Station id 20 at p_idx 1, consumption 0.75.
 #[test]
 fn pumping_power_none_resolves_per_block_with_consumption() {
     let fx = default_fixture();
@@ -1503,9 +1560,11 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let (stations, ppos) = make_pumping_fixture();
+    let col_pumping_start = layout.equipment.col_pumping_start;
+    let n_blks = layout.n_blks;
+    let range = pumping_col_range(&layout);
 
-    let per_block: Vec<(usize, f64)> = (0..PUMP_N_BLKS)
+    let per_block: Vec<(usize, f64)> = (0..n_blks)
         .map(|blk| {
             let r = call_pumping(
                 VariableRef::PumpingPower {
@@ -1515,12 +1574,13 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
                 blk,
                 &geom,
                 &prod,
-                PUMP_COL_START,
-                PUMP_N_BLKS,
-                &stations,
-                &ppos,
+                col_pumping_start,
+                n_blks,
+                ctx.pumping_stations,
+                &ctx.pumping_pos,
             );
             assert_eq!(r.len(), 1);
+            assert!(range.contains(&r[0].0));
             r[0]
         })
         .collect();
@@ -1528,9 +1588,9 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
     assert_eq!(
         per_block,
         vec![
-            (PUMP_COL_START + 1 * PUMP_N_BLKS + 0, 0.75),
-            (PUMP_COL_START + 1 * PUMP_N_BLKS + 1, 0.75),
-            (PUMP_COL_START + 1 * PUMP_N_BLKS + 2, 0.75),
+            (col_pumping_start + 1 * n_blks + 0, 0.75),
+            (col_pumping_start + 1 * n_blks + 1, 0.75),
+            (col_pumping_start + 1 * n_blks + 2, 0.75),
         ]
     );
 }
@@ -1542,7 +1602,8 @@ fn pumping_unknown_station_returns_empty() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let (stations, ppos) = make_pumping_fixture();
+    let col_pumping_start = layout.equipment.col_pumping_start;
+    let n_blks = layout.n_blks;
 
     for var_ref in [
         VariableRef::PumpingFlow {
@@ -1559,10 +1620,10 @@ fn pumping_unknown_station_returns_empty() {
             0,
             &geom,
             &prod,
-            PUMP_COL_START,
-            PUMP_N_BLKS,
-            &stations,
-            &ppos,
+            col_pumping_start,
+            n_blks,
+            ctx.pumping_stations,
+            &ctx.pumping_pos,
         );
         assert!(
             result.is_empty(),
@@ -1572,7 +1633,8 @@ fn pumping_unknown_station_returns_empty() {
 }
 
 /// `n_pumping == 0` (no stations) resolves to `vec![]` — the empty `pumping_pos`
-/// lookup misses before `col_pumping_start` is ever used.
+/// lookup misses before `col_pumping_start` is ever used. Deliberately passes
+/// no stations, overriding the fixture's own declared two.
 #[test]
 fn pumping_no_stations_returns_empty() {
     let fx = default_fixture();
@@ -1580,6 +1642,8 @@ fn pumping_no_stations_returns_empty() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
+    let col_pumping_start = layout.equipment.col_pumping_start;
+    let n_blks = layout.n_blks;
     let no_stations: Vec<PumpingStation> = Vec::new();
     let empty_pos: BTreeMap<EntityId, usize> = BTreeMap::new();
 
@@ -1598,8 +1662,8 @@ fn pumping_no_stations_returns_empty() {
             0,
             &geom,
             &prod,
-            PUMP_COL_START,
-            PUMP_N_BLKS,
+            col_pumping_start,
+            n_blks,
             &no_stations,
             &empty_pos,
         );
@@ -1686,9 +1750,10 @@ fn contract_family_slot_counts_per_direction() {
     );
 }
 
-/// Two imports + one export, on the default fixture's (real, `n_contract_import
-/// = n_contract_export = 0`) `geom.contract_import`/`geom.contract_export`
-/// bases — the second import (id 30, per-family slot 1) at block 0 is
+/// Two imports + one export, on the default fixture's own REAL declared
+/// contracts (`n_contract_import = 2`, `n_contract_export = 1`) and their real
+/// `geom.contract_import`/`geom.contract_export` bases — the second import
+/// (id 30, per-family slot 1) at block 0 is
 /// `grid.flat(import_start, 1, 0) = import_start + n_blks`.
 #[test]
 fn contract_import_resolves_to_column_with_unit_coefficient() {
@@ -1697,16 +1762,6 @@ fn contract_import_resolves_to_column_with_unit_coefficient() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let contracts = vec![
-        make_contract(10, ContractType::Import),
-        make_contract(30, ContractType::Import),
-        make_contract(20, ContractType::Export),
-    ];
-    let contract_pos: BTreeMap<EntityId, usize> = contracts
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
-        .collect();
 
     let result = call_contract(
         VariableRef::ContractImport {
@@ -1716,17 +1771,20 @@ fn contract_import_resolves_to_column_with_unit_coefficient() {
         0,
         &geom,
         &prod,
-        &contracts,
-        &contract_pos,
+        ctx.contracts,
+        &ctx.contract_pos,
     );
 
     let import_start = geom.contract_import.start;
-    assert_eq!(result, vec![(import_start + 1 * geom.n_blks + 0, 1.0)]);
+    let expected_col = import_start + 1 * geom.n_blks + 0;
+    assert_eq!(result, vec![(expected_col, 1.0)]);
+    assert!(geom.contract_import.contains(&expected_col));
 }
 
 /// The variable's own coefficient is `+1.0`; the injection/withdrawal sign is
-/// owned by the load-balance fill, not here. Same fixture as the import test:
-/// export id 20 is per-family slot 0, `grid.flat(export_start, 0, 2)`.
+/// owned by the load-balance fill, not here. Same fixture's real contracts as
+/// the import test: export id 20 is per-family slot 0,
+/// `grid.flat(export_start, 0, 2)`.
 #[test]
 fn contract_export_resolves_to_column_with_unit_coefficient() {
     let fx = default_fixture();
@@ -1734,16 +1792,6 @@ fn contract_export_resolves_to_column_with_unit_coefficient() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let contracts = vec![
-        make_contract(10, ContractType::Import),
-        make_contract(30, ContractType::Import),
-        make_contract(20, ContractType::Export),
-    ];
-    let contract_pos: BTreeMap<EntityId, usize> = contracts
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
-        .collect();
 
     let result = call_contract(
         VariableRef::ContractExport {
@@ -1753,12 +1801,14 @@ fn contract_export_resolves_to_column_with_unit_coefficient() {
         0,
         &geom,
         &prod,
-        &contracts,
-        &contract_pos,
+        ctx.contracts,
+        &ctx.contract_pos,
     );
 
     let export_start = geom.contract_export.start;
-    assert_eq!(result, vec![(export_start + 0 * geom.n_blks + 2, 1.0)]);
+    let expected_col = export_start + 0 * geom.n_blks + 2;
+    assert_eq!(result, vec![(expected_col, 1.0)]);
+    assert!(geom.contract_export.contains(&expected_col));
 }
 
 /// An unknown contract id misses `contract_pos` and resolves to empty — the
@@ -1770,8 +1820,6 @@ fn contract_unknown_id_returns_empty() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
-    let contracts = vec![make_contract(10, ContractType::Import)];
-    let contract_pos: BTreeMap<EntityId, usize> = [(EntityId(10), 0)].into_iter().collect();
 
     let result = call_contract(
         VariableRef::ContractImport {
@@ -1781,8 +1829,8 @@ fn contract_unknown_id_returns_empty() {
         0,
         &geom,
         &prod,
-        &contracts,
-        &contract_pos,
+        ctx.contracts,
+        &ctx.contract_pos,
     );
 
     assert!(result.is_empty());
@@ -2341,10 +2389,9 @@ fn anticipated_decision_unknown_entity_returns_empty() {
 // ── block_col_range tests ─────────────────────────────────────────────────
 
 /// Each equipment/line family maps to its matching `StageLayout` equipment
-/// range, and the two contract families map to their own (here empty, since
-/// the default fixture declares no contracts) `layout.equipment.contract_import`
-/// / `contract_export` ranges. This pins the family↔range pairing the
-/// resolver's `col_start` reads depend on.
+/// range, and the two contract families map to their own real
+/// `layout.equipment.contract_import` / `contract_export` ranges. This pins
+/// the family↔range pairing the resolver's `col_start` reads depend on.
 #[test]
 fn block_col_range_maps_each_family_to_its_geometry_range() {
     let fx = default_fixture();
@@ -2777,30 +2824,27 @@ fn hydro_inflow_is_block_dependent() {
 
 // ── Per-block storage boundary tests ──────────────────────────────────────
 //
-// A K=3 chronological geom: `default_fixture` (n_blks=3, N=4, storage=[0,4),
-// storage_in.start=8) with `storage_boundary_grid` overridden to a non-zero
-// interior anchor so the interior-boundary formula is exercised (the fixture
-// always builds `BlockMode::Parallel`, which has no interior columns, so its
-// `storage_internal_start` must be overridden regardless of its own value).
-// Interior stride is `n_blks - 1 = 2`; for hydro pos 0 the boundaries are S⁰=8,
-// S¹=12, S²=13, S³=0.
+// A K=3 chronological build of `default_fixture`'s own hydro/thermal/line/bus
+// set: `default_fixture`'s `Stage` is always parallel, whose interior stride
+// is zero, so the interior-boundary family needs a genuinely chronological
+// stage to reserve real columns — never a copied/overridden grid.
 
-const STORAGE_INTERNAL_START: usize = 12;
-
-/// Override `geom`'s `storage_boundary_grid` to simulate a K=3 chronological
-/// build on top of the (always-parallel) fixture layout — `StorageBoundaryGrid`
-/// is a plain value type, so this needs no separate chronological
-/// `StageLayout`.
-fn chronological_override(mut geom: GenericResolverGeom<'_>) -> GenericResolverGeom<'_> {
-    geom.storage_boundary_grid = StorageBoundaryGrid::new(STORAGE_INTERNAL_START, geom.n_blks);
-    geom
+/// `default_fixture` with its `Stage` flipped to [`BlockMode::Chronological`]
+/// after construction, so `StageLayout::new` reserves a real, non-empty
+/// interior-boundary column family (`n_interior = n_blks - 1`) for the
+/// per-block storage boundary tests below. `fx.state` (storage/storage_in) is
+/// block-mode-independent and unaffected.
+fn chronological_default_fixture() -> ResolverFixture {
+    let mut fx = default_fixture();
+    fx.stage.block_mode = BlockMode::Chronological;
+    fx
 }
 
-/// `VariableRef::HydroStorageInitial`/`HydroStorageFinal` resolve to the hand-
-/// computed S⁰/interior/Sᴷ boundary columns for this K=3,
-/// `STORAGE_INTERNAL_START = 12` fixture — literals computed independently of
-/// `StorageBoundaryGrid::col` itself, so a regression in its match arms fails
-/// this test, not just an identity of the owner with itself.
+/// `VariableRef::HydroStorageInitial`/`HydroStorageFinal` resolve to the S⁰/
+/// interior/Sᴷ boundary columns, each computed from the layout's own owners
+/// (`fx.state.storage_in`/`storage`, `layout.equipment.storage_internal_start`)
+/// independently of `StorageBoundaryGrid::col` itself, so a regression in its
+/// match arms fails this test, not just an identity of the owner with itself.
 ///
 /// Seam B of the geometry cross-check guard — pairs with
 /// `stage_geometry_block_storage_col_matches_layout` (Seam A, in
@@ -2808,15 +2852,16 @@ fn chronological_override(mut geom: GenericResolverGeom<'_>) -> GenericResolverG
 /// against its own hand-computed oracle rather than compared to each other.
 #[test]
 fn hydro_storage_boundary_resolves_each_boundary() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
     let bpos = ctx.bus_pos.clone();
     let lpos = ctx.line_pos.clone();
+    let storage_internal_start = layout.equipment.storage_internal_start;
 
     // Hydro EntityId(10) at pos 0; K = 3.
     let initial_0 = call(
@@ -2832,7 +2877,11 @@ fn hydro_storage_boundary_resolves_each_boundary() {
         &bpos,
         &lpos,
     );
-    assert_eq!(initial_0, vec![(8, 1.0)], "S⁰ = storage_in.start + 0");
+    assert_eq!(
+        initial_0,
+        vec![(fx.state.storage_in.start + 0, 1.0)],
+        "S⁰ = storage_in.start + 0"
+    );
 
     let initial_1 = call(
         VariableRef::HydroStorageInitial {
@@ -2849,8 +2898,8 @@ fn hydro_storage_boundary_resolves_each_boundary() {
     );
     assert_eq!(
         initial_1,
-        vec![(12, 1.0)],
-        "S¹ = STORAGE_INTERNAL_START + 0 (interior boundary)"
+        vec![(storage_internal_start + 0, 1.0)],
+        "S¹ = storage_internal_start + 0 (interior boundary)"
     );
 
     let final_2 = call(
@@ -2868,7 +2917,7 @@ fn hydro_storage_boundary_resolves_each_boundary() {
     );
     assert_eq!(
         final_2,
-        vec![(0, 1.0)],
+        vec![(fx.state.storage.start + 0, 1.0)],
         "S³ = Sᴷ = storage.start + 0 (K=3, last block)"
     );
 }
@@ -2876,10 +2925,10 @@ fn hydro_storage_boundary_resolves_each_boundary() {
 /// `HydroStorageFinal{K-1}` resolves to the SAME column as `HydroStorage` (Sᴷ).
 #[test]
 fn hydro_storage_final_last_block_equals_hydro_storage() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
@@ -2919,15 +2968,16 @@ fn hydro_storage_final_last_block_equals_hydro_storage() {
 /// `Initial{1}` both resolve to the interior column `S¹`.
 #[test]
 fn hydro_storage_final_shares_interior_column_with_next_initial() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
     let bpos = ctx.bus_pos.clone();
     let lpos = ctx.line_pos.clone();
+    let storage_internal_start = layout.equipment.storage_internal_start;
 
     let final_0 = call(
         VariableRef::HydroStorageFinal {
@@ -2956,17 +3006,17 @@ fn hydro_storage_final_shares_interior_column_with_next_initial() {
         &lpos,
     );
     assert_eq!(final_0, initial_1);
-    assert_eq!(final_0, vec![(STORAGE_INTERNAL_START, 1.0)]);
+    assert_eq!(final_0, vec![(storage_internal_start + 0, 1.0)]);
 }
 
 /// `block_id = None` resolves to the fixed stage endpoint — `S⁰` for initial,
 /// `Sᴷ` for final — independent of the caller's `block_idx`.
 #[test]
 fn hydro_storage_boundary_none_resolves_stage_endpoint() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
@@ -3020,10 +3070,10 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
 
 #[test]
 fn hydro_storage_boundary_unknown_id_returns_empty() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
@@ -3077,10 +3127,10 @@ fn storage_boundary_variants_are_block_independent() {
 /// like their storage counterparts.
 #[test]
 fn hydro_useful_volume_boundary_matches_storage_boundary() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
@@ -3165,10 +3215,10 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
 /// `* multiplier` factor.
 #[test]
 fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
-    let fx = default_fixture();
+    let fx = chronological_default_fixture();
     let ctx = fx.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let geom = chronological_override(layout.resolver_geom(ctx.hydro_cell_index));
+    let geom = layout.resolver_geom(ctx.hydro_cell_index);
     let prod = make_production_models();
     let hpos = ctx.hydro_pos.clone();
     let tpos = ctx.thermal_pos.clone();
@@ -3188,7 +3238,11 @@ fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
         &bpos,
         &lpos,
     );
-    assert_eq!(useful_initial, vec![(8, 1.0)], "S⁰ = storage_in.start + 0");
+    assert_eq!(
+        useful_initial,
+        vec![(fx.state.storage_in.start + 0, 1.0)],
+        "S⁰ = storage_in.start + 0"
+    );
 
     let useful_final = call(
         VariableRef::HydroUsefulVolumeFinal {
@@ -3205,7 +3259,7 @@ fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
     );
     assert_eq!(
         useful_final,
-        vec![(0, 1.0)],
+        vec![(fx.state.storage.start + 0, 1.0)],
         "S³ = Sᴷ = storage.start + 0 (K=3, last block)"
     );
 }

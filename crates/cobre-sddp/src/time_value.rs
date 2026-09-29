@@ -4,7 +4,6 @@
 use cobre_core::{EntityId, HorizonGraph, PostStudyStages, PostStudyThermalBound, Stage, System};
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
-use crate::block_clock::BlockClock;
 use crate::lp::indexer::{AnticipatedLocal, AnticipatedPlants};
 
 /// The study's post-study delivery calendar ([`post_study_calendar_stages`]),
@@ -311,10 +310,7 @@ impl DeliveryCalendar {
     /// post-study calendar.
     pub(crate) fn from_system(system: &System) -> Self {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
-        let study_total_hours: Vec<f64> = study_stages
-            .iter()
-            .map(|s| BlockClock::new(s).total_hours())
-            .collect();
+        let study_total_hours: Vec<f64> = study_stages.iter().map(|s| s.total_hours()).collect();
         let post_study = system.post_study_stages();
         let post_study_total_hours: Vec<f64> = post_study
             .map(|p| p.stages.iter().map(|s| s.duration_hours).collect())

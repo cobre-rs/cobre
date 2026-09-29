@@ -1574,7 +1574,7 @@ order. `build_transit_bucket_topology` derives `column_order` from that canonica
 iteration alone. Emitting buckets in traversal order instead makes the state
 layout input-declaration-order-dependent, breaking the
 declaration-order-invariance hard rule.
-Read: `setup/bucket_topology.rs` (`build_transit_bucket_topology`,
+Read: `bucket_topology.rs` (`build_transit_bucket_topology`,
 `TransitBucketTopology::column_order`). Pinned by the bucket column-order
 declaration-invariance regression: two systems differing only in the
 declaration order of their hydros produce identical `column_order`,
@@ -1684,7 +1684,7 @@ reproduction, alongside the passing `t_v <= horizon` round-trip, in
 `tests/hydro_sim.rs`.
 Read: `lp/indexer/state_space.rs` (`StateRegion::cut_enabled`),
 `lp/indexer/cut_state_projection.rs` (`CutStateProjection::new`),
-`setup/bucket_topology.rs` (`horizon_cap_active`), `lp/builder/columns.rs`
+`bucket_topology.rs` (`horizon_cap_active`), `lp/builder/columns.rs`
 (`fill_anticipated_slot_columns`, `fill_transit_bucket_columns`),
 `crates/cobre-io/src/config/policy.rs` (`PolicyConfig::boundary`). Pinned by
 `every_bucket_dim_projects_including_deep_terminal_lags` (every bucket dim, the
@@ -1726,7 +1726,7 @@ arm requires the dropped lag `d` at stage `t` to satisfy `t + d >= n_stages`,
 so the drop is provably confined to a target past the horizon and unreachable
 once `boundary_present` un-caps the mask; the `HashMap` lookup the check needs
 lives inside the `debug_assert!` argument, so it does not exist in release.
-Read: `setup/bucket_topology.rs` (`horizon_cap_active`), `lp/builder/layout.rs`
+Read: `bucket_topology.rs` (`horizon_cap_active`), `lp/builder/layout.rs`
 (`build_transit_bucket_row_pos`), `lp/builder/columns.rs` (`fill_transit_bucket_columns`).
 Pinned by the horizon-depth-cap regression (the last stage's active-lag cap
 reaches zero, so no slot targets past the horizon), `build_transit_bucket_row_pos`'s
@@ -1734,7 +1734,7 @@ own consumption regression (that same cap sequence emitting correspondingly
 fewer rows), a sub-stage-delay case's last-stage release, whose dropped
 share surfaces as an uneven per-stage delivery split rather than a credited
 one, and `transit_bucket_mask_covers_every_arc_deposit_depth_under_boundary`
-(`setup/bucket_topology.rs`), which asserts `per_stage_mask` dominates every
+(`bucket_topology.rs`), which asserts `per_stage_mask` dominates every
 arc's deposit depth on both the parallel and chronological tables under
 `boundary_present` and is strictly exceeded at some stage without it.
 
@@ -1771,7 +1771,7 @@ The bucket state stays a pure function of stage lengths, never of
 Read: `lead_time/mod.rs` (`resolve_spread`'s
 `block_deposits`/`within_stage_routing`/`arrival_density` fields,
 `resolve_block_factors`'s `BlockFactors`, `resolve_arrival_density_at`),
-`setup/bucket_topology.rs` (`build_arc_arrival_density`), `lp/builder/entries.rs`
+`bucket_topology.rs` (`build_arc_arrival_density`), `lp/builder/entries.rs`
 (`fill_chronological_water_entries`, `resolve_chrono_arrival_density`). Pinned
 by the shared-density-consistency regression exercising the aggregation
 debug_assert directly, the chronological block-table regression matching the

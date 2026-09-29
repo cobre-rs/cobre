@@ -286,7 +286,7 @@ pub(crate) fn resolve_post_study_artifacts(
 
 /// The delivery axis — study stages then post-study stages — resolved once
 /// from `system` and shared by [`TimeValue`] and ring sizing
-/// (`setup::bucket_topology`), so neither derives it a second time. Stores no
+/// (`crate::bucket_topology`), so neither derives it a second time. Stores no
 /// count: [`Self::n_study`]/[`Self::n_post`]/[`Self::n_delivery`] read slice
 /// lengths.
 #[derive(Debug, Clone)]

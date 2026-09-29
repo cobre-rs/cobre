@@ -18,7 +18,7 @@ use crate::lead_time::{SpreadResolution, resolve_arrival_density_at, resolve_spr
 use crate::time_value::DeliveryCalendar;
 
 /// Canonical bucket ordering, global bucket count, and per-stage reachability
-/// mask, stored on [`super::StudySetup`].
+/// mask.
 ///
 /// `n_buckets == 0` exactly when the system declares no travel-time arc
 /// (`travel_time_hours` absent, `0.0`, or missing a `downstream_id`).

@@ -29,28 +29,6 @@ an unreachable milestone converts a reserved seam into dead code).
 
 ## Reserved-seam register
 
-### Water travel-time in-transit bucket topology (`StudySetup.transit_bucket_topology`)
-
-**What it is.** `crates/cobre-sddp/src/setup/mod.rs` derives one
-`TransitBucketTopology` per study (`bucket_topology::build_transit_bucket_topology`)
-and threads it into state-layout sizing, the LP builder's arc-table wiring, and
-the bucket initial-condition seed — all as a **local** variable consumed during
-`StudySetup` construction. The same value is then also stored on
-`StudySetup.transit_bucket_topology` (`#[allow(dead_code)]`), but no code reads
-the field back off `StudySetup` after construction; every real consumer already
-received the value via the local, one derivation, no second call.
-
-**Owner.** The water travel-time feature (`crates/cobre-sddp/src/setup/bucket_topology.rs`,
-`crates/cobre-sddp/src/lp/builder/{template,entries}.rs`; see the "Water travel
-time" contracts in `.claude/rules/sddp.md`).
-
-**Consuming milestone.** The first caller that needs the topology after
-`StudySetup` has already been built — for example a resume/warm-start path that
-re-validates topology consistency against a loaded checkpoint, or an
-output/diagnostic surface reporting the resolved bucket topology without
-re-deriving it. The `#[allow(dead_code)]` on the field re-fires the moment such
-a reader lands, which is the field's own activation signal.
-
 ### `LipschitzConfig.mode` and its enclosing `UpperBoundEvaluationConfig`
 
 **What it is.** `crates/cobre-io/src/config/training.rs` declares

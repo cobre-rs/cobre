@@ -2914,7 +2914,7 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
         ]
     }
 
-    /// Per-stage total hours, mirroring `bucket_topology::study_stage_durations`
+    /// Per-stage total hours, mirroring `DeliveryCalendar::study_total_hours`
     /// for the [`resolve_spread`](cobre_sddp::lead_time::resolve_spread) calls
     /// property 3 drives directly.
     fn study_durations() -> Vec<f64> {

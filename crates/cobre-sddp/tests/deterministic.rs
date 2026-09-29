@@ -3944,7 +3944,7 @@ fn d44_travel_time_substage_transit_bucket_dual() {
 
 /// Pads `stage_hours` with copies of its trailing duration until the total
 /// covers `travel_time_hours` — mirrors the production padding
-/// (`setup::bucket_topology`'s calendar-extension helper) that lets
+/// (`bucket_topology::extend_for_resolution`) that lets
 /// `resolve_spread` resolve an anchor whose own remaining calendar runs out
 /// before its arrival window closes; without it `resolve_spread`'s own
 /// `Σ_d k_d = 1` debug_assert panics instead of resolving a real depth.

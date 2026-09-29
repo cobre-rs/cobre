@@ -3967,7 +3967,7 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     }
 }
 
-/// Consumption side of `setup::bucket_topology`'s
+/// Consumption side of `crate::bucket_topology`'s
 /// `test_horizon_cap_drops_lag_targeting_past_last_stage` (that test pins the
 /// MASK — `per_stage_mask == [2, 1, 0]` for a depth-3 plant over 3
 /// stages; this pins that `build_transit_bucket_row_pos` actually gates row emission

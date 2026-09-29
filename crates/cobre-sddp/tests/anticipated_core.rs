@@ -6557,7 +6557,7 @@ mod a1c_stage_count_mode_anchor {
         );
 
         // Each stage carries one block whose hours are the d37 stage total, so
-        // study_stage_durations feeds the [730,730,730,720,744,720] calendar to the
+        // DeliveryCalendar::study_total_hours feeds the [730,730,730,720,744,720] calendar to the
         // point-commitment resolver.
         let stages: Vec<Stage> = (0..N_STAGES)
             .map(|i| {

@@ -280,7 +280,7 @@ fn resolve_delivery(
 /// which instead reuses the anchor's own partition at every reached lag.
 /// Lets a caller blend several source stages' deliveries into one arrival
 /// stage's own frame regardless of each source's own block mode
-/// (`setup::bucket_topology::build_arc_arrival_density`). `target_blocks` is
+/// (`crate::bucket_topology::build_arc_arrival_density`). `target_blocks` is
 /// `None` for a parallel target (the single `1.0` row).
 ///
 /// # Panics

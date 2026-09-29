@@ -147,7 +147,7 @@ Travel time is an **arc attribute declared on the upstream hydro, in hours** —
 discretization in the input**: the user supplies one scalar per plant, and cobre
 derives everything. An arc exists iff `travel_time_hours == Some(t) && t > 0.0 &&
 downstream_id.is_some()` — `0.0` means _undeclared_, not "instant-with-a-bucket"
-(`declared_arcs`, `crates/cobre-sddp/src/setup/bucket_topology.rs`).
+(`declared_arcs`, `crates/cobre-sddp/src/bucket_topology.rs`).
 
 The companion input is the **pre-study release history** that seeds the buckets:
 `HydroPastDefluence { hydro_id, start_date, end_date, value_m3s }`

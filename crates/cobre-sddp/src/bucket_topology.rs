@@ -62,6 +62,26 @@ impl TransitBucketTopology {
     pub(crate) fn arcs(&self) -> &[TravelTimeArc] {
         &self.arcs
     }
+
+    /// A no-arc topology (`n_buckets == 0`, every table empty), for a
+    /// hand-built [`TemplateBuildCtx`](crate::lp::builder::TemplateBuildCtx)
+    /// fixture with no backing [`System`] to run [`build_transit_bucket_topology`]
+    /// against. The private `arcs` field makes this the only way to construct
+    /// one outside this module; every other field is `pub(crate)` and
+    /// mutable after construction for a fixture that needs a non-empty one.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn empty() -> Self {
+        Self {
+            n_buckets: 0,
+            per_plant_depth: Vec::new(),
+            column_order: Vec::new(),
+            per_stage_mask: Vec::new(),
+            arc_stage_weights: HashMap::new(),
+            arc_spread_chrono: HashMap::new(),
+            arc_arrival_density: HashMap::new(),
+            arcs: Vec::new(),
+        }
+    }
 }
 
 /// The one site of the arc rule: a hydro declares an arc when

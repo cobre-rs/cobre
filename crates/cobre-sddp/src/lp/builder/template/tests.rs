@@ -29,7 +29,7 @@ use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
     FillingTargetLocal, FloorLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys, PumpingSys,
-    ThermalSys, anticipated_resolution_for,
+    StateSpace, ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -41,8 +41,6 @@ use crate::time_value::{
     DeliveryCalendar, PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
     compute_per_stage_discount_factors, resolve_post_study_artifacts,
 };
-
-use super::super::test_support::{ctx_anticipated_and_mask_inputs, state_layout_for};
 
 /// The value `build_template_build_ctx`'s own `time_value` parameter takes at
 /// every direct test call site — resolved through the same production entry
@@ -462,16 +460,7 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -483,13 +472,9 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -525,16 +510,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -546,13 +522,9 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -571,8 +543,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let state = state_layout_for(&ctx);
-    let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, 0);
     assert_eq!(
         layout.equipment.n_pumping,
         ctx.pumping_stations.len(),
@@ -609,16 +580,7 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
     )
     .expect("build_stage_templates: valid system");
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -630,13 +592,9 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -648,8 +606,7 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
         "two stations were declared; the dense count is a scalar"
     );
     for (t, stage) in study_stages.iter().enumerate() {
-        let state = state_layout_for(&ctx);
-        let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, t);
+        let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, t);
         assert_eq!(
             templates.n_pumping, layout.equipment.n_pumping,
             "stage {t}: scalar n_pumping must equal layout.n_pumping",
@@ -869,16 +826,7 @@ fn geometry_ncs_family_matches_the_stage_layout() {
     )
     .expect("build_stage_templates: valid system");
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -890,13 +838,9 @@ fn geometry_ncs_family_matches_the_stage_layout() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -914,8 +858,7 @@ fn geometry_ncs_family_matches_the_stage_layout() {
             n_ncs * geom.n_blks,
             "stage {t}: ncs_generation must span n_ncs*n_blks columns"
         );
-        let state = state_layout_for(&ctx);
-        let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, t);
+        let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, t);
         assert_eq!(
             geom.ncs_generation,
             layout.equipment.col_ncs_start
@@ -1107,16 +1050,7 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1128,13 +1062,9 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -1184,16 +1114,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1205,13 +1126,9 @@ fn stage_layout_geometry_populates_contract_ranges() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -1220,8 +1137,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let state = state_layout_for(&ctx);
-    let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, 0);
     let geometry = layout.geometry(stage.block_mode);
 
     assert_eq!(geometry.contract_import.len(), 2, "1 import * 2 blocks");
@@ -1246,16 +1162,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1267,13 +1174,9 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -1282,8 +1185,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let state = state_layout_for(&ctx);
-    let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, 0);
     let col_pumping_end =
         layout.equipment.col_pumping_start + layout.equipment.n_pumping * layout.clock.n_blks();
     let geometry = layout.geometry(stage.block_mode);
@@ -1398,16 +1300,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1419,13 +1312,9 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -1481,16 +1370,7 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1502,26 +1382,23 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
 
     assert_eq!(ctx.n_anticipated, 2, "n_anticipated");
     assert_eq!(
-        ctx.anticipated_resolution
-            .ring_size(&ctx.anticipated_lead_stages),
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
         3,
         "k_max"
     );
     assert_eq!(
-        ctx.anticipated_lead_stages,
+        ctx.state.anticipated_lead_stages,
         vec![2, 3],
         "anticipated_lead_stages"
     );
@@ -1567,16 +1444,7 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1588,26 +1456,23 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
 
     assert_eq!(ctx.n_anticipated, 0, "n_anticipated");
     assert_eq!(
-        ctx.anticipated_resolution
-            .ring_size(&ctx.anticipated_lead_stages),
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
         0,
         "k_max"
     );
     assert!(
-        ctx.anticipated_lead_stages.is_empty(),
+        ctx.state.anticipated_lead_stages.is_empty(),
         "anticipated_lead_stages"
     );
     assert!(ctx.anticipated_plants.len() == 0, "anticipated_plants");
@@ -1978,16 +1843,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs_a = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -1999,13 +1855,9 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -2013,15 +1865,16 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     assert_eq!(ctx_a.n_anticipated, 2);
     assert_eq!(
         ctx_a
+            .state
             .anticipated_resolution
-            .ring_size(&ctx_a.anticipated_lead_stages),
+            .ring_size(&ctx_a.state.anticipated_lead_stages),
         3
     );
     assert_eq!(
         ctx_a.anticipated_plants.thermals().collect::<Vec<_>>(),
         vec![ThermalSys::new(0), ThermalSys::new(1)]
     );
-    assert_eq!(ctx_a.anticipated_lead_stages, vec![2, 3]);
+    assert_eq!(ctx_a.state.anticipated_lead_stages, vec![2, 3]);
 
     // Both anticipated arrays must be permuted in lockstep to preserve the
     // (thermal_idx, K_i) pairing.
@@ -2039,17 +1892,43 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             ctx_a.anticipated_plants.windows()[0],
         ],
     );
-    let (
-        anticipated_resolution_b,
-        anticipated_lead_stages_b,
-        per_stage_mask_b,
-        arc_stage_weights_b,
-        arc_spread_chrono_b,
-        arc_arrival_density_b,
-        _max_par_order_b,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let ctx_b_lead_stages = vec![
+        ctx_a.state.anticipated_lead_stages[1],
+        ctx_a.state.anticipated_lead_stages[0],
+    ];
+    let ctx_b_resolution = AnticipatedResolution {
+        per_plant: vec![
+            ctx_a.state.anticipated_resolution.per_plant[1].clone(),
+            ctx_a.state.anticipated_resolution.per_plant[0].clone(),
+        ],
+        k_max: ctx_a.state.anticipated_resolution.k_max,
+        max_fanout: ctx_a.state.anticipated_resolution.max_fanout,
+    };
+    let max_par_order = par_lp.max_order();
+    let effective_lag_counts: Vec<usize> = if max_par_order > 0 {
+        (0..resolved.state.hydro_count)
+            .map(|h| {
+                if h < par_lp.n_hydros() {
+                    par_lp.effective_lag_count(h)
+                } else {
+                    max_par_order
+                }
+            })
+            .collect()
+    } else {
+        vec![0; resolved.state.hydro_count]
+    };
+    let ctx_b_state = StateSpace::new(
+        resolved.state.hydro_count,
+        max_par_order,
+        topology.n_buckets,
+        topology.column_order.clone(),
+        ctx_b_lead_stages,
+        ctx_b_resolution,
+        &effective_lag_counts,
+    );
     let inputs_b = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
-    let mut ctx_b = super::build_template_build_ctx(
+    let ctx_b = super::build_template_build_ctx(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
@@ -2057,35 +1936,18 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution_b,
-        anticipated_lead_stages_b,
-        &anticipated_plants,
-        per_stage_mask_b,
-        arc_stage_weights_b,
-        arc_spread_chrono_b,
-        arc_arrival_density_b,
+        &ctx_b_state,
+        &ctx_b_anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
-    ctx_b.anticipated_lead_stages = vec![
-        ctx_a.anticipated_lead_stages[1],
-        ctx_a.anticipated_lead_stages[0],
-    ];
-    ctx_b.anticipated_plants = &ctx_b_anticipated_plants;
-    ctx_b.anticipated_resolution = AnticipatedResolution {
-        per_plant: vec![
-            ctx_a.anticipated_resolution.per_plant[1].clone(),
-            ctx_a.anticipated_resolution.per_plant[0].clone(),
-        ],
-        k_max: ctx_a.anticipated_resolution.k_max,
-        max_fanout: ctx_a.anticipated_resolution.max_fanout,
-    };
 
     assert_eq!(
         ctx_b.anticipated_plants.thermals().collect::<Vec<_>>(),
         vec![ThermalSys::new(1), ThermalSys::new(0)]
     );
-    assert_eq!(ctx_b.anticipated_lead_stages, vec![3, 2]);
+    assert_eq!(ctx_b.state.anticipated_lead_stages, vec![3, 2]);
 
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
@@ -2094,16 +1956,17 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     for stage_idx in [0_usize, 2, 3] {
         let stage = study_stages[stage_idx];
 
-        let state_a = state_layout_for(&ctx_a);
-        let state_b = state_layout_for(&ctx_b);
-
-        let tpl_a = super::build_single_stage_template(&ctx_a, &state_a, stage, stage_idx).template;
-        let tpl_b = super::build_single_stage_template(&ctx_b, &state_b, stage, stage_idx).template;
+        let tpl_a =
+            super::build_single_stage_template(&ctx_a, ctx_a.state, stage, stage_idx).template;
+        let tpl_b =
+            super::build_single_stage_template(&ctx_b, ctx_b.state, stage, stage_idx).template;
 
         // Both templates share num_cols/num_rows: the layout depends only on
         // n_anticipated and k_max, unchanged by the swap.
-        let layout_a = super::super::layout::StageLayout::new(&ctx_a, &state_a, stage, stage_idx);
-        let layout_b = super::super::layout::StageLayout::new(&ctx_b, &state_b, stage, stage_idx);
+        let layout_a =
+            super::super::layout::StageLayout::new(&ctx_a, ctx_a.state, stage, stage_idx);
+        let layout_b =
+            super::super::layout::StageLayout::new(&ctx_b, ctx_b.state, stage, stage_idx);
 
         assert_eq!(
             layout_a.anticipated.col_anticipated_decision_start,
@@ -2136,8 +1999,9 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             layout_b.state.commit_out.start,
             ctx_a.n_anticipated,
             ctx_a
+                .state
                 .anticipated_resolution
-                .ring_size(&ctx_a.anticipated_lead_stages),
+                .ring_size(&ctx_a.state.anticipated_lead_stages),
             layout_a.anticipated.row_anticipated_fishing_start,
             layout_b.anticipated.row_anticipated_fishing_start,
             layout_a.anticipated.n_anticipated_fishing_rows,
@@ -2349,10 +2213,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &resolved_params,
         &layout.state,
         &layout.anticipated_plants,
-        &topology.per_stage_mask,
-        &topology.arc_stage_weights,
-        &topology.arc_spread_chrono,
-        &topology.arc_arrival_density,
+        &topology,
         &hydro_cell_index,
         inputs,
         &time_value,
@@ -2420,16 +2281,7 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -2441,13 +2293,9 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -2471,16 +2319,7 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -2492,13 +2331,9 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -2530,16 +2365,7 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -2551,13 +2377,9 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -2584,16 +2406,7 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -2605,13 +2418,9 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -2807,16 +2616,7 @@ fn build_post_study_resolved_for(
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -2828,13 +2628,9 @@ fn build_post_study_resolved_for(
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
@@ -3231,18 +3027,11 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
     )));
     let resolved_params = Box::leak(Box::new(empty_resolved_params()));
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(system, par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = build_time_value_for(system);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(system, par_lp);
+    let topology = Box::leak(Box::new(topology));
+    let resolved = Box::leak(Box::new(resolved));
+    let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
+    let time_value = Box::leak(Box::new(build_time_value_for(system)));
     let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
         system,
         &[],
@@ -3256,18 +3045,14 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         production,
         &hydro_models.evaporation,
         resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        &hydro_cell_index,
-        &time_value,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        topology,
+        hydro_cell_index,
+        time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = Box::leak(Box::new(state_layout_for(ctx)));
+    let state = ctx.state;
     let stage = &system.stages()[0];
 
     let template = super::build_single_stage_template(ctx, state, stage, 0).template;
@@ -3757,16 +3542,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &production);
@@ -3778,19 +3554,14 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         &production,
         &hydro_models.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
-    let state = state_layout_for(&ctx);
     let stage = &system.stages()[0];
-    super::build_single_stage_template(&ctx, &state, stage, 0).template
+    super::build_single_stage_template(&ctx, ctx.state, stage, 0).template
 }
 
 /// `K = 1` chronological build collapses to the parallel LP: the interior
@@ -3875,18 +3646,11 @@ fn block_layout_and_template(
     )));
     let resolved_params = Box::leak(Box::new(empty_resolved_params()));
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(system, par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = build_time_value_for(system);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(system, par_lp);
+    let topology = Box::leak(Box::new(topology));
+    let resolved = Box::leak(Box::new(resolved));
+    let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
+    let time_value = Box::leak(Box::new(build_time_value_for(system)));
     let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
         system,
         &[],
@@ -3900,18 +3664,14 @@ fn block_layout_and_template(
         production,
         &hydro_models.evaporation,
         resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        &hydro_cell_index,
-        &time_value,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        topology,
+        hydro_cell_index,
+        time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = Box::leak(Box::new(state_layout_for(ctx)));
+    let state = ctx.state;
     let stage = &system.stages()[0];
 
     let template = super::build_single_stage_template(ctx, state, stage, 0).template;
@@ -4546,16 +4306,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -4567,17 +4318,12 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
-    let state = state_layout_for(&ctx);
 
     let mut saw_populated_filling_target = false;
     let mut saw_empty_filling_target = false;
@@ -4585,7 +4331,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let mut saw_empty_filled_floor = false;
 
     for (stage_idx, stage) in system.stages().iter().enumerate() {
-        let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, stage_idx);
+        let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, stage_idx);
         let geometry = layout.geometry(stage.block_mode);
 
         assert_eq!(
@@ -4994,18 +4740,11 @@ fn filling_block_layout_and_template(
     )));
     let resolved_params = Box::leak(Box::new(empty_resolved_params()));
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(system, par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = build_time_value_for(system);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(system, par_lp);
+    let topology = Box::leak(Box::new(topology));
+    let resolved = Box::leak(Box::new(resolved));
+    let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
+    let time_value = Box::leak(Box::new(build_time_value_for(system)));
     let inputs = Box::leak(Box::new(crate::setup::resolve_lp_build_inputs(
         system,
         &[],
@@ -5019,18 +4758,14 @@ fn filling_block_layout_and_template(
         production,
         &hydro_models.evaporation,
         resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        &hydro_cell_index,
-        &time_value,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        topology,
+        hydro_cell_index,
+        time_value,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = Box::leak(Box::new(state_layout_for(ctx)));
+    let state = ctx.state;
     let stage = &system.stages()[0];
 
     let template = super::build_single_stage_template(ctx, state, stage, 0).template;
@@ -5326,16 +5061,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -5347,29 +5073,26 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
     assert_eq!(
-        ctx.anticipated_resolution
-            .ring_size(&ctx.anticipated_lead_stages),
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
         1,
         "ctx.k_max"
     );
     assert_eq!(
-        ctx.anticipated_lead_stages,
+        ctx.state.anticipated_lead_stages,
         vec![1],
         "ctx.anticipated_lead_stages"
     );
 
-    let template_state = super::super::test_support::state_layout_with_resolution(&ctx);
+    let template_state = ctx.state;
     assert_eq!(template_state.k_max, 1, "template StateSpace k_max");
     assert_eq!(
         template_state.anticipated_lead_stages,
@@ -5378,7 +5101,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     );
     let expected_decider = vec![None, Some(0), Some(1)];
     assert_eq!(
-        anticipated_resolution_for(&template_state, AnticipatedLocal::new(0)).decider,
+        anticipated_resolution_for(template_state, AnticipatedLocal::new(0)).decider,
         expected_decider,
         "template's threaded resolution must resolve the calendar-derived decider"
     );
@@ -5389,13 +5112,14 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         &AnticipatedPlants::build(system.thermals()),
     );
     assert_eq!(
-        setup_lead_stages, ctx.anticipated_lead_stages,
+        setup_lead_stages, ctx.state.anticipated_lead_stages,
         "setup vs template anticipated_lead_stages"
     );
     assert_eq!(
         setup_resolution.k_max,
-        ctx.anticipated_resolution
-            .ring_size(&ctx.anticipated_lead_stages),
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
         "setup vs template k_max"
     );
     assert_eq!(
@@ -5415,16 +5139,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        _max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
-    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let time_value = build_time_value_for(&system);
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
@@ -5436,20 +5151,16 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         &hydro_result.production,
         &hydro_result.evaporation,
         &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        &anticipated_plants,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
+        &resolved.state,
+        &resolved.anticipated_plants,
+        &topology,
         &hydro_cell_index,
         &time_value,
     );
-    assert_eq!(ctx.anticipated_lead_stages, vec![1]);
+    assert_eq!(ctx.state.anticipated_lead_stages, vec![1]);
 
-    let template_state = super::super::test_support::state_layout_with_resolution(&ctx);
-    let template_decider = anticipated_resolution_for(&template_state, AnticipatedLocal::new(0))
+    let template_state = ctx.state;
+    let template_decider = anticipated_resolution_for(template_state, AnticipatedLocal::new(0))
         .decider
         .clone();
 
@@ -5458,11 +5169,10 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
-    assert_eq!(setup_lead_stages, ctx.anticipated_lead_stages);
+    assert_eq!(setup_lead_stages, ctx.state.anticipated_lead_stages);
     assert_eq!(setup_resolution.per_plant[0].decider, template_decider);
 
-    let fallback_state = state_layout_for(&ctx);
-    let fallback_decider = anticipated_resolution_for(&fallback_state, AnticipatedLocal::new(0))
+    let fallback_decider = anticipated_resolution_for(ctx.state, AnticipatedLocal::new(0))
         .decider
         .clone();
     assert_eq!(
@@ -5551,7 +5261,6 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let topology = build_transit_bucket_topology(&system, &calendar, false);
     let layout = resolve_state_layout(&system, &calendar, &par_lp, &topology, None)
         .expect("resolve_state_layout: valid test fixture");
-    let per_stage_mask = topology.per_stage_mask;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let inputs = crate::setup::resolve_lp_build_inputs(&system, &[], &hydro_result.production);
 
@@ -5567,10 +5276,7 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
             &resolved_params,
             &layout.state,
             &layout.anticipated_plants,
-            &per_stage_mask,
-            &topology.arc_stage_weights,
-            &topology.arc_spread_chrono,
-            &topology.arc_arrival_density,
+            &topology,
             &hydro_cell_index,
             inputs,
             &time_value,

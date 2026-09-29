@@ -9,11 +9,13 @@ use cobre_core::{
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
+use crate::bucket_topology::TransitBucketTopology;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-use crate::indexer::{AnticipatedPlants, EntityPositions, HydroCellIndex};
-use crate::lead_time::{AnticipatedResolution, SpreadResolution};
+use crate::indexer::{AnticipatedPlants, EntityPositions, HydroCellIndex, StateSpace};
+use crate::lead_time::AnticipatedResolution;
 use crate::lp::builder::{ResolvedTables, TemplateBuildCtx};
 use crate::resolved_parameters::ResolvedParameters;
+use crate::test_support::constant_lead_resolution;
 use crate::time_value::{PostStudyResolved, TimeValue};
 
 /// Owns every value a [`TemplateBuildCtx`] borrows, or holds by value, so a
@@ -50,15 +52,24 @@ pub(crate) struct CtxFixture {
     pub(crate) contracts: Vec<EnergyContract>,
     pub(crate) diversion_upstream: HashMap<EntityId, Vec<usize>>,
     pub(crate) anticipated_lead_stages: Vec<usize>,
-    pub(crate) anticipated_plants: AnticipatedPlants,
+    /// Non-default only when a test set it explicitly — [`Self::ctx`] then
+    /// attaches it to `self.state` as-is, in place of the saturating-default
+    /// [`constant_lead_resolution`] every other fixture gets.
     pub(crate) anticipated_resolution: AnticipatedResolution,
+    pub(crate) anticipated_plants: AnticipatedPlants,
     pub(crate) has_penalty: bool,
     pub(crate) time_value: TimeValue,
     pub(crate) filling_v_target: BTreeMap<(usize, i32), f64>,
-    pub(crate) arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
-    pub(crate) arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
-    pub(crate) arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
-    pub(crate) per_stage_mask: Vec<Vec<usize>>,
+    /// The resolved bucket topology. Its fields are `pub(crate)` and mutable
+    /// after construction (only [`TransitBucketTopology::empty`] can build
+    /// one outside `bucket_topology.rs`, since its `arcs` field is private
+    /// there) — a test needing a non-empty one mutates this in place.
+    pub(crate) topology: TransitBucketTopology,
+    /// Derived fresh, from this fixture's own `hydros/par_lp/topology`/
+    /// `anticipated_lead_stages`, on every [`Self::ctx`] call — the backing
+    /// store [`TemplateBuildCtx::state`] borrows. See [`Self::build_state`]
+    /// for a test that needs a differently-resolved one.
+    pub(crate) state: StateSpace,
 }
 
 impl Default for CtxFixture {
@@ -88,8 +99,8 @@ impl Default for CtxFixture {
             contracts: Vec::new(),
             diversion_upstream: HashMap::new(),
             anticipated_lead_stages: Vec::new(),
-            anticipated_plants: AnticipatedPlants::default(),
             anticipated_resolution: AnticipatedResolution::default(),
+            anticipated_plants: AnticipatedPlants::default(),
             has_penalty: false,
             time_value: TimeValue::from_parts(
                 Vec::new(),
@@ -99,22 +110,32 @@ impl Default for CtxFixture {
                 PostStudyResolved::default(),
             ),
             filling_v_target: BTreeMap::new(),
-            arc_stage_weights: HashMap::new(),
-            arc_spread_chrono: HashMap::new(),
-            arc_arrival_density: HashMap::new(),
-            per_stage_mask: Vec::new(),
+            topology: TransitBucketTopology::empty(),
+            state: StateSpace::new(
+                0,
+                0,
+                0,
+                Vec::new(),
+                Vec::new(),
+                AnticipatedResolution::default(),
+                &[],
+            ),
         }
     }
 }
 
 impl CtxFixture {
-    /// Derives `positions` from this fixture's own slices, the way
-    /// `build_template_build_ctx` does; every other field is copied through
-    /// unchanged. `&mut self`: `positions` is recomputed into
-    /// `self.positions` on every call, so [`TemplateBuildCtx::positions`] can
-    /// borrow a backing store with `self`'s own lifetime. A test whose
-    /// original literal set one of the derived fields to a value the slices
-    /// disagree with restores it by mutating the returned context's field.
+    /// Derives `positions` and `state` from this fixture's own slices, the
+    /// way `build_template_build_ctx` does; every other field is copied
+    /// through unchanged. `&mut self`: both are recomputed into `self`'s own
+    /// fields on every call, so [`TemplateBuildCtx::positions`]/`state` can
+    /// borrow a backing store with `self`'s own lifetime. `state` attaches
+    /// `self.anticipated_resolution` as-is when a test set it explicitly (it
+    /// is no longer `AnticipatedResolution::default`), else the
+    /// saturating-default [`constant_lead_resolution`] over this fixture's
+    /// own `anticipated_lead_stages`. A test whose original literal set one
+    /// of the derived fields to a value the slices disagree with restores it
+    /// by mutating the returned context's field.
     pub(crate) fn ctx(&mut self) -> TemplateBuildCtx<'_> {
         self.positions = EntityPositions::from_slices(
             self.hydros.iter().map(|h| h.id),
@@ -124,6 +145,12 @@ impl CtxFixture {
             self.pumping_stations.iter().map(|p| p.id),
             self.contracts.iter().map(|c| c.id),
         );
+        let resolution = if self.anticipated_resolution == AnticipatedResolution::default() {
+            constant_lead_resolution(&self.anticipated_lead_stages, self.bounds.n_stages())
+        } else {
+            self.anticipated_resolution.clone()
+        };
+        self.state = self.build_state(resolution);
         TemplateBuildCtx {
             hydros: &self.hydros,
             thermals: &self.thermals,
@@ -151,16 +178,46 @@ impl CtxFixture {
             contracts: &self.contracts,
             diversion_upstream: &self.diversion_upstream,
             n_anticipated: self.anticipated_plants.len(),
-            anticipated_lead_stages: self.anticipated_lead_stages.clone(),
+            state: &self.state,
             anticipated_plants: &self.anticipated_plants,
-            anticipated_resolution: self.anticipated_resolution.clone(),
             has_penalty: self.has_penalty,
             time_value: &self.time_value,
             filling_v_target: &self.filling_v_target,
-            arc_stage_weights: self.arc_stage_weights.clone(),
-            arc_spread_chrono: self.arc_spread_chrono.clone(),
-            arc_arrival_density: self.arc_arrival_density.clone(),
-            per_stage_mask: self.per_stage_mask.clone(),
+            topology: &self.topology,
         }
+    }
+
+    /// Build a [`StateSpace`] from this fixture's current
+    /// `hydros/par_lp/topology/anticipated_lead_stages`, attaching `resolution`.
+    /// [`Self::ctx`] calls this for its own `self.state`, with either the
+    /// saturating-default [`constant_lead_resolution`] or `self`'s own
+    /// explicitly-set `anticipated_resolution` (see [`Self::ctx`]). A test
+    /// needing a non-empty bucket topology sets `self.topology`'s fields
+    /// before calling [`Self::ctx`]; both flow into the built state
+    /// automatically.
+    pub(crate) fn build_state(&self, resolution: AnticipatedResolution) -> StateSpace {
+        let max_par_order = self.par_lp.max_order();
+        let effective_lag_counts: Vec<usize> = if max_par_order > 0 {
+            (0..self.hydros.len())
+                .map(|h| {
+                    if h < self.par_lp.n_hydros() {
+                        self.par_lp.effective_lag_count(h)
+                    } else {
+                        max_par_order
+                    }
+                })
+                .collect()
+        } else {
+            vec![0; self.hydros.len()]
+        };
+        StateSpace::new(
+            self.hydros.len(),
+            max_par_order,
+            self.topology.n_buckets,
+            self.topology.column_order.clone(),
+            self.anticipated_lead_stages.clone(),
+            resolution,
+            &effective_lag_counts,
+        )
     }
 }

@@ -11,6 +11,7 @@ use cobre_core::{
 };
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
+use crate::bucket_topology::TransitBucketTopology;
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
 };
@@ -21,7 +22,6 @@ use crate::indexer::{
     StateSpace, StorageBoundaryGrid, ThermalSys, anticipated_resolution_for,
     for_each_live_commitment_slot, is_anticipated_decision_active_for_delivery,
 };
-use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::time_value::TimeValue;
 
 use super::template::StageGeometry;
@@ -91,16 +91,22 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
     /// [`AnticipatedPlants::len`].
     pub(crate) n_anticipated: usize,
-    /// Per-plant `lead_stages` (`K_i`), length `n_anticipated`, anticipated-local order.
-    pub(crate) anticipated_lead_stages: Vec<usize>,
+    /// The role-(a) state layout, threaded from setup's single owner
+    /// (`crate::setup::resolve_state_layout`) — owns `anticipated_lead_stages`
+    /// and `anticipated_resolution`, which this ctx used to carry as its own
+    /// copies.
+    // Rationale: read only by tests and fixtures so far; production call sites
+    // still thread the state layout as their own separate parameter alongside
+    // this ctx.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read only by tests and fixtures so far")
+    )]
+    pub(crate) state: &'a StateSpace,
     /// The study's anticipated-plant set, including each plant's commissioning
     /// window (`AnticipatedPlants::windows`) the decision gate keys on
     /// (`is_anticipated_decision_active_for_delivery`).
     pub(crate) anticipated_plants: &'a AnticipatedPlants,
-    /// Delivery-anchored resolution, threaded from setup's single owner
-    /// (`crate::setup::resolve_state_layout`) — the same resolution the role-(a)
-    /// `StateSpace` this build receives already carries.
-    pub(crate) anticipated_resolution: AnticipatedResolution,
     /// Whether any penalty method is active.
     pub(crate) has_penalty: bool,
     /// Present-value discounting and delivery hours/ids at each DELIVERY
@@ -123,34 +129,13 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// (`LpBuildInputs::filling_v_target`,
     /// [`build_filling_v_target`](crate::setup::lp_build_inputs::build_filling_v_target)).
     pub(crate) filling_v_target: &'a BTreeMap<(usize, i32), f64>,
-    /// Per-declared-arc resolved stage-clock weights, keyed by the arc's
-    /// upstream hydro system index (parallel-mode fill; [`Self::arc_spread_chrono`]
-    /// carries the chronological block-resolved factors). Absent for an
-    /// undeclared arc — the fill's `k_0 = 1`, no-deposit branch. See
-    /// [`build_arc_stage_weights`](crate::bucket_topology::build_arc_stage_weights).
-    pub(crate) arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
-    /// Per-declared-arc, per-chronological-stage full [`SpreadResolution`]
-    /// (`block_deposits`/`within_stage_routing`/`arrival_density`), keyed
-    /// like [`Self::arc_stage_weights`].
-    /// `by_stage[stage_idx]` is `None` when that study stage's own `block_mode`
-    /// is `Parallel` (the parallel fill reads [`Self::arc_stage_weights`] instead).
-    /// See [`build_arc_spread_chrono`](crate::bucket_topology::build_arc_spread_chrono).
-    pub(crate) arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
-    /// Per-declared-arc, per-chronological-arrival-stage blend of every
-    /// contributing source stage's arrival density (ρ in the methodology),
-    /// resolved in that arrival stage's own frame; keyed like
-    /// [`Self::arc_stage_weights`]. `None` where [`Self::arc_spread_chrono`] is
-    /// also `None` (a `Parallel` arrival stage), or where no in-study source
-    /// stage reaches it. Looked up directly by `resolve_bucket_arrival_density`,
-    /// which the chronological water fill and the generic hydro-inflow term read. See
-    /// [`build_arc_arrival_density`](crate::bucket_topology::build_arc_arrival_density).
-    pub(crate) arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
-    /// `per_stage_mask[stage_idx]` holds the max reachable lag per declared
-    /// downstream plant, discovery order (mirrors
-    /// [`TransitBucketTopology::per_plant_depth`](crate::bucket_topology::TransitBucketTopology::per_plant_depth)).
-    /// Gates which bucket-definition rows [`StageLayout::new`] emits; see
-    /// [`crate::bucket_topology::TransitBucketTopology::per_stage_mask`].
-    pub(crate) per_stage_mask: Vec<Vec<usize>>,
+    /// The resolved bucket topology (canonical column order, per-stage
+    /// reachability mask, and the three resolved arc tables — stage-clock
+    /// weights, chronological spread, arrival density), threaded from
+    /// setup's single owner (`crate::bucket_topology::build_transit_bucket_topology`).
+    /// This ctx used to carry four of its tables as its own clones; see
+    /// [`crate::bucket_topology::TransitBucketTopology`].
+    pub(crate) topology: &'a TransitBucketTopology,
 }
 
 /// Column/row offsets for one stage's in-study anticipated-ring layout
@@ -1240,12 +1225,12 @@ impl<'a> StageLayout<'a> {
         };
         // Sized from this stage's reachable count, not the stage-invariant
         // `state.n_buckets`: `build_transit_bucket_row_pos` masks a lag beyond
-        // `ctx.per_stage_mask[stage_idx]`'s per-plant cap out of the row range
-        // entirely — the cap itself is `build_transit_bucket_topology`'s, gated
-        // on `boundary_present`.
+        // `ctx.topology.per_stage_mask[stage_idx]`'s per-plant cap out of the row
+        // range entirely — the cap itself is `build_transit_bucket_topology`'s,
+        // gated on `boundary_present`.
         let (transit_bucket_row_pos, n_transit_bucket_rows) = build_transit_bucket_row_pos(
             &state.transit_bucket_column_order,
-            &ctx.per_stage_mask,
+            &ctx.topology.per_stage_mask,
             stage_idx,
         );
         let transit_bucket_definition = row.alloc(n_transit_bucket_rows);

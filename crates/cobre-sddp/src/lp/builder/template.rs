@@ -6,11 +6,11 @@ use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
+use crate::bucket_topology::TransitBucketTopology;
 #[cfg(any(test, feature = "test-support"))]
 use crate::error::SddpError;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::inflow_method::InflowNonNegativityMethod;
-use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::resolved_parameters::ResolvedParameters;
 #[cfg(any(test, feature = "test-support"))]
 use crate::time_value::DeliveryCalendar;
@@ -569,8 +569,7 @@ pub(crate) fn models_from_normal<M>(
 ///
 #[expect(
     clippy::too_many_arguments,
-    clippy::implicit_hasher,
-    reason = "a wrapper around the three arc-table inputs would rename their one setup-owned derivation, not remove it, and every caller passes a concrete HashMap"
+    reason = "each parameter threads one single-owner value the caller resolved; a wrapper would rename the derivation, not remove it"
 )]
 #[expect(
     private_interfaces,
@@ -586,10 +585,7 @@ pub fn build_stage_templates(
     resolved_parameters: &ResolvedParameters,
     state_layout: &StateSpace,
     anticipated_plants: &AnticipatedPlants,
-    per_stage_mask: &[Vec<usize>],
-    arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
-    arc_spread_chrono: &HashMap<usize, Vec<Option<SpreadResolution>>>,
-    arc_arrival_density: &HashMap<usize, Vec<Option<Vec<f64>>>>,
+    topology: &TransitBucketTopology,
     hydro_cell_index: &HydroCellIndex,
     inputs: LpBuildInputs,
     time_value: &TimeValue,
@@ -619,23 +615,11 @@ pub fn build_stage_templates(
         production_models,
         evaporation_models,
         resolved_parameters,
-        state_layout.anticipated_resolution.clone(),
-        state_layout.anticipated_lead_stages.clone(),
+        state_layout,
         anticipated_plants,
-        per_stage_mask.to_vec(),
-        arc_stage_weights.clone(),
-        arc_spread_chrono.clone(),
-        arc_arrival_density.clone(),
+        topology,
         hydro_cell_index,
         time_value,
-    );
-    debug_assert_eq!(
-        ctx.anticipated_resolution, state_layout.anticipated_resolution,
-        "ctx's threaded anticipated_resolution must match the state_layout it was built from"
-    );
-    debug_assert_eq!(
-        ctx.anticipated_lead_stages, state_layout.anticipated_lead_stages,
-        "ctx's threaded anticipated_lead_stages must match the state_layout it was built from"
     );
 
     let mut stage_outputs = Vec::with_capacity(study_stages.len());
@@ -705,10 +689,7 @@ pub fn build_stage_templates_resolving_layout(
         resolved_parameters,
         &layout.state,
         &layout.anticipated_plants,
-        &topology.per_stage_mask,
-        &topology.arc_stage_weights,
-        &topology.arc_spread_chrono,
-        &topology.arc_arrival_density,
+        &topology,
         &hydro_cell_index,
         inputs,
         &time_value,
@@ -733,13 +714,9 @@ fn build_template_build_ctx<'a>(
     production_models: &'a ProductionModelSet,
     evaporation_models: &'a EvaporationModelSet,
     resolved_parameters: &'a ResolvedParameters,
-    anticipated_resolution: AnticipatedResolution,
-    anticipated_lead_stages: Vec<usize>,
+    state: &'a StateSpace,
     anticipated_plants: &'a AnticipatedPlants,
-    per_stage_mask: Vec<Vec<usize>>,
-    arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
-    arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
-    arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
+    topology: &'a TransitBucketTopology,
     hydro_cell_index: &'a HydroCellIndex,
     time_value: &'a TimeValue,
 ) -> TemplateBuildCtx<'a> {
@@ -782,16 +759,12 @@ fn build_template_build_ctx<'a>(
         contracts,
         diversion_upstream: &inputs.diversion_upstream,
         n_anticipated,
-        anticipated_lead_stages,
+        state,
         anticipated_plants,
-        anticipated_resolution,
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
         time_value,
         filling_v_target: &inputs.filling_v_target,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        per_stage_mask,
+        topology,
     }
 }
 

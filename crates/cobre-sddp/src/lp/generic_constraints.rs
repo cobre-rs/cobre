@@ -408,6 +408,7 @@ fn push_upstream_release_rate(
     out: &mut Vec<(usize, f64)>,
 ) {
     if let Some(res) = ctx
+        .topology
         .arc_spread_chrono
         .get(&u_idx)
         .and_then(|by_stage| by_stage[stage_idx].as_ref())
@@ -426,7 +427,7 @@ fn push_upstream_release_rate(
         return;
     }
 
-    let Some(k_by_stage) = ctx.arc_stage_weights.get(&u_idx) else {
+    let Some(k_by_stage) = ctx.topology.arc_stage_weights.get(&u_idx) else {
         push_release_columns(u_idx, blk, 1.0, ctx, layout, out);
         return;
     };

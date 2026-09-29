@@ -1296,8 +1296,7 @@ fn fill_z_inflow_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
 #[cfg(test)]
 #[expect(
     clippy::needless_range_loop,
-    clippy::similar_names,
-    reason = "the loop index addresses parallel arrays and test locals mirror the paired column and row names the assertions compare"
+    reason = "the loop index addresses parallel arrays"
 )]
 mod interior_storage_bound_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
@@ -1312,12 +1311,10 @@ mod interior_storage_bound_tests {
         ThermalStageBounds,
     };
 
+    use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_storage_columns};
     use crate::hydro_models::{
         EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
     };
-
-    use super::super::test_support::state_layout_for;
-    use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_storage_columns};
     use crate::indexer::{Boundary, HydroCellIndex, HydroSys};
 
     const N_STAGES: usize = 1;
@@ -1522,8 +1519,7 @@ mod interior_storage_bound_tests {
     /// offsets by value (the borrowed `StateSpace` cannot escape).
     fn run_fill(fixtures: &mut InteriorStorageFixtures, stage: &Stage) -> RawFill {
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -1601,12 +1597,11 @@ mod interior_storage_bound_tests {
         // them). Build the full chronological template and run the production scale
         // computation on its CSC.
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
         let chrono_stage = stage_with_blocks(BlockMode::Chronological);
-        let layout = StageLayout::new(&ctx, &state, &chrono_stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &chrono_stage, STAGE_IDX);
         let template = super::super::template::build_single_stage_template(
             &ctx,
-            &state,
+            ctx.state,
             &chrono_stage,
             STAGE_IDX,
         )
@@ -1642,11 +1637,10 @@ mod interior_storage_bound_tests {
 
         let mut build_parallel = || {
             let par_ctx = fixtures.make_ctx();
-            let par_state = state_layout_for(&par_ctx);
             let parallel_stage = stage_with_blocks(BlockMode::Parallel);
             super::super::template::build_single_stage_template(
                 &par_ctx,
-                &par_state,
+                par_ctx.state,
                 &parallel_stage,
                 STAGE_IDX,
             )
@@ -1686,9 +1680,8 @@ mod interior_storage_bound_tests {
 
         let (endpoint, par_storage_internal_empty) = {
             let par_ctx = fixtures.make_ctx();
-            let par_state = state_layout_for(&par_ctx);
             let stage = stage_with_blocks(BlockMode::Parallel);
-            let l = StageLayout::new(&par_ctx, &par_state, &stage, STAGE_IDX);
+            let l = StageLayout::new(&par_ctx, par_ctx.state, &stage, STAGE_IDX);
             (
                 l.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
                 l.equipment.storage_internal_start == l.equipment.turbine.start,
@@ -1733,10 +1726,6 @@ mod interior_storage_bound_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod diversion_bound_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -1754,7 +1743,7 @@ mod diversion_bound_tests {
     };
     use crate::indexer::HydroCellIndex;
 
-    use super::super::test_support::{state_layout_for, two_block_stage, zero_hydro_penalties};
+    use super::super::test_support::{two_block_stage, zero_hydro_penalties};
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_diversion_columns};
 
     // Declaration-time diversion capacity on the entity. The test makes the
@@ -1952,8 +1941,7 @@ mod diversion_bound_tests {
     fn run_fill(fixtures: &mut DivFixtures) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let stage = two_block_stage(STAGE_IDX, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -2059,10 +2047,6 @@ mod diversion_bound_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod filling_phase_gating_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -2081,9 +2065,7 @@ mod filling_phase_gating_tests {
     };
     use crate::indexer::{BlockIdx, FphaCellLocal, HydroCell, HydroCellIndex};
 
-    use super::super::test_support::{
-        state_layout_for, three_block_stage, two_block_stage, zero_hydro_penalties,
-    };
+    use super::super::test_support::{three_block_stage, two_block_stage, zero_hydro_penalties};
     use super::{
         ColumnBufs, StageLayout, TemplateBuildCtx, fill_diversion_columns,
         fill_fpha_generation_columns, fill_spillage_columns, fill_turbine_columns,
@@ -2306,8 +2288,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2361,8 +2342,7 @@ mod filling_phase_gating_tests {
         stage: &Stage,
     ) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2770,8 +2750,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2884,8 +2863,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -3020,8 +2998,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -3156,9 +3133,7 @@ mod anticipated_objective_tests {
 
     use crate::time_value::{PostStudyResolved, TimeValue, resolve_post_study_artifacts};
 
-    use super::super::test_support::{
-        state_layout_for, state_layout_with_resolution, two_block_stage,
-    };
+    use super::super::test_support::two_block_stage;
     use super::{DeliveryRing, StageLayout, TemplateBuildCtx, fill_stage_columns};
     use crate::indexer::AnticipatedPlants;
 
@@ -3294,8 +3269,7 @@ mod anticipated_objective_tests {
         let mut fixtures = AntObjFixtures::new();
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(STAGE_IDX, [372.0, 372.0]);
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
 
         let (_col_lower, col_upper, objective) =
             fill_stage_columns(&ctx, &stage, STAGE_IDX, &layout);
@@ -3488,8 +3462,7 @@ mod anticipated_objective_tests {
         );
         let ctx = fx.make_ctx();
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
         let decision_col = layout.anticipated.col_anticipated_decision_start;
@@ -3534,10 +3507,10 @@ mod anticipated_objective_tests {
     /// Borrow-target owner for a post-study anchor-read `TemplateBuildCtx`:
     /// one anticipated plant, `LeadTime::Stages(PSA_LEAD)`, `PSA_N_STAGES`
     /// study stages plus a configurable `n_post` post-study stages. The
-    /// attached [`AnticipatedResolution`] spans the full extended delivery
-    /// axis, so the state must be built through
-    /// `state_layout_with_resolution` — the constant-lead fallback
-    /// `state_layout_for` leaves active only covers the study-only axis.
+    /// explicitly-set `anticipated_resolution` field spans the full extended
+    /// delivery axis, so `CtxFixture::ctx` attaches it as-is; the
+    /// saturating-default `constant_lead_resolution` it falls back to
+    /// otherwise covers only the study-only axis.
     struct PostStudyAnchorFixtures {
         base: CtxFixture,
     }
@@ -3737,9 +3710,10 @@ mod anticipated_objective_tests {
     fn post_study_anchor_study_only_axis_reads_thermal_block_base() {
         let mut fixtures = PostStudyAnchorFixtures::new(0, &[]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_with_resolution(&ctx);
+
+        let state = ctx.state;
         let stage = two_block_stage(0, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+        let layout = StageLayout::new(&ctx, state, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
         let decision_col = layout.anticipated.col_anticipated_decision_start;
@@ -3770,9 +3744,10 @@ mod anticipated_objective_tests {
     fn post_study_anchor_extended_axis_reads_post_study_bound() {
         let mut fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 10.0, 50.0)]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_with_resolution(&ctx);
+
+        let state = ctx.state;
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, &state, &stage, 1);
+        let layout = StageLayout::new(&ctx, state, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.anticipated.col_anticipated_decision_start;
@@ -3802,9 +3777,10 @@ mod anticipated_objective_tests {
     fn post_study_anchor_missing_cell_leaves_decision_column_dormant() {
         let mut fixtures = PostStudyAnchorFixtures::new(2, &[]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_with_resolution(&ctx);
+
+        let state = ctx.state;
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, &state, &stage, 1);
+        let layout = StageLayout::new(&ctx, state, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.anticipated.col_anticipated_decision_start;
@@ -3830,9 +3806,10 @@ mod anticipated_objective_tests {
     fn post_study_anchor_min_equals_max_pins_the_decision_column() {
         let mut fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 30.0, 30.0)]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_with_resolution(&ctx);
+
+        let state = ctx.state;
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, &state, &stage, 1);
+        let layout = StageLayout::new(&ctx, state, &stage, 1);
 
         let (col_lower, col_upper, _objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.anticipated.col_anticipated_decision_start;
@@ -3849,10 +3826,6 @@ mod anticipated_objective_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod block_family_slack_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -3872,7 +3845,7 @@ mod block_family_slack_tests {
 
     use crate::time_value::TimeValue;
 
-    use super::super::test_support::{state_layout_for, two_block_stage, zero_hydro_penalties};
+    use super::super::test_support::{two_block_stage, zero_hydro_penalties};
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_operational_slack_columns};
 
     const N_STAGES: usize = 1;
@@ -4206,8 +4179,7 @@ mod block_family_slack_tests {
         let mut fixtures = SlackFixtures::new(&specs);
         let stage = two_block_stage(STAGE_IDX, [BLOCK_HOURS[0], BLOCK_HOURS[1]]);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -4304,10 +4276,6 @@ mod block_family_slack_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod evaporation_slack_objective_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -4327,7 +4295,7 @@ mod evaporation_slack_objective_tests {
     };
     use crate::indexer::{BlockIdx, EvapLocal, HydroCellIndex};
 
-    use super::super::test_support::{state_layout_for, zero_hydro_penalties};
+    use super::super::test_support::zero_hydro_penalties;
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_evaporation_columns};
 
     const N_STAGES: usize = 1;
@@ -4547,8 +4515,7 @@ mod evaporation_slack_objective_tests {
 
     fn run_fill(fixtures: &mut EvapFixtures, stage: &Stage) -> EvapFill {
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -4643,10 +4610,6 @@ mod evaporation_slack_objective_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod contract_column_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -4657,10 +4620,8 @@ mod contract_column_tests {
         ThermalStageBounds,
     };
 
-    use crate::time_value::TimeValue;
-
-    use super::super::test_support::state_layout_for;
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_contract_columns};
+    use crate::time_value::TimeValue;
 
     const N_STAGES: usize = 1;
     const STAGE_IDX: usize = 0;
@@ -4799,8 +4760,7 @@ mod contract_column_tests {
     fn run_fill(fixtures: &mut ContractFixtures) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize, usize) {
         let stage = one_block_stage();
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -4867,10 +4827,6 @@ mod contract_column_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod thermal_block_bound_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -4884,7 +4840,7 @@ mod thermal_block_bound_tests {
 
     use crate::time_value::TimeValue;
 
-    use super::super::test_support::{BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage};
+    use super::super::test_support::{BLOCK_HOURS, N_BLKS, three_block_stage};
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_thermal_columns};
 
     const N_STAGES: usize = 2;
@@ -5037,8 +4993,7 @@ mod thermal_block_bound_tests {
     ) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize) {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -5208,10 +5163,6 @@ mod thermal_block_bound_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod line_contract_pumping_block_bound_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -5227,7 +5178,7 @@ mod line_contract_pumping_block_bound_tests {
 
     use crate::time_value::TimeValue;
 
-    use super::super::test_support::{BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage};
+    use super::super::test_support::{BLOCK_HOURS, N_BLKS, three_block_stage};
     use super::{
         ColumnBufs, StageLayout, TemplateBuildCtx, fill_contract_columns, fill_line_columns,
         fill_pumping_columns,
@@ -5518,8 +5469,7 @@ mod line_contract_pumping_block_bound_tests {
     fn run_fill(fixtures: &mut LcpFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -5835,10 +5785,6 @@ mod line_contract_pumping_block_bound_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod hydro_block_bound_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -5863,7 +5809,7 @@ mod hydro_block_bound_tests {
 
     use super::super::rows::fill_operational_violation_rows;
     use super::super::test_support::{
-        BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage, zero_hydro_penalties,
+        BLOCK_HOURS, N_BLKS, three_block_stage, zero_hydro_penalties,
     };
     use super::{
         ColumnBufs, StageLayout, TemplateBuildCtx, fill_diversion_columns,
@@ -6208,8 +6154,7 @@ mod hydro_block_bound_tests {
     fn run_fill(fixtures: &mut HydroBlockFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -6796,8 +6741,7 @@ mod hydro_block_bound_tests {
 
         let stage = three_block_stage(STAGE_IDX);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         assert_eq!(
             layout.fpha_hydro_indices.len(),
             1,
@@ -6826,10 +6770,6 @@ mod hydro_block_bound_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod cell_column_bound_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -6853,9 +6793,7 @@ mod cell_column_bound_tests {
     use crate::test_support::make_unit_group;
     use crate::time_value::TimeValue;
 
-    use super::super::test_support::{
-        BLOCK_HOURS, state_layout_for, three_block_stage, zero_hydro_penalties,
-    };
+    use super::super::test_support::{BLOCK_HOURS, three_block_stage, zero_hydro_penalties};
     use super::{
         ColumnBufs, GroupBoundLookup, StageLayout, TemplateBuildCtx, cell_min_generation,
         cell_min_turbined, fill_fpha_generation_columns, fill_turbine_columns,
@@ -7270,8 +7208,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7403,8 +7340,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7471,8 +7407,7 @@ mod cell_column_bound_tests {
         // row, decoupled from stage.id exactly as the filling-phase gating
         // tests decouple them.
         let stage = three_block_stage(usize::try_from(PREFILLING_ID).expect("non-negative"));
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         assert!(
             layout.fpha_hydro_indices.is_empty(),
             "the suspended FPHA plant must be excluded from fpha_hydro_indices during PreFilling"
@@ -7549,8 +7484,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7658,10 +7592,8 @@ mod cell_column_bound_tests {
             vec![0]
         );
 
-        let state = state_layout_for(&ctx);
-
         let stage2 = three_block_stage(2);
-        let layout2 = StageLayout::new(&ctx, &state, &stage2, 2);
+        let layout2 = StageLayout::new(&ctx, ctx.state, &stage2, 2);
         let (mut col_lower2, mut col_upper2, mut objective2) = fresh_bufs(layout2.num_cols);
         let mut bufs2 = ColumnBufs {
             col_lower: &mut col_lower2,
@@ -7690,7 +7622,7 @@ mod cell_column_bound_tests {
         );
 
         let stage0 = three_block_stage(0);
-        let layout0 = StageLayout::new(&ctx, &state, &stage0, 0);
+        let layout0 = StageLayout::new(&ctx, ctx.state, &stage0, 0);
         let (mut col_lower0, mut col_upper0, mut objective0) = fresh_bufs(layout0.num_cols);
         let mut bufs0 = ColumnBufs {
             col_lower: &mut col_lower0,
@@ -7774,10 +7706,8 @@ mod cell_column_bound_tests {
         assert_eq!(ctx.hydro_cell_index.bus_of(cell_sibling), EntityId(500));
         assert_eq!(ctx.hydro_cell_index.bus_of(cell_overridden), EntityId(900));
 
-        let state = state_layout_for(&ctx);
-
         let stage2 = three_block_stage(2);
-        let layout2 = StageLayout::new(&ctx, &state, &stage2, 2);
+        let layout2 = StageLayout::new(&ctx, ctx.state, &stage2, 2);
         assert_eq!(
             layout2.fpha_hydro_indices,
             vec![HydroSys::new(3)],
@@ -7814,7 +7744,7 @@ mod cell_column_bound_tests {
         );
 
         let stage0 = three_block_stage(0);
-        let layout0 = StageLayout::new(&ctx, &state, &stage0, 0);
+        let layout0 = StageLayout::new(&ctx, ctx.state, &stage0, 0);
         let (mut col_lower0, mut col_upper0, mut objective0) = fresh_bufs(layout0.num_cols);
         let mut bufs0 = ColumnBufs {
             col_lower: &mut col_lower0,
@@ -7951,8 +7881,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7972,10 +7901,6 @@ mod cell_column_bound_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod ncs_objective_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -7987,7 +7912,7 @@ mod ncs_objective_tests {
 
     use crate::time_value::TimeValue;
 
-    use super::super::test_support::{BLOCK_HOURS, N_BLKS, state_layout_for, three_block_stage};
+    use super::super::test_support::{BLOCK_HOURS, N_BLKS, three_block_stage};
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_ncs_columns};
 
     const N_STAGES: usize = 1;
@@ -8122,8 +8047,7 @@ mod ncs_objective_tests {
     fn run_fill(fixtures: &mut NcsFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let state = state_layout_for(&ctx);
-        let layout = StageLayout::new(&ctx, &state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];

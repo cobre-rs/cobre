@@ -39,12 +39,14 @@ use cobre_io::{
     EntitySlot, GraphManifest, ManifestEdge, ManifestNode, PolicyCutRecord, ProducerBlock,
     StageCutsPayload, decode_slot_date, encode_slot_date, write_policy_checkpoint,
 };
+use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::{
     ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
 use crate::BoundaryStateRequirements;
 use crate::StudySetup;
+use crate::bucket_topology::{TransitBucketTopology, build_transit_bucket_topology};
 use crate::context::{StageContext, TrainingContext};
 use crate::cut::pool::CutPool;
 use crate::error::SddpError;
@@ -74,9 +76,10 @@ use crate::setup::node_graph::{
     NodeGraph, NodeId, NodePos, OpeningSource, StageIdx, build_node_graph,
     enumerated_node_visit_counts, enumerated_scenario_count,
 };
+use crate::setup::{ResolvedStateLayout, resolve_state_layout};
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
-use crate::time_value::{PostStudyResolved, TimeValue};
+use crate::time_value::{DeliveryCalendar, PostStudyResolved, TimeValue};
 use crate::training::backward::{
     extract_state_duals_only, fill_external_opening_noise, write_opening_outcome,
 };
@@ -308,6 +311,36 @@ mod constant_lead_resolution_tests {
             );
         }
     }
+}
+
+/// Resolve the bucket topology and role-(a) state layout for `system`/`par_lp`
+/// through the same setup entry points production uses
+/// ([`build_transit_bucket_topology`], [`crate::setup::resolve_state_layout`]),
+/// for a builder-module test that needs production's own resolution rather
+/// than a hand-built [`TemplateBuildCtx`](crate::lp::builder::TemplateBuildCtx).
+///
+/// # Panics
+///
+/// If `resolve_state_layout` rejects `system` (a `LeadTime` fan-out) — a test
+/// fixture is expected to be resolvable.
+#[expect(
+    private_interfaces,
+    reason = "the returned crate-private types narrow this function's own visibility until callers move behind it"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "a test fixture that resolve_state_layout rejects is a fixture bug, not a runtime error to propagate"
+)]
+#[must_use]
+pub fn resolved_layout_for(
+    system: &System,
+    par_lp: &PrecomputedPar,
+) -> (TransitBucketTopology, ResolvedStateLayout) {
+    let calendar = DeliveryCalendar::from_system(system);
+    let topology = build_transit_bucket_topology(system, &calendar, false);
+    let layout = resolve_state_layout(system, &calendar, par_lp, &topology, None)
+        .expect("resolved_layout_for: valid test fixture");
+    (topology, layout)
 }
 
 /// All-zero [`HydroPenalties`] for [`geometry_hydro`] — no fixture-side penalty

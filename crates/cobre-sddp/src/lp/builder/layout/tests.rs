@@ -2166,9 +2166,8 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
 // ── Delivery-axis generalization: row positions & masking ────────────────
 
 /// Build a one-plant `StateSpace` carrying an attached delivery-anchored
-/// `AnticipatedResolution` directly — never `state_layout_for`'s own
-/// saturating constant-lead default; these tests need the real resolved
-/// axis instead.
+/// `AnticipatedResolution` directly, not the context's constant-lead
+/// resolution; these tests need the real resolved axis.
 fn state_with_attached_resolution(k_max: usize, resolution: AnticipatedResolution) -> StateSpace {
     let n_anticipated = resolution.per_plant.len();
     StateSpace::new(

@@ -5337,12 +5337,12 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
             .anticipated_resolution
             .ring_size(&ctx.state.anticipated_lead_stages),
         1,
-        "ctx.k_max"
+        "ctx.state ring size"
     );
     assert_eq!(
         ctx.state.anticipated_lead_stages,
         vec![1],
-        "ctx.anticipated_lead_stages"
+        "ctx.state.anticipated_lead_stages"
     );
 
     let template_state = ctx.state;

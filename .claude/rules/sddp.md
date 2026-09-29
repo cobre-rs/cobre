@@ -1745,10 +1745,10 @@ The bucket state stays a pure function of stage lengths, never of
 
 - **Depth from stage lengths alone.** Bucket depth and `n_buckets` derive from
   the per-stage calendar, the declared post-study calendar, and the pre-study
-  anchor alone (`study_stage_durations`, `delivery_stage_durations`,
-  `build_transit_bucket_topology`) — never from `n_blks` or `block_mode`.
-  Deriving any part of the depth inside a block-aware code path re-couples the
-  state dimension to how a stage happens to be resolved.
+  anchor alone (`DeliveryCalendar`, `build_transit_bucket_topology`) — never
+  from `n_blks` or `block_mode`. Deriving any part of the depth inside a
+  block-aware code path re-couples the state dimension to how a stage happens
+  to be resolved.
 - **Shared arrival density.** A chronological stage's per-block deposit shares
   `block_deposits`/`within_stage_routing` and the stage-level `stage_weights`
   come from the same shared arrival density (`resolve_spread`'s

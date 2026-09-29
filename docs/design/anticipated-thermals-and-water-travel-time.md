@@ -210,8 +210,8 @@ column_order = [(j, 1), (j, 2), …, (j, L_j)] for each plant j in canonical ord
 ```
 
 `extended` is the study calendar followed by any declared post-study calendar
-(`delivery_stage_durations`), padded with copies of its trailing duration only
-past what that base calendar already covers (`extend_for_resolution`,
+(`DeliveryCalendar::total_hours`), padded with copies of its trailing duration
+only past what that base calendar already covers (`extend_for_resolution`,
 `bucket_topology.rs`). With no declared post-study calendar the base is the
 study-only vector and the formula above is unchanged.
 
@@ -317,7 +317,7 @@ on two separate surfaces:
   segment plus a per-`(thermal, post-study stage)` `cost_per_mwh`/`min_mw`/`max_mw`
   an in-study decision delivering past the horizon is priced and bounded against.
   It extends the delivery axis to `n_delivery = n_stages + n_post` — the runtime
-  axis is built by `delivery_stage_durations` in `resolve_anticipated_commitments_core`
+  axis is `DeliveryCalendar::total_hours`, read by `resolve_anticipated_commitments_core`
   (`build_extended_delivery_axis` is the separate cobre-io _validation_ axis used
   for the reach check below); with it absent the axis is study-only and no lead can
   reach a post-study stage. `min_mw == max_mw` pins a fixed post-study profile (a

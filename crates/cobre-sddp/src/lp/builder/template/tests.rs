@@ -2350,8 +2350,9 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let par_lp = PrecomputedPar::default();
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
-    let topology = build_transit_bucket_topology(&system, false);
-    let layout = resolve_state_layout(&system, &par_lp, &topology, None)
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = build_transit_bucket_topology(&system, &calendar, false);
+    let layout = resolve_state_layout(&system, &calendar, &par_lp, &topology, None)
         .expect("resolve_state_layout: valid test fixture");
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
@@ -5609,8 +5610,11 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         "template's threaded resolution must resolve the calendar-derived decider"
     );
 
-    let (setup_resolution, setup_lead_stages) =
-        resolve_anticipated_commitments(&system, &AnticipatedPlants::build(system.thermals()));
+    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(
+        &system,
+        &DeliveryCalendar::from_system(&system),
+        &AnticipatedPlants::build(system.thermals()),
+    );
     assert_eq!(
         setup_lead_stages, ctx.anticipated_lead_stages,
         "setup vs template anticipated_lead_stages"
@@ -5704,8 +5708,11 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
         .decider
         .clone();
 
-    let (setup_resolution, setup_lead_stages) =
-        resolve_anticipated_commitments(&system, &AnticipatedPlants::build(system.thermals()));
+    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(
+        &system,
+        &DeliveryCalendar::from_system(&system),
+        &AnticipatedPlants::build(system.thermals()),
+    );
     assert_eq!(setup_lead_stages, ctx.anticipated_lead_stages);
     assert_eq!(setup_resolution.per_plant[0].decider, template_decider);
 
@@ -5796,8 +5803,9 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let par_lp = PrecomputedPar::default();
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
-    let topology = build_transit_bucket_topology(&system, false);
-    let layout = resolve_state_layout(&system, &par_lp, &topology, None)
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = build_transit_bucket_topology(&system, &calendar, false);
+    let layout = resolve_state_layout(&system, &calendar, &par_lp, &topology, None)
         .expect("resolve_state_layout: valid test fixture");
     let per_stage_mask = topology.per_stage_mask;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());

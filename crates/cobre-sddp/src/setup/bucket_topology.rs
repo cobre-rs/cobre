@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use cobre_core::{BlockMode, EntityId, Hydro, Stage, System, window_period_overlaps};
 
-use crate::block_clock::BlockClock;
 use crate::lead_time::{SpreadResolution, resolve_arrival_density_at, resolve_spread};
+use crate::time_value::DeliveryCalendar;
 
 /// Canonical bucket ordering, global bucket count, and per-stage reachability
 /// mask, stored on [`super::StudySetup`].
@@ -48,17 +48,6 @@ pub(crate) struct TransitBucketTopology {
     pub(crate) arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
 }
 
-/// Study-stage (`id >= 0`) durations in canonical (ascending `id`) stage-index
-/// order, each summed from its blocks.
-pub(crate) fn study_stage_durations(system: &System) -> Vec<f64> {
-    system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .map(|s| BlockClock::new(s).total_hours())
-        .collect()
-}
-
 /// Declared arcs' travel times grouped by downstream plant id. A hydro
 /// declares an arc when `travel_time_hours` is `Some` and `> 0.0` (`0.0` is
 /// undeclared) and `downstream_id` is `Some`.
@@ -85,7 +74,7 @@ fn declared_travel_time(hydro: &Hydro) -> Option<f64> {
 }
 
 /// Extends the base calendar — study stages plus any declared post-study
-/// stages ([`super::delivery_stage_durations`]) — with copies of its trailing
+/// stages ([`DeliveryCalendar::total_hours`]) — with copies of its trailing
 /// duration so [`resolve_spread`] never sees a window it cannot absorb; its
 /// conservation check panics otherwise. The pad runs only past what the base
 /// calendar already covers, so a declared post-study calendar shorter than
@@ -142,11 +131,10 @@ fn horizon_cap_active(active: usize, stage: usize, n_stages: usize) -> usize {
 /// "Delivery-family right-boundary pricing" contract).
 pub(crate) fn build_transit_bucket_topology(
     system: &System,
+    calendar: &DeliveryCalendar,
     boundary_present: bool,
 ) -> TransitBucketTopology {
-    let study_durations = study_stage_durations(system);
-    let n_stages = study_durations.len();
-    let base_calendar = super::delivery_stage_durations(study_durations.clone(), system);
+    let n_stages = calendar.n_study();
     let arcs_by_downstream = declared_arcs(system);
 
     let mut per_plant_depth = Vec::new();
@@ -161,11 +149,11 @@ pub(crate) fn build_transit_bucket_topology(
         let mut own_release_by_stage = vec![0_usize; n_stages];
         let mut ic_depth = 0_usize;
         for &t_v in t_vs {
-            let extended = extend_for_resolution(&base_calendar, t_v);
+            let extended = extend_for_resolution(calendar.total_hours(), t_v);
             for (stage, slot) in own_release_by_stage.iter_mut().enumerate() {
                 *slot = (*slot).max(in_study_depth(t_v, stage, &extended));
             }
-            ic_depth = ic_depth.max(ic_only_depth(t_v, &study_durations));
+            ic_depth = ic_depth.max(ic_only_depth(t_v, calendar.study_total_hours()));
         }
 
         let in_study_max = own_release_by_stage.iter().copied().max().unwrap_or(0);
@@ -203,9 +191,9 @@ pub(crate) fn build_transit_bucket_topology(
         "n_buckets must be zero exactly when no arc is declared"
     );
 
-    let arc_stage_weights = build_arc_stage_weights(system);
-    let arc_spread_chrono = build_arc_spread_chrono(system);
-    let arc_arrival_density = build_arc_arrival_density(system, &arc_stage_weights);
+    let arc_stage_weights = build_arc_stage_weights(system, calendar);
+    let arc_spread_chrono = build_arc_spread_chrono(system, calendar);
+    let arc_arrival_density = build_arc_arrival_density(system, calendar, &arc_stage_weights);
 
     TransitBucketTopology {
         n_buckets,
@@ -222,17 +210,18 @@ pub(crate) fn build_transit_bucket_topology(
 /// upstream hydro system index. `k_by_stage[stage_idx]` is [`resolve_spread`]'s
 /// `stage_weights` anchored at that in-study stage (`stage_weights[0]` is the
 /// same-stage share); a hydro absent declares no arc.
-pub(crate) fn build_arc_stage_weights(system: &System) -> HashMap<usize, Vec<Vec<f64>>> {
-    let study_durations = study_stage_durations(system);
-    let n_stages = study_durations.len();
-    let base_calendar = super::delivery_stage_durations(study_durations.clone(), system);
+pub(crate) fn build_arc_stage_weights(
+    system: &System,
+    calendar: &DeliveryCalendar,
+) -> HashMap<usize, Vec<Vec<f64>>> {
+    let n_stages = calendar.n_study();
     let mut arc_stage_weights = HashMap::new();
 
     for (u_idx, hydro) in system.hydros().iter().enumerate() {
         let Some(t_v) = declared_travel_time(hydro) else {
             continue;
         };
-        let extended = extend_for_resolution(&base_calendar, t_v);
+        let extended = extend_for_resolution(calendar.total_hours(), t_v);
         let k_by_stage: Vec<Vec<f64>> = (0..n_stages)
             .map(|stage| resolve_spread(t_v, stage, &extended, None).stage_weights)
             .collect();
@@ -250,10 +239,9 @@ pub(crate) fn build_arc_stage_weights(system: &System) -> HashMap<usize, Vec<Vec
 /// stage (no block-resolved routing there).
 pub(crate) fn build_arc_spread_chrono(
     system: &System,
+    calendar: &DeliveryCalendar,
 ) -> HashMap<usize, Vec<Option<SpreadResolution>>> {
-    let study_durations = study_stage_durations(system);
-    let n_stages = study_durations.len();
-    let base_calendar = super::delivery_stage_durations(study_durations.clone(), system);
+    let n_stages = calendar.n_study();
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     debug_assert_eq!(study_stages.len(), n_stages);
 
@@ -263,7 +251,7 @@ pub(crate) fn build_arc_spread_chrono(
         let Some(t_v) = declared_travel_time(hydro) else {
             continue;
         };
-        let extended = extend_for_resolution(&base_calendar, t_v);
+        let extended = extend_for_resolution(calendar.total_hours(), t_v);
         let by_stage: Vec<Option<SpreadResolution>> = (0..n_stages)
             .map(|stage_idx| {
                 if study_stages[stage_idx].block_mode != BlockMode::Chronological {
@@ -294,11 +282,10 @@ pub(crate) fn build_arc_spread_chrono(
 /// source stage reaches it (total weight `== 0`, e.g. the first stage).
 pub(crate) fn build_arc_arrival_density(
     system: &System,
+    calendar: &DeliveryCalendar,
     arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
 ) -> HashMap<usize, Vec<Option<Vec<f64>>>> {
-    let study_durations = study_stage_durations(system);
-    let n_stages = study_durations.len();
-    let base_calendar = super::delivery_stage_durations(study_durations.clone(), system);
+    let n_stages = calendar.n_study();
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     debug_assert_eq!(study_stages.len(), n_stages);
 
@@ -311,7 +298,7 @@ pub(crate) fn build_arc_arrival_density(
         let Some(k_by_stage) = arc_stage_weights.get(&u_idx) else {
             continue;
         };
-        let extended = extend_for_resolution(&base_calendar, t_v);
+        let extended = extend_for_resolution(calendar.total_hours(), t_v);
 
         let density_by_stage: Vec<Option<Vec<f64>>> = (0..n_stages)
             .map(|arrival_stage| {
@@ -576,7 +563,8 @@ mod tests {
         let downstream = hydro(1, None, None);
         let system = build_system(vec![downstream], uniform_stages(3, 24.0));
 
-        let topology = build_transit_bucket_topology(&system, false);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.n_buckets, 0);
         assert!(topology.column_order.is_empty());
@@ -589,7 +577,8 @@ mod tests {
         let upstream = hydro(2, Some(1), Some(0.0));
         let system = build_system(vec![downstream, upstream], uniform_stages(3, 24.0));
 
-        let topology = build_transit_bucket_topology(&system, false);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.n_buckets, 0);
     }
@@ -604,7 +593,8 @@ mod tests {
             uniform_stages(10, 24.0),
         );
 
-        let topology = build_transit_bucket_topology(&system, false);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.per_plant_depth, vec![5]);
         assert_eq!(topology.n_buckets, 5);
@@ -636,7 +626,8 @@ mod tests {
         );
         assert_eq!(ic_depth, 2, "the IC anchor must give L_arc(IC) == 2");
 
-        let topology = build_transit_bucket_topology(&system, false);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.per_plant_depth, vec![2]);
         assert_eq!(topology.n_buckets, 2);
@@ -668,7 +659,8 @@ mod tests {
         let ic_depth = ic_only_depth(24.0, &durations);
         assert_eq!(ic_depth, in_study_max, "uniform calendar: no IC deepening");
 
-        let topology = build_transit_bucket_topology(&system, false);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.per_plant_depth, vec![in_study_max]);
     }
@@ -695,7 +687,8 @@ mod tests {
         );
         assert_eq!(ic_depth, 3, "the IC anchor must also reach 3 stages ahead");
 
-        let topology = build_transit_bucket_topology(&system, false);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(
             topology.per_plant_depth,
@@ -737,8 +730,9 @@ mod tests {
             stages_with_durations(&durations),
         );
 
-        let topology_off = build_transit_bucket_topology(&system, false);
-        let topology_on = build_transit_bucket_topology(&system, true);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology_off = build_transit_bucket_topology(&system, &calendar, false);
+        let topology_on = build_transit_bucket_topology(&system, &calendar, true);
 
         assert_eq!(
             topology_on.per_plant_depth, topology_off.per_plant_depth,
@@ -786,10 +780,11 @@ mod tests {
         );
 
         let upstream_idx = 1;
-        let topology_on = build_transit_bucket_topology(&system, true);
-        let topology_off = build_transit_bucket_topology(&system, false);
-        let arc_stage_weights = build_arc_stage_weights(&system);
-        let arc_spread_chrono = build_arc_spread_chrono(&system);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology_on = build_transit_bucket_topology(&system, &calendar, true);
+        let topology_off = build_transit_bucket_topology(&system, &calendar, false);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arc_spread_chrono = build_arc_spread_chrono(&system, &calendar);
 
         let k_by_stage = arc_stage_weights
             .get(&upstream_idx)
@@ -845,8 +840,10 @@ mod tests {
         );
         let system_b = build_system(vec![upstream, downstream], uniform_stages(5, 24.0));
 
-        let topology_a = build_transit_bucket_topology(&system_a, false);
-        let topology_b = build_transit_bucket_topology(&system_b, false);
+        let calendar_a = DeliveryCalendar::from_system(&system_a);
+        let calendar_b = DeliveryCalendar::from_system(&system_b);
+        let topology_a = build_transit_bucket_topology(&system_a, &calendar_a, false);
+        let topology_b = build_transit_bucket_topology(&system_b, &calendar_b, false);
 
         assert_eq!(topology_a.column_order, topology_b.column_order);
         assert_eq!(topology_a.per_plant_depth, topology_b.per_plant_depth);
@@ -858,8 +855,9 @@ mod tests {
         let downstream = hydro(1, None, None);
         let upstream = hydro(2, Some(1), None);
         let system = build_system(vec![downstream, upstream], uniform_stages(3, 24.0));
+        let calendar = DeliveryCalendar::from_system(&system);
 
-        let arc_stage_weights = build_arc_stage_weights(&system);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
 
         assert!(arc_stage_weights.is_empty());
     }
@@ -870,8 +868,9 @@ mod tests {
         let upstream = hydro(2, Some(1), Some(24.0));
         let system = build_system(vec![downstream, upstream], uniform_stages(10, 24.0));
 
-        let topology = build_transit_bucket_topology(&system, false);
-        let arc_stage_weights = build_arc_stage_weights(&system);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let topology = build_transit_bucket_topology(&system, &calendar, false);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
 
         let upstream_idx = 1;
         let k_by_stage = arc_stage_weights
@@ -904,7 +903,8 @@ mod tests {
             ],
         );
 
-        let arc_spread_chrono = build_arc_spread_chrono(&system);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let arc_spread_chrono = build_arc_spread_chrono(&system, &calendar);
         let upstream_idx = 1;
         let by_stage = arc_spread_chrono
             .get(&upstream_idx)
@@ -960,8 +960,9 @@ mod tests {
             ],
         );
 
-        let arc_stage_weights = build_arc_stage_weights(&system);
-        let arc_arrival_density = build_arc_arrival_density(&system, &arc_stage_weights);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arc_arrival_density = build_arc_arrival_density(&system, &calendar, &arc_stage_weights);
 
         let upstream_idx = 1;
         let density_by_stage = arc_arrival_density
@@ -1005,8 +1006,9 @@ mod tests {
             ],
         );
 
-        let arc_stage_weights = build_arc_stage_weights(&system);
-        let arc_arrival_density = build_arc_arrival_density(&system, &arc_stage_weights);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arc_arrival_density = build_arc_arrival_density(&system, &calendar, &arc_stage_weights);
 
         let upstream_idx = 1;
         let density_by_stage = arc_arrival_density
@@ -1046,8 +1048,9 @@ mod tests {
             ],
         );
 
-        let arc_stage_weights = build_arc_stage_weights(&system);
-        let arc_arrival_density = build_arc_arrival_density(&system, &arc_stage_weights);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
+        let arc_arrival_density = build_arc_arrival_density(&system, &calendar, &arc_stage_weights);
 
         let mut n_checked = 0;
         for density_by_stage in arc_arrival_density.values() {
@@ -1078,9 +1081,19 @@ mod tests {
 
         let system_a = build_system(vec![downstream.clone(), upstream.clone()], stages.clone());
         let system_b = build_system(vec![upstream, downstream], stages);
+        let calendar_a = DeliveryCalendar::from_system(&system_a);
+        let calendar_b = DeliveryCalendar::from_system(&system_b);
 
-        let density_a = build_arc_arrival_density(&system_a, &build_arc_stage_weights(&system_a));
-        let density_b = build_arc_arrival_density(&system_b, &build_arc_stage_weights(&system_b));
+        let density_a = build_arc_arrival_density(
+            &system_a,
+            &calendar_a,
+            &build_arc_stage_weights(&system_a, &calendar_a),
+        );
+        let density_b = build_arc_arrival_density(
+            &system_b,
+            &calendar_b,
+            &build_arc_stage_weights(&system_b, &calendar_b),
+        );
 
         assert_eq!(density_a, density_b);
     }
@@ -1112,8 +1125,12 @@ mod tests {
             stages_with_durations(&durations),
         );
 
-        let topology = build_transit_bucket_topology(&system_with_post_study, true);
-        let topology_pad_only = build_transit_bucket_topology(&system_pad_only, true);
+        let calendar_with_post_study = DeliveryCalendar::from_system(&system_with_post_study);
+        let calendar_pad_only = DeliveryCalendar::from_system(&system_pad_only);
+        let topology =
+            build_transit_bucket_topology(&system_with_post_study, &calendar_with_post_study, true);
+        let topology_pad_only =
+            build_transit_bucket_topology(&system_pad_only, &calendar_pad_only, true);
 
         assert_eq!(
             topology.per_plant_depth,
@@ -1146,7 +1163,8 @@ mod tests {
             post_study_stages_hours(&[24.0]),
         );
 
-        let arc_stage_weights = build_arc_stage_weights(&system);
+        let calendar = DeliveryCalendar::from_system(&system);
+        let arc_stage_weights = build_arc_stage_weights(&system, &calendar);
         let upstream_idx = 1;
         let k_by_stage = arc_stage_weights
             .get(&upstream_idx)
@@ -1179,8 +1197,10 @@ mod tests {
             post_study,
         );
 
-        let topology_a = build_transit_bucket_topology(&system_a, false);
-        let topology_b = build_transit_bucket_topology(&system_b, false);
+        let calendar_a = DeliveryCalendar::from_system(&system_a);
+        let calendar_b = DeliveryCalendar::from_system(&system_b);
+        let topology_a = build_transit_bucket_topology(&system_a, &calendar_a, false);
+        let topology_b = build_transit_bucket_topology(&system_b, &calendar_b, false);
 
         assert_eq!(topology_a.column_order, topology_b.column_order);
         assert_eq!(topology_a.per_plant_depth, topology_b.per_plant_depth);
@@ -1208,8 +1228,12 @@ mod tests {
             stages_with_durations(&durations),
         );
 
-        let topology_with_calendar = build_transit_bucket_topology(&system_with_calendar, false);
-        let topology_no_calendar = build_transit_bucket_topology(&system_no_calendar, false);
+        let calendar_with_calendar = DeliveryCalendar::from_system(&system_with_calendar);
+        let calendar_no_calendar = DeliveryCalendar::from_system(&system_no_calendar);
+        let topology_with_calendar =
+            build_transit_bucket_topology(&system_with_calendar, &calendar_with_calendar, false);
+        let topology_no_calendar =
+            build_transit_bucket_topology(&system_no_calendar, &calendar_no_calendar, false);
 
         assert!(
             topology_no_calendar.n_buckets > 0,
@@ -1265,8 +1289,12 @@ mod tests {
             stages_with_durations(&durations),
         );
 
-        let topology_with_calendar = build_transit_bucket_topology(&system_with_calendar, false);
-        let topology_no_calendar = build_transit_bucket_topology(&system_no_calendar, false);
+        let calendar_with_calendar = DeliveryCalendar::from_system(&system_with_calendar);
+        let calendar_no_calendar = DeliveryCalendar::from_system(&system_no_calendar);
+        let topology_with_calendar =
+            build_transit_bucket_topology(&system_with_calendar, &calendar_with_calendar, false);
+        let topology_no_calendar =
+            build_transit_bucket_topology(&system_no_calendar, &calendar_no_calendar, false);
 
         assert!(
             topology_no_calendar.n_buckets > 0,

@@ -13,6 +13,7 @@ use crate::indexer::{AnticipatedPlants, StateSpace};
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::setup::bucket_topology::build_transit_bucket_topology;
 use crate::setup::resolve_anticipated_commitments_core;
+use crate::time_value::DeliveryCalendar;
 
 use super::layout::TemplateBuildCtx;
 
@@ -38,9 +39,13 @@ pub(super) fn ctx_anticipated_and_mask_inputs(
     HashMap<usize, Vec<Option<Vec<f64>>>>,
     usize,
 ) {
-    let (resolution, lead_stages) =
-        resolve_anticipated_commitments_core(system, &AnticipatedPlants::build(system.thermals()));
-    let topology = build_transit_bucket_topology(system, false);
+    let calendar = DeliveryCalendar::from_system(system);
+    let (resolution, lead_stages) = resolve_anticipated_commitments_core(
+        system,
+        &calendar,
+        &AnticipatedPlants::build(system.thermals()),
+    );
+    let topology = build_transit_bucket_topology(system, &calendar, false);
     let max_par_order = system
         .inflow_models()
         .iter()

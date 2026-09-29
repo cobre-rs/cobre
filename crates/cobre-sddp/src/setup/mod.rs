@@ -115,7 +115,7 @@ use crate::{
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
     stopping_rule::{StoppingRule, StoppingRuleSet},
-    time_value::{DeliveryCalendar, TimeValue, post_study_delivery_calendar},
+    time_value::{DeliveryCalendar, TimeValue},
     workspace::CapturedBasis,
 };
 
@@ -423,8 +423,12 @@ impl StudySetup {
 
         let anticipated_windows =
             build_anticipated_windows(system, &stage_data.study_dims.anticipated_plants);
-        let extended_delivery_anchors =
-            build_extended_delivery_anchors(system, &stage_data.state, n_stages);
+        let extended_delivery_anchors = build_extended_delivery_anchors(
+            system,
+            &stage_data.state,
+            n_stages,
+            stage_data.time_value.calendar(),
+        );
 
         Ok(Self {
             inputs: SolveInputs {
@@ -942,6 +946,7 @@ pub(crate) struct ResolvedStateLayout {
 ///   fan-out simulation output is not yet supported.
 pub(crate) fn resolve_state_layout(
     system: &System,
+    calendar: &DeliveryCalendar,
     par_lp: &PrecomputedPar,
     transit_bucket_topology: &bucket_topology::TransitBucketTopology,
     inflow_lag_depth: Option<u32>,
@@ -955,7 +960,7 @@ pub(crate) fn resolve_state_layout(
     // second resolve_point call site is forbidden — this resolution threads onto
     // the state layout instead.
     let (anticipated_resolution, anticipated_lead_stages) =
-        resolve_anticipated_commitments(system, &anticipated_plants);
+        resolve_anticipated_commitments(system, calendar, &anticipated_plants);
 
     // TODO(anticipated-fanout-output): the coupled output extractor is
     // compute_anticipated_decision_mw
@@ -1092,8 +1097,8 @@ pub(crate) fn extended_delivery_stages<'a>(
 
 /// Extended delivery-stage anchors: the `YYYYMM01` anchor of each delivery
 /// target stage — the study stages (`id >= 0`) followed by the synthetic
-/// post-study continuation ([`post_study_delivery_calendar`]) — indexed by
-/// delivery target `m`. The dating input the `anticipated_lanes` output
+/// post-study continuation ([`DeliveryCalendar::post_study_stages`]) — indexed
+/// by delivery target `m`. The dating input the `anticipated_lanes` output
 /// extractor reads for a post-study-targeted decision (`delivery_dates[m]`),
 /// matching the policy manifest's `delivery_anchor_at` walk over the same
 /// extended calendar. Study-only, byte-identical to a study-stages walk, when
@@ -1102,10 +1107,10 @@ fn build_extended_delivery_anchors(
     system: &System,
     state: &StateSpace,
     n_stages: usize,
+    calendar: &DeliveryCalendar,
 ) -> Vec<i32> {
     let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let post_study_calendar = post_study_delivery_calendar(system);
-    let anchors: Vec<i32> = extended_delivery_stages(&study_stages, &post_study_calendar)
+    let anchors: Vec<i32> = extended_delivery_stages(&study_stages, calendar.post_study_stages())
         .iter()
         .map(|s| year_month_day_anchor(s.start_date))
         .collect();
@@ -1209,19 +1214,6 @@ fn first_fanned_plant_id(
         })
 }
 
-/// The study calendar followed by every declared post-study stage duration;
-/// byte-identical to the study-only vector when none is declared. Two
-/// consumers derive their own extended calendar from this one vector: the
-/// anticipated delivery axis ([`DeliveryAxis::stage_lengths_hours`], where it
-/// lets `n_delivery` span `n_stages + n_post`) and the water ring's arrival
-/// resolution (`bucket_topology::extend_for_resolution`'s base calendar).
-fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> Vec<f64> {
-    if let Some(post_study) = system.post_study_stages() {
-        study_durations.extend(post_study.stages.iter().map(|s| s.duration_hours));
-    }
-    study_durations
-}
-
 /// Resolve every anticipated thermal's delivery-anchored point commitment and
 /// derive the constant-lead per-plant `K_i` the still-live ring machinery reads.
 ///
@@ -1245,6 +1237,7 @@ fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> V
 /// the moment a study declares `post_study_stages`.
 pub(crate) fn resolve_anticipated_commitments_core(
     system: &System,
+    calendar: &DeliveryCalendar,
     anticipated_plants: &AnticipatedPlants,
 ) -> (AnticipatedResolution, Vec<usize>) {
     let anticipated_thermals: Vec<&Thermal> = anticipated_plants
@@ -1263,16 +1256,13 @@ pub(crate) fn resolve_anticipated_commitments_core(
         return (AnticipatedResolution::default(), Vec::new());
     }
 
-    let study_durations = bucket_topology::study_stage_durations(system);
-    let n_stages = study_durations.len();
-    let durations = delivery_stage_durations(study_durations, system);
-    let n_delivery = durations.len();
+    let n_stages = calendar.n_study();
     let resolution = AnticipatedResolution::resolve(
         &leads,
         DeliveryAxis {
-            stage_lengths_hours: &durations,
+            stage_lengths_hours: calendar.total_hours(),
             n_decision: n_stages,
-            n_delivery,
+            n_delivery: calendar.n_delivery(),
         },
     );
 
@@ -1311,10 +1301,11 @@ pub(crate) fn resolve_anticipated_commitments_core(
 /// the core directly so the advisory never double-emits.
 pub(crate) fn resolve_anticipated_commitments(
     system: &System,
+    calendar: &DeliveryCalendar,
     anticipated_plants: &AnticipatedPlants,
 ) -> (AnticipatedResolution, Vec<usize>) {
     let (resolution, lead_stages) =
-        resolve_anticipated_commitments_core(system, anticipated_plants);
+        resolve_anticipated_commitments_core(system, calendar, anticipated_plants);
     let anticipated_thermals: Vec<&Thermal> = anticipated_plants
         .thermals()
         .map(|t| &system.thermals()[t.get()])
@@ -1362,6 +1353,7 @@ fn warn_on_sub_stage_lead(thermals: &[&Thermal], resolution: &AnticipatedResolut
 /// event), naming every affected plant in the one emitted event.
 fn warn_on_boundary_absent_post_study_delivery(
     system: &System,
+    calendar: &DeliveryCalendar,
     anticipated_plants: &AnticipatedPlants,
     resolution: &AnticipatedResolution,
     boundary_present: bool,
@@ -1369,7 +1361,7 @@ fn warn_on_boundary_absent_post_study_delivery(
     if boundary_present {
         return;
     }
-    let n_stages = bucket_topology::study_stage_durations(system).len();
+    let n_stages = calendar.n_study();
     let thermals = system.thermals();
     let horizon_end = study_horizon_end(system);
     let past = &system.initial_conditions().past_anticipated_commitments;
@@ -1724,17 +1716,22 @@ fn resolve_stage_data(
     SddpError,
 > {
     let calendar = DeliveryCalendar::from_system(system);
-    let transit_bucket_topology =
-        bucket_topology::build_transit_bucket_topology(system, config.boundary.is_present());
+    let transit_bucket_topology = bucket_topology::build_transit_bucket_topology(
+        system,
+        &calendar,
+        config.boundary.is_present(),
+    );
 
     let layout = resolve_state_layout(
         system,
+        &calendar,
         stochastic.par(),
         &transit_bucket_topology,
         config.boundary.inflow_lag_depth(),
     )?;
     warn_on_boundary_absent_post_study_delivery(
         system,
+        &calendar,
         &layout.anticipated_plants,
         &layout.state.anticipated_resolution,
         config.boundary.is_present(),
@@ -2840,6 +2837,7 @@ mod transit_seed_round_trip_tests {
     use super::{TransitSeedArc, bucket_topology, build_initial_transit_bucket_state};
     use crate::simulation::extraction::build_transit_seed;
     use crate::simulation::types::{SimulationHydroResult, SimulationStageResult};
+    use crate::time_value::DeliveryCalendar;
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| unreachable!("hardcoded date is valid"))
@@ -3086,7 +3084,9 @@ mod transit_seed_round_trip_tests {
                 })
                 .collect(),
         );
-        let topology_b = bucket_topology::build_transit_bucket_topology(&system_b, false);
+        let calendar_b = DeliveryCalendar::from_system(&system_b);
+        let topology_b =
+            bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
         let seed_from_emission = build_initial_transit_bucket_state(&system_b, &topology_b);
 
         let system_reference = build_system(
@@ -3108,8 +3108,12 @@ mod transit_seed_round_trip_tests {
                 },
             ],
         );
-        let topology_reference =
-            bucket_topology::build_transit_bucket_topology(&system_reference, false);
+        let calendar_reference = DeliveryCalendar::from_system(&system_reference);
+        let topology_reference = bucket_topology::build_transit_bucket_topology(
+            &system_reference,
+            &calendar_reference,
+            false,
+        );
         let seed_reference =
             build_initial_transit_bucket_state(&system_reference, &topology_reference);
 

@@ -1811,10 +1811,17 @@ mod tests {
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
         let par_lp = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, None)
             .expect("PrecomputedPar must build");
-        let topology = crate::setup::bucket_topology::build_transit_bucket_topology(&system, false);
-        let layout =
-            crate::setup::resolve_state_layout(&system, &par_lp, &topology, declared_depth)
-                .expect("resolve_state_layout must succeed with a declared depth");
+        let calendar = crate::time_value::DeliveryCalendar::from_system(&system);
+        let topology =
+            crate::setup::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+        let layout = crate::setup::resolve_state_layout(
+            &system,
+            &calendar,
+            &par_lp,
+            &topology,
+            declared_depth,
+        )
+        .expect("resolve_state_layout must succeed with a declared depth");
 
         let lib = build_opening_tree_library(&system, &training_source, declared_depth)
             .expect("build_opening_tree_library must succeed with a declared depth")

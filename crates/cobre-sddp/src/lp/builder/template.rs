@@ -732,14 +732,11 @@ pub fn build_stage_templates_resolving_layout(
     evaporation_models: &EvaporationModelSet,
     resolved_parameters: &ResolvedParameters,
 ) -> Result<StageTemplates, SddpError> {
-    let topology = build_transit_bucket_topology(system, false);
-    let layout = resolve_state_layout(system, par_lp, &topology, None)?;
+    let calendar = DeliveryCalendar::from_system(system);
+    let topology = build_transit_bucket_topology(system, &calendar, false);
+    let layout = resolve_state_layout(system, &calendar, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = TimeValue::from_system(
-        system,
-        &layout.anticipated_plants,
-        DeliveryCalendar::from_system(system),
-    );
+    let time_value = TimeValue::from_system(system, &layout.anticipated_plants, calendar);
     Ok(build_stage_templates(
         system,
         inflow_method,

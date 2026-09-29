@@ -9,6 +9,7 @@ use crate::hydro_models::{PrepareHydroModelsResult, ProductionModelSet, Resolved
 use crate::lp::builder::StageGeometry;
 use crate::lp::indexer::{AnticipatedPlants, StateSpace, ThermalSys};
 use crate::test_support;
+use crate::time_value::DeliveryCalendar;
 use cobre_stochastic::ExternalScenarioLibrary;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::StageCalendar;
@@ -7319,6 +7320,7 @@ fn setup_leadstages_resolution_preserves_k_max_and_state_dimension() {
     let system = minimal_system_with_anticipated_lead_stages(5, 2);
     let (resolution, lead_stages) = super::resolve_anticipated_commitments(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -7394,6 +7396,7 @@ fn test_anticipated_resolve_point_pmo_calendar() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
@@ -7420,6 +7423,7 @@ fn lead_time_three_stage_lead_resolves_a_pre_study_prefix() {
         minimal_system_with_anticipated(&[100.0; 4], AnticipatedConfig::LeadTime(350.0), 1, None);
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
@@ -7440,6 +7444,7 @@ fn ring_depth_counts_pre_study_occupancy() {
         minimal_system_with_anticipated(&[100.0; 4], AnticipatedConfig::LeadTime(350.0), 1, None);
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -7459,6 +7464,7 @@ fn leadstages_ring_depth_covers_full_lead_when_lead_equals_horizon() {
         minimal_system_with_anticipated_lead_stages(n_stages, u32::try_from(n_stages).unwrap());
     let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -7480,6 +7486,7 @@ fn test_anticipated_resolve_point_fanout_calendar() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
@@ -7512,6 +7519,7 @@ fn resolve_anticipated_commitments_widens_lead_time_plant_lead_to_the_ring_depth
     );
     let (resolution, lead_stages) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -8794,6 +8802,7 @@ fn test_anticipated_resolve_point_k0_uniform_calendar() {
     );
     let (resolution, lead_stages) = super::resolve_anticipated_commitments(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
     let point = &resolution.per_plant[0];
@@ -8834,6 +8843,7 @@ fn resolve_anticipated_commitments_warns_on_k0_sub_stage_lead() {
     tracing::subscriber::with_default(subscriber, || {
         let _ = super::resolve_anticipated_commitments(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
         );
     });
@@ -8870,6 +8880,7 @@ fn resolve_anticipated_commitments_leadstages_never_warns() {
     tracing::subscriber::with_default(subscriber, || {
         let _ = super::resolve_anticipated_commitments(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
         );
     });
@@ -8900,6 +8911,7 @@ fn warn_on_sub_stage_lead_emits_once_per_self_delivered_stage() {
     tracing::subscriber::with_default(subscriber, || {
         let _ = super::resolve_anticipated_commitments(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
         );
     });
@@ -8959,6 +8971,7 @@ fn resolve_anticipated_commitments_core_reports_the_extended_delivery_width() {
 
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -8983,6 +8996,7 @@ fn resolve_anticipated_commitments_core_matches_study_only_width_without_post_st
 
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -9014,6 +9028,7 @@ fn warn_on_boundary_absent_post_study_delivery_fires_once_when_boundary_absent()
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -9021,6 +9036,7 @@ fn warn_on_boundary_absent_post_study_delivery_fires_once_when_boundary_absent()
     tracing::subscriber::with_default(subscriber, || {
         super::warn_on_boundary_absent_post_study_delivery(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
             &resolution,
             false,
@@ -9063,6 +9079,7 @@ fn warn_on_boundary_absent_post_study_delivery_silent_when_boundary_present() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -9070,6 +9087,7 @@ fn warn_on_boundary_absent_post_study_delivery_silent_when_boundary_present() {
     tracing::subscriber::with_default(subscriber, || {
         super::warn_on_boundary_absent_post_study_delivery(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
             &resolution,
             true,
@@ -9106,6 +9124,7 @@ fn warn_on_boundary_absent_fires_for_nonzero_fixed_value_without_boundary() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -9113,6 +9132,7 @@ fn warn_on_boundary_absent_fires_for_nonzero_fixed_value_without_boundary() {
     tracing::subscriber::with_default(subscriber, || {
         super::warn_on_boundary_absent_post_study_delivery(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
             &resolution,
             false,
@@ -9157,6 +9177,7 @@ fn warn_on_boundary_absent_silent_for_all_zero_stub_without_boundary() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -9164,6 +9185,7 @@ fn warn_on_boundary_absent_silent_for_all_zero_stub_without_boundary() {
     tracing::subscriber::with_default(subscriber, || {
         super::warn_on_boundary_absent_post_study_delivery(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
             &resolution,
             false,
@@ -9206,6 +9228,7 @@ fn warn_on_boundary_absent_names_dual_cause_plant_once() {
     );
     let (resolution, _) = super::resolve_anticipated_commitments_core(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
 
@@ -9213,6 +9236,7 @@ fn warn_on_boundary_absent_names_dual_cause_plant_once() {
     tracing::subscriber::with_default(subscriber, || {
         super::warn_on_boundary_absent_post_study_delivery(
             &system,
+            &DeliveryCalendar::from_system(&system),
             &AnticipatedPlants::build(system.thermals()),
             &resolution,
             false,
@@ -9263,6 +9287,7 @@ fn lead_time_fanout_rejected_at_setup() {
     // Sanity: the fixture genuinely fans out (guards the guard's own fixture).
     let (resolution, _) = super::resolve_anticipated_commitments(
         &system,
+        &DeliveryCalendar::from_system(&system),
         &AnticipatedPlants::build(system.thermals()),
     );
     assert_eq!(
@@ -10856,7 +10881,8 @@ fn test_single_arc_unroll_matches_ac1() {
         vec![bucket_seed_defluence_window(2, 0.0, 24.0, 100.0)],
     );
 
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, false);
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
@@ -10888,7 +10914,8 @@ fn test_mid_horizon_entrant_zero_history_zero_seeds_stage_0_transit_buckets() {
         vec![bucket_seed_defluence_window(2, 0.0, 24.0, 0.0)],
     );
 
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, false);
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
@@ -10916,7 +10943,8 @@ fn test_confluence_aggregates_two_upstreams_into_shared_transit_buckets() {
         ],
     );
 
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, false);
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
@@ -10962,8 +10990,12 @@ fn test_seed_is_declaration_order_invariant() {
         defluences,
     );
 
-    let topology_a = super::bucket_topology::build_transit_bucket_topology(&system_a, false);
-    let topology_b = super::bucket_topology::build_transit_bucket_topology(&system_b, false);
+    let calendar_a = DeliveryCalendar::from_system(&system_a);
+    let calendar_b = DeliveryCalendar::from_system(&system_b);
+    let topology_a =
+        super::bucket_topology::build_transit_bucket_topology(&system_a, &calendar_a, false);
+    let topology_b =
+        super::bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
     let seed_a = super::build_initial_transit_bucket_state(&system_a, &topology_a);
     let seed_b = super::build_initial_transit_bucket_state(&system_b, &topology_b);
 
@@ -10984,7 +11016,8 @@ fn test_seed_len_matches_n_buckets() {
         bucket_seed_study_stages(4, 12.0),
         vec![bucket_seed_defluence_window(2, 0.0, 24.0, 100.0)],
     );
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, false);
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = super::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
     assert_eq!(seed.len(), topology.n_buckets);
 
@@ -10994,8 +11027,12 @@ fn test_seed_len_matches_n_buckets() {
         bucket_seed_study_stages(3, 24.0),
         vec![],
     );
-    let no_arc_topology =
-        super::bucket_topology::build_transit_bucket_topology(&no_arc_system, false);
+    let no_arc_calendar = DeliveryCalendar::from_system(&no_arc_system);
+    let no_arc_topology = super::bucket_topology::build_transit_bucket_topology(
+        &no_arc_system,
+        &no_arc_calendar,
+        false,
+    );
     assert_eq!(no_arc_topology.n_buckets, 0);
     let no_arc_seed = super::build_initial_transit_bucket_state(&no_arc_system, &no_arc_topology);
     assert_eq!(no_arc_seed.len(), 0);
@@ -11023,7 +11060,9 @@ fn test_gapped_windows_contribute_additively() {
         ],
     );
 
-    let topology = super::bucket_topology::build_transit_bucket_topology(&system, false);
+    let delivery_calendar = DeliveryCalendar::from_system(&system);
+    let topology =
+        super::bucket_topology::build_transit_bucket_topology(&system, &delivery_calendar, false);
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
 
     let vol_recent = 24.0 * M3S_TO_HM3 * 100.0;

@@ -1,5 +1,5 @@
 //! [`LpBuildInputs`]: the builder's resolved study inputs, each resolved once
-//! by [`crate::setup::resolve_lp_build_inputs`].
+//! by setup's `resolve_lp_build_inputs`.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -12,7 +12,7 @@ use crate::time_value::TimeValue;
 
 /// Resolved study inputs [`build_stage_templates`](super::build_stage_templates)
 /// consumes by value; every field is the single derivation of its fact, either
-/// owned here or borrowed from the same `setup::resolve_stage_data` step that
+/// owned here or borrowed from the same setup `resolve_stage_data` step that
 /// resolves the other borrowed fields.
 pub(crate) struct LpBuildInputs<'a> {
     /// Canonical entity-id → slot maps for every position-addressed family.
@@ -29,8 +29,8 @@ pub(crate) struct LpBuildInputs<'a> {
     pub(crate) diversion_upstream: HashMap<EntityId, Vec<usize>>,
     /// Per-stage hydro productivities (MW per m³/s); FPHA hydros carry `0.0`.
     pub(crate) hydro_productivities_per_stage: Vec<Vec<f64>>,
-    /// Study-invariant, non-state LP shape, from
-    /// [`crate::setup::build_study_dimensions`].
+    /// Study-invariant, non-state LP shape, from setup's
+    /// `build_study_dimensions`.
     pub(crate) study_dims: &'a StudyDimensions,
     /// Present-value discounting and delivery hours/ids, from
     /// [`crate::time_value::TimeValue::from_system`].

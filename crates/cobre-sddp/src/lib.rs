@@ -93,8 +93,6 @@ pub use cut::{CutPool, FutureCostFunction};
 pub use error::SddpError;
 pub use fixed_delivery_echo::build_fixed_delivery_rows;
 pub use generic_constraint_echo::build_generic_constraint_echo_rows;
-#[cfg(any(test, feature = "test-support"))]
-pub use lp::builder::build_stage_templates_resolving_layout;
 pub use lp::builder::{StageTemplates, build_stage_templates};
 pub use policy::policy_export::{ReservedInflowLagLayout, reserve_boundary_inflow_lag_slots};
 pub use policy::policy_load::{
@@ -121,6 +119,8 @@ pub use production::hydro_models::{
     PrepareHydroModelsResult, ProductionModelSource, build_deviation_summary,
     build_evaporation_model_rows, build_hydro_model_summary, prepare_hydro_models,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use setup::lp_build_inputs::build_stage_templates_resolving_layout;
 pub use setup::{
     BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED,
     PrepareStochasticResult, StudyParams, StudySetup, build_stochastic_context_for_study,

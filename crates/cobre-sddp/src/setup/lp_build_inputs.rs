@@ -4,15 +4,31 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[cfg(any(test, feature = "test-support"))]
+use cobre_core::Stage;
 use cobre_core::scenario::LoadModel;
 use cobre_core::{EntityId, Hydro, ResolvedBounds, System};
 use cobre_io::StageIdResolver;
+#[cfg(any(test, feature = "test-support"))]
+use cobre_stochastic::normal::precompute::PrecomputedNormal;
+#[cfg(any(test, feature = "test-support"))]
+use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::block_clock::BlockClock;
+#[cfg(any(test, feature = "test-support"))]
+use crate::error::SddpError;
+#[cfg(any(test, feature = "test-support"))]
+use crate::hydro_models::EvaporationModelSet;
 use crate::hydro_models::{ProductionModelSet, ResolvedProductionModel};
+#[cfg(any(test, feature = "test-support"))]
+use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lp::builder::LpBuildInputs;
+#[cfg(any(test, feature = "test-support"))]
+use crate::lp::builder::{StageTemplates, build_stage_templates};
 use crate::lp::indexer::{EntityPositions, HydroCellIndex, StudyDimensions};
 use crate::resolved_parameters::ResolvedParameters;
+#[cfg(any(test, feature = "test-support"))]
+use crate::time_value::DeliveryCalendar;
 use crate::time_value::TimeValue;
 
 /// Precompute the per-stage minimum target-storage trajectory `V_target[t]` for
@@ -195,11 +211,81 @@ pub(crate) fn resolve_lp_build_inputs<'a>(
 }
 
 /// The in-sample load-noise membership list, for a caller with no stochastic
-/// context to resolve it from directly
-/// ([`build_stage_templates_resolving_layout`](crate::lp::builder::build_stage_templates_resolving_layout)).
+/// context to resolve it from directly ([`build_stage_templates_resolving_layout`]).
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn resolve_in_sample_load_bus_ids(system: &System) -> Vec<EntityId> {
     system.load_noise_member_bus_ids(cobre_core::scenario::SamplingScheme::InSample)
+}
+
+/// Test/integration-only convenience wrapper over [`build_stage_templates`]:
+/// resolves the state layout and bucket topology from `system`/`par_lp`
+/// through the same setup entry point production uses
+/// ([`super::resolve_state_and_topology`]), then delegates. Production
+/// (`StudySetup`) always threads its own already-resolved
+/// `StateSpace`/`per_stage_mask` directly through `build_stage_templates`
+/// instead — this wrapper exists so test call sites that build templates from
+/// a bare system do not each need to resolve the layout themselves.
+///
+/// # Errors
+///
+/// Propagates [`super::resolve_state_and_topology`]'s `LeadTime` fan-out
+/// rejection.
+#[cfg(any(test, feature = "test-support"))]
+pub fn build_stage_templates_resolving_layout(
+    system: &System,
+    inflow_method: InflowNonNegativityMethod,
+    par_lp: &PrecomputedPar,
+    normal_lp: &PrecomputedNormal,
+    production_models: &ProductionModelSet,
+    evaporation_models: &EvaporationModelSet,
+    resolved_parameters: &ResolvedParameters,
+) -> Result<StageTemplates, SddpError> {
+    let calendar = DeliveryCalendar::from_system(system);
+    let (topology, layout) =
+        super::resolve_state_and_topology(system, &calendar, par_lp, None, false)?;
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let stages: Vec<Stage> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let (downstream_par_order, _) = super::resolve_stage_lag_transitions(
+        &stages,
+        par_lp,
+        system.policy_graph().season_map.as_ref(),
+    );
+    let study_dims = super::build_study_dimensions(
+        system,
+        inflow_method,
+        layout.state.hydro_count,
+        layout.anticipated_plants.clone(),
+        downstream_par_order,
+    );
+    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
+    let inputs = resolve_lp_build_inputs(
+        system,
+        &resolve_in_sample_load_bus_ids(system),
+        production_models,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        resolved_parameters,
+    );
+    debug_assert_eq!(
+        normal_lp.n_entities(),
+        inputs.load_bus_indices.len(),
+        "load noise model and LP disagree on the stochastic load buses"
+    );
+    Ok(build_stage_templates(
+        system,
+        par_lp,
+        production_models,
+        evaporation_models,
+        &layout.state,
+        &topology,
+        inputs,
+    ))
 }
 
 #[cfg(test)]

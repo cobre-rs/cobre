@@ -66,8 +66,6 @@ pub mod stage_data;
 pub mod stochastic_pipeline;
 pub(crate) mod template_postprocess;
 
-#[cfg(test)]
-pub(crate) use lp_build_inputs::build_filling_v_target;
 pub(crate) use lp_build_inputs::resolve_lp_build_inputs;
 pub use node_graph::{
     EnumeratedPlan, NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor,
@@ -1001,6 +999,27 @@ pub(crate) fn resolve_state_layout(
     })
 }
 
+/// [`bucket_topology::build_transit_bucket_topology`] then [`resolve_state_layout`]
+/// — the shared prefix [`resolve_stage_data`] and
+/// [`lp_build_inputs::build_stage_templates_resolving_layout`] both need before
+/// diverging.
+///
+/// # Errors
+///
+/// Propagates [`resolve_state_layout`]'s `LeadTime` fan-out rejection.
+pub(crate) fn resolve_state_and_topology(
+    system: &System,
+    calendar: &DeliveryCalendar,
+    par_lp: &PrecomputedPar,
+    inflow_lag_depth: Option<u32>,
+    boundary_present: bool,
+) -> Result<(bucket_topology::TransitBucketTopology, ResolvedStateLayout), SddpError> {
+    let topology =
+        bucket_topology::build_transit_bucket_topology(system, calendar, boundary_present);
+    let layout = resolve_state_layout(system, calendar, par_lp, &topology, inflow_lag_depth)?;
+    Ok((topology, layout))
+}
+
 /// Canonical absolute delivery/arrival calendar date of a stage `start_date`,
 /// encoded `year * 10000 + month * 100 + day` (`YYYYMMDD`). The day is pinned to
 /// `01` so the anchor stays month-granular — the same calendar month maps to the
@@ -1665,20 +1684,14 @@ fn resolve_stage_data(
     SddpError,
 > {
     let calendar = DeliveryCalendar::from_system(system);
-    let transit_bucket_topology = bucket_topology::build_transit_bucket_topology(
-        system,
-        &calendar,
-        config.boundary.is_present(),
-    );
-    let transit_seed_arcs = build_transit_seed_arcs(system, &transit_bucket_topology);
-
-    let layout = resolve_state_layout(
+    let (transit_bucket_topology, layout) = resolve_state_and_topology(
         system,
         &calendar,
         stochastic.par(),
-        &transit_bucket_topology,
         config.boundary.inflow_lag_depth(),
+        config.boundary.is_present(),
     )?;
+    let transit_seed_arcs = build_transit_seed_arcs(system, &transit_bucket_topology);
     warn_on_boundary_absent_post_study_delivery(
         system,
         &calendar,

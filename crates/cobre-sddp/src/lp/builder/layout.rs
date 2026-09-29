@@ -85,12 +85,12 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// `contract_type`, not pre-partitioned.
     pub(crate) contracts: &'a [EnergyContract],
     /// Target hydro ID → system indices of hydros diverting to it (each hydro `d`
-    /// with `diversion.downstream_id == target_id`). Borrowed from
-    /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
+    /// with `diversion.downstream_id == target_id`). Borrowed from setup's
+    /// single `resolve_lp_build_inputs` resolution
     /// (`LpBuildInputs::diversion_upstream`).
     pub(crate) diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
     /// The role-(a) state layout, threaded from setup's single owner
-    /// (`crate::setup::resolve_state_layout`) — owns `anticipated_lead_stages`
+    /// (`resolve_state_layout`) — owns `anticipated_lead_stages`
     /// and `anticipated_resolution`, which this ctx used to carry as its own
     /// copies.
     // Rationale: read only by tests and fixtures so far; production call sites
@@ -103,15 +103,14 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) state: &'a StateSpace,
     /// Study-invariant, non-state LP shape (`has_inflow_penalty`,
     /// `max_deficit_segments`, `anticipated_plants`), threaded from setup's
-    /// single owner (`crate::setup::build_study_dimensions`).
+    /// single owner (`build_study_dimensions`).
     pub(crate) study_dims: &'a StudyDimensions,
     /// Present-value discounting and delivery hours/ids at each DELIVERY
     /// stage, length `n_study_stages + n_post` — the study's own per-stage
     /// values concatenated with the post-study continuation, the first
     /// cumulative-discount entry exactly `1.0`. The strict predicate
     /// `stage_idx + K_i < n_stages` keeps every delivery lookup in range.
-    /// Borrowed from `StageData`'s single owner
-    /// ([`crate::setup::stage_data::StageData`]).
+    /// Borrowed from setup's single `StageData` owner.
     pub(crate) time_value: &'a TimeValue,
     /// Per-stage minimum target-storage trajectory, keyed `(hydro_idx, stage_id)
     /// → V_target` \[hm³\]. Computed once by a backward fold from the dead volume
@@ -120,10 +119,9 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// `fill_filling_target_rows` (which sees one stage) — is wrong or re-walks the
     /// schedule on the hot path. `BTreeMap` for determinism (canonical iteration
     /// order, not `HashMap`'s). Empty for a non-filling build (parity-neutral).
-    /// Borrowed from
-    /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
-    /// (`LpBuildInputs::filling_v_target`,
-    /// [`build_filling_v_target`](crate::setup::lp_build_inputs::build_filling_v_target)).
+    /// Borrowed from setup's single `resolve_lp_build_inputs` resolution
+    /// (`LpBuildInputs::filling_v_target`, computed by setup's
+    /// `build_filling_v_target`).
     pub(crate) filling_v_target: &'a BTreeMap<(usize, i32), f64>,
     /// The resolved bucket topology (canonical column order, per-stage
     /// reachability mask, and the three resolved arc tables — stage-clock

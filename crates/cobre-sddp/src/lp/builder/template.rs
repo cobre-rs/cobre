@@ -7,32 +7,13 @@ use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::bucket_topology::TransitBucketTopology;
-#[cfg(any(test, feature = "test-support"))]
-use crate::error::SddpError;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-#[cfg(any(test, feature = "test-support"))]
-use crate::inflow_method::InflowNonNegativityMethod;
-#[cfg(any(test, feature = "test-support"))]
-use crate::resolved_parameters::ResolvedParameters;
-#[cfg(any(test, feature = "test-support"))]
-use crate::time_value::DeliveryCalendar;
-#[cfg(any(test, feature = "test-support"))]
-use crate::time_value::TimeValue;
 
 use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, entity_flat};
 use super::{GenericConstraintRowEntry, LpBuildInputs, StateBox, columns, entries, rows, scaling};
-#[cfg(any(test, feature = "test-support"))]
-use crate::bucket_topology::build_transit_bucket_topology;
-#[cfg(any(test, feature = "test-support"))]
-use crate::lp::indexer::HydroCellIndex;
 use crate::lp::indexer::{
     AnticipatedLocal, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
     FillingTargetLocal, FloorLocal, HydroSys, NcsSys, PumpingSys, StateSpace, StorageBoundaryGrid,
-};
-#[cfg(any(test, feature = "test-support"))]
-use crate::setup::{
-    build_study_dimensions, resolve_lp_build_inputs, resolve_stage_lag_transitions,
-    resolve_state_layout,
 };
 
 #[cfg(any(test, feature = "test-support"))]
@@ -53,7 +34,7 @@ pub struct StageTemplates {
     /// `spot_price = dual / block_hours`.
     pub block_hours_per_stage: Vec<Vec<f64>>,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`,
-    /// [`ResolvedParameters::cost_scale_factor`]). Every non-theta objective
+    /// the resolved `cost_scale_factor` scalar). Every non-theta objective
     /// coefficient was divided by this at template build time; cost-domain
     /// reporting boundaries multiply back by it.
     pub cost_scale_factor: f64,
@@ -471,10 +452,10 @@ pub(super) fn build_single_stage_template(
 /// was built over (a `debug_assert` enforces it) — this is a pure positional
 /// read, never a re-derivation from raw rows. Shared by the external library
 /// builders' standardization-moment derivation
-/// (`setup::scenario_libraries::build_external_load_library` /
-/// `build_external_ncs_library`), so a library's standardization and
-/// `cobre_stochastic::context`'s reconstruction read the identical moments
-/// rather than each re-deriving independently.
+/// (`build_external_load_library` / `build_external_ncs_library`), so a
+/// library's standardization and `cobre_stochastic::context`'s
+/// reconstruction read the identical moments rather than each re-deriving
+/// independently.
 pub(crate) fn models_from_normal<M>(
     normal_lp: &PrecomputedNormal,
     entity_ids: &[EntityId],
@@ -633,74 +614,6 @@ pub fn build_stage_templates(
         &study_stages,
         inputs.resolved_parameters.cost_scale_factor,
     )
-}
-
-/// Test/integration-only convenience wrapper over [`build_stage_templates`]:
-/// resolves the state layout and bucket topology from `system`/`par_lp`
-/// through the same setup entry point production uses
-/// (`crate::setup::resolve_state_layout`), then delegates. Production
-/// (`StudySetup`) always threads its own already-resolved
-/// `StateSpace`/`per_stage_mask` directly through [`build_stage_templates`]
-/// instead — this wrapper exists so test call sites that build templates from
-/// a bare system do not each need to resolve the layout themselves.
-///
-/// # Errors
-///
-/// Propagates `crate::setup::resolve_state_layout`'s `LeadTime` fan-out
-/// rejection.
-#[cfg(any(test, feature = "test-support"))]
-pub fn build_stage_templates_resolving_layout(
-    system: &System,
-    inflow_method: InflowNonNegativityMethod,
-    par_lp: &PrecomputedPar,
-    normal_lp: &PrecomputedNormal,
-    production_models: &ProductionModelSet,
-    evaporation_models: &EvaporationModelSet,
-    resolved_parameters: &ResolvedParameters,
-) -> Result<StageTemplates, SddpError> {
-    let calendar = DeliveryCalendar::from_system(system);
-    let topology = build_transit_bucket_topology(system, &calendar, false);
-    let layout = resolve_state_layout(system, &calendar, par_lp, &topology, None)?;
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let stages: Vec<Stage> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .cloned()
-        .collect();
-    let (downstream_par_order, _) =
-        resolve_stage_lag_transitions(&stages, par_lp, system.policy_graph().season_map.as_ref());
-    let study_dims = build_study_dimensions(
-        system,
-        inflow_method,
-        layout.state.hydro_count,
-        layout.anticipated_plants.clone(),
-        downstream_par_order,
-    );
-    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
-    let inputs = resolve_lp_build_inputs(
-        system,
-        &crate::setup::lp_build_inputs::resolve_in_sample_load_bus_ids(system),
-        production_models,
-        &study_dims,
-        &time_value,
-        &hydro_cell_index,
-        resolved_parameters,
-    );
-    debug_assert_eq!(
-        normal_lp.n_entities(),
-        inputs.load_bus_indices.len(),
-        "load noise model and LP disagree on the stochastic load buses"
-    );
-    Ok(build_stage_templates(
-        system,
-        par_lp,
-        production_models,
-        evaporation_models,
-        &layout.state,
-        &topology,
-        inputs,
-    ))
 }
 
 /// Build the [`TemplateBuildCtx`] shared across all per-stage builds, from

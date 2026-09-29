@@ -86,7 +86,14 @@ constructors (`stage_ctx`, `training_ctx`, `simulation_ctx`) are `SolveInputs`
 methods; `StudySetup` delegates to them unchanged. `StageData`'s templates are
 built by threading `crate::setup::resolve_lp_build_inputs`'s single resolution
 of the LP builder's study inputs (`LpBuildInputs`) into `build_stage_templates`,
-rather than the builder re-deriving them per stage.
+rather than the builder re-deriving them per stage. `resolve_stage_data`
+(`setup/mod.rs`) resolves the bucket topology and role-(a) state layout
+together through `resolve_state_and_topology`, then hands the resolved
+`LpBuildInputs` to `build_postprocessed_templates`, which builds the stage
+templates and runs the scaling/state-box postprocess in one step — the same
+`resolve_state_and_topology` step the test-support wrapper
+(`build_stage_templates_resolving_layout`) delegates through, so neither
+duplicates the other's resolution sequence.
 
 ### Cohesive sub-structs
 

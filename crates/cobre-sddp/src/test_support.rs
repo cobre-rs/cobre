@@ -343,6 +343,17 @@ pub fn resolved_layout_for(
     (topology, layout)
 }
 
+/// Setup steps a builder-module test needs without a direct
+/// `lp::builder` → `setup` import edge.
+#[cfg(test)]
+pub(crate) use crate::setup::lp_build_inputs::build_filling_v_target;
+#[cfg(test)]
+pub(crate) use crate::setup::template_postprocess::postprocess_templates;
+#[cfg(test)]
+pub(crate) use crate::setup::{
+    build_study_dimensions, resolve_anticipated_commitments, resolve_lp_build_inputs,
+};
+
 /// All-zero [`HydroPenalties`] for [`geometry_hydro`] — no fixture-side penalty
 /// cost reaches the column/objective arithmetic `StageLayout::new` computes.
 fn geometry_zero_penalties() -> HydroPenalties {

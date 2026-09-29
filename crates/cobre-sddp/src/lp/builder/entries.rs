@@ -3960,7 +3960,7 @@ mod pumping_water_tests {
             // under test (max entry = 4). Recomputed on every call (never cached
             // at construction) so a test's post-construction bounds mutation is
             // reflected.
-            self.base.filling_v_target = crate::setup::build_filling_v_target(
+            self.base.filling_v_target = crate::test_support::build_filling_v_target(
                 &self.base.hydros,
                 &self.base.bounds,
                 &[744.0 * M3S_TO_HM3; N_STAGES],
@@ -7964,7 +7964,7 @@ mod pumping_water_tests {
             .filling_min_rate_m3s = AC_RATE_M3S;
         // The fixture-default stage_zetas is 744 · M3S_TO_HM3; rebuild the ctx's
         // V_target map with the AC ζ (720 h → ζ = 2.592) so the fold matches the AC.
-        let ac_filling_v_target = crate::setup::build_filling_v_target(
+        let ac_filling_v_target = crate::test_support::build_filling_v_target(
             &fixtures.base.hydros,
             &fixtures.base.bounds,
             &[AC_TOTAL_HOURS * M3S_TO_HM3],

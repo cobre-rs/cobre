@@ -40,7 +40,7 @@ use cobre_core::{
 };
 use cobre_sddp::{
     Phase, ResolvedParameters, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig,
+    TrainingConfig, build_stage_templates_resolving_layout,
     config::{CutManagementConfig, EventConfig, LoopConfig},
     context::TrainingContext,
     cut::FutureCostFunction,
@@ -50,7 +50,7 @@ use cobre_sddp::{
     indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
-    lp::builder::{PatchBuffer, StageGeometry, StateBox, build_stage_templates_resolving_layout},
+    lp::builder::{PatchBuffer, StageGeometry, StateBox},
     risk_measure::RiskMeasure,
     setup::node_graph::Traversal,
     simulate,

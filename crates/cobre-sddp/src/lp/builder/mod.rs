@@ -59,8 +59,6 @@ mod test_support;
 pub use delivery_ring::DeliveryRing;
 pub use patch::PatchBuffer;
 pub use state_box::StateBox;
-#[cfg(any(test, feature = "test-support"))]
-pub use template::build_stage_templates_resolving_layout;
 pub use template::{StageGeometry, StageTemplates, build_stage_templates};
 
 // --- Crate-internal re-exports ---

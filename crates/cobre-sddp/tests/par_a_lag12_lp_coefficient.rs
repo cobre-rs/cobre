@@ -50,8 +50,8 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    InflowNonNegativityMethod, ResolvedParameters, hydro_models::PrepareHydroModelsResult,
-    lp::builder::build_stage_templates_resolving_layout,
+    InflowNonNegativityMethod, ResolvedParameters, build_stage_templates_resolving_layout,
+    hydro_models::PrepareHydroModelsResult,
 };
 use cobre_stochastic::{PrecomputedPar, normal::precompute::PrecomputedNormal};
 

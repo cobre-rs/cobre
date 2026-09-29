@@ -24,6 +24,4 @@ pub mod builder;
 pub(crate) mod generic_constraints;
 pub mod indexer;
 
-#[cfg(any(test, feature = "test-support"))]
-pub use builder::build_stage_templates_resolving_layout;
 pub use builder::{StageGeometry, StageTemplates, build_stage_templates};

@@ -12,7 +12,9 @@
 //! ```
 
 use crate::context::ClassSchemes;
+use crate::season_cast::{StageCalendar, occurrence_year};
 
+use chrono::{Datelike, Months, NaiveDate};
 use std::fmt;
 pub mod class_sampler;
 mod eta_inversion;
@@ -35,7 +37,10 @@ pub use tables::{ClassNoiseTables, ForwardNoiseTables, NoiseTable};
 pub use window::discover_historical_windows;
 pub(crate) mod out_of_sample;
 
-use cobre_core::{scenario::SamplingScheme, temporal::NoiseMethod, temporal::Stage};
+use cobre_core::{
+    scenario::SamplingScheme,
+    temporal::{NoiseMethod, SeasonMap, Stage},
+};
 
 use crate::noise::seed::derive_class_forward_seed;
 use crate::{
@@ -680,76 +685,90 @@ pub fn build_forward_sampler(
 // Shared helper
 // ---------------------------------------------------------------------------
 
-/// Build the full observation sequence as `(year_offset, season_id)` pairs.
+/// Build the observation sequence as `(year_offset, season_id)` pairs.
 ///
-/// Returns `max_order + stages.len()` entries in chronological order:
-/// - Indices `0..max_order`: pre-study lag seasons (oldest first)
-/// - Indices `max_order..max_order + stages.len()`: study seasons
+/// The anchor is `stages[0]`; its own resolved year is `y0`, and every other
+/// entry's `year_offset` is relative to it — `window_year` is the first study
+/// observation's year.
 ///
-/// The year offset increments whenever the season sequence wraps from
-/// `n_seasons - 1` back to `0`, then is normalized so the first study entry is
-/// `0` — `window_year` is the first study observation's year and lag entries go
-/// negative.
+/// **Layout.** The study entries come first, one per stage carrying a
+/// `season_id`, in stage order. The resolved lag entries follow, for
+/// `k = 1..=r` (newest first), where `r <= max_order`: the season-map walk
+/// ([`StageCalendar::season_occurrences`]) may truncate before `max_order` on
+/// a sparse `Custom` map, and there are no lag entries at all when
+/// `stages[0]`'s own season id has no entry in `season_map`.
 ///
-/// When `n_seasons == 1` (annual data), every entry advances exactly one year
-/// (wrap-detection is suppressed to avoid self-referential offsets).
+/// **Year.** A study or lag entry whose season id resolves to a
+/// [`SeasonDefinition`](cobre_core::temporal::SeasonDefinition) in
+/// `season_map` is dated via [`occurrence_year`]; one that does not (a
+/// missing def, or `season_map: None`) falls back to its own date's calendar
+/// year — the same fallback `None` uses throughout, so a `None` map's lag `k`
+/// is `stages[0].start_date` minus `k` calendar months, keyed by that date's
+/// `month0()`.
 pub(crate) fn build_observation_sequence(
     stages: &[Stage],
     max_order: usize,
-    n_seasons: usize,
+    season_map: Option<&SeasonMap>,
 ) -> Vec<(i32, usize)> {
-    if stages.is_empty() {
+    let Some(first_stage) = stages.first() else {
         return Vec::new();
-    }
+    };
 
-    let study_seasons: Vec<usize> = stages.iter().filter_map(|s| s.season_id).collect();
-    if study_seasons.is_empty() {
-        return Vec::new();
-    }
+    let year_for = |season_id: Option<usize>, start: NaiveDate, end: NaiveDate| -> i32 {
+        season_map
+            .zip(season_id)
+            .and_then(|(map, sid)| {
+                map.seasons
+                    .iter()
+                    .find(|def| def.id == sid)
+                    .map(|def| occurrence_year(map, def, start, end))
+            })
+            .unwrap_or_else(|| start.year())
+    };
 
-    let first_study_season = study_seasons[0];
-    let lag_seasons: Vec<usize> = (1..=max_order)
-        .rev()
-        .map(|k| {
-            // k seasons before first_study_season, wrapping modularly.
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let n = n_seasons as i32;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let s = first_study_season as i32;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            let k_i32 = k as i32;
-            #[allow(clippy::cast_sign_loss)]
-            let season = ((s - k_i32 % n + n) % n) as usize;
-            season
+    let y0 = year_for(
+        first_stage.season_id,
+        first_stage.start_date,
+        first_stage.end_date,
+    );
+
+    let mut result: Vec<(i32, usize)> = stages
+        .iter()
+        .filter_map(|stage| {
+            let sid = stage.season_id?;
+            let year = year_for(Some(sid), stage.start_date, stage.end_date);
+            Some((year - y0, sid))
         })
         .collect();
 
-    let full_seasons: Vec<usize> = lag_seasons.into_iter().chain(study_seasons).collect();
-
-    // For n_seasons == 1 (annual) the wrap test `season < prev_season` is always
-    // false (`0 < 0`), so each entry must advance a year by explicit arithmetic
-    // instead of wrap detection.
-    let mut result = Vec::with_capacity(full_seasons.len());
-    if n_seasons == 1 {
-        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-        for (i, &season) in full_seasons.iter().enumerate() {
-            result.push((i as i32, season));
-        }
-    } else {
-        let mut year_offset: i32 = 0;
-        let mut prev_season = full_seasons[0];
-        for (i, &season) in full_seasons.iter().enumerate() {
-            if i > 0 && season < prev_season {
-                year_offset += 1;
+    match season_map {
+        Some(map) => {
+            let def0 = first_stage
+                .season_id
+                .and_then(|sid| map.seasons.iter().find(|def| def.id == sid));
+            if let Some(def0) = def0
+                && let Some(occurrences) = StageCalendar::new(std::slice::from_ref(first_stage))
+                    .season_occurrences(map, def0, max_order)
+            {
+                for occ in occurrences.iter().skip(1) {
+                    let Some(id_k) = map.season_for_date(occ.start) else {
+                        break;
+                    };
+                    let year_k = year_for(Some(id_k), occ.start, occ.end);
+                    result.push((year_k - y0, id_k));
+                }
             }
-            result.push((year_offset, season));
-            prev_season = season;
         }
-        // Normalize so the first study stage (index max_order) has year_offset 0.
-        let study_base = result[max_order].0;
-        if study_base != 0 {
-            for entry in &mut result {
-                entry.0 -= study_base;
+        None => {
+            for k in 1..=max_order {
+                let months = u32::try_from(k).unwrap_or(u32::MAX);
+                let Some(d) = first_stage
+                    .start_date
+                    .checked_sub_months(Months::new(months))
+                else {
+                    break;
+                };
+                result.push((d.year() - y0, d.month0() as usize));
             }
         }
     }

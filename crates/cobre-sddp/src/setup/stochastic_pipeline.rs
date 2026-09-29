@@ -799,9 +799,10 @@ mod tests {
                 value_m3s: raw[t],
             })
             .collect();
-        // `discover_historical_windows` also requires one lag observation
-        // (season 13, the wraparound lag season for PAR order 1 immediately
-        // before the first study season). Its value is never read by
+        // `discover_historical_windows`'s season-map walk needs one lag
+        // observation at its predecessor of Jan 2026 (season 0): season 13
+        // (Jul-Sep 2025), the ring's last declared season — see
+        // `ring_season_map`'s `Custom` cycle. Its value is never read by
         // `standardize_historical_windows`, which only consumes the 5
         // study-stage entries above.
         let lag_start = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
@@ -1016,7 +1017,7 @@ mod tests {
             value_m3s: value,
         };
 
-        let mut inflow_history = vec![month_row(1989, 3, 110.0)];
+        let mut inflow_history = vec![month_row(1989, 12, 110.0)];
         for m in 1..=3u32 {
             inflow_history.push(month_row(1990, m, 200.0 + f64::from(m)));
         }
@@ -1289,24 +1290,9 @@ mod tests {
             month_end: Some(month_end),
             day_end: None,
         };
-        // `discover_historical_windows` walks lag seasons by
-        // `(first_study_season - k) mod n_seasons` (`n_seasons` from the
-        // study's own max season id), landing on 8 and 9 here regardless of any
-        // calendar meaning; window discovery needs some declared, resolvable
-        // span for each, so these two claim one otherwise-unobserved day apiece.
-        let filler = |id: usize, day: u32| SeasonDefinition {
-            id,
-            label: format!("S{id}"),
-            month_start: 1,
-            day_start: Some(day),
-            month_end: Some(1),
-            day_end: Some(day),
-        };
         SeasonMap {
             cycle_type: SeasonCycleType::Custom,
             seasons: vec![
-                filler(8, 1),
-                filler(9, 2),
                 month(10, 11),
                 month(11, 12),
                 month(0, 1),
@@ -1414,18 +1400,17 @@ mod tests {
                 value_m3s: raw[t],
             })
             .collect();
-        // `discover_historical_windows` needs one pre-study row per lag season
-        // at the applied PAR's order, 2 (seasons 9, 10 — see
-        // `nonaligned_ring_season_map`); season 8's filler row is surplus but
-        // harmless. These values are never read by `standardize_historical_windows`.
-        for day in 1..=2u32 {
-            inflow_history.push(InflowHistoryRow {
-                hydro_id: RING_HYDRO_ID,
-                start_date: NaiveDate::from_ymd_opt(2025, 1, day).unwrap(),
-                end_date: NaiveDate::from_ymd_opt(2025, 1, day + 1).unwrap(),
-                value_m3s: 999.0,
-            });
-        }
+        // `discover_historical_windows`'s season-map walk needs one pre-study
+        // row at its lag-2 predecessor of Dec 2025 (season 11): the walk steps
+        // to Nov 2025 (season 10), then to Aug-Oct 2024 (season 13) — see
+        // `nonaligned_ring_season_map`'s `Custom` cycle. This value is never
+        // read by `standardize_historical_windows`.
+        inflow_history.push(InflowHistoryRow {
+            hydro_id: RING_HYDRO_ID,
+            start_date: NaiveDate::from_ymd_opt(2024, 8, 15).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 8, 16).unwrap(),
+            value_m3s: 999.0,
+        });
         inflow_history.push(InflowHistoryRow {
             hydro_id: RING_HYDRO_ID,
             start_date: NaiveDate::from_ymd_opt(2025, 11, 15).unwrap(),

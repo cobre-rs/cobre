@@ -1,12 +1,15 @@
 //! Historical window discovery algorithm.
 //!
 //! A "window" is a starting year `y` such that every hydro in the study has a
-//! contiguous sequence of historical observations covering `max_par_order +
-//! n_study_stages` seasons beginning in year `y`. Observations align to study
-//! stages by `season_id` matching, not by raw calendar arithmetic.
+//! historical observation for every study season and every pre-study lag
+//! season the season-map walk resolves. Observations align to study stages by
+//! `season_id` matching, not by raw calendar arithmetic.
 //!
 //! `build_observation_sequence` owns the `(year_offset, season_id)` layout the
-//! window year is resolved against.
+//! window year is resolved against; its lag entries come from
+//! [`StageCalendar::season_occurrences`](crate::season_cast::StageCalendar::season_occurrences),
+//! never from arithmetic on declared season ids. `y` is the first study
+//! observation's year.
 
 use std::collections::HashSet;
 
@@ -125,14 +128,8 @@ pub fn discover_historical_windows(
         })
         .collect();
 
-    let n_seasons = stages
-        .iter()
-        .filter_map(|s| s.season_id)
-        .max()
-        .map_or(1, |m| m + 1);
-
     let required_sequence: Vec<(i32, usize)> =
-        super::build_observation_sequence(stages, max_par_order, n_seasons);
+        super::build_observation_sequence(stages, max_par_order, season_map);
 
     let mut candidate_years: Vec<i32> = match user_pool {
         Some(pool) => pool.to_years(),
@@ -559,33 +556,30 @@ mod tests {
         );
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn three_monthly_stages(year: i32) -> Vec<Stage> {
-        (0_usize..3)
-            .map(|i| {
-                let month = i as u32 + 1;
-                Stage {
-                    index: i,
-                    id: i as i32,
-                    start_date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
-                    end_date: NaiveDate::from_ymd_opt(year, month, 28).unwrap(),
-                    season_id: Some(i),
-                    blocks: vec![Block {
-                        index: 0,
-                        name: "SINGLE".to_string(),
-                        duration_hours: 720.0,
-                    }],
-                    block_mode: BlockMode::Parallel,
-                    state_config: StageStateConfig {
-                        storage: true,
-                        inflow_lags: false,
-                    },
-                    risk_config: StageRiskConfig::Expectation,
-                    scenario_config: ScenarioSourceConfig {
-                        branching_factor: 5,
-                        noise_method: NoiseMethod::Saa,
-                    },
-                }
+        [(0_usize, 0_i32, 1_u32), (1, 1, 2), (2, 2, 3)]
+            .into_iter()
+            .map(|(index, id, month)| Stage {
+                index,
+                id,
+                start_date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(year, month, 28).unwrap(),
+                season_id: Some(index),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "SINGLE".to_string(),
+                    duration_hours: 720.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 5,
+                    noise_method: NoiseMethod::Saa,
+                },
             })
             .collect()
     }
@@ -626,7 +620,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "red: discovery must walk the season map"]
     fn discover_walks_the_calendar_predecessor_on_a_partial_year_study() {
         let hydro = EntityId(1);
         let stages = three_monthly_stages(2024);
@@ -649,7 +642,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "red: discovery must walk the season map"]
     fn discover_covers_lags_beyond_the_declared_span() {
         let hydro = EntityId(1);
         let stages = three_monthly_stages(2024);
@@ -664,7 +656,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "red: discovery must walk the season map"]
     fn discover_requires_the_ring_predecessor_on_a_sparse_id_map() {
         let hydro = EntityId(1);
         let stages = three_monthly_stages(2026);
@@ -687,7 +678,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "red: discovery must walk the season map"]
     fn discover_lag_entries_follow_nth_previous_occurrence() {
         let hydro = EntityId(1);
         let stages = three_monthly_stages(2024);

@@ -150,9 +150,7 @@ impl ZeroEntityFixtures {
     fn make_ctx_generic(&mut self) -> TemplateBuildCtx<'_> {
         self.base.anticipated_plants = anticipated_plants_at(&[]);
         self.base.anticipated_lead_stages = vec![];
-        let mut ctx = self.base.ctx();
-        ctx.n_anticipated = 0;
-        ctx
+        self.base.ctx()
     }
 
     /// Build a zero-entity `TemplateBuildCtx` with the supplied
@@ -160,28 +158,23 @@ impl ZeroEntityFixtures {
     ///
     /// All slice fields are empty; all scalar entity counts are zero except
     /// the anticipated fields provided by the caller. `anticipated_positions`
-    /// must be strictly ascending (`test_support::anticipated_plants_at`).
+    /// must be strictly ascending (`test_support::anticipated_plants_at`),
+    /// and its length is the resulting `n_anticipated`.
     fn make_ctx(
         &mut self,
-        n_anticipated: usize,
         anticipated_lead_stages: Vec<usize>,
         anticipated_positions: &[usize],
     ) -> TemplateBuildCtx<'_> {
         self.base.anticipated_plants = anticipated_plants_at(anticipated_positions);
-        self.build_ctx(n_anticipated, anticipated_lead_stages)
+        self.build_ctx(anticipated_lead_stages)
     }
 
     /// The shared half of `make_ctx`, reading the already-set
     /// `anticipated_plants` field.
-    fn build_ctx(
-        &mut self,
-        n_anticipated: usize,
-        anticipated_lead_stages: Vec<usize>,
-    ) -> TemplateBuildCtx<'_> {
+    fn build_ctx(&mut self, anticipated_lead_stages: Vec<usize>) -> TemplateBuildCtx<'_> {
         self.base.anticipated_lead_stages = anticipated_lead_stages;
         let mut ctx = self.base.ctx();
         ctx.generic_constraints = &[];
-        ctx.n_anticipated = n_anticipated;
         ctx
     }
 }
@@ -328,7 +321,7 @@ fn dormant_contract(idx: usize, contract_type: ContractType) -> EnergyContract {
 #[test]
 fn stage_layout_zero_anticipated_matches_pre_anticipated_offsets() {
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -1943,7 +1936,7 @@ fn block_strided_addresses_match_their_family_ranges() {
     let mut zero_fixtures = ZeroEntityFixtures::new();
     zero_fixtures.base.thermals = vec![dormant_thermal(0), dormant_thermal(1)];
     zero_fixtures.base.buses = vec![dormant_bus(0), dormant_bus(1)];
-    let thermal_ctx = zero_fixtures.make_ctx(0, vec![], &[]);
+    let thermal_ctx = zero_fixtures.make_ctx(vec![], &[]);
     let thermal_stage = stage_with_blocks(BlockMode::Parallel, 4);
     let thermal_layout = StageLayout::new(&thermal_ctx, thermal_ctx.state, &thermal_stage, 0);
     assert_eq!(
@@ -1979,7 +1972,7 @@ fn anticipated_decision_columns_placed_between_thermal_and_line_fwd() {
     // ZeroEntityFixtures builds n_thermals=0, so the thermal per-block block is
     // empty and col_anticipated_decision_start == col_thermal_start.
     let n_anticipated = 2_usize;
-    let ctx = fixtures.make_ctx(n_anticipated, vec![1, 1], &[0, 1]);
+    let ctx = fixtures.make_ctx(vec![1, 1], &[0, 1]);
 
     let mut stage = minimal_stage();
     stage.blocks = (0..4)
@@ -2036,7 +2029,6 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
 
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(
-        n_anticipated,
         vec![2, 3], // anticipated_lead_stages
         &[0, 2],    // anticipated_positions (arbitrary; layout doesn't inspect them)
     );
@@ -2077,11 +2069,8 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
 /// - `row_anticipated_fishing_start` must equal `row_min_generation_start + 0`
 #[test]
 fn anticipated_fishing_row_offset_after_operational_violations() {
-    let n_anticipated = 2_usize;
-
     let mut fixtures = AntFixturesWithNStages::new(4);
     let ctx = fixtures.make_ctx(
-        n_anticipated,
         vec![1, 2], // K_0=1, K_1=2
         &[0, 1],    // arbitrary thermal indices
     );
@@ -2108,11 +2097,8 @@ fn anticipated_fishing_row_offset_after_operational_violations() {
 /// `ZeroEntityFixtures` — see the sibling test above for why).
 #[test]
 fn anticipated_fishing_row_count_grows_with_stage() {
-    let n_anticipated = 2_usize;
-
     let mut fixtures = AntFixturesWithNStages::new(4);
     let ctx = fixtures.make_ctx(
-        n_anticipated,
         vec![1, 2], // K_0=1, K_1=2
         &[0, 1],    // arbitrary thermal indices
     );
@@ -2144,7 +2130,7 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
     let k_max = 3_usize;
 
     let mut fixtures = AntFixturesWithNStages::new(1);
-    let ctx = fixtures.make_ctx(n_anticipated, vec![3, 2], &[0, 1]);
+    let ctx = fixtures.make_ctx(vec![3, 2], &[0, 1]);
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -2640,18 +2626,16 @@ impl AntFixturesWithNStages {
     }
 
     /// `anticipated_positions` must be strictly ascending
-    /// (`test_support::anticipated_plants_at`).
+    /// (`test_support::anticipated_plants_at`), and its length is the
+    /// resulting `n_anticipated`.
     fn make_ctx(
         &mut self,
-        n_anticipated: usize,
         anticipated_lead_stages: Vec<usize>,
         anticipated_positions: &[usize],
     ) -> TemplateBuildCtx<'_> {
         self.base.anticipated_plants = anticipated_plants_at(anticipated_positions);
         self.base.anticipated_lead_stages = anticipated_lead_stages;
-        let mut ctx = self.base.ctx();
-        ctx.n_anticipated = n_anticipated;
-        ctx
+        self.base.ctx()
     }
 }
 
@@ -2668,7 +2652,6 @@ impl AntFixturesWithNStages {
 fn test_layout_state_out_block_adjacent_to_decision() {
     let mut fixtures = AntFixturesWithNStages::new(6);
     let ctx = fixtures.make_ctx(
-        2,          // n_anticipated
         vec![2, 3], // K_0=2, K_1=3
         &[0, 1],
     );
@@ -2703,7 +2686,6 @@ fn test_layout_state_out_block_adjacent_to_decision() {
 fn test_layout_state_out_def_rows_zero_when_all_inactive() {
     let mut fixtures = AntFixturesWithNStages::new(6);
     let ctx = fixtures.make_ctx(
-        2,          // n_anticipated
         vec![2, 3], // K_0=2, K_1=3
         &[0, 1],
     );
@@ -2720,7 +2702,7 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
 #[test]
 fn test_layout_no_anticipated_unchanged_num_cols() {
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -2843,7 +2825,7 @@ impl PumpingFixtures {
 #[test]
 fn pumping_layout_inert_when_no_stations() {
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -3100,7 +3082,7 @@ fn column_accessors_match_open_coded_formulas() {
     // Chronological so `n_evap_slots == n_blks`, giving the evaporation probe
     // below the same multi-slot coverage as every other block-major family.
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = Stage {
         block_mode: BlockMode::Chronological,
         ..PumpingFixtures::stage_with_blocks(4)
@@ -3248,7 +3230,7 @@ fn column_accessors_match_open_coded_formulas() {
 #[test]
 fn withdrawal_and_operational_columns_collapse_onto_evap_col_start_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -3301,7 +3283,7 @@ fn withdrawal_and_operational_columns_collapse_onto_evap_col_start_when_no_hydro
 #[test]
 fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -3354,7 +3336,7 @@ fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
 #[test]
 fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
-    let ctx = fixtures.make_ctx(0, vec![], &[]);
+    let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
@@ -3891,8 +3873,8 @@ fn column_address_pins_cover_every_family() {
     let mut totals = ColumnAddressCounts::default();
 
     let mut filling_fixtures = FillingMembershipFixtures::new();
-    let mut ctx = filling_fixtures.make_ctx();
-    ctx.has_penalty = true;
+    filling_fixtures.base.has_penalty = true;
+    let ctx = filling_fixtures.make_ctx();
 
     let filling_stage = stage_with_id(1);
     let filling_layout = StageLayout::new(&ctx, ctx.state, &filling_stage, 0);
@@ -3908,7 +3890,7 @@ fn column_address_pins_cover_every_family() {
     totals.filled_min_storage_floor_slack += operating_counts.filled_min_storage_floor_slack;
 
     let mut anticipated_fixtures = ZeroEntityFixtures::new();
-    let anticipated_ctx = anticipated_fixtures.make_ctx(2, vec![1, 1], &[0, 1]);
+    let anticipated_ctx = anticipated_fixtures.make_ctx(vec![1, 1], &[0, 1]);
     let anticipated_stage = minimal_stage();
     let anticipated_layout = StageLayout::new(
         &anticipated_ctx,
@@ -3922,7 +3904,7 @@ fn column_address_pins_cover_every_family() {
     let mut equipment_fixtures = ZeroEntityFixtures::new();
     let ncs = vec![make_ncs(1), make_ncs(2)];
     let pumping = vec![make_pumping_station(1)];
-    let mut equipment_ctx = equipment_fixtures.make_ctx(0, vec![], &[]);
+    let mut equipment_ctx = equipment_fixtures.make_ctx(vec![], &[]);
     equipment_ctx.non_controllable_sources = &ncs;
     equipment_ctx.pumping_stations = &pumping;
     let equipment_stage = stage_with_blocks(BlockMode::Parallel, 2);
@@ -4195,7 +4177,7 @@ fn row_address_pins_cover_every_family() {
     // its own deposit, before the long-lead plant's own next deposit reaches
     // that residue.
     let mut ant_fixtures = AntFixturesWithNStages::new(6);
-    let ant_ctx = ant_fixtures.make_ctx(2, vec![2, 3], &[0, 1]);
+    let ant_ctx = ant_fixtures.make_ctx(vec![2, 3], &[0, 1]);
     let ant_stage = minimal_stage();
     for stage_idx in [0, 1] {
         let layout = StageLayout::new(&ant_ctx, ant_ctx.state, &ant_stage, stage_idx);
@@ -4245,7 +4227,7 @@ fn row_address_pins_cover_every_family() {
     // Transit-bucket definition: one downstream plant, one reachable lag.
     let mut transit_fixtures = ZeroEntityFixtures::new();
     transit_fixtures.base.topology.per_stage_mask = vec![vec![1]];
-    let transit_ctx = transit_fixtures.make_ctx(0, vec![], &[]);
+    let transit_ctx = transit_fixtures.make_ctx(vec![], &[]);
     let transit_state = state_layout_with_transit_buckets(0, 0, 1, vec![(0, 1)], 0, vec![]);
     let transit_stage = minimal_stage();
     let transit_layout = StageLayout::new(&transit_ctx, &transit_state, &transit_stage, 0);

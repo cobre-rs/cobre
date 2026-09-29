@@ -608,7 +608,7 @@ fn resolve_bus_deficit(
 /// the per-plant stage-level decision column.
 ///
 /// Returns an empty vec when `thermal_id` has no `ctx.positions.thermal` slot, or the
-/// thermal is not in `ctx.anticipated_plants` (`AnticipatedPlants::local_of`
+/// thermal is not in `ctx.study_dims.anticipated_plants` (`AnticipatedPlants::local_of`
 /// returns `None`) — both defense-in-depth past semantic validation
 /// (`check_anticipated_decision_target_is_anticipated`).
 fn resolve_anticipated_decision(
@@ -619,7 +619,11 @@ fn resolve_anticipated_decision(
     let Some(sys_pos) = ctx.positions.thermal(thermal_id) else {
         return vec![];
     };
-    if let Some(local) = ctx.anticipated_plants.local_of(ThermalSys::new(sys_pos)) {
+    if let Some(local) = ctx
+        .study_dims
+        .anticipated_plants
+        .local_of(ThermalSys::new(sys_pos))
+    {
         vec![(layout.anticipated_decision_col(local), 1.0)]
     } else {
         vec![]

@@ -639,16 +639,20 @@ struct EnergyAndTemplates {
     resolved_parameters: ResolvedParameters,
     time_value: TimeValue,
     hydro_cell_index: HydroCellIndex,
+    study_dims: StudyDimensions,
+    stage_lag_transitions: Vec<StageLagTransition>,
+    stages: Vec<Stage>,
 }
 
-/// Build the energy-conversion set, the resolved parameter table, and the
-/// post-processed stage LP templates.
+/// Build the energy-conversion set, the resolved parameter table, the study
+/// dimensions, and the post-processed stage LP templates.
 ///
-/// The energy-conversion set and resolved parameter table are built before the
-/// LP templates so the builder can resolve `CoefficientRef::Parameter` values.
-/// The resolved parameter table feeds `build_stage_templates` and is returned
-/// for the generic-constraint echo. Seasonless stages collapse to season 0,
-/// consistent with every other season-indexed lookup.
+/// The energy-conversion set, the resolved parameter table and
+/// [`StudyDimensions`] are built before the LP templates: the builder can
+/// then resolve `CoefficientRef::Parameter` values, and `ctx.study_dims`
+/// carries `has_inflow_penalty`/`max_deficit_segments`/`anticipated_plants`
+/// instead of the builder re-deriving them. Seasonless stages collapse to
+/// season 0, consistent with every other season-indexed lookup.
 ///
 /// # Errors
 ///
@@ -670,20 +674,38 @@ fn build_energy_and_templates(
         config.cost_scale_factor,
     )?;
 
-    let time_value = TimeValue::from_system(system, &layout.anticipated_plants, calendar);
+    let stages: Vec<Stage> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let (downstream_par_order, stage_lag_transitions) = resolve_stage_lag_transitions(
+        &stages,
+        stochastic.par(),
+        system.policy_graph().season_map.as_ref(),
+    );
+    let study_dims = build_study_dimensions(
+        system,
+        config.inflow_method,
+        layout.state.hydro_count,
+        layout.anticipated_plants.clone(),
+        downstream_par_order,
+    );
+
+    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
     let load_bus_ids = &stochastic.entity_order()[stochastic.class_dimensions().load_bus_range()];
     let inputs = resolve_lp_build_inputs(system, load_bus_ids, &hydro_models.production);
 
     let mut stage_templates = build_stage_templates(
         system,
-        config.inflow_method,
         stochastic.par(),
         &hydro_models.production,
         &hydro_models.evaporation,
         &resolved_parameters,
         &layout.state,
-        &layout.anticipated_plants,
+        &study_dims,
         topology,
         &hydro_cell_index,
         inputs,
@@ -694,7 +716,7 @@ fn build_energy_and_templates(
         &mut stage_templates,
         system,
         &layout.state,
-        &layout.anticipated_plants,
+        &study_dims.anticipated_plants,
         config.cost_scale_factor,
         &time_value,
     );
@@ -712,6 +734,9 @@ fn build_energy_and_templates(
         resolved_parameters,
         time_value,
         hydro_cell_index,
+        study_dims,
+        stage_lag_transitions,
+        stages,
     })
 }
 
@@ -1130,15 +1155,14 @@ fn build_transit_seed_arcs(
 }
 
 /// Build the study-invariant, non-state [`StudyDimensions`] from the system
-/// and the post-processed stage templates.
+/// alone, before the stage templates exist.
 ///
 /// `hydro_count` and `anticipated_plants` are threaded from
 /// [`resolve_state_layout`] — the same values its [`StateSpace`] was built
-/// from — so the only per-stage template field this reads is
-/// `geometry_per_stage`, the one dimension genuinely derived from the built LP.
-fn build_study_dimensions(
+/// from. `has_ncs` reads `system` directly (D6): "the study has at least one
+/// stage", the same value the per-stage geometry's presence used to give.
+pub(crate) fn build_study_dimensions(
     system: &System,
-    stage_templates: &StageTemplates,
     inflow_method: crate::InflowNonNegativityMethod,
     hydro_count: usize,
     anticipated_plants: AnticipatedPlants,
@@ -1163,7 +1187,7 @@ fn build_study_dimensions(
         n_lines: system.lines().len(),
         n_buses: system.buses().len(),
         max_deficit_segments,
-        has_ncs: !stage_templates.geometry_per_stage.is_empty(),
+        has_ncs: system.stages().iter().any(|s| s.id >= 0),
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,
@@ -1606,10 +1630,10 @@ static NOOP_SEASON_MAP: SeasonMap = SeasonMap {
 };
 
 /// Downstream PAR order and per-stage lag transitions over one `SeasonMap`.
-/// The sole owner of both derivations — `resolve_stage_data` and
+/// The sole owner of both derivations — `build_energy_and_templates` and
 /// `scenario_libraries::build_historical_inflow_library` each call it once,
 /// over their own PAR model.
-fn resolve_stage_lag_transitions(
+pub(crate) fn resolve_stage_lag_transitions(
     stages: &[Stage],
     par: &PrecomputedPar,
     season_map: Option<&SeasonMap>,
@@ -1734,6 +1758,9 @@ fn resolve_stage_data(
         resolved_parameters,
         time_value,
         hydro_cell_index,
+        study_dims,
+        stage_lag_transitions,
+        stages,
     } = build_energy_and_templates(
         system,
         config,
@@ -1744,28 +1771,7 @@ fn resolve_stage_data(
         calendar,
     )?;
 
-    let stages: Vec<Stage> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .cloned()
-        .collect();
-
-    let (downstream_par_order, stage_lag_transitions) = resolve_stage_lag_transitions(
-        &stages,
-        stochastic.par(),
-        system.policy_graph().season_map.as_ref(),
-    );
     let noise_group_ids = precompute_noise_groups(&stages);
-
-    let study_dims = build_study_dimensions(
-        system,
-        &stage_templates,
-        config.inflow_method,
-        layout.state.hydro_count,
-        layout.anticipated_plants,
-        downstream_par_order,
-    );
 
     let initial = resolve_initial_conditions(
         system,

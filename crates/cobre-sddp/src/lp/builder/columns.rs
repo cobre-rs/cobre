@@ -522,6 +522,7 @@ pub(super) fn fill_thermal_columns(
         // `build_anticipated_fishing_row_pos` returns an empty vec whenever
         // `k_max == 0`, regardless of `n_anticipated`.
         let is_anticipated = ctx
+            .study_dims
             .anticipated_plants
             .local_of(ThermalSys::new(t_idx))
             .is_some_and(|local| {
@@ -591,7 +592,7 @@ pub(super) fn fill_anticipated_columns(
 ) {
     let n_stages = ctx.resolved.bounds.n_stages();
     let n_delivery = layout.state.delivery_stage_count(n_stages);
-    let n_ant = ctx.n_anticipated;
+    let n_ant = ctx.study_dims.anticipated_plants.len();
     let ring = DeliveryRing::anticipated(layout.state);
 
     for local_idx in 0..n_ant {
@@ -623,7 +624,7 @@ pub(super) fn fill_anticipated_columns(
             AnticipatedLocal::new(res.plant),
             delivery_stage,
             n_delivery,
-            ctx.anticipated_plants.windows(),
+            ctx.study_dims.anticipated_plants.windows(),
             ctx.time_value.delivery_stage_ids(),
         ) {
             active_count += 1;
@@ -632,6 +633,7 @@ pub(super) fn fill_anticipated_columns(
 
             let bound = if delivery_stage < n_stages {
                 let thermal_idx = ctx
+                    .study_dims
                     .anticipated_plants
                     .thermal_of(AnticipatedLocal::new(res.plant));
                 // Safe only because cobre-io's load-time validation rejects a
@@ -752,7 +754,7 @@ fn fill_inflow_slack_columns(
     total_stage_hours: f64,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    if ctx.has_penalty {
+    if ctx.study_dims.has_inflow_penalty {
         for h_idx in 0..layout.state.hydro_count {
             let col = layout.inflow_slack_col(HydroSys::new(h_idx));
             let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);

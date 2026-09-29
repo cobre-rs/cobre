@@ -53,7 +53,7 @@ pub(super) fn fill_anticipated_fishing_entries(
     let n_blks = layout.clock.n_blks();
     let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active = 0_usize;
-    for local_idx in 0..ctx.n_anticipated {
+    for local_idx in 0..ctx.study_dims.anticipated_plants.len() {
         let local = AnticipatedLocal::new(local_idx);
         let Some(row) = layout.anticipated_fishing_row(local) else {
             continue;
@@ -64,7 +64,7 @@ pub(super) fn fill_anticipated_fishing_entries(
         // an `n_anticipated`-only gate would reach this modulo on an empty
         // ring.
         let slot = stage_idx % layout.state.k_max;
-        let thermal_idx = ctx.anticipated_plants.thermal_of(local);
+        let thermal_idx = ctx.study_dims.anticipated_plants.thermal_of(local);
         let mut block_hours_total: f64 = 0.0;
         for blk in 0..n_blks {
             let col_gen = layout.thermal_col(thermal_idx, BlockIdx::new(blk));
@@ -320,7 +320,7 @@ fn fill_parallel_water_entries(
             continue;
         }
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
-        if ctx.has_penalty {
+        if ctx.study_dims.has_inflow_penalty {
             col_entries[layout.inflow_slack_col(HydroSys::new(h_idx))].push((row, -zeta));
         }
         col_entries[layout.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -zeta));
@@ -614,7 +614,7 @@ fn fill_chronological_water_entries(
                 }
             }
 
-            if ctx.has_penalty {
+            if ctx.study_dims.has_inflow_penalty {
                 col_entries[layout.inflow_slack_col(HydroSys::new(h_idx))].push((row, -tau_k));
             }
             col_entries[layout.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -tau_k));
@@ -2924,7 +2924,7 @@ mod zero_cost_tests {
             );
             assert_eq!(
                 layout.anticipated_decision().len(),
-                ctx.n_anticipated,
+                ctx.study_dims.anticipated_plants.len(),
                 "stage {stage_idx}: the decision-column block stays uniformly \
                  n_anticipated wide even when every plant is K=0 (all rows excluded, \
                  the columns are not)"
@@ -3316,7 +3316,7 @@ mod zero_cost_tests {
         let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
         let col_entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
 
-        let a = ctx.n_anticipated;
+        let a = ctx.study_dims.anticipated_plants.len();
         let k = ctx
             .state
             .anticipated_resolution

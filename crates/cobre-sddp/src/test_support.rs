@@ -714,13 +714,11 @@ pub fn geometry(
         ..CtxFixture::default()
     };
     let mut ctx = fixture.ctx();
-    // geometry() never resolves an EntityId through a position map, and
-    // declares its anticipated count independently of anticipated_plants —
+    // geometry() never resolves an EntityId through a position map —
     // restore the empty-positions default over the derived (non-empty
     // hydro/bus) one.
     let empty_positions = EntityPositions::from_slices([], [], [], [], [], []);
     ctx.positions = &empty_positions;
-    ctx.n_anticipated = dims.n_anticipated;
 
     let state = state_layout_full(
         dims.hydro_count,
@@ -1249,8 +1247,8 @@ pub fn study_dims() -> StudyDimensions {
 }
 
 /// Build the [`StudyDimensions`] matching the [`GeometryDims`] a test built its
-/// stage geometry from. `has_ncs` is always `false`: these fixtures never model NCS
-/// (production sets it from `!geometry_per_stage.is_empty()`).
+/// stage geometry from. `has_ncs` is always `false`: these fixtures declare no
+/// stage (production sets it from `system.stages().iter().any(|s| s.id >= 0)`).
 #[must_use]
 pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {

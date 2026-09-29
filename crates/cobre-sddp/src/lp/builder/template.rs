@@ -10,6 +10,7 @@ use crate::bucket_topology::TransitBucketTopology;
 #[cfg(any(test, feature = "test-support"))]
 use crate::error::SddpError;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
+#[cfg(any(test, feature = "test-support"))]
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::resolved_parameters::ResolvedParameters;
 #[cfg(any(test, feature = "test-support"))]
@@ -21,12 +22,15 @@ use super::{GenericConstraintRowEntry, LpBuildInputs, StateBox, columns, entries
 #[cfg(any(test, feature = "test-support"))]
 use crate::bucket_topology::build_transit_bucket_topology;
 use crate::lp::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
-    EvaporationIndices, FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, NcsSys,
-    PumpingSys, StateSpace, StorageBoundaryGrid,
+    AnticipatedLocal, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
+    FillingTargetLocal, FloorLocal, HydroCellIndex, HydroSys, NcsSys, PumpingSys, StateSpace,
+    StorageBoundaryGrid, StudyDimensions,
 };
 #[cfg(any(test, feature = "test-support"))]
-use crate::setup::{resolve_lp_build_inputs, resolve_state_layout};
+use crate::setup::{
+    build_study_dimensions, resolve_lp_build_inputs, resolve_stage_lag_transitions,
+    resolve_state_layout,
+};
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod canonical;
@@ -578,13 +582,12 @@ pub(crate) fn models_from_normal<M>(
 #[must_use]
 pub fn build_stage_templates(
     system: &System,
-    inflow_method: InflowNonNegativityMethod,
     par_lp: &PrecomputedPar,
     production_models: &ProductionModelSet,
     evaporation_models: &EvaporationModelSet,
     resolved_parameters: &ResolvedParameters,
     state_layout: &StateSpace,
-    anticipated_plants: &AnticipatedPlants,
+    study_dims: &StudyDimensions,
     topology: &TransitBucketTopology,
     hydro_cell_index: &HydroCellIndex,
     inputs: LpBuildInputs,
@@ -609,14 +612,13 @@ pub fn build_stage_templates(
 
     let ctx = build_template_build_ctx(
         system,
-        inflow_method,
         par_lp,
         &inputs,
         production_models,
         evaporation_models,
         resolved_parameters,
         state_layout,
-        anticipated_plants,
+        study_dims,
         topology,
         hydro_cell_index,
         time_value,
@@ -669,7 +671,22 @@ pub fn build_stage_templates_resolving_layout(
     let topology = build_transit_bucket_topology(system, &calendar, false);
     let layout = resolve_state_layout(system, &calendar, par_lp, &topology, None)?;
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let time_value = TimeValue::from_system(system, &layout.anticipated_plants, calendar);
+    let stages: Vec<Stage> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let (downstream_par_order, _) =
+        resolve_stage_lag_transitions(&stages, par_lp, system.policy_graph().season_map.as_ref());
+    let study_dims = build_study_dimensions(
+        system,
+        inflow_method,
+        layout.state.hydro_count,
+        layout.anticipated_plants.clone(),
+        downstream_par_order,
+    );
+    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
     let inputs = resolve_lp_build_inputs(
         system,
         &crate::setup::lp_build_inputs::resolve_in_sample_load_bus_ids(system),
@@ -682,13 +699,12 @@ pub fn build_stage_templates_resolving_layout(
     );
     Ok(build_stage_templates(
         system,
-        inflow_method,
         par_lp,
         production_models,
         evaporation_models,
         resolved_parameters,
         &layout.state,
-        &layout.anticipated_plants,
+        &study_dims,
         &topology,
         &hydro_cell_index,
         inputs,
@@ -708,29 +724,25 @@ pub fn build_stage_templates_resolving_layout(
 )]
 fn build_template_build_ctx<'a>(
     system: &'a System,
-    inflow_method: InflowNonNegativityMethod,
     par_lp: &'a PrecomputedPar,
     inputs: &'a LpBuildInputs,
     production_models: &'a ProductionModelSet,
     evaporation_models: &'a EvaporationModelSet,
     resolved_parameters: &'a ResolvedParameters,
     state: &'a StateSpace,
-    anticipated_plants: &'a AnticipatedPlants,
+    study_dims: &'a StudyDimensions,
     topology: &'a TransitBucketTopology,
     hydro_cell_index: &'a HydroCellIndex,
     time_value: &'a TimeValue,
 ) -> TemplateBuildCtx<'a> {
     let hydros = system.hydros();
     let buses = system.buses();
-    let n_hydros = hydros.len();
 
     // Iterate the (ID-sorted) station slice in slot order, NOT declaration order,
     // to uphold the declaration-order bit-determinism rule.
     let pumping_stations = system.pumping_stations();
 
     let contracts = system.contracts();
-
-    let n_anticipated = anticipated_plants.len();
 
     TemplateBuildCtx {
         hydros,
@@ -758,10 +770,8 @@ fn build_template_build_ctx<'a>(
         pumping_stations,
         contracts,
         diversion_upstream: &inputs.diversion_upstream,
-        n_anticipated,
         state,
-        anticipated_plants,
-        has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
+        study_dims,
         time_value,
         filling_v_target: &inputs.filling_v_target,
         topology,

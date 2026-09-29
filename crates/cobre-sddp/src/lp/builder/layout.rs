@@ -16,10 +16,10 @@ use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, ProductionModelSet, ResolvedProductionModel,
 };
 use crate::indexer::{
-    AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
-    EntityPositions, EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal,
-    FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, NcsSys, PumpingSys, RangeCursor,
-    StateSpace, StorageBoundaryGrid, ThermalSys, anticipated_resolution_for,
+    AnticipatedLocal, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EntityPositions,
+    EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
+    HydroCell, HydroCellIndex, HydroSys, LineSys, NcsSys, PumpingSys, RangeCursor, StateSpace,
+    StorageBoundaryGrid, StudyDimensions, ThermalSys, anticipated_resolution_for,
     for_each_live_commitment_slot, is_anticipated_decision_active_for_delivery,
 };
 use crate::time_value::TimeValue;
@@ -89,8 +89,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
     /// (`LpBuildInputs::diversion_upstream`).
     pub(crate) diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
-    /// [`AnticipatedPlants::len`].
-    pub(crate) n_anticipated: usize,
     /// The role-(a) state layout, threaded from setup's single owner
     /// (`crate::setup::resolve_state_layout`) — owns `anticipated_lead_stages`
     /// and `anticipated_resolution`, which this ctx used to carry as its own
@@ -103,12 +101,10 @@ pub(crate) struct TemplateBuildCtx<'a> {
         expect(dead_code, reason = "read only by tests and fixtures so far")
     )]
     pub(crate) state: &'a StateSpace,
-    /// The study's anticipated-plant set, including each plant's commissioning
-    /// window (`AnticipatedPlants::windows`) the decision gate keys on
-    /// (`is_anticipated_decision_active_for_delivery`).
-    pub(crate) anticipated_plants: &'a AnticipatedPlants,
-    /// Whether any penalty method is active.
-    pub(crate) has_penalty: bool,
+    /// Study-invariant, non-state LP shape (`has_inflow_penalty`,
+    /// `max_deficit_segments`, `anticipated_plants`), threaded from setup's
+    /// single owner (`crate::setup::build_study_dimensions`).
+    pub(crate) study_dims: &'a StudyDimensions,
     /// Present-value discounting and delivery hours/ids at each DELIVERY
     /// stage, length `n_study_stages + n_post` — the study's own per-stage
     /// values concatenated with the post-study continuation, the first
@@ -1164,12 +1160,7 @@ impl<'a> StageLayout<'a> {
             total_fpha_rows += n_cells_h * fpha_planes_per_hydro[local_idx];
         }
 
-        let max_deficit_segments = ctx
-            .buses
-            .iter()
-            .map(|b| b.deficit_segments.len())
-            .max()
-            .unwrap_or(0);
+        let max_deficit_segments = ctx.study_dims.max_deficit_segments;
 
         // ── Role-(b) equipment column ranges ─────────────────────────────────
         // Anchored at the handle's `control_region_start()` (the role-(a)/role-(b)
@@ -1195,7 +1186,7 @@ impl<'a> StageLayout<'a> {
         let deficit = col.alloc(ctx.buses.len() * max_deficit_segments * n_blks);
         let excess = col.alloc(ctx.buses.len() * n_blks);
 
-        let has_inflow_penalty = ctx.has_penalty && n_h > 0;
+        let has_inflow_penalty = ctx.study_dims.has_inflow_penalty;
         let inflow_slack = col.alloc(if has_inflow_penalty { n_h } else { 0 });
 
         // `generation_col_start` is the empty-block cursor `col_generation_start`
@@ -1294,7 +1285,7 @@ impl<'a> StageLayout<'a> {
                 state,
                 n_stages,
                 stage_idx,
-                ctx.anticipated_plants.windows(),
+                ctx.study_dims.anticipated_plants.windows(),
                 ctx.time_value.delivery_stage_ids(),
             );
         let row_anticipated_state_out_def_start = row.alloc(n_anticipated_state_out_def_rows).start;

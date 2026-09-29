@@ -11,7 +11,9 @@ use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::bucket_topology::TransitBucketTopology;
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-use crate::indexer::{AnticipatedPlants, EntityPositions, HydroCellIndex, StateSpace};
+use crate::indexer::{
+    AnticipatedPlants, EntityPositions, HydroCellIndex, StateSpace, StudyDimensions,
+};
 use crate::lead_time::AnticipatedResolution;
 use crate::lp::builder::{ResolvedTables, TemplateBuildCtx};
 use crate::resolved_parameters::ResolvedParameters;
@@ -58,6 +60,10 @@ pub(crate) struct CtxFixture {
     pub(crate) anticipated_resolution: AnticipatedResolution,
     pub(crate) anticipated_plants: AnticipatedPlants,
     pub(crate) has_penalty: bool,
+    /// Derived fresh, from `anticipated_plants`/`has_penalty` and the slices
+    /// below, on every [`Self::ctx`] call — the backing store
+    /// [`TemplateBuildCtx::study_dims`] borrows.
+    pub(crate) study_dims: StudyDimensions,
     pub(crate) time_value: TimeValue,
     pub(crate) filling_v_target: BTreeMap<(usize, i32), f64>,
     /// The resolved bucket topology. Its fields are `pub(crate)` and mutable
@@ -102,6 +108,7 @@ impl Default for CtxFixture {
             anticipated_resolution: AnticipatedResolution::default(),
             anticipated_plants: AnticipatedPlants::default(),
             has_penalty: false,
+            study_dims: StudyDimensions::default(),
             time_value: TimeValue::from_parts(
                 Vec::new(),
                 vec![1.0],
@@ -125,17 +132,19 @@ impl Default for CtxFixture {
 }
 
 impl CtxFixture {
-    /// Derives `positions` and `state` from this fixture's own slices, the
-    /// way `build_template_build_ctx` does; every other field is copied
-    /// through unchanged. `&mut self`: both are recomputed into `self`'s own
-    /// fields on every call, so [`TemplateBuildCtx::positions`]/`state` can
-    /// borrow a backing store with `self`'s own lifetime. `state` attaches
+    /// Derives `positions`, `state`, and `study_dims` from this fixture's own
+    /// slices, the way `build_template_build_ctx`/`build_study_dimensions` do;
+    /// every other field is copied through unchanged. `&mut self`: all three
+    /// are recomputed into `self`'s own fields on every call, so
+    /// [`TemplateBuildCtx::positions`]/`state`/`study_dims` can borrow a
+    /// backing store with `self`'s own lifetime. `state` attaches
     /// `self.anticipated_resolution` as-is when a test set it explicitly (it
     /// is no longer `AnticipatedResolution::default`), else the
     /// saturating-default [`constant_lead_resolution`] over this fixture's
-    /// own `anticipated_lead_stages`. A test whose original literal set one
-    /// of the derived fields to a value the slices disagree with restores it
-    /// by mutating the returned context's field.
+    /// own `anticipated_lead_stages`. A test that needs a derived field's
+    /// value to disagree with its own slices sets the fixture's owner field
+    /// (e.g. `self.has_penalty`) before calling [`Self::ctx`], never the
+    /// returned context's field.
     pub(crate) fn ctx(&mut self) -> TemplateBuildCtx<'_> {
         self.positions = EntityPositions::from_slices(
             self.hydros.iter().map(|h| h.id),
@@ -151,6 +160,21 @@ impl CtxFixture {
             self.anticipated_resolution.clone()
         };
         self.state = self.build_state(resolution);
+        self.study_dims = StudyDimensions {
+            n_thermals: self.thermals.len(),
+            n_lines: self.lines.len(),
+            n_buses: self.buses.len(),
+            max_deficit_segments: self
+                .buses
+                .iter()
+                .map(|b| b.deficit_segments.len())
+                .max()
+                .unwrap_or(0),
+            has_inflow_penalty: self.has_penalty,
+            anticipated_plants: self.anticipated_plants.clone(),
+            n_pumping: self.pumping_stations.len(),
+            ..StudyDimensions::default()
+        };
         TemplateBuildCtx {
             hydros: &self.hydros,
             thermals: &self.thermals,
@@ -177,10 +201,8 @@ impl CtxFixture {
             pumping_stations: &self.pumping_stations,
             contracts: &self.contracts,
             diversion_upstream: &self.diversion_upstream,
-            n_anticipated: self.anticipated_plants.len(),
             state: &self.state,
-            anticipated_plants: &self.anticipated_plants,
-            has_penalty: self.has_penalty,
+            study_dims: &self.study_dims,
             time_value: &self.time_value,
             filling_v_target: &self.filling_v_target,
             topology: &self.topology,

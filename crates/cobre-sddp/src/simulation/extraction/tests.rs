@@ -7475,7 +7475,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
     let resolved_generic_bounds =
         ResolvedGenericConstraintBounds::new(&id_map, raw_bounds.into_iter());
 
-    let fixture = CtxFixture {
+    let mut fixture = CtxFixture {
         hydro_cell_index: test_support::identity_hydro_cell_index(0),
         production_models: ProductionModelSet::new(Vec::new(), 0, 1),
         evaporation_models: EvaporationModelSet::new(Vec::new()),

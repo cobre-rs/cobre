@@ -190,7 +190,7 @@ pub(super) fn resolve_shortcircuit_target(
     let mut current_id = ctx.hydros[h_idx].id;
     for _ in 0..ctx.hydros.len() {
         let down_id = ctx.cascade.downstream(current_id)?;
-        let d_idx = *ctx.hydro_pos.get(&down_id)?;
+        let d_idx = ctx.positions.hydro(down_id)?;
         if !is_prefilling(ctx, stage, d_idx) {
             return Some(d_idx);
         }
@@ -289,7 +289,7 @@ fn fill_parallel_water_entries(
             let col_diversion = layout.diversion_col(HydroSys::new(h_idx), BlockIdx::new(blk));
             col_entries[col_diversion].push((row, tau_h));
             for &up_id in ctx.cascade.upstream(hydro.id) {
-                if let Some(&u_idx) = ctx.hydro_pos.get(&up_id) {
+                if let Some(u_idx) = ctx.positions.hydro(up_id) {
                     fill_arc_release_block_entries(
                         ctx,
                         layout,
@@ -593,7 +593,7 @@ fn fill_chronological_water_entries(
             col_entries[layout.diversion_col(HydroSys::new(h_idx), BlockIdx::new(blk))]
                 .push((row, tau_k));
             for &up_id in ctx.cascade.upstream(hydro.id) {
-                if let Some(&u_idx) = ctx.hydro_pos.get(&up_id) {
+                if let Some(u_idx) = ctx.positions.hydro(up_id) {
                     fill_arc_release_chrono_block_entries(
                         ctx,
                         layout,
@@ -777,7 +777,7 @@ pub(crate) fn resolve_bucket_arrival_density(
 
     let mut chosen: Option<Vec<f64>> = None;
     for &up_id in ctx.cascade.upstream(downstream_id) {
-        let Some(&u_idx) = ctx.hydro_pos.get(&up_id) else {
+        let Some(u_idx) = ctx.positions.hydro(up_id) else {
             continue;
         };
         let Some(by_stage) = ctx.arc_arrival_density.get(&u_idx) else {
@@ -882,7 +882,7 @@ fn fill_prefilling_shortcircuit(
         let tau_k = layout.clock.tau(BlockIdx::new(blk));
         let row_d = layout.water_balance_row(target, BlockIdx::new(blk));
         for &up_id in ctx.cascade.upstream(hydro.id) {
-            if let Some(&u_idx) = ctx.hydro_pos.get(&up_id) {
+            if let Some(u_idx) = ctx.positions.hydro(up_id) {
                 push_plant_release(ctx, layout, u_idx, blk, row_d, -tau_k, col_entries);
             }
         }
@@ -957,8 +957,8 @@ pub(super) fn fill_pumping_water_entries(
         // Per-side guards are defense-in-depth (`validate_pumping_station_refs` guarantees
         // resolution on a production `System`). Do NOT promote to an unconditional
         // index/expect — a one-sided resolve writes a feasible-but-wrong half coupling.
-        let source = ctx.hydro_pos.get(&station.source_hydro_id).copied();
-        let destination = ctx.hydro_pos.get(&station.destination_hydro_id).copied();
+        let source = ctx.positions.hydro(station.source_hydro_id);
+        let destination = ctx.positions.hydro(station.destination_hydro_id);
         for blk in 0..n_blks {
             let blk_idx = BlockIdx::new(blk);
             let tau_h = layout.clock.tau(blk_idx);
@@ -1005,7 +1005,7 @@ pub(super) fn fill_load_balance_entries(
                 let cell_base = layout.fpha_cell_local_start[local_idx.get()];
                 for (offset, c) in ctx.hydro_cell_index.cells_of(h_sys).enumerate() {
                     let cell = HydroCell::new(c);
-                    if let Some(&b_idx) = ctx.bus_pos.get(&ctx.hydro_cell_index.bus_of(cell)) {
+                    if let Some(b_idx) = ctx.positions.bus(ctx.hydro_cell_index.bus_of(cell)) {
                         let cell_local = FphaCellLocal::new(cell_base + offset);
                         for blk in (0..n_blks).map(BlockIdx::new) {
                             let row = layout.load_balance_row(BusSys::new(b_idx), blk);
@@ -1018,7 +1018,7 @@ pub(super) fn fill_load_balance_entries(
             StageProductionRole::Constant(rho) => {
                 for c in ctx.hydro_cell_index.cells_of(h_sys) {
                     let cell = HydroCell::new(c);
-                    if let Some(&b_idx) = ctx.bus_pos.get(&ctx.hydro_cell_index.bus_of(cell)) {
+                    if let Some(b_idx) = ctx.positions.bus(ctx.hydro_cell_index.bus_of(cell)) {
                         for blk in (0..n_blks).map(BlockIdx::new) {
                             let row = layout.load_balance_row(BusSys::new(b_idx), blk);
                             let col = layout.turbine_col(cell, blk);
@@ -1032,7 +1032,7 @@ pub(super) fn fill_load_balance_entries(
     }
 
     for (t_idx, thermal) in ctx.thermals.iter().enumerate() {
-        if let Some(&b_idx) = ctx.bus_pos.get(&thermal.bus_id) {
+        if let Some(b_idx) = ctx.positions.bus(thermal.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.load_balance_row(BusSys::new(b_idx), blk);
                 let col = layout.thermal_col(ThermalSys::new(t_idx), blk);
@@ -1042,8 +1042,8 @@ pub(super) fn fill_load_balance_entries(
     }
 
     for (l_idx, line) in ctx.lines.iter().enumerate() {
-        let src_idx = ctx.bus_pos.get(&line.source_bus_id).copied();
-        let tgt_idx = ctx.bus_pos.get(&line.target_bus_id).copied();
+        let src_idx = ctx.positions.bus(line.source_bus_id);
+        let tgt_idx = ctx.positions.bus(line.target_bus_id);
         for blk in (0..n_blks).map(BlockIdx::new) {
             let col_fwd = layout.line_fwd_col(LineSys::new(l_idx), blk);
             let col_rev = layout.line_rev_col(LineSys::new(l_idx), blk);
@@ -1062,7 +1062,7 @@ pub(super) fn fill_load_balance_entries(
 
     // Written for every station: a dormant station's pumping column is `[0, 0]`.
     for (p_sys, station) in ctx.pumping_stations.iter().enumerate() {
-        if let Some(&b_idx) = ctx.bus_pos.get(&station.bus_id) {
+        if let Some(b_idx) = ctx.positions.bus(station.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.load_balance_row(BusSys::new(b_idx), blk);
                 let col = layout.pumping_flow_col(PumpingSys::new(p_sys), blk);
@@ -1080,7 +1080,7 @@ pub(super) fn fill_load_balance_entries(
             ContractType::Import => 1.0,
             ContractType::Export => -1.0,
         };
-        if let Some(&b_idx) = ctx.bus_pos.get(&contract.bus_id) {
+        if let Some(b_idx) = ctx.positions.bus(contract.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.load_balance_row(BusSys::new(b_idx), blk);
                 let col = layout.contract_col(contract_type, family_slot, blk);
@@ -1334,7 +1334,7 @@ pub(super) fn fill_ncs_load_balance_entries(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     for (ncs_sys_idx, ncs) in ctx.non_controllable_sources.iter().enumerate() {
-        let Some(&bus_idx) = ctx.bus_pos.get(&ncs.bus_id) else {
+        let Some(bus_idx) = ctx.positions.bus(ncs.bus_id) else {
             continue;
         };
         for blk in (0..layout.clock.n_blks()).map(BlockIdx::new) {
@@ -4025,8 +4025,8 @@ mod pumping_water_tests {
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let source_pos = ctx.hydro_pos[&EntityId(1)];
-        let dest_pos = ctx.hydro_pos[&EntityId(2)];
+        let source_pos = ctx.positions.hydro(EntityId(1)).unwrap();
+        let dest_pos = ctx.positions.hydro(EntityId(2)).unwrap();
         let row_source = layout.rows.water_balance.start() + source_pos;
         let row_dest = layout.rows.water_balance.start() + dest_pos;
 
@@ -4062,8 +4062,8 @@ mod pumping_water_tests {
         let n_blks = layout.clock.n_blks();
         let s_row = layout.rows.water_balance.start();
         for (p_sys, st) in ctx.pumping_stations.iter().enumerate() {
-            let src = ctx.hydro_pos[&st.source_hydro_id];
-            let dst = ctx.hydro_pos[&st.destination_hydro_id];
+            let src = ctx.positions.hydro(st.source_hydro_id).unwrap();
+            let dst = ctx.positions.hydro(st.destination_hydro_id).unwrap();
             for blk in 0..n_blks {
                 let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
                 let col = layout.equipment.col_pumping_start + p_sys * n_blks + blk;
@@ -4113,8 +4113,8 @@ mod pumping_water_tests {
         let n_blks = layout.clock.n_blks();
         let s_row = layout.rows.water_balance.start();
         for (p_sys, st) in ctx.pumping_stations.iter().enumerate() {
-            let src = ctx.hydro_pos[&st.source_hydro_id];
-            let dst = ctx.hydro_pos[&st.destination_hydro_id];
+            let src = ctx.positions.hydro(st.source_hydro_id).unwrap();
+            let dst = ctx.positions.hydro(st.destination_hydro_id).unwrap();
             for blk in 0..n_blks {
                 let tau = stage.blocks[blk].duration_hours * M3S_TO_HM3;
                 let blk_idx = BlockIdx::new(blk);
@@ -4184,7 +4184,7 @@ mod pumping_water_tests {
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let dest_pos = ctx.hydro_pos[&EntityId(2)];
+        let dest_pos = ctx.positions.hydro(EntityId(2)).unwrap();
         let row_dest = layout.rows.water_balance.start() + dest_pos;
         for blk in 0..n_blks {
             let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
@@ -4215,7 +4215,7 @@ mod pumping_water_tests {
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let source_pos = ctx.hydro_pos[&EntityId(1)];
+        let source_pos = ctx.positions.hydro(EntityId(1)).unwrap();
         let row_source = layout.rows.water_balance.start() + source_pos;
         for blk in 0..n_blks {
             let tau_h = stage.blocks[blk].duration_hours * M3S_TO_HM3;
@@ -4248,7 +4248,7 @@ mod pumping_water_tests {
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let b_idx = ctx.bus_pos[&EntityId(1)];
+        let b_idx = ctx.positions.bus(EntityId(1)).unwrap();
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
             let col = layout.equipment.col_pumping_start + blk;
@@ -4302,7 +4302,7 @@ mod pumping_water_tests {
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let b_idx = ctx.bus_pos[&EntityId(1)];
+        let b_idx = ctx.positions.bus(EntityId(1)).unwrap();
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
             let col = layout.equipment.contract_import.start + blk;
@@ -4332,7 +4332,7 @@ mod pumping_water_tests {
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let b_idx = ctx.bus_pos[&EntityId(1)];
+        let b_idx = ctx.positions.bus(EntityId(1)).unwrap();
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
             let col = layout.equipment.contract_export.start + blk;
@@ -4366,7 +4366,7 @@ mod pumping_water_tests {
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let b_idx = ctx.bus_pos[&EntityId(1)];
+        let b_idx = ctx.positions.bus(EntityId(1)).unwrap();
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
             let import_col = layout.equipment.contract_import.start + blk;
@@ -4407,7 +4407,7 @@ mod pumping_water_tests {
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
 
         let n_blks = layout.clock.n_blks();
-        let b_idx = ctx.bus_pos[&EntityId(1)];
+        let b_idx = ctx.positions.bus(EntityId(1)).unwrap();
         for blk in 0..n_blks {
             let row = layout.rows.load_balance.start() + b_idx * n_blks + blk;
             let slot0_col = layout.equipment.contract_import.start + blk;
@@ -5972,9 +5972,9 @@ mod pumping_water_tests {
         assert_eq!(ctx.hydro_cell_index.bus_of(cell_a), fixture.bus_cell_a);
         assert_eq!(ctx.hydro_cell_index.bus_of(cell_b), fixture.bus_cell_b);
 
-        let bus_pos_a = *ctx.bus_pos.get(&fixture.bus_cell_a).unwrap();
-        let bus_pos_b = *ctx.bus_pos.get(&fixture.bus_cell_b).unwrap();
-        let bus_pos_decoy = *ctx.bus_pos.get(&fixture.bus_decoy).unwrap();
+        let bus_pos_a = ctx.positions.bus(fixture.bus_cell_a).unwrap();
+        let bus_pos_b = ctx.positions.bus(fixture.bus_cell_b).unwrap();
+        let bus_pos_decoy = ctx.positions.bus(fixture.bus_decoy).unwrap();
         // The mutually-distinct index check the fixture's own doc promises:
         // hydro_idx=1, cell_idx=2, block_idx=0, bus_idx=3.
         assert_ne!(split.get(), cell_b.get());
@@ -6062,8 +6062,8 @@ mod pumping_water_tests {
             .map(HydroCell::new)
             .collect();
         let (cell_a, cell_b) = (cells[0], cells[1]);
-        let bus_pos_a = *ctx.bus_pos.get(&fixture.bus_cell_a).unwrap();
-        let bus_pos_b = *ctx.bus_pos.get(&fixture.bus_cell_b).unwrap();
+        let bus_pos_a = ctx.positions.bus(fixture.bus_cell_a).unwrap();
+        let bus_pos_b = ctx.positions.bus(fixture.bus_cell_b).unwrap();
         let grid = layout.block_grid();
         let row_load = layout.rows.load_balance.start();
 
@@ -9932,7 +9932,7 @@ mod pumping_water_tests {
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
 
-        let bus_pos = *ctx.bus_pos.get(&EntityId(1)).unwrap();
+        let bus_pos = ctx.positions.bus(EntityId(1)).unwrap();
         let grid = layout.block_grid();
         let row_load = layout.rows.load_balance.start();
         let cell = HydroCell::new(

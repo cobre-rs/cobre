@@ -6,9 +6,13 @@ use std::collections::{BTreeMap, HashMap};
 use cobre_core::EntityId;
 use cobre_core::scenario::LoadModel;
 
+use crate::lp::indexer::EntityPositions;
+
 /// Resolved study inputs [`build_stage_templates`](super::build_stage_templates)
 /// consumes by value; every field is the single derivation of its fact.
 pub(crate) struct LpBuildInputs {
+    /// Canonical entity-id → slot maps for every position-addressed family.
+    pub(crate) positions: EntityPositions,
     /// Per-stage minimum target-storage trajectory, keyed `(hydro_idx,
     /// stage_id) → V_target` \[hm³\].
     pub(crate) filling_v_target: BTreeMap<(usize, i32), f64>,

@@ -319,7 +319,7 @@ fn fixture_hydro(id: i32) -> Hydro {
 /// `SystemBuilder::build` sorts every entity Vec by `id.0`, so passing
 /// stations out of declaration order exercises the canonical-ordering
 /// guarantee that `build_template_build_ctx` relies on when threading the
-/// slice into `ctx.pumping_stations`/`pumping_pos`. The two hydros and bus
+/// slice into `ctx.pumping_stations`/`ctx.positions`. The two hydros and bus
 /// exist solely to satisfy pumping-station reference validation.
 fn system_with_pumping_stations(stations: Vec<PumpingStation>) -> cobre_core::System {
     let n_pumping = stations.len();
@@ -444,11 +444,12 @@ fn fixture_pumping_station(id: i32) -> PumpingStation {
 // ── Pumping data threaded into TemplateBuildCtx ────────────────────────────
 
 /// Stations declared out of ID order are exposed ID-sorted on the ctx, and
-/// `pumping_pos` maps each station id to its slot in that sorted slice.
+/// `ctx.positions.pumping` maps each station id to its slot in that sorted
+/// slice.
 ///
 /// Declaration order `[30, 10, 20]` must become `[10, 20, 30]` on the ctx
 /// (the canonical sort applied by `SystemBuilder::build`), with
-/// `pumping_pos = {10->0, 20->1, 30->2}`.
+/// `positions.pumping = {10->Some(0), 20->Some(1), 30->Some(2)}`.
 #[test]
 fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let stations = vec![
@@ -501,19 +502,15 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         "ctx.pumping_stations must be ID-sorted regardless of declaration order"
     );
 
-    assert_eq!(
-        ctx.pumping_pos.len(),
-        3,
-        "pumping_pos has one entry per station"
-    );
-    assert_eq!(ctx.pumping_pos[&EntityId(10)], 0);
-    assert_eq!(ctx.pumping_pos[&EntityId(20)], 1);
-    assert_eq!(ctx.pumping_pos[&EntityId(30)], 2);
+    assert_eq!(ctx.positions.pumping(EntityId(10)), Some(0));
+    assert_eq!(ctx.positions.pumping(EntityId(20)), Some(1));
+    assert_eq!(ctx.positions.pumping(EntityId(30)), Some(2));
 
     for (slot, station) in ctx.pumping_stations.iter().enumerate() {
         assert_eq!(
-            ctx.pumping_pos[&station.id], slot,
-            "pumping_pos[{:?}] must equal its slot in the sorted slice",
+            ctx.positions.pumping(station.id),
+            Some(slot),
+            "positions.pumping({:?}) must equal its slot in the sorted slice",
             station.id
         );
     }
@@ -1105,7 +1102,7 @@ fn system_with_contracts(contracts: Vec<EnergyContract>, n_blks: usize) -> cobre
 }
 
 /// One import + one export contract (declared out of ID order) are exposed
-/// ID-sorted on the ctx; `contract_pos` maps each id to its slot, and the
+/// ID-sorted on the ctx; `ctx.positions.contract` maps each id to its slot, and the
 /// per-direction counts are derived by `contract_type`.
 #[test]
 fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
@@ -1160,12 +1157,13 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
     );
     assert_eq!(ctx.n_contract_import, 1);
     assert_eq!(ctx.n_contract_export, 1);
-    assert_eq!(ctx.contract_pos[&EntityId(10)], 0);
-    assert_eq!(ctx.contract_pos[&EntityId(20)], 1);
+    assert_eq!(ctx.positions.contract(EntityId(10)), Some(0));
+    assert_eq!(ctx.positions.contract(EntityId(20)), Some(1));
     for (slot, contract) in ctx.contracts.iter().enumerate() {
         assert_eq!(
-            ctx.contract_pos[&contract.id], slot,
-            "contract_pos[{:?}] must equal its slot in the sorted slice",
+            ctx.positions.contract(contract.id),
+            Some(slot),
+            "positions.contract({:?}) must equal its slot in the sorted slice",
             contract.id
         );
     }

@@ -11,6 +11,7 @@ use cobre_io::StageIdResolver;
 use crate::block_clock::BlockClock;
 use crate::hydro_models::{ProductionModelSet, ResolvedProductionModel};
 use crate::lp::builder::LpBuildInputs;
+use crate::lp::indexer::EntityPositions;
 
 /// Precompute the per-stage minimum target-storage trajectory `V_target[t]` for
 /// every filling hydro, keyed `(hydro_idx, stage_id) → V_target` \[hm³\].
@@ -168,6 +169,7 @@ pub(crate) fn resolve_lp_build_inputs(
 ) -> LpBuildInputs {
     let n_study = system.stages().iter().filter(|s| s.id >= 0).count();
     LpBuildInputs {
+        positions: EntityPositions::build(system),
         filling_v_target: resolve_filling_v_target(system),
         deterministic_load_models: resolve_deterministic_load_models(system, load_bus_ids),
         load_bus_indices: resolve_load_bus_indices(system, load_bus_ids),

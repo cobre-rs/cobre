@@ -11,7 +11,7 @@ use cobre_core::{
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
-use crate::indexer::{AnticipatedPlants, HydroCellIndex};
+use crate::indexer::{AnticipatedPlants, EntityPositions, HydroCellIndex};
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::lp::builder::{ResolvedTables, TemplateBuildCtx};
 use crate::resolved_parameters::ResolvedParameters;
@@ -21,10 +21,13 @@ use crate::time_value::{PostStudyResolved, TimeValue};
 /// test builds one through [`Self::ctx`] instead of hand-writing its own
 /// field-by-field construction — the same shape `columns.rs`'s
 /// `InteriorStorageFixtures` and `generic_constraints::tests::ResolverFixture`
-/// each duplicate independently. `ctx()` derives every position map and
-/// entity count from its own slices, the way `build_template_build_ctx` does;
-/// every other field is copied through unchanged.
+/// each duplicate independently. `ctx()` derives `positions` and every entity
+/// count from its own slices, the way `build_template_build_ctx` does; every
+/// other field is copied through unchanged.
 pub(crate) struct CtxFixture {
+    /// Derived fresh, from the slices below, on every [`Self::ctx`] call — the
+    /// backing store [`TemplateBuildCtx::positions`] borrows.
+    pub(crate) positions: EntityPositions,
     pub(crate) hydros: Vec<Hydro>,
     pub(crate) thermals: Vec<Thermal>,
     pub(crate) lines: Vec<Line>,
@@ -63,6 +66,7 @@ pub(crate) struct CtxFixture {
 impl Default for CtxFixture {
     fn default() -> Self {
         Self {
+            positions: EntityPositions::from_slices([], [], [], [], [], []),
             hydros: Vec::new(),
             thermals: Vec::new(),
             lines: Vec::new(),
@@ -107,12 +111,22 @@ impl Default for CtxFixture {
 }
 
 impl CtxFixture {
-    /// Derives every position map and entity count from this fixture's own
+    /// Derives `positions` and every entity count from this fixture's own
     /// slices, the way `build_template_build_ctx` does; every other field is
-    /// copied through unchanged. A test whose original literal set one of the
-    /// derived fields to a value the slices disagree with restores it by
-    /// mutating the returned context's field.
-    pub(crate) fn ctx(&self) -> TemplateBuildCtx<'_> {
+    /// copied through unchanged. `&mut self`: `positions` is recomputed into
+    /// `self.positions` on every call, so [`TemplateBuildCtx::positions`] can
+    /// borrow a backing store with `self`'s own lifetime. A test whose
+    /// original literal set one of the derived fields to a value the slices
+    /// disagree with restores it by mutating the returned context's field.
+    pub(crate) fn ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.positions = EntityPositions::from_slices(
+            self.hydros.iter().map(|h| h.id),
+            self.thermals.iter().map(|t| t.id),
+            self.lines.iter().map(|l| l.id),
+            self.buses.iter().map(|b| b.id),
+            self.pumping_stations.iter().map(|p| p.id),
+            self.contracts.iter().map(|c| c.id),
+        );
         TemplateBuildCtx {
             hydros: &self.hydros,
             thermals: &self.thermals,
@@ -130,50 +144,15 @@ impl CtxFixture {
                 resolved_ncs_factors: &self.resolved_ncs_factors,
                 resolved_parameters: &self.resolved_parameters,
             },
-            hydro_pos: self
-                .hydros
-                .iter()
-                .enumerate()
-                .map(|(i, h)| (h.id, i))
-                .collect(),
-            thermal_pos: self
-                .thermals
-                .iter()
-                .enumerate()
-                .map(|(i, t)| (t.id, i))
-                .collect(),
-            line_pos: self
-                .lines
-                .iter()
-                .enumerate()
-                .map(|(i, l)| (l.id, i))
-                .collect(),
-            bus_pos: self
-                .buses
-                .iter()
-                .enumerate()
-                .map(|(i, b)| (b.id, i))
-                .collect(),
+            positions: &self.positions,
             par_lp: &self.par_lp,
             production_models: &self.production_models,
             evaporation_models: &self.evaporation_models,
             generic_constraints: &self.generic_constraints,
             non_controllable_sources: &self.non_controllable_sources,
             pumping_stations: &self.pumping_stations,
-            pumping_pos: self
-                .pumping_stations
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (p.id, i))
-                .collect(),
             n_pumping: self.pumping_stations.len(),
             contracts: &self.contracts,
-            contract_pos: self
-                .contracts
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (c.id, i))
-                .collect(),
             n_contract_import: self
                 .contracts
                 .iter()

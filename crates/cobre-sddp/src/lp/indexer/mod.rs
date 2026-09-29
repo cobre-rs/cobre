@@ -48,6 +48,8 @@
 //!   readiness-filtered form (`for_each_live_commitment_slot`).
 //! - `anticipated_plants` — the [`AnticipatedPlants`] typed owner of the
 //!   anticipated-plant set.
+//! - `entity_positions` — the [`EntityPositions`] typed owner: canonical
+//!   `EntityId -> slot` for every position-addressed entity family.
 //! - `layout` — the per-stage geometry satellite type [`EvaporationIndices`]
 //!   (locating one hydro's evaporation columns/row within a stage LP).
 //! - `index` — the base typed vocabulary: [`StateDim`], [`InCol`]/[`OutCol`]
@@ -95,6 +97,7 @@ mod block_grid;
 mod block_row_family;
 mod cut_state_projection;
 mod entity_index;
+mod entity_positions;
 mod hydro_cell;
 mod index;
 mod layout;
@@ -115,6 +118,7 @@ pub use entity_index::{
     AnticipatedLocal, BusSys, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
     HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, ThermalSys,
 };
+pub(crate) use entity_positions::EntityPositions;
 pub use hydro_cell::HydroCellIndex;
 pub use index::{BlockIdx, Boundary, CutSlot, InCol, OutCol, StateDim};
 pub use layout::EvaporationIndices;

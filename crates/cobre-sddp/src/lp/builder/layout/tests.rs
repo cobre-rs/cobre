@@ -4,7 +4,7 @@
     reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and test locals mirror the paired column and row names the assertions compare"
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::ops::Range;
 
 use chrono::NaiveDate;
@@ -149,8 +149,9 @@ impl ZeroEntityFixtures {
     /// generic constraints (rather than the empty slice `make_ctx` installs).
     fn make_ctx_generic(&mut self) -> TemplateBuildCtx<'_> {
         self.base.anticipated_plants = anticipated_plants_at(&[]);
-        let mut ctx = self.build_ctx(0, vec![]);
-        ctx.generic_constraints = &self.base.generic_constraints;
+        let mut ctx = self.base.ctx();
+        ctx.n_anticipated = 0;
+        ctx.anticipated_lead_stages = vec![];
         ctx
     }
 
@@ -170,11 +171,10 @@ impl ZeroEntityFixtures {
         self.build_ctx(n_anticipated, anticipated_lead_stages)
     }
 
-    /// The `&self` half of `make_ctx`, reading the already-set
-    /// `anticipated_plants` field — split out so `make_ctx_generic` can
-    /// re-borrow `self.generic_constraints` after building the ctx.
+    /// The shared half of `make_ctx`, reading the already-set
+    /// `anticipated_plants` field.
     fn build_ctx(
-        &self,
+        &mut self,
         n_anticipated: usize,
         anticipated_lead_stages: Vec<usize>,
     ) -> TemplateBuildCtx<'_> {
@@ -580,7 +580,7 @@ impl UsefulVolumeFixtures {
         );
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
         let mut ctx = self.base.ctx();
         ctx.n_hydros = 0;
         ctx
@@ -931,10 +931,8 @@ impl TwoHydroFixtures {
         }
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        ctx.hydro_pos = BTreeMap::new();
-        ctx
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.base.ctx()
     }
 }
 
@@ -957,7 +955,7 @@ fn stage_with_blocks(block_mode: BlockMode, n_blks: usize) -> Stage {
 /// and at `K = 1`, with `turbine.start` re-anchored to the family's end.
 #[test]
 fn chronological_interior_storage_boundary_sizing() {
-    let fixtures = TwoHydroFixtures::new();
+    let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
     let anchor = state.control_region_start();
@@ -1017,7 +1015,7 @@ fn chronological_interior_storage_boundary_sizing() {
 /// is addressed).
 #[test]
 fn block_storage_col_resolves_all_boundaries() {
-    let fixtures = TwoHydroFixtures::new();
+    let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
 
@@ -1080,7 +1078,7 @@ fn block_storage_col_resolves_all_boundaries() {
 /// arms through those accessors instead of its own copied state bases.
 #[test]
 fn storage_boundary_endpoints_match_state_space_accessors() {
-    let fixtures = TwoHydroFixtures::new();
+    let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
     let stage = stage_with_blocks(BlockMode::Chronological, 3);
@@ -1118,7 +1116,7 @@ fn storage_boundary_endpoints_match_state_space_accessors() {
 /// `water_balance.end()` in every case.
 #[test]
 fn chronological_water_balance_row_count() {
-    let fixtures = TwoHydroFixtures::new();
+    let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
 
@@ -1168,7 +1166,7 @@ fn chronological_water_balance_row_count() {
 /// modes — the two are built from the same `ConstraintRows` families.
 #[test]
 fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
-    let fixtures = TwoHydroFixtures::new();
+    let mut fixtures = TwoHydroFixtures::new();
     let mut ctx = fixtures.make_ctx();
     ctx.n_buses = 3;
     let state = state_layout_for(&ctx);
@@ -1209,7 +1207,7 @@ fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
 /// not count.
 #[test]
 fn parallel_z_inflow_column_enters_each_target_water_row_once() {
-    let fixtures = TwoHydroFixtures::new();
+    let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let state = state_layout_for(&ctx);
     let stage = stage_with_blocks(BlockMode::Parallel, 3);
@@ -1281,10 +1279,8 @@ impl FphaMixFixtures {
         }
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        ctx.hydro_pos = BTreeMap::new();
-        ctx
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.base.ctx()
     }
 }
 
@@ -1293,7 +1289,7 @@ impl FphaMixFixtures {
 /// two non-FPHA hydros stay `None`, giving `[None, Some(0), None]`.
 #[test]
 fn stage_layout_populates_fpha_local_index_inverse_map() {
-    let fixtures = FphaMixFixtures::new();
+    let mut fixtures = FphaMixFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
     let state = state_layout_for(&ctx);
@@ -1384,15 +1380,13 @@ impl FillingMembershipFixtures {
         }
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        ctx.hydro_pos = BTreeMap::new();
-        ctx
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.base.ctx()
     }
 
     /// `fpha_hydro_indices` for a stage built at `stage_id` (`stage_idx` held
     /// at 0 so the single FPHA/evaporation model row serves every phase).
-    fn fpha_indices_at(&self, stage_id: i32) -> Vec<HydroSys> {
+    fn fpha_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
         let state = state_layout_for(&ctx);
@@ -1400,7 +1394,7 @@ impl FillingMembershipFixtures {
     }
 
     /// `evap_hydro_indices` for a stage built at `stage_id`.
-    fn evap_indices_at(&self, stage_id: i32) -> Vec<HydroSys> {
+    fn evap_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
         let state = state_layout_for(&ctx);
@@ -1408,7 +1402,7 @@ impl FillingMembershipFixtures {
     }
 
     /// `filling_target_hydro_indices` for a stage built at `stage_id`.
-    fn filling_target_indices_at(&self, stage_id: i32) -> Vec<HydroSys> {
+    fn filling_target_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
         let state = state_layout_for(&ctx);
@@ -1418,7 +1412,7 @@ impl FillingMembershipFixtures {
     }
 
     /// `filled_min_storage_floor_hydro_indices` for a stage built at `stage_id`.
-    fn filled_min_storage_floor_indices_at(&self, stage_id: i32) -> Vec<HydroSys> {
+    fn filled_min_storage_floor_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
         let state = state_layout_for(&ctx);
@@ -1436,7 +1430,7 @@ impl FillingMembershipFixtures {
 /// floor; this test pins per-stage Filling membership.
 #[test]
 fn filling_target_emitted_at_every_filling_stage() {
-    let fixtures = FillingMembershipFixtures::new();
+    let mut fixtures = FillingMembershipFixtures::new();
 
     // Filling stages 1 and 2 (start = 1, entry = 3): both filling hydros
     // (system indices 0, 1) carry the target at every Filling stage.
@@ -1466,8 +1460,8 @@ fn filling_target_emitted_at_every_filling_stage() {
 #[test]
 fn non_filling_system_no_filling_target_num_rows_unchanged() {
     // `FphaMixFixtures` hydros are all non-filling.
-    let fixtures = FphaMixFixtures::new();
-    let layout_at = |stage_id: i32| {
+    let mut fixtures = FphaMixFixtures::new();
+    let mut layout_at = |stage_id: i32| {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(stage_id);
         let state = state_layout_for(&ctx);
@@ -1506,7 +1500,7 @@ fn non_filling_system_no_filling_target_num_rows_unchanged() {
 /// block precedes it).
 #[test]
 fn filling_target_row_and_col_below_structural_bounds() {
-    let fixtures = FillingMembershipFixtures::new();
+    let mut fixtures = FillingMembershipFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = stage_with_id(2); // entry − 1: the terminal stage.
     let state = state_layout_for(&ctx);
@@ -1559,7 +1553,7 @@ fn filling_target_row_and_col_below_structural_bounds() {
 /// target-row start), isolating the per-stage target rows to the Filling window.
 #[test]
 fn filling_target_adds_rows_at_every_filling_stage() {
-    let fixtures = FillingMembershipFixtures::new();
+    let mut fixtures = FillingMembershipFixtures::new();
     // PreFilling (id 0) and Operating (id 3, 4): the σ_fill TARGET adds no rows.
     for stage_id in [0, 3, 4] {
         let ctx = fixtures.make_ctx();
@@ -1588,7 +1582,7 @@ fn filling_target_adds_rows_at_every_filling_stage() {
 /// stage split.
 #[test]
 fn filled_min_storage_floor_emitted_at_every_operating_stage() {
-    let fixtures = FillingMembershipFixtures::new();
+    let mut fixtures = FillingMembershipFixtures::new();
 
     // Operating (id >= entry = 3): both filling hydros carry the floor at every
     // stage, not just one terminal stage.
@@ -1630,8 +1624,8 @@ fn filled_min_storage_floor_emitted_at_every_operating_stage() {
 /// existing deterministic cases.
 #[test]
 fn non_filling_system_no_filled_min_storage_floor_num_rows_unchanged() {
-    let fixtures = FphaMixFixtures::new();
-    let layout_at = |stage_id: i32| {
+    let mut fixtures = FphaMixFixtures::new();
+    let mut layout_at = |stage_id: i32| {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(stage_id);
         let state = state_layout_for(&ctx);
@@ -1671,7 +1665,7 @@ fn non_filling_system_no_filled_min_storage_floor_num_rows_unchanged() {
 /// fit and a generation column with no constraining row.
 #[test]
 fn filling_fpha_hydro_excluded_while_filling_present_when_operating() {
-    let fixtures = FillingMembershipFixtures::new();
+    let mut fixtures = FillingMembershipFixtures::new();
 
     // Filling (stage_id 1 and 2 are in `[start_stage_id, entry_stage_id)`):
     // hydro 0 (the FPHA hydro) is absent.
@@ -1714,7 +1708,7 @@ fn filling_fpha_hydro_excluded_while_filling_present_when_operating() {
 /// the two exclusions must not be unified.
 #[test]
 fn filling_evap_hydro_excluded_only_in_prefilling() {
-    let fixtures = FillingMembershipFixtures::new();
+    let mut fixtures = FillingMembershipFixtures::new();
 
     // PreFilling (stage_id < start_stage_id): hydro 1 (evaporation) is absent.
     assert_eq!(
@@ -1751,7 +1745,7 @@ fn filling_evap_hydro_excluded_only_in_prefilling() {
 fn non_filling_hydro_membership_bit_identical_across_stages() {
     // The `FphaMixFixtures` hydros are all non-filling (one FPHA at system
     // index 1, two constant), so its membership must be invariant to stage_id.
-    let fixtures = FphaMixFixtures::new();
+    let mut fixtures = FphaMixFixtures::new();
     let (reference_fpha, reference_evap) = {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(0);
@@ -1795,7 +1789,7 @@ fn non_filling_hydro_membership_bit_identical_across_stages() {
 /// Fixture: `n_h = 3`, one block (`n_blks = 1`), so `n_op = 3` per family.
 #[test]
 fn stage_layout_operational_violation_rows_are_contiguous_blocks() {
-    let fixtures = FphaMixFixtures::new();
+    let mut fixtures = FphaMixFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
     let state = state_layout_for(&ctx);
@@ -1910,7 +1904,7 @@ fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
 /// is nonzero and at least one layout is multi-block.
 #[test]
 fn block_strided_addresses_match_their_family_ranges() {
-    let fpha_fixtures = FphaMixFixtures::new();
+    let mut fpha_fixtures = FphaMixFixtures::new();
     let fpha_ctx = fpha_fixtures.make_ctx();
     let fpha_stage = minimal_stage();
     let fpha_state = state_layout_for(&fpha_ctx);
@@ -2799,12 +2793,11 @@ impl PumpingFixtures {
         }
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
         let mut ctx = self.base.ctx();
-        // The slice/`pumping_pos` threading is covered by the
+        // The slice/position threading is covered by the
         // `build_template_build_ctx` tests in `template.rs`.
-        ctx.pumping_pos = BTreeMap::new();
-        ctx.n_pumping = self.base.bounds.n_pumping();
+        ctx.n_pumping = ctx.resolved.bounds.n_pumping();
         ctx
     }
 
@@ -2878,14 +2871,14 @@ fn pumping_layout_reserves_block_major_columns() {
     let n_pumping = 2_usize;
     let n_blks = 3_usize;
 
-    let baseline_fixtures = PumpingFixtures::new(0, 3);
+    let mut baseline_fixtures = PumpingFixtures::new(0, 3);
     let baseline_ctx = baseline_fixtures.make_ctx();
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
     let state = state_layout_for(&baseline_ctx);
     let baseline = StageLayout::new(&baseline_ctx, &state, &stage, 0);
     assert_eq!(baseline.equipment.n_pumping, 0);
 
-    let fixtures = PumpingFixtures::new(n_pumping, 3);
+    let mut fixtures = PumpingFixtures::new(n_pumping, 3);
     let ctx = fixtures.make_ctx();
     assert_eq!(
         ctx.resolved.bounds.n_pumping(),
@@ -2924,7 +2917,7 @@ fn pumping_layout_reserves_block_major_columns() {
 fn contract_columns_empty_keep_generic_slack_at_pumping_end() {
     let n_pumping = 2_usize;
     let n_blks = 3_usize;
-    let fixtures = PumpingFixtures::new(n_pumping, 3);
+    let mut fixtures = PumpingFixtures::new(n_pumping, 3);
     let ctx = fixtures.make_ctx();
     assert_eq!(ctx.n_contract_import, 0);
     assert_eq!(ctx.n_contract_export, 0);
@@ -2956,7 +2949,7 @@ fn contract_columns_empty_keep_generic_slack_at_pumping_end() {
 fn contract_columns_reserve_import_then_export_blocks() {
     let n_pumping = 2_usize;
     let n_blks = 3_usize;
-    let fixtures = PumpingFixtures::new(n_pumping, 3);
+    let mut fixtures = PumpingFixtures::new(n_pumping, 3);
     let mut ctx = fixtures.make_ctx();
     ctx.n_contract_import = 2;
     ctx.n_contract_export = 1;
@@ -2988,7 +2981,7 @@ fn contract_columns_reserve_import_then_export_blocks() {
 fn contract_col_covers_each_contract_column_once() {
     let n_pumping = 2_usize;
     let n_blks = 3_usize;
-    let fixtures = PumpingFixtures::new(n_pumping, 3);
+    let mut fixtures = PumpingFixtures::new(n_pumping, 3);
     let mut ctx = fixtures.make_ctx();
     ctx.n_contract_import = 2;
     ctx.n_contract_export = 1;
@@ -3531,10 +3524,8 @@ impl TwoHydroMultiBusFixtures {
         }
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        ctx.hydro_pos = BTreeMap::new();
-        ctx
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.base.ctx()
     }
 }
 
@@ -3548,7 +3539,7 @@ fn test_turbine_family_is_sized_by_cell_not_by_plant() {
     let n_blks = 3;
     let stage = stage_with_blocks(BlockMode::Parallel, n_blks);
 
-    let split_fixtures = TwoHydroMultiBusFixtures::new(true);
+    let mut split_fixtures = TwoHydroMultiBusFixtures::new(true);
     let split_ctx = split_fixtures.make_ctx();
     assert_eq!(split_ctx.hydro_cell_index.n_cells(), 3);
     let split_state = state_layout_for(&split_ctx);
@@ -3563,7 +3554,7 @@ fn test_turbine_family_is_sized_by_cell_not_by_plant() {
         "spillage follows turbine directly, with no gap"
     );
 
-    let same_bus_fixtures = TwoHydroMultiBusFixtures::new(false);
+    let mut same_bus_fixtures = TwoHydroMultiBusFixtures::new(false);
     let same_bus_ctx = same_bus_fixtures.make_ctx();
     assert_eq!(same_bus_ctx.hydro_cell_index.n_cells(), 2);
     let same_bus_state = state_layout_for(&same_bus_ctx);
@@ -3589,7 +3580,7 @@ fn test_turbine_family_is_sized_by_cell_not_by_plant() {
 #[test]
 fn test_turbine_col_addresses_each_cell_of_a_split_plant() {
     let n_blks = 3;
-    let fixtures = TwoHydroMultiBusFixtures::new(true);
+    let mut fixtures = TwoHydroMultiBusFixtures::new(true);
     let ctx = fixtures.make_ctx();
     assert_eq!(
         ctx.hydro_cell_index.cells_of(HydroSys::new(1)),
@@ -3705,10 +3696,8 @@ impl FphaMultiBusFixtures {
         }
     }
 
-    fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-        let mut ctx = self.base.ctx();
-        ctx.hydro_pos = BTreeMap::new();
-        ctx
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.base.ctx()
     }
 }
 
@@ -3718,7 +3707,7 @@ impl FphaMultiBusFixtures {
 #[test]
 fn test_generation_family_is_sized_by_fpha_cell() {
     let n_blks = 2;
-    let fixtures = FphaMultiBusFixtures::new();
+    let mut fixtures = FphaMultiBusFixtures::new();
     let ctx = fixtures.make_ctx();
 
     // The fixture's three index families genuinely diverge for plant 2:
@@ -3894,7 +3883,7 @@ fn compare_column_addresses(layout: &StageLayout, block_mode: BlockMode) -> Colu
 fn column_address_pins_cover_every_family() {
     let mut totals = ColumnAddressCounts::default();
 
-    let filling_fixtures = FillingMembershipFixtures::new();
+    let mut filling_fixtures = FillingMembershipFixtures::new();
     let mut ctx = filling_fixtures.make_ctx();
     ctx.has_penalty = true;
     let state = state_layout_for(&ctx);
@@ -4210,7 +4199,7 @@ fn row_address_pins_cover_every_family() {
     }
 
     // Filling target + evaporation (Parallel).
-    let filling_fixtures = FillingMembershipFixtures::new();
+    let mut filling_fixtures = FillingMembershipFixtures::new();
     let filling_ctx = filling_fixtures.make_ctx();
     let filling_state = state_layout_for(&filling_ctx);
     let filling_stage = stage_with_id(1);

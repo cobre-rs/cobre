@@ -6,7 +6,7 @@
     reason = "test docs name LP symbols that are not code identifiers, the equivalence check takes each varied input explicitly, and offsets spell the full base-plus-stride formula even when a term is zero"
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::ops::Range;
 
 use super::{contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent};
@@ -15,7 +15,7 @@ use crate::hydro_models::{
 };
 use crate::lp::builder::{StageLayout, TemplateBuildCtx};
 use crate::lp::indexer::{
-    AnticipatedPlants, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
+    AnticipatedPlants, Boundary, EntityPositions, HydroCell, HydroCellIndex, HydroSys, StateSpace,
 };
 use crate::test_support::ctx_fixture::CtxFixture;
 use crate::test_support::{
@@ -185,10 +185,6 @@ impl ResolverFixture {
             state,
             stage,
         }
-    }
-
-    fn ctx(&self) -> TemplateBuildCtx<'_> {
-        self.base.ctx()
     }
 }
 
@@ -501,8 +497,8 @@ fn make_pumping_station(
 /// with `layout.equipment.thermal.start = 49`, `n_blks = 3`.
 #[test]
 fn thermal_generation_column_arithmetic() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     // (case_name, thermal_id, block_id, block_idx, expected_col)
@@ -535,8 +531,8 @@ fn thermal_generation_column_arithmetic() {
 /// storage.start = 0, hydro_pos[EntityId(10)] = 0 → column 0, regardless of block_idx.
 #[test]
 fn hydro_storage_stage_level_ignores_block() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     for block_idx in [0, 1, 2] {
@@ -569,8 +565,8 @@ fn hydro_storage_stage_level_ignores_block() {
 /// n_blks = 3 → [(13 + 3*3, 1.0), (25 + 3*3, 1.0)] = [(22, 1.0), (34, 1.0)].
 #[test]
 fn hydro_outflow_expands_to_turbine_and_spillage() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -592,8 +588,8 @@ fn hydro_outflow_expands_to_turbine_and_spillage() {
 
 #[test]
 fn hydro_outflow_block_id_some_uses_explicit_block() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -616,8 +612,8 @@ fn hydro_outflow_block_id_some_uses_explicit_block() {
 /// n_blks = 3, block_idx = 0 → [(13 + 1*3, 2.5)] = [(16, 2.5)].
 #[test]
 fn hydro_generation_constant_productivity_maps_to_turbine() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -638,8 +634,8 @@ fn hydro_generation_constant_productivity_maps_to_turbine() {
 /// n_blks = 3, block_idx = 0 → [(79, 1.0)].
 #[test]
 fn hydro_generation_fpha_maps_to_generation_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -660,8 +656,8 @@ fn hydro_generation_fpha_maps_to_generation_column() {
 /// n_blks = 3, block_idx = 2 → [(79 + 1*3 + 2, 1.0)] = [(84, 1.0)].
 #[test]
 fn hydro_generation_fpha_second_hydro_block_2() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -727,8 +723,8 @@ fn turbine_bus_selector_fixture() -> ResolverFixture {
 /// instead of `cell_of_bus` returns the FIRST cell's column instead.
 #[test]
 fn resolve_turbine_bus_selector_picks_one_cell() {
-    let fx = turbine_bus_selector_fixture();
-    let ctx = fx.ctx();
+    let mut fx = turbine_bus_selector_fixture();
+    let ctx = fx.base.ctx();
     assert_eq!(ctx.hydro_cell_index.n_cells(), 3);
     assert_eq!(ctx.hydro_cell_index.cells_of(HydroSys::new(1)), 1..3);
     assert_eq!(ctx.hydro_cell_index.bus_of(HydroCell::new(1)), EntityId(10));
@@ -743,7 +739,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
 
     let picked = call(
         VariableRef::HydroTurbined {
-            hydro_id: fx.base.hydros[1].id,
+            hydro_id: ctx.hydros[1].id,
             block_id: Some(3),
             bus_id: Some(EntityId(20)),
         },
@@ -755,7 +751,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
 
     let summed = call(
         VariableRef::HydroTurbined {
-            hydro_id: fx.base.hydros[1].id,
+            hydro_id: ctx.hydros[1].id,
             block_id: Some(3),
             bus_id: None,
         },
@@ -784,8 +780,8 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
 /// scaled result from the raw turbine coefficient.
 #[test]
 fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
-    let fx = turbine_bus_selector_fixture();
-    let mut ctx = fx.ctx();
+    let mut fx = turbine_bus_selector_fixture();
+    let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let n_blks = layout.clock.n_blks();
     let turbine_start = layout.equipment.turbine.start;
@@ -796,14 +792,14 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
             vec![ResolvedProductionModel::ConstantProductivity { productivity: 1.0 }],
             vec![ResolvedProductionModel::ConstantProductivity { productivity }],
         ],
-        fx.base.hydros.len(),
+        ctx.hydros.len(),
         1,
     );
     ctx.production_models = &prod;
 
     let picked = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.base.hydros[1].id,
+            hydro_id: ctx.hydros[1].id,
             block_id: Some(3),
             bus_id: Some(EntityId(20)),
         },
@@ -815,7 +811,7 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
 
     let summed = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.base.hydros[1].id,
+            hydro_id: ctx.hydros[1].id,
             block_id: Some(3),
             bus_id: None,
         },
@@ -863,7 +859,7 @@ fn fpha_bus_selector_production_models() -> ProductionModelSet {
 #[test]
 fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
     let hydros = bus_selector_hydros(HydroGenerationModel::Fpha);
-    let fx = ResolverFixture::new(
+    let mut fx = ResolverFixture::new(
         hydros,
         vec![],
         vec![],
@@ -875,7 +871,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
         vec![],
         vec![],
     );
-    let ctx = fx.ctx();
+    let ctx = fx.base.ctx();
     assert_eq!(ctx.hydro_cell_index.cells_of(HydroSys::new(1)), 1..3);
     assert_eq!(ctx.hydro_cell_index.bus_of(HydroCell::new(2)), EntityId(20));
 
@@ -885,7 +881,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 
     let picked = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.base.hydros[1].id,
+            hydro_id: ctx.hydros[1].id,
             block_id: Some(3),
             bus_id: Some(EntityId(20)),
         },
@@ -897,7 +893,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 
     let summed = call(
         VariableRef::HydroGeneration {
-            hydro_id: fx.base.hydros[1].id,
+            hydro_id: ctx.hydros[1].id,
             block_id: Some(3),
             bus_id: None,
         },
@@ -927,8 +923,8 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 /// evap cols: [15, 18)  → evaporation_flow=15, f_evap_plus=16, f_evap_minus=17
 #[test]
 fn hydro_evaporation_maps_to_evaporation_flow_col() {
-    let fx = evaporation_fixture(1);
-    let ctx = fx.ctx();
+    let mut fx = evaporation_fixture(1);
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -946,8 +942,8 @@ fn hydro_evaporation_maps_to_evaporation_flow_col() {
 
 #[test]
 fn hydro_evaporation_no_evap_model_returns_empty() {
-    let fx = evaporation_fixture(1);
-    let ctx = fx.ctx();
+    let mut fx = evaporation_fixture(1);
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     // Hydro 20 (pos=1) has no evaporation in evap_hydro_indices=[0]
@@ -969,8 +965,8 @@ fn hydro_evaporation_no_evap_model_returns_empty() {
 /// an out-of-range block still resolves to empty.
 #[test]
 fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
-    let fx = evaporation_fixture(3);
-    let ctx = fx.ctx();
+    let mut fx = evaporation_fixture(3);
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     assert_eq!(
@@ -1036,8 +1032,8 @@ fn pumping_col_range(layout: &StageLayout<'_>) -> Range<usize> {
 /// Station id 20 at p_idx 1, blk 2: col = col_pumping_start + 1*n_blks + 2.
 #[test]
 fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.clock.n_blks();
@@ -1065,8 +1061,8 @@ fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
 /// separate column.
 #[test]
 fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.clock.n_blks();
@@ -1103,8 +1099,8 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
 /// caller's per-block loop yields one `(col, 1.0)` entry per block in order.
 #[test]
 fn pumping_flow_none_resolves_per_block() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.clock.n_blks();
@@ -1142,8 +1138,8 @@ fn pumping_flow_none_resolves_per_block() {
 /// Station id 20 at p_idx 1, consumption 0.75.
 #[test]
 fn pumping_power_none_resolves_per_block_with_consumption() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let col_pumping_start = layout.equipment.col_pumping_start;
     let n_blks = layout.clock.n_blks();
@@ -1178,8 +1174,8 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
 
 #[test]
 fn pumping_unknown_station_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     for var_ref in [
@@ -1200,18 +1196,26 @@ fn pumping_unknown_station_returns_empty() {
     }
 }
 
-/// `n_pumping == 0` (no stations) resolves to `vec![]` — the empty `pumping_pos`
+/// `n_pumping == 0` (no stations) resolves to `vec![]` — the empty `positions`
 /// lookup misses before `col_pumping_start` is ever used. Deliberately overrides
 /// the fixture's own declared two stations with none.
 #[test]
 fn pumping_no_stations_returns_empty() {
-    let fx = default_fixture();
-    let mut ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let no_stations: Vec<PumpingStation> = Vec::new();
     ctx.pumping_stations = &no_stations;
-    ctx.pumping_pos = BTreeMap::new();
     ctx.n_pumping = 0;
+    let positions_no_stations = EntityPositions::from_slices(
+        ctx.hydros.iter().map(|h| h.id),
+        ctx.thermals.iter().map(|t| t.id),
+        ctx.lines.iter().map(|l| l.id),
+        ctx.buses.iter().map(|b| b.id),
+        [],
+        ctx.contracts.iter().map(|c| c.id),
+    );
+    ctx.positions = &positions_no_stations;
 
     for var_ref in [
         VariableRef::PumpingFlow {
@@ -1314,8 +1318,8 @@ fn contract_family_slot_counts_per_direction() {
 /// `layout.contract_col(Import, 1, 0) = import_start + n_blks`.
 #[test]
 fn contract_import_resolves_to_column_with_unit_coefficient() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1340,8 +1344,8 @@ fn contract_import_resolves_to_column_with_unit_coefficient() {
 /// `grid.flat(export_start, 0, 2)`.
 #[test]
 fn contract_export_resolves_to_column_with_unit_coefficient() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1364,8 +1368,8 @@ fn contract_export_resolves_to_column_with_unit_coefficient() {
 /// defense-in-depth fallback past referential validation.
 #[test]
 fn contract_unknown_id_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1385,8 +1389,8 @@ fn contract_unknown_id_returns_empty() {
 
 #[test]
 fn non_controllable_generation_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1411,8 +1415,8 @@ fn non_controllable_generation_returns_empty() {
 /// fall-through.
 #[test]
 fn hydro_withdrawal_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1439,8 +1443,8 @@ fn hydro_withdrawal_returns_empty() {
 /// missing-id fall-through.
 #[test]
 fn non_controllable_curtailment_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1464,8 +1468,8 @@ fn non_controllable_curtailment_returns_empty() {
 
 #[test]
 fn missing_entity_id_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1487,8 +1491,8 @@ fn missing_entity_id_returns_empty() {
 /// [(61 + 0*2*3 + 0*3, 1.0), (61 + 0*2*3 + 1*3, 1.0)] = [(61, 1.0), (64, 1.0)].
 #[test]
 fn bus_deficit_returns_one_entry_per_segment() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1510,8 +1514,8 @@ fn bus_deficit_returns_one_entry_per_segment() {
 /// seg0 = 61 + 1*2*3 + 0*3 + 1 = 68; seg1 = 61 + 1*2*3 + 1*3 + 1 = 71.
 #[test]
 fn bus_deficit_second_bus_block_1() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1535,8 +1539,8 @@ fn bus_deficit_second_bus_block_1() {
 /// [(73 + 0*3 + 2, 1.0)] = [(75, 1.0)].
 #[test]
 fn bus_excess_maps_to_excess_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1558,8 +1562,8 @@ fn bus_excess_maps_to_excess_column() {
 /// [(55 + 0*3 + 1, 1.0)] = [(56, 1.0)].
 #[test]
 fn line_direct_maps_to_fwd_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1578,8 +1582,8 @@ fn line_direct_maps_to_fwd_column() {
 /// line_pos[EntityId(50)] = 0, line_rev.start = 58, n_blks = 3, block = 0 → [(58, 1.0)].
 #[test]
 fn line_reverse_maps_to_rev_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1604,8 +1608,8 @@ fn line_reverse_maps_to_rev_column() {
 /// Expected: [(55 + 0*3 + 1, 1.0), (58 + 0*3 + 1, -1.0)] = [(56, 1.0), (59, -1.0)]
 #[test]
 fn line_exchange_maps_to_fwd_and_rev_columns() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1627,8 +1631,8 @@ fn line_exchange_maps_to_fwd_and_rev_columns() {
 /// Expected: [(55, 1.0), (58, -1.0)]
 #[test]
 fn line_exchange_with_explicit_block() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1646,8 +1650,8 @@ fn line_exchange_with_explicit_block() {
 
 #[test]
 fn line_exchange_unknown_id_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1676,8 +1680,8 @@ fn line_exchange_unknown_id_returns_empty() {
 /// → column 9.
 #[test]
 fn anticipated_decision_maps_to_correct_column() {
-    let fx = anticipated_fixture();
-    let ctx = fx.ctx();
+    let mut fx = anticipated_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     assert_eq!(
@@ -1706,8 +1710,8 @@ fn anticipated_decision_maps_to_correct_column() {
 /// regardless of `block_idx`.
 #[test]
 fn anticipated_decision_ignores_block_idx() {
-    let fx = anticipated_fixture();
-    let ctx = fx.ctx();
+    let mut fx = anticipated_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     for block_idx in [0, 1] {
@@ -1731,8 +1735,8 @@ fn anticipated_decision_ignores_block_idx() {
 /// EntityId(5) at sys_pos=0 is NOT in `anticipated_plants`.
 #[test]
 fn anticipated_decision_non_anticipated_thermal_returns_empty() {
-    let fx = anticipated_fixture();
-    let ctx = fx.ctx();
+    let mut fx = anticipated_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1752,8 +1756,8 @@ fn anticipated_decision_non_anticipated_thermal_returns_empty() {
 
 #[test]
 fn anticipated_decision_unknown_entity_returns_empty() {
-    let fx = anticipated_fixture();
-    let ctx = fx.ctx();
+    let mut fx = anticipated_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1780,8 +1784,8 @@ fn anticipated_decision_unknown_entity_returns_empty() {
 /// `resolve_block_column` upholds for every one of its six callers.
 #[test]
 fn single_column_resolvers_land_inside_their_equipment_range() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let cases: [(VariableRef, &Range<usize>); 6] = [
@@ -1843,8 +1847,8 @@ fn single_column_resolvers_land_inside_their_equipment_range() {
 
 #[test]
 fn hydro_turbined_maps_to_turbine_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     // hydro pos=1 (EntityId 20), turbine.start=13, n_blks=3, block=2
@@ -1864,8 +1868,8 @@ fn hydro_turbined_maps_to_turbine_column() {
 
 #[test]
 fn hydro_spillage_maps_to_spillage_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     // hydro pos=3 (EntityId 40), spillage.start=25, n_blks=3, block=1
@@ -1887,8 +1891,8 @@ fn hydro_spillage_maps_to_spillage_column() {
 /// the unit coefficient.
 #[test]
 fn diversion_maps_to_diversion_column() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -1925,8 +1929,8 @@ fn make_inflow_cascade() -> CascadeTopology {
 /// z_inflow.start=4 → (7, 1.0); turbine.start=13, spillage.start=25, n_blks=3, k=2.
 #[test]
 fn hydro_inflow_two_upstream_canonical_order() {
-    let fx = default_fixture();
-    let mut ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
     ctx.cascade = &cascade;
@@ -1962,8 +1966,8 @@ fn hydro_inflow_two_upstream_canonical_order() {
 /// (the resolver uses `eff_blk = block_id.unwrap_or(block_idx)`).
 #[test]
 fn hydro_inflow_none_matches_some_block_idx() {
-    let fx = default_fixture();
-    let mut ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
     ctx.cascade = &cascade;
@@ -1996,8 +2000,8 @@ fn hydro_inflow_none_matches_some_block_idx() {
 /// index 2), diversion.start=37, n_blks=3, k=1 → (37 + 2*3 + 1, 1.0) = (44, 1.0).
 #[test]
 fn hydro_inflow_diversion_into_appends_diversion_column() {
-    let fx = default_fixture();
-    let mut ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
     let div: HashMap<EntityId, Vec<usize>> = [(EntityId(40), vec![2])].into_iter().collect();
@@ -2038,8 +2042,8 @@ fn hydro_inflow_diversion_into_appends_diversion_column() {
 /// `make_inflow_cascade`; z_inflow.start=4 → (6, 1.0).
 #[test]
 fn hydro_inflow_headwater_resolves_to_z_inflow_only() {
-    let fx = default_fixture();
-    let mut ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let cascade = make_inflow_cascade();
     ctx.cascade = &cascade;
@@ -2063,8 +2067,8 @@ fn hydro_inflow_headwater_resolves_to_z_inflow_only() {
 /// `z_inflow.start` is meaningless; the resolver must short-circuit to `[]`.
 #[test]
 fn hydro_inflow_empty_when_no_hydros() {
-    let fx = anticipated_fixture();
-    let ctx = fx.ctx();
+    let mut fx = anticipated_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     assert!(
@@ -2090,8 +2094,8 @@ fn hydro_inflow_empty_when_no_hydros() {
 
 #[test]
 fn hydro_inflow_unknown_id_returns_empty() {
-    let fx = default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let result = call(
@@ -2152,8 +2156,8 @@ fn chronological_default_fixture() -> ResolverFixture {
 /// against its own hand-computed oracle rather than compared to each other.
 #[test]
 fn hydro_storage_boundary_resolves_each_boundary() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let storage_internal_start = layout.equipment.storage_internal_start;
 
@@ -2207,8 +2211,8 @@ fn hydro_storage_boundary_resolves_each_boundary() {
 /// `HydroStorageFinal{K-1}` resolves to the SAME column as `HydroStorage` (Sᴷ).
 #[test]
 fn hydro_storage_final_last_block_equals_hydro_storage() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let final_last = call(
@@ -2236,8 +2240,8 @@ fn hydro_storage_final_last_block_equals_hydro_storage() {
 /// `Initial{1}` both resolve to the interior column `S¹`.
 #[test]
 fn hydro_storage_final_shares_interior_column_with_next_initial() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let storage_internal_start = layout.equipment.storage_internal_start;
 
@@ -2267,8 +2271,8 @@ fn hydro_storage_final_shares_interior_column_with_next_initial() {
 /// `Sᴷ` for final — independent of the caller's `block_idx`.
 #[test]
 fn hydro_storage_boundary_none_resolves_stage_endpoint() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     for blk in 0..3 {
@@ -2310,8 +2314,8 @@ fn hydro_storage_boundary_none_resolves_stage_endpoint() {
 
 #[test]
 fn hydro_storage_boundary_unknown_id_returns_empty() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     for var_ref in [
@@ -2361,8 +2365,8 @@ fn storage_boundary_variants_are_block_independent() {
 /// like their storage counterparts.
 #[test]
 fn hydro_useful_volume_boundary_matches_storage_boundary() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     for block_id in [None, Some(0), Some(1), Some(2)] {
@@ -2427,8 +2431,8 @@ fn hydro_useful_volume_boundary_matches_storage_boundary() {
 /// `* multiplier` factor.
 #[test]
 fn hydro_useful_volume_boundary_multiplier_is_exactly_one() {
-    let fx = chronological_default_fixture();
-    let ctx = fx.ctx();
+    let mut fx = chronological_default_fixture();
+    let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     let useful_initial = call(

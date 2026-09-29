@@ -62,8 +62,8 @@ use crate::lp::builder::{
 #[cfg(test)]
 use crate::lp::indexer::HydroSys;
 use crate::lp::indexer::{
-    AnticipatedPlants, BlockRowFamily, CutStateProjection, HydroCellIndex, StateDim, StateSpace,
-    StudyDimensions,
+    AnticipatedPlants, BlockRowFamily, CutStateProjection, EntityPositions, HydroCellIndex,
+    StateDim, StateSpace, StudyDimensions,
 };
 use crate::noise::{DownstreamAccumState, LagAccumState};
 use crate::policy::policy_load::{
@@ -628,7 +628,7 @@ pub fn geometry(
         PostStudyResolved::default(),
     );
 
-    let fixture = CtxFixture {
+    let mut fixture = CtxFixture {
         hydros,
         buses,
         hydro_cell_index,
@@ -645,10 +645,10 @@ pub fn geometry(
     let mut ctx = fixture.ctx();
     // geometry() never resolves an EntityId through a position map, and declares
     // its thermal/line/anticipated counts independently of the (deliberately
-    // empty) entity slices — restore the fixture's own values over the derived
-    // ones.
-    ctx.hydro_pos = BTreeMap::new();
-    ctx.bus_pos = BTreeMap::new();
+    // empty) entity slices — restore the empty-positions default over the
+    // derived (non-empty hydro/bus) one.
+    let empty_positions = EntityPositions::from_slices([], [], [], [], [], []);
+    ctx.positions = &empty_positions;
     ctx.n_thermals = dims.n_thermals;
     ctx.n_lines = dims.n_lines;
     ctx.n_anticipated = dims.n_anticipated;

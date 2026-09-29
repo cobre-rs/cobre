@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::ops::Range;
 
 use cobre_core::{BlockMode, ContractType, EntityId, Stage, System};
@@ -720,9 +720,9 @@ pub fn build_stage_templates_resolving_layout(
     ))
 }
 
-/// Build the [`TemplateBuildCtx`] shared across all per-stage builds:
-/// position maps (hydro/thermal/line/bus) plus every field it borrows from
-/// `inputs` (the resolved load models, filling target, and diversion map).
+/// Build the [`TemplateBuildCtx`] shared across all per-stage builds, from
+/// `system`'s own slices plus every field it borrows from `inputs` (the
+/// resolved positions, load models, filling target, and diversion map).
 ///
 /// Called once per `build_stage_templates` invocation, after the early-return
 /// guard for empty systems.
@@ -753,51 +753,14 @@ fn build_template_build_ctx<'a>(
     let buses = system.buses();
     let n_hydros = hydros.len();
 
-    let hydro_pos: BTreeMap<EntityId, usize> =
-        hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
-    let thermal_pos: BTreeMap<EntityId, usize> = system
-        .thermals()
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id, i))
-        .collect();
-    let line_pos: BTreeMap<EntityId, usize> = system
-        .lines()
-        .iter()
-        .enumerate()
-        .map(|(i, l)| (l.id, i))
-        .collect();
-    let bus_pos: BTreeMap<EntityId, usize> =
-        buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
-
     // Iterate the (ID-sorted) station slice in slot order, NOT declaration order,
     // to uphold the declaration-order bit-determinism rule.
     let pumping_stations = system.pumping_stations();
-    let pumping_pos: BTreeMap<EntityId, usize> = pumping_stations
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (p.id, i))
-        .collect();
     let n_pumping = pumping_stations.len();
-    // Fail fast on a station-count divergence rather than silently reserving the
-    // wrong number of pumping-flow columns.
-    debug_assert_eq!(
-        n_pumping,
-        system.bounds().n_pumping(),
-        "pumping_stations.len() ({}) != bounds.n_pumping() ({}): resolved-bounds \
-         station count disagrees with the entity slice",
-        n_pumping,
-        system.bounds().n_pumping()
-    );
 
     // One id-sorted slice for both directions; the import/export split is derived
     // here as counts (the dense per-direction column strides) by `contract_type`.
     let contracts = system.contracts();
-    let contract_pos: BTreeMap<EntityId, usize> = contracts
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
-        .collect();
     let n_contract_import = contracts
         .iter()
         .filter(|c| c.contract_type == ContractType::Import)
@@ -806,16 +769,6 @@ fn build_template_build_ctx<'a>(
         .iter()
         .filter(|c| c.contract_type == ContractType::Export)
         .count();
-    // Fail fast on a contract-count divergence rather than silently reserving the
-    // wrong number of contract columns.
-    debug_assert_eq!(
-        contracts.len(),
-        system.bounds().n_contracts(),
-        "contracts.len() ({}) != bounds.n_contracts() ({}): resolved-bounds \
-         contract count disagrees with the entity slice",
-        contracts.len(),
-        system.bounds().n_contracts()
-    );
 
     let n_anticipated = anticipated_plants.len();
 
@@ -836,20 +789,15 @@ fn build_template_build_ctx<'a>(
             resolved_ncs_factors: system.resolved_ncs_factors(),
             resolved_parameters,
         },
-        hydro_pos,
-        thermal_pos,
-        line_pos,
-        bus_pos,
+        positions: &inputs.positions,
         par_lp,
         production_models,
         evaporation_models,
         generic_constraints: system.generic_constraints(),
         non_controllable_sources: system.non_controllable_sources(),
         pumping_stations,
-        pumping_pos,
         n_pumping,
         contracts,
-        contract_pos,
         n_contract_import,
         n_contract_export,
         diversion_upstream: &inputs.diversion_upstream,

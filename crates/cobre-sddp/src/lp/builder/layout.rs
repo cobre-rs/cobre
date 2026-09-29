@@ -16,10 +16,10 @@ use crate::hydro_models::{
 };
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys,
-    EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
-    HydroCell, HydroCellIndex, HydroSys, LineSys, NcsSys, PumpingSys, RangeCursor, StateSpace,
-    StorageBoundaryGrid, ThermalSys, anticipated_resolution_for, for_each_live_commitment_slot,
-    is_anticipated_decision_active_for_delivery,
+    EntityPositions, EvapLocal, EvaporationIndices, FillingTargetLocal, FloorLocal, FphaCellLocal,
+    FphaLocal, HydroCell, HydroCellIndex, HydroSys, LineSys, NcsSys, PumpingSys, RangeCursor,
+    StateSpace, StorageBoundaryGrid, ThermalSys, anticipated_resolution_for,
+    for_each_live_commitment_slot, is_anticipated_decision_active_for_delivery,
 };
 use crate::lead_time::{AnticipatedResolution, SpreadResolution};
 use crate::time_value::TimeValue;
@@ -65,17 +65,10 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) hydro_cell_index: &'a HydroCellIndex,
     /// Pre-resolved bound, penalty, and factor tables.
     pub(crate) resolved: ResolvedTables<'a>,
-    /// Entity-id → canonical slot index. `BTreeMap`, not `HashMap`: an accidental
-    /// iterating fill then emits entries in canonical `EntityId` order, not
-    /// nondeterministic `HashMap` order (declaration-order bit-determinism;
-    /// `csc_byte_identical_under_permuted_multi_entity_order`).
-    pub(crate) hydro_pos: BTreeMap<EntityId, usize>,
-    /// Thermal id → slot. `BTreeMap` for determinism, see `hydro_pos`.
-    pub(crate) thermal_pos: BTreeMap<EntityId, usize>,
-    /// Line id → slot. `BTreeMap` for determinism, see `hydro_pos`.
-    pub(crate) line_pos: BTreeMap<EntityId, usize>,
-    /// Bus id → slot. `BTreeMap` for determinism, see `hydro_pos`.
-    pub(crate) bus_pos: BTreeMap<EntityId, usize>,
+    /// Canonical entity-id → slot maps for every position-addressed family.
+    /// Declaration-order bit-determinism (`csc_byte_identical_under_permuted_multi_entity_order`)
+    /// depends on every fill iterating a slice, never this map.
+    pub(crate) positions: &'a EntityPositions,
     pub(crate) par_lp: &'a PrecomputedPar,
     /// Resolved production models for all (hydro, stage) pairs.
     pub(crate) production_models: &'a ProductionModelSet,
@@ -87,9 +80,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) non_controllable_sources: &'a [NonControllableSource],
     /// Pumping station entities, id-sorted (canonical slot order).
     pub(crate) pumping_stations: &'a [PumpingStation],
-    /// Station id → slot into `pumping_stations`. `BTreeMap` for determinism, see
-    /// `hydro_pos`.
-    pub(crate) pumping_pos: BTreeMap<EntityId, usize>,
     /// Full station count, asserted `== bounds.n_pumping()` at construction. The
     /// dense per-stage column-block stride: every station keeps a column at every
     /// stage, a commissioning-dormant one zeroed to `[0, 0]` rather than omitted.
@@ -98,9 +88,6 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// both directions; the import/export split is derived at fill time from
     /// `contract_type`, not pre-partitioned.
     pub(crate) contracts: &'a [EnergyContract],
-    /// Contract id → slot into `contracts`. `BTreeMap` for determinism, see
-    /// `hydro_pos`.
-    pub(crate) contract_pos: BTreeMap<EntityId, usize>,
     /// Number of import-family contracts; the dense per-stage import-column stride.
     pub(crate) n_contract_import: usize,
     /// Number of export-family contracts; the dense per-stage export-column stride.
@@ -142,8 +129,9 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// because the fold needs the full per-stage ζ·rate schedule across a hydro's
     /// Filling stages; the forbidden alternative — recomputing inside the per-stage
     /// `fill_filling_target_rows` (which sees one stage) — is wrong or re-walks the
-    /// schedule on the hot path. `BTreeMap` for determinism, see `hydro_pos`.
-    /// Empty for a non-filling build (parity-neutral). Borrowed from
+    /// schedule on the hot path. `BTreeMap` for determinism (canonical iteration
+    /// order, not `HashMap`'s). Empty for a non-filling build (parity-neutral).
+    /// Borrowed from
     /// [`crate::setup::resolve_lp_build_inputs`]'s single resolution
     /// (`LpBuildInputs::filling_v_target`,
     /// [`build_filling_v_target`](crate::setup::lp_build_inputs::build_filling_v_target)).
@@ -991,7 +979,7 @@ fn useful_volume_bound_shift(
         // A dangling hydro_id is unreachable past referential validation
         // (`validate_variable_ref_entity`); mirrors `ResolvedParameters::get`'s
         // test-loud, production-safe miss handling.
-        let Some(&h_idx) = ctx.hydro_pos.get(&hydro_id) else {
+        let Some(h_idx) = ctx.positions.hydro(hydro_id) else {
             debug_assert!(
                 false,
                 "generic constraint {:?} useful-volume term references unknown hydro {hydro_id:?}",

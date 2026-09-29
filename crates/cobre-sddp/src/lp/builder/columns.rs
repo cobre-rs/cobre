@@ -1512,7 +1512,7 @@ mod interior_storage_bound_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -1520,7 +1520,7 @@ mod interior_storage_bound_tests {
     /// Run `fill_storage_columns` against raw, unscaled buffers for `stage`,
     /// returning the bound/objective buffers plus the resolved storage-column
     /// offsets by value (the borrowed `StateSpace` cannot escape).
-    fn run_fill(fixtures: &InteriorStorageFixtures, stage: &Stage) -> RawFill {
+    fn run_fill(fixtures: &mut InteriorStorageFixtures, stage: &Stage) -> RawFill {
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, stage, STAGE_IDX);
@@ -1565,10 +1565,10 @@ mod interior_storage_bound_tests {
     /// with storage bounds and objective unchanged.
     #[test]
     fn interior_storage_columns_inherit_stage_bounds_objective_scale() {
-        let fixtures = InteriorStorageFixtures::new();
+        let mut fixtures = InteriorStorageFixtures::new();
 
         // Bounds + objective: raw, unscaled buffers in chronological K = 3.
-        let chrono = run_fill(&fixtures, &stage_with_blocks(BlockMode::Chronological));
+        let chrono = run_fill(&mut fixtures, &stage_with_blocks(BlockMode::Chronological));
         assert!(
             !chrono.storage_internal_empty,
             "chronological K=3 must reserve interior storage columns"
@@ -1629,7 +1629,7 @@ mod interior_storage_bound_tests {
         // bit-for-bit identical in bounds, objective, and dense matrix — and neither
         // reserves interior columns. (A change perturbing the inert loop into the
         // parallel column block would break this dense comparison.)
-        let parallel = run_fill(&fixtures, &stage_with_blocks(BlockMode::Parallel));
+        let parallel = run_fill(&mut fixtures, &stage_with_blocks(BlockMode::Parallel));
         assert!(
             parallel.storage_internal_empty,
             "parallel interior storage-boundary family must be empty (no interior columns)"
@@ -1640,7 +1640,7 @@ mod interior_storage_bound_tests {
             "parallel mode resolves no interior storage columns"
         );
 
-        let build_parallel = || {
+        let mut build_parallel = || {
             let par_ctx = fixtures.make_ctx();
             let par_state = state_layout_for(&par_ctx);
             let parallel_stage = stage_with_blocks(BlockMode::Parallel);
@@ -1937,7 +1937,7 @@ mod diversion_bound_tests {
                 .min_diversion_m3s = value;
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -1949,7 +1949,7 @@ mod diversion_bound_tests {
     /// the `StageLayout` itself: the layout borrows the function-local
     /// `StateSpace`, so it cannot escape — the caller only needs these two
     /// offsets to index `col_lower`/`col_upper`.
-    fn run_fill(fixtures: &DivFixtures) -> (Vec<f64>, Vec<f64>, usize, usize) {
+    fn run_fill(fixtures: &mut DivFixtures) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let stage = two_block_stage(STAGE_IDX, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
@@ -1984,7 +1984,7 @@ mod diversion_bound_tests {
         let mut fixtures = DivFixtures::new();
         fixtures.set_resolved_diversion(Some(override_value));
 
-        let (_col_lower, col_upper, n_blks, col_diversion_start) = run_fill(&fixtures);
+        let (_col_lower, col_upper, n_blks, col_diversion_start) = run_fill(&mut fixtures);
         for blk in 0..n_blks {
             let col = col_diversion_start + blk;
             assert_eq!(
@@ -2006,7 +2006,7 @@ mod diversion_bound_tests {
         // resolver does for a diverting hydro with no per-stage override.
         fixtures.set_resolved_diversion(Some(DECLARATION_MAX_FLOW_M3S));
 
-        let (_col_lower, col_upper, n_blks, col_diversion_start) = run_fill(&fixtures);
+        let (_col_lower, col_upper, n_blks, col_diversion_start) = run_fill(&mut fixtures);
         for blk in 0..n_blks {
             let col = col_diversion_start + blk;
             assert_eq!(
@@ -2026,7 +2026,7 @@ mod diversion_bound_tests {
         fixtures.set_resolved_diversion(Some(20.0));
         fixtures.set_resolved_diversion_min(Some(5.0));
 
-        let (col_lower, col_upper, n_blks, col_diversion_start) = run_fill(&fixtures);
+        let (col_lower, col_upper, n_blks, col_diversion_start) = run_fill(&mut fixtures);
         for blk in 0..n_blks {
             let col = col_diversion_start + blk;
             assert_eq!(
@@ -2047,7 +2047,7 @@ mod diversion_bound_tests {
         let mut fixtures = DivFixtures::new();
         fixtures.set_resolved_diversion(Some(DECLARATION_MAX_FLOW_M3S));
 
-        let (col_lower, _col_upper, n_blks, col_diversion_start) = run_fill(&fixtures);
+        let (col_lower, _col_upper, n_blks, col_diversion_start) = run_fill(&mut fixtures);
         for blk in 0..n_blks {
             let col = col_diversion_start + blk;
             assert_eq!(
@@ -2283,7 +2283,7 @@ mod filling_phase_gating_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -2302,7 +2302,7 @@ mod filling_phase_gating_tests {
     /// read. The layout and resolved-bound lookups use `STAGE_IDX`; the phase is
     /// keyed on `stage_id` alone, so building the stage at `stage_id` (its `id`)
     /// while pinning the resolved-bound index lets one bounds row serve all phases.
-    fn run_fills(fixtures: &Fixtures, stage_id: i32) -> (Vec<f64>, Vec<f64>, [usize; 3]) {
+    fn run_fills(fixtures: &mut Fixtures, stage_id: i32) -> (Vec<f64>, Vec<f64>, [usize; 3]) {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
@@ -2335,7 +2335,10 @@ mod filling_phase_gating_tests {
     /// `(col_lower, col_upper)`, the spillage column start, and the block count.
     /// Isolated like `run_storage_fill`: the spillage freeze is independent of the
     /// turbine/diversion/generation gates, so it is exercised on its own.
-    fn run_spillage_fill(fixtures: &Fixtures, stage_id: i32) -> (Vec<f64>, Vec<f64>, usize, usize) {
+    fn run_spillage_fill(
+        fixtures: &mut Fixtures,
+        stage_id: i32,
+    ) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         run_spillage_fill_at(fixtures, &stage)
@@ -2345,7 +2348,7 @@ mod filling_phase_gating_tests {
     /// per-block override AC, whose `block_id = 2` target has no counterpart on a
     /// two-block stage.
     fn run_spillage_fill_three_block(
-        fixtures: &Fixtures,
+        fixtures: &mut Fixtures,
         stage_id: i32,
     ) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
@@ -2354,7 +2357,7 @@ mod filling_phase_gating_tests {
     }
 
     fn run_spillage_fill_at(
-        fixtures: &Fixtures,
+        fixtures: &mut Fixtures,
         stage: &Stage,
     ) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let ctx = fixtures.make_ctx();
@@ -2389,9 +2392,9 @@ mod filling_phase_gating_tests {
     /// relief valve (D40).
     #[test]
     fn filling_hydro_spillage_frozen_in_prefilling_free_in_filling_and_operating() {
-        let fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), false);
+        let mut fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), false);
         let (_lower_pre, upper_pre, spill_start, n_blks) =
-            run_spillage_fill(&fixtures, PREFILLING_ID);
+            run_spillage_fill(&mut fixtures, PREFILLING_ID);
         for blk in 0..n_blks {
             assert_eq!(
                 upper_pre[spill_start + blk],
@@ -2400,7 +2403,7 @@ mod filling_phase_gating_tests {
             );
         }
         for stage_id in [FILLING_ID, OPERATING_ID] {
-            let (_lower, upper, start, n) = run_spillage_fill(&fixtures, stage_id);
+            let (_lower, upper, start, n) = run_spillage_fill(&mut fixtures, stage_id);
             for blk in 0..n {
                 assert_eq!(
                     upper[start + blk],
@@ -2416,11 +2419,11 @@ mod filling_phase_gating_tests {
     /// regaining free spillage from `entry` onward (`Operating`).
     #[test]
     fn dormant_non_filling_hydro_spillage_frozen_before_entry_free_after() {
-        let fixtures = Fixtures::new(None, Some(ENTRY_STAGE_ID), false);
+        let mut fixtures = Fixtures::new(None, Some(ENTRY_STAGE_ID), false);
         // With filling = None, both ids < entry are PreFilling (no Filling phase
         // exists for a non-filling hydro): FILLING_ID here is just a second dormant id.
         for stage_id in [PREFILLING_ID, FILLING_ID] {
-            let (_lower, upper, start, n_blks) = run_spillage_fill(&fixtures, stage_id);
+            let (_lower, upper, start, n_blks) = run_spillage_fill(&mut fixtures, stage_id);
             for blk in 0..n_blks {
                 assert_eq!(
                     upper[start + blk],
@@ -2429,7 +2432,7 @@ mod filling_phase_gating_tests {
                 );
             }
         }
-        let (_lower, upper, start, n_blks) = run_spillage_fill(&fixtures, OPERATING_ID);
+        let (_lower, upper, start, n_blks) = run_spillage_fill(&mut fixtures, OPERATING_ID);
         for blk in 0..n_blks {
             assert_eq!(
                 upper[start + blk],
@@ -2444,9 +2447,9 @@ mod filling_phase_gating_tests {
     /// freeze never fires).
     #[test]
     fn non_filling_hydro_spillage_free_at_every_stage() {
-        let fixtures = Fixtures::new(None, None, false);
+        let mut fixtures = Fixtures::new(None, None, false);
         for stage_id in [PREFILLING_ID, FILLING_ID, OPERATING_ID] {
-            let (_lower, upper, start, n_blks) = run_spillage_fill(&fixtures, stage_id);
+            let (_lower, upper, start, n_blks) = run_spillage_fill(&mut fixtures, stage_id);
             for blk in 0..n_blks {
                 assert_eq!(
                     upper[start + blk],
@@ -2468,7 +2471,7 @@ mod filling_phase_gating_tests {
         hb.min_spillage_m3s = Some(2.0);
         hb.max_spillage_m3s = Some(30.0);
 
-        let (lower, upper, start, n_blks) = run_spillage_fill(&fixtures, FILLING_ID);
+        let (lower, upper, start, n_blks) = run_spillage_fill(&mut fixtures, FILLING_ID);
         for blk in 0..n_blks {
             assert_eq!(
                 lower[start + blk],
@@ -2494,7 +2497,7 @@ mod filling_phase_gating_tests {
         hb.min_spillage_m3s = Some(2.0);
         hb.max_spillage_m3s = Some(30.0);
 
-        let (lower, upper, start, n_blks) = run_spillage_fill(&fixtures, PREFILLING_ID);
+        let (lower, upper, start, n_blks) = run_spillage_fill(&mut fixtures, PREFILLING_ID);
         for blk in 0..n_blks {
             assert_eq!(
                 lower[start + blk],
@@ -2515,8 +2518,8 @@ mod filling_phase_gating_tests {
     /// `col_lower`.
     #[test]
     fn operating_no_bounds_preserves_free_range_both_sides() {
-        let fixtures = Fixtures::new(None, None, false);
-        let (lower, upper, start, n_blks) = run_spillage_fill(&fixtures, OPERATING_ID);
+        let mut fixtures = Fixtures::new(None, None, false);
+        let (lower, upper, start, n_blks) = run_spillage_fill(&mut fixtures, OPERATING_ID);
         for blk in 0..n_blks {
             assert_eq!(
                 lower[start + blk],
@@ -2562,7 +2565,8 @@ mod filling_phase_gating_tests {
             .expect("overlay cell must exist for a fixture-sized overlay")
             .max_spillage_m3s = Some(10.0);
 
-        let (_lower, upper, start, n_blks) = run_spillage_fill_three_block(&fixtures, OPERATING_ID);
+        let (_lower, upper, start, n_blks) =
+            run_spillage_fill_three_block(&mut fixtures, OPERATING_ID);
         assert_eq!(n_blks, 3, "three-block fixture");
         assert_eq!(
             [upper[start], upper[start + 1], upper[start + 2]],
@@ -2587,9 +2591,9 @@ mod filling_phase_gating_tests {
     /// `filling_hydro_turbine_and_generation_normal_in_operating`.
     #[test]
     fn filling_hydro_turbine_zeroed_and_no_generation_column_before_entry() {
-        let fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), true);
+        let mut fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), true);
         for stage_id in [PREFILLING_ID, FILLING_ID] {
-            let (lower, upper, [turb, _div, gen_col]) = run_fills(&fixtures, stage_id);
+            let (lower, upper, [turb, _div, gen_col]) = run_fills(&mut fixtures, stage_id);
             assert_eq!(lower[turb], 0.0, "turbine col_lower at stage {stage_id}");
             assert_eq!(upper[turb], 0.0, "turbine col_upper at stage {stage_id}");
             assert_eq!(
@@ -2604,8 +2608,8 @@ mod filling_phase_gating_tests {
     /// their normal operating bounds — only diversion stays gated all-phases.
     #[test]
     fn filling_hydro_turbine_and_generation_normal_in_operating() {
-        let fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), true);
-        let (lower, upper, [turb, _div, gen_col]) = run_fills(&fixtures, OPERATING_ID);
+        let mut fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), true);
+        let (lower, upper, [turb, _div, gen_col]) = run_fills(&mut fixtures, OPERATING_ID);
         assert_eq!(lower[turb], 0.0, "turbine col_lower");
         assert_eq!(upper[turb], MAX_TURBINED_M3S, "turbine col_upper");
         assert_eq!(lower[gen_col], 0.0, "generation col_lower");
@@ -2616,9 +2620,9 @@ mod filling_phase_gating_tests {
     /// on `filling.is_some()`, not on the phase, so entry does not re-enable it.
     #[test]
     fn filling_hydro_diversion_zeroed_in_all_phases() {
-        let fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), true);
+        let mut fixtures = Fixtures::new(Some(filling_config()), Some(ENTRY_STAGE_ID), true);
         for stage_id in [PREFILLING_ID, FILLING_ID, OPERATING_ID] {
-            let (lower, upper, [_turb, div, _gen_col]) = run_fills(&fixtures, stage_id);
+            let (lower, upper, [_turb, div, _gen_col]) = run_fills(&mut fixtures, stage_id);
             for blk in 0..2 {
                 let col = div + blk;
                 assert_eq!(
@@ -2646,7 +2650,7 @@ mod filling_phase_gating_tests {
             .hydro_block_base_mut(0, STAGE_IDX)
             .min_diversion_m3s = Some(5.0);
 
-        let (lower, upper, [_turb, div, _gen_col]) = run_fills(&fixtures, OPERATING_ID);
+        let (lower, upper, [_turb, div, _gen_col]) = run_fills(&mut fixtures, OPERATING_ID);
         for blk in 0..2 {
             let col = div + blk;
             assert_eq!(
@@ -2665,9 +2669,9 @@ mod filling_phase_gating_tests {
     /// stage id (the parity-neutrality contract — all three gates no-op).
     #[test]
     fn non_filling_hydro_unchanged_at_every_stage() {
-        let fixtures = Fixtures::new(None, None, true);
+        let mut fixtures = Fixtures::new(None, None, true);
         for stage_id in [PREFILLING_ID, FILLING_ID, OPERATING_ID] {
-            let (lower, upper, [turb, div, gen_col]) = run_fills(&fixtures, stage_id);
+            let (lower, upper, [turb, div, gen_col]) = run_fills(&mut fixtures, stage_id);
             assert_eq!(lower[turb], 0.0, "turbine col_lower at {stage_id}");
             assert_eq!(
                 upper[turb], MAX_TURBINED_M3S,
@@ -2699,9 +2703,9 @@ mod filling_phase_gating_tests {
     /// `PreFilling` stage.
     #[test]
     fn dormant_non_filling_hydro_zeroed_before_entry() {
-        let fixtures = Fixtures::new(None, Some(ENTRY_STAGE_ID), true);
+        let mut fixtures = Fixtures::new(None, Some(ENTRY_STAGE_ID), true);
         for stage_id in [PREFILLING_ID, FILLING_ID] {
-            let (lower, upper, [turb, div, gen_col]) = run_fills(&fixtures, stage_id);
+            let (lower, upper, [turb, div, gen_col]) = run_fills(&mut fixtures, stage_id);
             assert_eq!(lower[turb], 0.0, "turbine col_lower at stage {stage_id}");
             assert_eq!(upper[turb], 0.0, "turbine col_upper at stage {stage_id}");
             for blk in 0..2 {
@@ -2728,8 +2732,8 @@ mod filling_phase_gating_tests {
     /// return to their normal bounds at the first commissioned stage.
     #[test]
     fn dormant_non_filling_hydro_normal_from_entry() {
-        let fixtures = Fixtures::new(None, Some(ENTRY_STAGE_ID), true);
-        let (lower, upper, [turb, div, gen_col]) = run_fills(&fixtures, OPERATING_ID);
+        let mut fixtures = Fixtures::new(None, Some(ENTRY_STAGE_ID), true);
+        let (lower, upper, [turb, div, gen_col]) = run_fills(&mut fixtures, OPERATING_ID);
         assert_eq!(lower[turb], 0.0, "turbine col_lower");
         assert_eq!(upper[turb], MAX_TURBINED_M3S, "turbine col_upper");
         assert_eq!(lower[gen_col], 0.0, "generation col_lower");
@@ -3137,7 +3141,6 @@ mod filling_phase_gating_tests {
 )]
 mod anticipated_objective_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
-    use std::collections::BTreeMap;
 
     use cobre_core::entities::thermal::AnticipatedConfig;
     use cobre_core::{
@@ -3232,10 +3235,8 @@ mod anticipated_objective_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-            let mut ctx = self.base.ctx();
-            ctx.thermal_pos = BTreeMap::new();
-            ctx
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+            self.base.ctx()
         }
     }
 
@@ -3290,7 +3291,7 @@ mod anticipated_objective_tests {
     /// (`fill_anticipated_columns` writes `cost * hours * cumulative_discount`).
     #[test]
     fn anticipated_objective_skip_and_npv_after_fill_stage_columns() {
-        let fixtures = AntObjFixtures::new();
+        let mut fixtures = AntObjFixtures::new();
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(STAGE_IDX, [372.0, 372.0]);
         let state = state_layout_for(&ctx);
@@ -3442,10 +3443,8 @@ mod anticipated_objective_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-            let mut ctx = self.base.ctx();
-            ctx.thermal_pos = BTreeMap::new();
-            ctx
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+            self.base.ctx()
         }
     }
 
@@ -3481,7 +3480,7 @@ mod anticipated_objective_tests {
             (0.0, 0.0, 0.0),
             (0.0, 0.0, 0.0),
         ];
-        let fx = DeliveryAnchoredFixtures::new(
+        let mut fx = DeliveryAnchoredFixtures::new(
             N_STAGES,
             K_MAX,
             AnticipatedConfig::LeadStages(1),
@@ -3725,10 +3724,8 @@ mod anticipated_objective_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
-            let mut ctx = self.base.ctx();
-            ctx.thermal_pos = BTreeMap::new();
-            ctx
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+            self.base.ctx()
         }
     }
 
@@ -3738,7 +3735,7 @@ mod anticipated_objective_tests {
     /// in-study arm, byte-identical to the pre-ticket read.
     #[test]
     fn post_study_anchor_study_only_axis_reads_thermal_block_base() {
-        let fixtures = PostStudyAnchorFixtures::new(0, &[]);
+        let mut fixtures = PostStudyAnchorFixtures::new(0, &[]);
         let ctx = fixtures.make_ctx();
         let state = state_layout_with_resolution(&ctx);
         let stage = two_block_stage(0, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
@@ -3771,7 +3768,7 @@ mod anticipated_objective_tests {
     /// `0`), where the deck declares `(cost 42.0, min 10.0, max 50.0)`.
     #[test]
     fn post_study_anchor_extended_axis_reads_post_study_bound() {
-        let fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 10.0, 50.0)]);
+        let mut fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 10.0, 50.0)]);
         let ctx = fixtures.make_ctx();
         let state = state_layout_with_resolution(&ctx);
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
@@ -3803,7 +3800,7 @@ mod anticipated_objective_tests {
     /// `[0, 0]` treatment, with no panic.
     #[test]
     fn post_study_anchor_missing_cell_leaves_decision_column_dormant() {
-        let fixtures = PostStudyAnchorFixtures::new(2, &[]);
+        let mut fixtures = PostStudyAnchorFixtures::new(2, &[]);
         let ctx = fixtures.make_ctx();
         let state = state_layout_with_resolution(&ctx);
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
@@ -3831,7 +3828,7 @@ mod anticipated_objective_tests {
     /// second interval intersected.
     #[test]
     fn post_study_anchor_min_equals_max_pins_the_decision_column() {
-        let fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 30.0, 30.0)]);
+        let mut fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 30.0, 30.0)]);
         let ctx = fixtures.make_ctx();
         let state = state_layout_with_resolution(&ctx);
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
@@ -4169,7 +4166,7 @@ mod block_family_slack_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -4206,7 +4203,7 @@ mod block_family_slack_tests {
     #[test]
     fn block_family_driver_matches_legacy_slack_fills() {
         let specs = hydro_specs();
-        let fixtures = SlackFixtures::new(&specs);
+        let mut fixtures = SlackFixtures::new(&specs);
         let stage = two_block_stage(STAGE_IDX, [BLOCK_HOURS[0], BLOCK_HOURS[1]]);
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
@@ -4536,7 +4533,7 @@ mod evaporation_slack_objective_tests {
             }
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -4548,7 +4545,7 @@ mod evaporation_slack_objective_tests {
         n_blks: usize,
     }
 
-    fn run_fill(fixtures: &EvapFixtures, stage: &Stage) -> EvapFill {
+    fn run_fill(fixtures: &mut EvapFixtures, stage: &Stage) -> EvapFill {
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
         let layout = StageLayout::new(&ctx, &state, stage, STAGE_IDX);
@@ -4582,9 +4579,9 @@ mod evaporation_slack_objective_tests {
     fn chronological_evap_slack_objective_is_block_weighted() {
         let block_durations = [300.0, 444.0, 148.0];
         let total_hours: f64 = block_durations.iter().sum();
-        let fixtures = EvapFixtures::new();
+        let mut fixtures = EvapFixtures::new();
         let chrono = run_fill(
-            &fixtures,
+            &mut fixtures,
             &stage_with_blocks(BlockMode::Chronological, &block_durations),
         );
 
@@ -4625,9 +4622,9 @@ mod evaporation_slack_objective_tests {
     #[test]
     fn parallel_evap_slack_objective_equals_total_stage_hours() {
         let total_hours = 744.0;
-        let fixtures = EvapFixtures::new();
+        let mut fixtures = EvapFixtures::new();
         let parallel = run_fill(
-            &fixtures,
+            &mut fixtures,
             &stage_with_blocks(BlockMode::Parallel, &[total_hours]),
         );
 
@@ -4761,7 +4758,7 @@ mod contract_column_tests {
             cell.price_per_mwh = price;
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -4799,7 +4796,7 @@ mod contract_column_tests {
 
     /// Run `fill_contract_columns` and return `(col_lower, col_upper, objective)`
     /// plus the two family-base offsets the assertions read.
-    fn run_fill(fixtures: &ContractFixtures) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize, usize) {
+    fn run_fill(fixtures: &mut ContractFixtures) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize, usize) {
         let stage = one_block_stage();
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
@@ -4829,7 +4826,7 @@ mod contract_column_tests {
         let mut fixtures = ContractFixtures::new(vec![contract(1, ContractType::Import, None)]);
         fixtures.set_contract_bounds(0, 10.0, 100.0, 200.0);
 
-        let (col_lower, col_upper, objective, import_start, _) = run_fill(&fixtures);
+        let (col_lower, col_upper, objective, import_start, _) = run_fill(&mut fixtures);
         assert_eq!(col_lower[import_start], 10.0);
         assert_eq!(col_upper[import_start], 100.0);
         assert_eq!(objective[import_start], 200.0 * BLOCK_HOURS);
@@ -4842,7 +4839,7 @@ mod contract_column_tests {
         let mut fixtures = ContractFixtures::new(vec![contract(1, ContractType::Export, None)]);
         fixtures.set_contract_bounds(0, 0.0, 500.0, -150.0);
 
-        let (_, _, objective, _, export_start) = run_fill(&fixtures);
+        let (_, _, objective, _, export_start) = run_fill(&mut fixtures);
         assert_eq!(objective[export_start], -150.0 * BLOCK_HOURS);
     }
 
@@ -4853,7 +4850,7 @@ mod contract_column_tests {
         let mut fixtures = ContractFixtures::new(vec![contract(1, ContractType::Import, Some(2))]);
         fixtures.set_contract_bounds(0, 25.0, 100.0, 200.0);
 
-        let (col_lower, col_upper, _, import_start, _) = run_fill(&fixtures);
+        let (col_lower, col_upper, _, import_start, _) = run_fill(&mut fixtures);
         assert_eq!(col_lower[import_start], 0.0);
         assert_eq!(col_upper[import_start], 0.0);
     }
@@ -4864,7 +4861,7 @@ mod contract_column_tests {
         let mut fixtures = ContractFixtures::new(vec![contract(1, ContractType::Import, None)]);
         fixtures.set_contract_bounds(0, 50.0, 100.0, 200.0);
 
-        let (col_lower, _, _, import_start, _) = run_fill(&fixtures);
+        let (col_lower, _, _, import_start, _) = run_fill(&mut fixtures);
         assert_eq!(col_lower[import_start], 50.0);
     }
 }
@@ -5026,7 +5023,7 @@ mod thermal_block_bound_tests {
             over.max_generation_mw = max_mw;
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -5035,7 +5032,7 @@ mod thermal_block_bound_tests {
     /// returning `(col_lower, col_upper, objective)` and the thermal family's
     /// block-major column base (`thermal_start + t_idx * N_BLKS + blk`).
     fn run_fill(
-        fixtures: &ThermalFixtures,
+        fixtures: &mut ThermalFixtures,
         stage_idx: usize,
     ) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize) {
         let stage = three_block_stage(stage_idx);
@@ -5071,7 +5068,7 @@ mod thermal_block_bound_tests {
         fixtures.set_stage_bounds(0, STAGE_IDX, 10.0, 200.0, 30.0);
         fixtures.set_stage_bounds(1, STAGE_IDX, 5.0, 150.0, 45.0);
 
-        let (col_lower, col_upper, objective, thermal_start) = run_fill(&fixtures, STAGE_IDX);
+        let (col_lower, col_upper, objective, thermal_start) = run_fill(&mut fixtures, STAGE_IDX);
 
         // Thermal 0: min 10.0, max 200.0, cost 30.0 * [200.0, 300.0, 244.0] hours.
         let expected_0 = (
@@ -5120,7 +5117,7 @@ mod thermal_block_bound_tests {
         fixtures.install_block_overlay();
         fixtures.set_block_override(0, STAGE_IDX, 1, None, Some(100.0));
 
-        let (col_lower, col_upper, objective, thermal_start) = run_fill(&fixtures, STAGE_IDX);
+        let (col_lower, col_upper, objective, thermal_start) = run_fill(&mut fixtures, STAGE_IDX);
 
         assert_eq!(
             col_upper[thermal_start..thermal_start + N_BLKS],
@@ -5151,7 +5148,7 @@ mod thermal_block_bound_tests {
         fixtures.install_block_overlay();
         fixtures.set_block_override(0, STAGE_IDX, 0, Some(300.0), None);
 
-        let (col_lower, col_upper, _objective, thermal_start) = run_fill(&fixtures, STAGE_IDX);
+        let (col_lower, col_upper, _objective, thermal_start) = run_fill(&mut fixtures, STAGE_IDX);
 
         assert_eq!(
             col_lower[thermal_start..thermal_start + N_BLKS],
@@ -5175,7 +5172,7 @@ mod thermal_block_bound_tests {
         fixtures.install_block_overlay();
         fixtures.set_block_override(0, STAGE_IDX, 0, Some(300.0), None);
 
-        let (col_lower, col_upper, _objective, thermal_start) = run_fill(&fixtures, STAGE_IDX);
+        let (col_lower, col_upper, _objective, thermal_start) = run_fill(&mut fixtures, STAGE_IDX);
 
         for blk in 0..N_BLKS {
             let col = thermal_start + blk;
@@ -5198,7 +5195,7 @@ mod thermal_block_bound_tests {
         fixtures.set_block_override(0, build_stage_idx, 1, None, Some(100.0));
 
         let (_col_lower, _col_upper, objective, thermal_start) =
-            run_fill(&fixtures, build_stage_idx);
+            run_fill(&mut fixtures, build_stage_idx);
 
         for blk in 0..N_BLKS {
             assert_eq!(
@@ -5485,7 +5482,7 @@ mod line_contract_pumping_block_bound_tests {
                 .expect("overlay cell must exist for a fixture-sized overlay") = over;
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -5518,7 +5515,7 @@ mod line_contract_pumping_block_bound_tests {
 
     /// Run the line, pumping, and contract column fills against `fixtures` at
     /// `stage_idx`, over a three-block stage.
-    fn run_fill(fixtures: &LcpFixtures, stage_idx: usize) -> FillResult {
+    fn run_fill(fixtures: &mut LcpFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
@@ -5575,7 +5572,7 @@ mod line_contract_pumping_block_bound_tests {
         fixtures.set_contract_bounds(0, 10.0, 90.0, 25.0);
         fixtures.set_contract_bounds(1, 0.0, 70.0, -15.0);
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
 
         for (blk, &hours) in BLOCK_HOURS.iter().enumerate() {
@@ -5639,7 +5636,7 @@ mod line_contract_pumping_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let fwd_upper: Vec<f64> = (0..N_BLKS)
             .map(|blk| result.col_upper[off.at(off.line_fwd_start, 0, blk)])
@@ -5709,7 +5706,7 @@ mod line_contract_pumping_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
 
         let contract_upper: Vec<f64> = (0..N_BLKS)
@@ -5800,7 +5797,7 @@ mod line_contract_pumping_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         for blk in 0..N_BLKS {
             assert_eq!(
@@ -6163,7 +6160,7 @@ mod hydro_block_bound_tests {
                 .expect("overlay cell must exist for a fixture-sized overlay") = over;
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -6208,7 +6205,7 @@ mod hydro_block_bound_tests {
     /// Run the turbine, diversion, and operational-slack column fills plus the
     /// operational-violation row fill against `fixtures` at `stage_idx`, over a
     /// three-block stage.
-    fn run_fill(fixtures: &HydroBlockFixtures, stage_idx: usize) -> FillResult {
+    fn run_fill(fixtures: &mut HydroBlockFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
@@ -6412,7 +6409,7 @@ mod hydro_block_bound_tests {
             hydro_stage_penalties(12.0, 0.0, 13.0, 14.0, 15.0, 16.0),
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
 
         let expected = [
@@ -6486,7 +6483,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let upper = per_block(&result.col_upper, off, off.turbine);
         assert_eq!(
@@ -6526,7 +6523,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let upper = per_block(&result.col_upper, off, off.diversion);
         assert_eq!(
@@ -6557,7 +6554,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let lower = per_block(&result.col_lower, off, off.diversion);
         assert_eq!(
@@ -6591,7 +6588,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         for blk in 0..N_BLKS {
             let col = off.at(off.turbine, 0, blk);
@@ -6625,7 +6622,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
 
         let slack_upper = per_block(&result.col_upper, off, off.outflow_below);
@@ -6667,7 +6664,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let row_upper = per_block(&result.row_upper, off, off.max_outflow_row);
         assert_eq!(
@@ -6711,7 +6708,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let row_lower = per_block(&result.row_lower, off, off.min_turbine_row);
         assert_eq!(
@@ -6745,7 +6742,7 @@ mod hydro_block_bound_tests {
             },
         );
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
         let row_lower = per_block(&result.row_lower, off, off.min_generation_row);
         assert_eq!(
@@ -7207,7 +7204,7 @@ mod cell_column_bound_tests {
                 .expect("overlay cell must exist for a fixture-sized overlay") = over;
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -8094,7 +8091,7 @@ mod ncs_objective_tests {
                 .ncs_penalties_mut(ncs_sys_idx, STAGE_IDX) = NcsStagePenalties { curtailment_cost };
         }
 
-        fn make_ctx(&self) -> TemplateBuildCtx<'_> {
+        fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
             self.base.ctx()
         }
     }
@@ -8122,7 +8119,7 @@ mod ncs_objective_tests {
 
     /// Run the NCS column fill against `fixtures` at `stage_idx`, over a
     /// three-block stage.
-    fn run_fill(fixtures: &NcsFixtures, stage_idx: usize) -> FillResult {
+    fn run_fill(fixtures: &mut NcsFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
         let state = state_layout_for(&ctx);
@@ -8155,7 +8152,7 @@ mod ncs_objective_tests {
         let mut fixtures = NcsFixtures::new();
         fixtures.set_ncs_override(0, NCS0_OVERRIDE_COST);
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
 
         for (blk, &hours) in BLOCK_HOURS.iter().enumerate() {
@@ -8176,7 +8173,7 @@ mod ncs_objective_tests {
         let mut fixtures = NcsFixtures::new();
         fixtures.set_ncs_override(0, NCS0_OVERRIDE_COST);
 
-        let result = run_fill(&fixtures, STAGE_IDX);
+        let result = run_fill(&mut fixtures, STAGE_IDX);
         let off = &result.offsets;
 
         for (blk, &hours) in BLOCK_HOURS.iter().enumerate() {

@@ -21,8 +21,6 @@
 //! with no LP columns (contracts, non-controllable sources, withdrawal) return an
 //! empty vec.
 
-use std::collections::BTreeMap;
-
 use cobre_core::{
     ConstraintExpression, ContractType, EnergyContract, EntityId, PumpingStation, VariableRef,
 };
@@ -248,7 +246,7 @@ pub(crate) fn expression_is_block_independent(expression: &ConstraintExpression)
 /// pair under the identity partition. `Some(b)` resolves through
 /// `ctx.hydro_cell_index.cell_of_bus`, never `Hydro::bus_id`: the cell's bus comes
 /// from a unit group's `bus_id`, an independent value the plant's own field
-/// need not match. Returns an empty vec on a `hydro_pos` miss (mirrors every
+/// need not match. Returns an empty vec on an `EntityPositions::hydro` miss (mirrors every
 /// other resolver's guard) or a `bus_id` naming no cell of the plant.
 fn resolve_turbine_cells(
     hydro_id: EntityId,
@@ -258,7 +256,7 @@ fn resolve_turbine_cells(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let Some(&pos) = ctx.hydro_pos.get(&hydro_id) else {
+    let Some(pos) = ctx.positions.hydro(hydro_id) else {
         return vec![];
     };
     let sys = HydroSys::new(pos);
@@ -277,13 +275,13 @@ fn resolve_turbine_cells(
 ///
 /// Role (a): the storage column is `layout.state.storage_outgoing_col(h)`, read
 /// through the state handle. Returns empty vec when the hydro ID is not found
-/// in `ctx.hydro_pos`.
+/// in `ctx.positions`.
 fn resolve_hydro_storage(
     hydro_id: EntityId,
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(&pos) = ctx.hydro_pos.get(&hydro_id) {
+    if let Some(pos) = ctx.positions.hydro(hydro_id) {
         vec![(
             layout.state.storage_outgoing_col(HydroSys::new(pos)).get(),
             1.0,
@@ -298,7 +296,7 @@ fn resolve_hydro_storage(
 /// `boundary_offset = 0` (initial): `Some(k)` → boundary `k`, `None` → stage-initial
 /// `S⁰` (boundary `0`). `boundary_offset = 1` (final): `Some(k)` → boundary `k + 1`,
 /// `None` → stage-final `Sᴷ` (boundary `K`). Both are stage-level stocks (fixed
-/// column, no per-block expansion). Returns an empty vec on a `hydro_pos` miss
+/// column, no per-block expansion). Returns an empty vec on an `EntityPositions::hydro` miss
 /// (mirrors [`resolve_hydro_storage`]).
 fn resolve_hydro_storage_boundary(
     hydro_id: EntityId,
@@ -307,7 +305,7 @@ fn resolve_hydro_storage_boundary(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(&pos) = ctx.hydro_pos.get(&hydro_id) {
+    if let Some(pos) = ctx.positions.hydro(hydro_id) {
         let k = match block_id {
             Some(k) => k + boundary_offset,
             None => boundary_offset * layout.clock.n_blks(),
@@ -349,7 +347,7 @@ fn resolve_hydro_inflow(
     if layout.state.z_inflow.is_empty() {
         return vec![];
     }
-    let Some(&pos_h) = ctx.hydro_pos.get(&hydro_id) else {
+    let Some(pos_h) = ctx.positions.hydro(hydro_id) else {
         return vec![];
     };
 
@@ -365,13 +363,13 @@ fn resolve_hydro_inflow(
 
     if !layout.equipment.turbine.is_empty() && !layout.equipment.spillage.is_empty() {
         for &up_id in upstream {
-            if let Some(&pos_up) = ctx.hydro_pos.get(&up_id) {
+            if let Some(pos_up) = ctx.positions.hydro(up_id) {
                 push_upstream_release_rate(pos_up, blk, stage_idx, ctx, layout, &mut result);
             }
         }
     }
 
-    // `diversion_upstream[h]` already holds system indices, so no `hydro_pos` lookup
+    // `diversion_upstream[h]` already holds system indices, so no position lookup
     // (mirrors the `fill_state_and_water_entries` diversion-inflow loop).
     if !layout.equipment.diversion.is_empty() {
         for &d_idx in diversion_into {
@@ -473,7 +471,7 @@ fn resolve_hydro_evaporation(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let Some(&sys_pos) = ctx.hydro_pos.get(&hydro_id) else {
+    let Some(sys_pos) = ctx.positions.hydro(hydro_id) else {
         return vec![];
     };
     // Linear scan: cold template-build path over a handful of evap hydros, so an
@@ -494,7 +492,7 @@ fn resolve_hydro_evaporation(
 }
 
 /// Resolve `HydroOutflow` to turbine (every cell of the plant, summed) plus
-/// spillage (one plant-keyed column). A `hydro_pos` miss returns an empty vec,
+/// spillage (one plant-keyed column). An `EntityPositions::hydro` miss returns an empty vec,
 /// never a partial reading.
 fn resolve_hydro_outflow(
     hydro_id: EntityId,
@@ -502,7 +500,7 @@ fn resolve_hydro_outflow(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let Some(&pos) = ctx.hydro_pos.get(&hydro_id) else {
+    let Some(pos) = ctx.positions.hydro(hydro_id) else {
         return vec![];
     };
     let mut result = resolve_turbine_cells(hydro_id, None, blk, 1.0, ctx, layout);
@@ -527,7 +525,7 @@ fn resolve_hydro_generation(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let Some(&sys_pos) = ctx.hydro_pos.get(&hydro_id) else {
+    let Some(sys_pos) = ctx.positions.hydro(hydro_id) else {
         return vec![];
     };
     match ctx.production_models.model(sys_pos, stage_idx) {
@@ -576,7 +574,7 @@ fn resolve_line_exchange(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(&pos) = ctx.line_pos.get(&line_id) {
+    if let Some(pos) = ctx.positions.line(line_id) {
         let sys = LineSys::new(pos);
         vec![
             (layout.line_fwd_col(sys, blk), 1.0),
@@ -596,7 +594,7 @@ fn resolve_bus_deficit(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(&b_pos) = ctx.bus_pos.get(&bus_id) {
+    if let Some(b_pos) = ctx.positions.bus(bus_id) {
         (0..layout.equipment.max_deficit_segments)
             .map(|seg| (layout.deficit_col(b_pos, seg, blk), 1.0))
             .collect()
@@ -608,7 +606,7 @@ fn resolve_bus_deficit(
 /// Resolve `AnticipatedDecision` to `layout.anticipated_decision_col(local)`,
 /// the per-plant stage-level decision column.
 ///
-/// Returns an empty vec when `thermal_id` is not in `ctx.thermal_pos`, or the
+/// Returns an empty vec when `thermal_id` has no `ctx.positions.thermal` slot, or the
 /// thermal is not in `ctx.anticipated_plants` (`AnticipatedPlants::local_of`
 /// returns `None`) — both defense-in-depth past semantic validation
 /// (`check_anticipated_decision_target_is_anticipated`).
@@ -617,7 +615,7 @@ fn resolve_anticipated_decision(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let Some(&sys_pos) = ctx.thermal_pos.get(&thermal_id) else {
+    let Some(sys_pos) = ctx.positions.thermal(thermal_id) else {
         return vec![];
     };
     if let Some(local) = ctx.anticipated_plants.local_of(ThermalSys::new(sys_pos)) {
@@ -639,7 +637,7 @@ fn resolve_anticipated_decision(
 /// index IS the correct column-block position at every stage (a dormant
 /// station keeps its zeroed column).
 ///
-/// Returns an empty vec on an unknown station or no stations (`pumping_pos` miss);
+/// Returns an empty vec on an unknown station or no stations (`EntityPositions::pumping` miss);
 /// `n_pumping == 0` is handled by the same guard. No panic.
 fn resolve_pumping_column(
     station_id: EntityId,
@@ -648,10 +646,10 @@ fn resolve_pumping_column(
     layout: &StageLayout<'_>,
     coeff_fn: impl Fn(&PumpingStation) -> f64,
 ) -> Vec<(usize, f64)> {
-    let Some(&p_idx) = ctx.pumping_pos.get(&station_id) else {
+    let Some(p_idx) = ctx.positions.pumping(station_id) else {
         return vec![];
     };
-    // Guard rather than index to uphold no-panic if `pumping_pos` and
+    // Guard rather than index to uphold no-panic if `EntityPositions::pumping` and
     // `pumping_stations` ever diverge (both built from the same ID-sorted slice).
     let Some(station) = ctx.pumping_stations.get(p_idx) else {
         return vec![];
@@ -692,7 +690,7 @@ pub(crate) fn contract_family_slot(
 /// the dense layout. A dormant (commissioning-window-inactive) contract keeps its
 /// `[0, 0]` column, so the column always exists.
 ///
-/// Returns an empty vec on an unknown contract id (`contract_pos` miss) or a
+/// Returns an empty vec on an unknown contract id (`EntityPositions::contract` miss) or a
 /// direction mismatch (the referenced family differs from the contract's
 /// `contract_type` — a referential-validation gap), mirroring the pumping precedent.
 /// No panic.
@@ -703,7 +701,7 @@ fn resolve_contract_column(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    let Some(&c_sys) = ctx.contract_pos.get(&contract_id) else {
+    let Some(c_sys) = ctx.positions.contract(contract_id) else {
         return vec![];
     };
     let Some(contract) = ctx.contracts.get(c_sys) else {
@@ -717,15 +715,11 @@ fn resolve_contract_column(
     vec![(col, 1.0)]
 }
 
-/// Resolve an entity to its `(column_index, 1.0)` pair via `col`, the single owner
-/// of the "position miss returns an empty vec" rule every block-major single-column
-/// family shares.
-fn resolve_block_column(
-    entity_id: EntityId,
-    pos_map: &BTreeMap<EntityId, usize>,
-    col: impl Fn(usize) -> usize,
-) -> Vec<(usize, f64)> {
-    if let Some(&pos) = pos_map.get(&entity_id) {
+/// Resolve a position lookup to its `(column_index, 1.0)` pair via `col`, the
+/// single owner of the "position miss returns an empty vec" rule every
+/// block-major single-column family shares.
+fn resolve_block_column(pos: Option<usize>, col: impl Fn(usize) -> usize) -> Vec<(usize, f64)> {
+    if let Some(pos) = pos {
         vec![(col(pos), 1.0)]
     } else {
         vec![]
@@ -739,7 +733,7 @@ fn resolve_hydro_spillage(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    resolve_block_column(hydro_id, &ctx.hydro_pos, |pos| {
+    resolve_block_column(ctx.positions.hydro(hydro_id), |pos| {
         layout.spillage_col(HydroSys::new(pos), blk)
     })
 }
@@ -751,7 +745,7 @@ fn resolve_hydro_diversion(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    resolve_block_column(hydro_id, &ctx.hydro_pos, |pos| {
+    resolve_block_column(ctx.positions.hydro(hydro_id), |pos| {
         layout.diversion_col(HydroSys::new(pos), blk)
     })
 }
@@ -763,7 +757,7 @@ fn resolve_thermal_generation(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    resolve_block_column(thermal_id, &ctx.thermal_pos, |pos| {
+    resolve_block_column(ctx.positions.thermal(thermal_id), |pos| {
         layout.thermal_col(ThermalSys::new(pos), blk)
     })
 }
@@ -775,7 +769,7 @@ fn resolve_line_direct(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    resolve_block_column(line_id, &ctx.line_pos, |pos| {
+    resolve_block_column(ctx.positions.line(line_id), |pos| {
         layout.line_fwd_col(LineSys::new(pos), blk)
     })
 }
@@ -787,7 +781,7 @@ fn resolve_line_reverse(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    resolve_block_column(line_id, &ctx.line_pos, |pos| {
+    resolve_block_column(ctx.positions.line(line_id), |pos| {
         layout.line_rev_col(LineSys::new(pos), blk)
     })
 }
@@ -799,7 +793,7 @@ fn resolve_bus_excess(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    resolve_block_column(bus_id, &ctx.bus_pos, |pos| {
+    resolve_block_column(ctx.positions.bus(bus_id), |pos| {
         layout.excess_col(BusSys::new(pos), blk)
     })
 }

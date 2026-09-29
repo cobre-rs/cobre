@@ -1760,7 +1760,7 @@ The bucket state stays a pure function of stage lengths, never of
 - **Fixed delivery density.** A maturing bucket delivers into its arrival
   stage's blocks through a fixed, `block_mode`-independent `arrival_density`
   looked up from the setup-precomputed per-`(arc, arrival stage)` table
-  (`resolve_chrono_arrival_density` reading
+  (`resolve_bucket_arrival_density` reading
   `TemplateBuildCtx::arc_arrival_density`, built by `build_arc_arrival_density`
   as a blend over every contributing source stage's lag, resolved in the
   ARRIVAL stage's own frame), never by tracking which origin block a unit came
@@ -1772,7 +1772,7 @@ Read: `lead_time/mod.rs` (`resolve_spread`'s
 `block_deposits`/`within_stage_routing`/`arrival_density` fields,
 `resolve_block_factors`'s `BlockFactors`, `resolve_arrival_density_at`),
 `bucket_topology.rs` (`build_arc_arrival_density`), `lp/builder/entries.rs`
-(`fill_chronological_water_entries`, `resolve_chrono_arrival_density`). Pinned
+(`fill_chronological_water_entries`, `resolve_bucket_arrival_density`). Pinned
 by the shared-density-consistency regression exercising the aggregation
 debug_assert directly, the chronological block-table regression matching the
 worked kappa/chi numbers, and the `K = 1` chronological-vs-parallel

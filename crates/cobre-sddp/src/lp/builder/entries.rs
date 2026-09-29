@@ -274,9 +274,8 @@ fn fill_parallel_water_entries(
 
         // The maturing-now bucket `b_1^in`: a SINGLE entry — the confluence sum over
         // every upstream arc lives in the state variable itself. Absent with no arc.
-        if let Some(range) = plant_transit_bucket_range(layout.state, h_idx) {
-            let ring = transit_bucket_ring(layout.state, range);
-            col_entries[ring.in_col(0, 0)].push((row, -1.0));
+        if let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(h_idx)) {
+            col_entries[col].push((row, -1.0));
         }
 
         for blk in 0..n_blks {
@@ -506,6 +505,15 @@ fn plant_transit_bucket_range(state: &StateSpace, plant_idx: usize) -> Option<Ra
     Some(start..end)
 }
 
+/// The maturing-now bucket's incoming column (`in_col(0, 0)`) for downstream
+/// `plant`, or `None` when it declares no incoming arc. The single owner of the
+/// `plant_transit_bucket_range` + `transit_bucket_ring(...).in_col(0, 0)` pair both
+/// water-balance fills, and the generic-constraint `hydro_inflow` resolver, read.
+pub(crate) fn maturing_bucket_in_col(state: &StateSpace, plant: HydroSys) -> Option<usize> {
+    plant_transit_bucket_range(state, plant.get())
+        .map(|range| transit_bucket_ring(state, range).in_col(0, 0))
+}
+
 /// Chronological per-block water-balance fill: each Operating/Filling hydro emits `K`
 /// chained rows (block-major `row_water + h·K + (k−1)`), each the parallel row per block
 /// with `τ_k` replacing the stage total `ζ` EVERYWHERE. A stray `ζ` double-applies
@@ -544,15 +552,14 @@ fn fill_chronological_water_entries(
 
         // The incoming maturing bucket `b_1^in` delivers over this stage's blocks by the
         // fixed `arrival_density` (fixed-delivery-density contract) — one entry per block.
-        if let Some(range) = plant_transit_bucket_range(layout.state, h_idx) {
+        if let Some(col_first_slot_in) = maturing_bucket_in_col(layout.state, HydroSys::new(h_idx))
+        {
             let arrival_density =
-                resolve_chrono_arrival_density(ctx, stage, stage_idx, hydro.id, n_blks);
+                resolve_bucket_arrival_density(ctx, layout.clock, stage_idx, hydro.id, n_blks);
             debug_assert!(
                 (arrival_density.iter().sum::<f64>() - 1.0).abs() < 1e-9,
                 "hydro {h_idx} stage {stage_idx}: arrival_density must sum to 1.0"
             );
-            let ring = transit_bucket_ring(layout.state, range);
-            let col_first_slot_in = ring.in_col(0, 0);
             for (target_slot, &rho_val) in arrival_density.iter().enumerate() {
                 if rho_val == 0.0 {
                     continue;
@@ -755,19 +762,16 @@ fn fill_arc_release_chrono_block_entries(
 /// `check_chronological_confluence_heterogeneous_travel_time` (`cobre-io`) rejects it at
 /// config time, so the `debug_assert!` below is a defensive backstop, not the enforcement
 /// point.
-fn resolve_chrono_arrival_density(
+pub(crate) fn resolve_bucket_arrival_density(
     ctx: &TemplateBuildCtx<'_>,
-    stage: &Stage,
+    clock: BlockClock<'_>,
     stage_idx: usize,
     downstream_id: EntityId,
     n_blks: usize,
 ) -> Vec<f64> {
     let uniform = || {
-        let total = BlockClock::new(stage).total_hours();
-        stage
-            .blocks
-            .iter()
-            .map(|b| b.duration_hours / total)
+        (0..n_blks)
+            .map(|b| clock.hours(BlockIdx::new(b)) / clock.total_hours())
             .collect::<Vec<f64>>()
     };
 
@@ -3449,7 +3453,7 @@ mod pumping_water_tests {
     };
     use cobre_stochastic::par::precompute::PrecomputedPar;
 
-    use crate::block_clock::M3S_TO_HM3;
+    use crate::block_clock::{BlockClock, M3S_TO_HM3};
     use crate::hydro_models::{
         EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet,
         ResolvedProductionModel,
@@ -3473,7 +3477,7 @@ mod pumping_water_tests {
         LpMatrixBuffers, assemble_csc, build_stage_matrix_entries, fill_fpha_entries,
         fill_generic_constraint_entries, fill_load_balance_entries,
         fill_operational_violation_entries, fill_pumping_water_entries,
-        fill_transit_bucket_definition_entries, resolve_chrono_arrival_density,
+        fill_transit_bucket_definition_entries, resolve_bucket_arrival_density,
     };
 
     const N_STAGES: usize = 1;
@@ -7481,11 +7485,11 @@ mod pumping_water_tests {
         let _ = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     }
 
-    /// `resolve_chrono_arrival_density` returns the precomputed arrival-frame
+    /// `resolve_bucket_arrival_density` returns the precomputed arrival-frame
     /// `arc_arrival_density` table entry verbatim — a lookup, not a
     /// re-derivation from the sender's own lag-1 row.
     #[test]
-    fn resolve_chrono_arrival_density_looks_up_arrival_frame_table() {
+    fn resolve_bucket_arrival_density_looks_up_arrival_frame_table() {
         let up = 1;
         let down = 2;
         let fixtures = PumpFixtures::new_full(
@@ -7509,7 +7513,8 @@ mod pumping_water_tests {
         };
 
         let stage = chronological_stage(1, &[300.0, 420.0]);
-        let resolved = resolve_chrono_arrival_density(&ctx, &stage, 1, EntityId(down), 2);
+        let resolved =
+            resolve_bucket_arrival_density(&ctx, BlockClock::new(&stage), 1, EntityId(down), 2);
 
         assert_eq!(
             resolved, table_density,
@@ -7522,7 +7527,7 @@ mod pumping_water_tests {
     /// (mirrors the real setup precompute's `None` at stage 0) and the
     /// fallback is the duration-weighted uniform density.
     #[test]
-    fn resolve_chrono_arrival_density_falls_back_to_uniform_when_table_entry_absent() {
+    fn resolve_bucket_arrival_density_falls_back_to_uniform_when_table_entry_absent() {
         let up = 1;
         let down = 2;
         let fixtures = PumpFixtures::new_full(
@@ -7538,7 +7543,8 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = chronological_stage(0, &[300.0, 420.0]);
-        let resolved = resolve_chrono_arrival_density(&ctx, &stage, 0, EntityId(down), 2);
+        let resolved =
+            resolve_bucket_arrival_density(&ctx, BlockClock::new(&stage), 0, EntityId(down), 2);
 
         assert_eq!(
             resolved,
@@ -7559,7 +7565,7 @@ mod pumping_water_tests {
     /// catch this: it counts travel-time arcs only, so one arc plus one plain
     /// tributary is `< 2` and passes config validation.
     #[test]
-    fn resolve_chrono_arrival_density_excludes_plain_tributary_from_confluence() {
+    fn resolve_bucket_arrival_density_excludes_plain_tributary_from_confluence() {
         let plain = 0;
         let up = 1;
         let down = 2;
@@ -7587,7 +7593,8 @@ mod pumping_water_tests {
         };
 
         let stage = chronological_stage(1, &[300.0, 420.0]);
-        let resolved = resolve_chrono_arrival_density(&ctx, &stage, 1, EntityId(down), 2);
+        let resolved =
+            resolve_bucket_arrival_density(&ctx, BlockClock::new(&stage), 1, EntityId(down), 2);
 
         assert_eq!(
             resolved, arrival_density,

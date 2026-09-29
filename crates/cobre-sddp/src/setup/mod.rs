@@ -159,11 +159,12 @@ pub struct StudySetup {
     /// walk. Study-only when the study declares no post-study stage.
     pub(crate) extended_delivery_anchors: Vec<i32>,
 
-    /// Declared travel-time arcs (upstream hydro id + travel time), resolved
-    /// once from [`System::hydros`] ([`build_transit_seed_arcs`]). Threaded
-    /// into [`SimulationOutputSpec`](crate::simulation::SimulationOutputSpec)
-    /// so the rolling-seed emitter never re-derives it from `System`. Empty
-    /// when the study declares no travel-time arc.
+    /// Declared travel-time arcs (upstream hydro id + travel time), projected
+    /// from the bucket topology's arc list ([`build_transit_seed_arcs`]).
+    /// Threaded into
+    /// [`SimulationOutputSpec`](crate::simulation::SimulationOutputSpec) so
+    /// the rolling-seed emitter never re-derives it from `System`. Empty when
+    /// the study declares no travel-time arc.
     pub(crate) transit_seed_arcs: Vec<TransitSeedArc>,
 
     /// This run's own `system.initial_conditions().past_defluences`, retained
@@ -368,7 +369,7 @@ impl StudySetup {
             .set_solve_order(&solve_order_keys)
             .map_err(|e| SddpError::Validation(e.to_string()))?;
 
-        let (stage_data, initial, energy_conversion, resolved_parameters) =
+        let (stage_data, initial, energy_conversion, resolved_parameters, transit_seed_arcs) =
             resolve_stage_data(system, &config, &stochastic, &hydro_models)?;
         let n_stages = stage_data.stage_templates.templates.len();
 
@@ -453,7 +454,7 @@ impl StudySetup {
             fcf,
             hydro_models,
             extended_delivery_anchors,
-            transit_seed_arcs: build_transit_seed_arcs(system),
+            transit_seed_arcs,
             past_defluences: system.initial_conditions().past_defluences.clone(),
             study_stage_dates,
             resolved_parameters,
@@ -1123,21 +1124,20 @@ fn build_extended_delivery_anchors(
     anchors
 }
 
-/// Declared travel-time arcs (upstream hydro id + travel time), one entry per
-/// hydro declaring `travel_time_hours > 0.0` and a `downstream_id` — the same
-/// predicate `bucket_topology::declared_arcs` uses, applied per upstream
-/// hydro rather than grouped by downstream plant.
-fn build_transit_seed_arcs(system: &System) -> Vec<TransitSeedArc> {
-    system
-        .hydros()
+/// Declared travel-time arcs (upstream hydro id + travel time), projected
+/// from [`bucket_topology::TransitBucketTopology::arcs`], in that list's
+/// order.
+fn build_transit_seed_arcs(
+    system: &System,
+    topology: &bucket_topology::TransitBucketTopology,
+) -> Vec<TransitSeedArc> {
+    let hydros = system.hydros();
+    topology
+        .arcs()
         .iter()
-        .filter_map(|h| {
-            let t_v = h.travel_time_hours.filter(|&t| t > 0.0)?;
-            h.downstream_id?;
-            Some(TransitSeedArc {
-                upstream_hydro_id: h.id.0,
-                travel_time_hours: t_v,
-            })
+        .map(|arc| TransitSeedArc {
+            upstream_hydro_id: hydros[arc.upstream.get()].id.0,
+            travel_time_hours: arc.travel_time_hours,
         })
         .collect()
 }
@@ -1693,9 +1693,10 @@ fn resolve_initial_conditions(
 /// and initial conditions built once before scenario libraries and the node
 /// graph.
 ///
-/// `energy_conversion` and `resolved_parameters` return alongside
-/// [`StageData`] rather than fold into it — both are `StudySetup`'s own
-/// fields, not part of the stage/training/simulation contexts' shared inputs.
+/// `energy_conversion`, `resolved_parameters`, and `transit_seed_arcs` return
+/// alongside [`StageData`] rather than fold into it — all three are
+/// `StudySetup`'s own fields, not part of the stage/training/simulation
+/// contexts' shared inputs.
 ///
 /// # Errors
 ///
@@ -1712,6 +1713,7 @@ fn resolve_stage_data(
         InitialConditions,
         EnergyConversionSet,
         ResolvedParameters,
+        Vec<TransitSeedArc>,
     ),
     SddpError,
 > {
@@ -1721,6 +1723,7 @@ fn resolve_stage_data(
         &calendar,
         config.boundary.is_present(),
     );
+    let transit_seed_arcs = build_transit_seed_arcs(system, &transit_bucket_topology);
 
     let layout = resolve_state_layout(
         system,
@@ -1804,7 +1807,13 @@ fn resolve_stage_data(
         scaling_report,
     };
 
-    Ok((stage_data, initial, energy_conversion, resolved_parameters))
+    Ok((
+        stage_data,
+        initial,
+        energy_conversion,
+        resolved_parameters,
+        transit_seed_arcs,
+    ))
 }
 
 /// Build one phase's per-class [`PhaseLibraries`].
@@ -2733,15 +2742,11 @@ fn build_initial_transit_bucket_state(
 
     let mut start = 0_usize;
     for &depth in &topology.per_plant_depth {
-        let plant_id = hydros[topology.column_order[start].0].id;
+        let plant = HydroSys::new(topology.column_order[start].0);
 
-        for upstream in hydros {
-            let Some(t_v) = upstream.travel_time_hours.filter(|&t| t > 0.0) else {
-                continue;
-            };
-            if upstream.downstream_id != Some(plant_id) {
-                continue;
-            }
+        for arc in topology.arcs().iter().filter(|arc| arc.downstream == plant) {
+            let upstream = &hydros[arc.upstream.get()];
+            let t_v = arc.travel_time_hours;
 
             for window in ic
                 .past_defluences

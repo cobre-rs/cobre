@@ -243,7 +243,7 @@ fn fill_parallel_water_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let n_h = layout.n_h;
+    let n_h = layout.state.hydro_count;
     let n_blks = layout.n_blks;
     let zeta = layout.clock.zeta();
 
@@ -530,7 +530,7 @@ fn fill_chronological_water_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let n_h = layout.n_h;
+    let n_h = layout.state.hydro_count;
     let n_blks = layout.n_blks;
 
     for h_idx in 0..n_h {
@@ -1350,8 +1350,8 @@ pub(super) fn fill_z_inflow_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let n_h = layout.n_h;
-    let lag_order = layout.lag_order;
+    let n_h = layout.state.hydro_count;
+    let lag_order = layout.state.max_par_order;
 
     for h_idx in 0..n_h {
         let row = layout.z_inflow_row(HydroSys::new(h_idx));
@@ -1404,7 +1404,7 @@ pub(super) fn fill_operational_violation_entries(
 ) {
     let n_blks = layout.n_blks;
 
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hydro = HydroSys::new(h_idx);
         for blk in (0..n_blks).map(BlockIdx::new) {
             let row = layout.min_outflow_row(hydro, blk);
@@ -3097,7 +3097,7 @@ mod zero_cost_tests {
         fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
 
         let out_start = layout.state.commit_out.start;
-        let n_ant_state = layout.n_anticipated * layout.state.k_max;
+        let n_ant_state = layout.state.n_anticipated * layout.state.k_max;
         for (offset, entries) in col_entries[out_start..out_start + n_ant_state]
             .iter()
             .enumerate()
@@ -3275,7 +3275,7 @@ mod zero_cost_tests {
         fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
 
         let out_start = layout.state.commit_out.start;
-        let n_ant_state = layout.n_anticipated * layout.state.k_max;
+        let n_ant_state = layout.state.n_anticipated * layout.state.k_max;
         for (offset, entries) in col_entries[out_start..out_start + n_ant_state]
             .iter()
             .enumerate()
@@ -5529,7 +5529,7 @@ mod pumping_water_tests {
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
-        let n_h = layout.n_h;
+        let n_h = layout.state.hydro_count;
         let n_blks = layout.n_blks;
         let n_cells = ctx.hydro_cell_index.n_cells();
         assert_eq!(
@@ -7043,7 +7043,7 @@ mod pumping_water_tests {
         );
         assert_eq!(
             layout.rows.load_balance.start(),
-            layout.rows.water_balance.start() + layout.n_h,
+            layout.rows.water_balance.start() + layout.state.hydro_count,
             "B==0 must reproduce today's row_water_balance_start + n_hydros offset"
         );
 
@@ -8920,7 +8920,7 @@ mod pumping_water_tests {
 
         // H2's water exits the system: z_{H2} appears on NO water-balance row, and
         // H1's releases appear only on H1's own row (no downstream to feed).
-        for h in 0..layout.n_h {
+        for h in 0..layout.state.hydro_count {
             let r = layout.rows.water_balance.start() + h;
             assert_eq!(
                 csc_at(&csc, z_h2, r),
@@ -9246,7 +9246,7 @@ mod pumping_water_tests {
         );
         assert_eq!(row_lower[row_h], 0.0, "frozen RHS 0");
         assert_eq!(row_upper[row_h], 0.0, "frozen RHS 0");
-        for h in 0..layout.n_h {
+        for h in 0..layout.state.hydro_count {
             let r = layout.rows.water_balance.start() + h;
             assert_eq!(
                 csc_at(&csc, z_h2, r),
@@ -9512,7 +9512,7 @@ mod pumping_water_tests {
 
         // Both links' inflow exits the system: neither z column lands on ANY water
         // row (no non-PreFilling downstream exists to receive it).
-        for h in 0..layout.n_h {
+        for h in 0..layout.state.hydro_count {
             let r = layout.rows.water_balance.start() + h;
             assert_eq!(
                 csc_at(&csc, z_h1, r),

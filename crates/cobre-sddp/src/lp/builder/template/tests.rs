@@ -4339,7 +4339,7 @@ fn stage_geometry_block_storage_col_matches_layout() {
     let storage_internal_start = layout.equipment.storage_internal_start;
     let storage_final_start = layout.state.storage.start;
 
-    for h in 0..layout.n_h {
+    for h in 0..layout.state.hydro_count {
         assert_eq!(
             geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Incoming),
             storage_in_start + h,

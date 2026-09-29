@@ -78,7 +78,7 @@ fn fill_storage_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
         // CONTRACT: `min_storage` is a HARD lower bound for every hydro EXCEPT (a) a
         // filling one (`hydro.filling.is_some()`), whose floor relaxes to `0` in ALL
@@ -334,7 +334,7 @@ fn fill_turbine_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
         let suspended = matches!(
             filling_phase(
@@ -399,7 +399,7 @@ fn fill_spillage_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
         let prefilling = matches!(
             filling_phase(
@@ -754,7 +754,7 @@ fn fill_inflow_slack_columns(
     bufs: &mut ColumnBufs<'_>,
 ) {
     if ctx.has_penalty {
-        for h_idx in 0..layout.n_h {
+        for h_idx in 0..layout.state.hydro_count {
             let col = layout.inflow_slack_col(HydroSys::new(h_idx));
             let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
             bufs.objective[col] = hp.inflow_nonnegativity_cost * total_stage_hours;
@@ -931,7 +931,7 @@ fn fill_withdrawal_slack_columns(
     total_stage_hours: f64,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hb = ctx.resolved.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let t = hb.water_withdrawal_m3s;
@@ -1024,7 +1024,7 @@ fn fill_block_family(
     bufs: &mut ColumnBufs<'_>,
     family: BlockSlackFamily,
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let cost = match family {
             BlockSlackFamily::OutflowBelow => hp.outflow_violation_below_cost,
@@ -1066,7 +1066,7 @@ fn fill_cell_block_family(
     bufs: &mut ColumnBufs<'_>,
     family: CellSlackFamily,
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let cost = match family {

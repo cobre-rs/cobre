@@ -376,7 +376,7 @@ fn stage_layout_zero_anticipated_matches_pre_anticipated_offsets() {
     let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
     assert_eq!(layout.state.commit_out.len(), 0, "n_ant_state");
-    assert_eq!(layout.n_anticipated, 0, "n_anticipated");
+    assert_eq!(layout.state.n_anticipated, 0, "n_anticipated");
     assert_eq!(layout.state.k_max, 0, "k_max");
 
     let idx = state_layout(ctx.n_hydros, ctx.max_par_order);
@@ -4697,7 +4697,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
     let mut counts = [0usize; 8];
 
     let mut fishing_rows = Vec::new();
-    for i in 0..layout.n_anticipated {
+    for i in 0..layout.state.n_anticipated {
         let expected = anticipated
             .anticipated_fishing_row_pos
             .get(i)
@@ -4721,7 +4721,7 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
     counts[0] = fishing_rows.len();
 
     let mut state_out_def_rows = Vec::new();
-    for i in 0..layout.n_anticipated {
+    for i in 0..layout.state.n_anticipated {
         let expected = anticipated
             .anticipated_decision_row_pos
             .get(i)

@@ -484,12 +484,6 @@ pub(crate) struct StageLayout<'a> {
     pub(crate) state: &'a StateSpace,
     /// Block count for this stage.
     pub(crate) n_blks: usize,
-    /// Hydro count.
-    pub(crate) n_h: usize,
-    /// PAR lag order.
-    pub(crate) lag_order: usize,
-    /// Number of anticipated thermals (mirrors `TemplateBuildCtx.n_anticipated`).
-    pub(crate) n_anticipated: usize,
     /// In-study anticipated-ring column/row offsets (see [`AnticipatedLayout`]).
     pub(crate) anticipated: AnticipatedLayout,
     /// Equipment column ranges (see [`EquipmentColumns`]).
@@ -1173,7 +1167,7 @@ impl<'a> StageLayout<'a> {
         stage_idx: usize,
     ) -> Self {
         let n_blks = stage.blocks.len();
-        let n_h = ctx.n_hydros;
+        let n_h = state.hydro_count;
 
         let (fpha_hydro_indices, fpha_planes_per_hydro) =
             identify_fpha_hydros(ctx, stage_idx, stage.id);
@@ -1226,7 +1220,7 @@ impl<'a> StageLayout<'a> {
         let diversion = col.alloc(n_h * n_blks);
         let thermal = col.alloc(ctx.n_thermals * n_blks);
         let thermal_end = thermal.end;
-        col.alloc(ctx.n_anticipated);
+        col.alloc(state.n_anticipated);
         let line_fwd = col.alloc(ctx.n_lines * n_blks);
         let line_rev = col.alloc(ctx.n_lines * n_blks);
         let deficit = col.alloc(ctx.n_buses * max_deficit_segments * n_blks);
@@ -1318,7 +1312,7 @@ impl<'a> StageLayout<'a> {
         // delivery matures this stage (`build_anticipated_fishing_row_pos`) —
         // a `K = 0` self-delivery excludes a plant's row this stage, so the
         // row family is sparse like the deposit family below, not the dense
-        // `ctx.n_anticipated` count.
+        // `state.n_anticipated` count.
         let n_stages = ctx.resolved.bounds.n_stages();
         let (anticipated_fishing_row_pos, n_anticipated_fishing_rows) =
             build_anticipated_fishing_row_pos(state, n_stages, stage_idx);
@@ -1452,9 +1446,6 @@ impl<'a> StageLayout<'a> {
         Self {
             state,
             n_blks,
-            n_h,
-            lag_order: ctx.max_par_order,
-            n_anticipated: ctx.n_anticipated,
             anticipated,
             equipment,
             slack,
@@ -1990,9 +1981,9 @@ impl StageLayout<'_> {
     #[inline]
     #[must_use]
     pub(crate) fn anticipated_decision(&self) -> Range<usize> {
-        if self.n_anticipated > 0 {
+        if self.state.n_anticipated > 0 {
             let s = self.anticipated.col_anticipated_decision_start;
-            s..s + self.n_anticipated
+            s..s + self.state.n_anticipated
         } else {
             0..0
         }

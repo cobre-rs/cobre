@@ -91,7 +91,7 @@ fn fill_parallel_water_rows(
     row_lower: &mut [f64],
     row_upper: &mut [f64],
 ) {
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
         if super::entries::is_prefilling(ctx, stage, h_idx) {
             row_lower[row] = 0.0;
@@ -115,7 +115,7 @@ fn fill_parallel_water_rows(
     // `downstream(h)` would land it on a PreFilling downstream's frozen-identity RHS
     // (which must stay `0`). A second pass, since `d` may be filled before or after
     // `h` in index order; sink case transfers nothing.
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         if !super::entries::is_prefilling(ctx, stage, h_idx) {
             continue;
         }
@@ -149,7 +149,7 @@ fn fill_chronological_water_rows(
     row_upper: &mut [f64],
 ) {
     let n_blks = layout.n_blks;
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         if super::entries::is_prefilling(ctx, stage, h_idx) {
             for blk in 0..n_blks {
                 let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(blk));
@@ -172,7 +172,7 @@ fn fill_chronological_water_rows(
         }
     }
 
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         if !super::entries::is_prefilling(ctx, stage, h_idx) {
             continue;
         }
@@ -404,7 +404,7 @@ fn fill_z_inflow_rows(
     row_upper: &mut [f64],
 ) {
     let has_par = ctx.par_lp.n_stages() > 0;
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let row = layout.z_inflow_row(HydroSys::new(h_idx));
         let base = if has_par {
             ctx.par_lp.deterministic_base(stage_idx, h_idx)
@@ -440,7 +440,7 @@ pub(super) fn fill_operational_violation_rows(
     // Each family writes its own computed row index, so the visit order does not
     // affect the result; the descriptor order is nonetheless pinned to the canonical
     // row-region order so the write order stays auditable against the layout.
-    for h_idx in 0..layout.n_h {
+    for h_idx in 0..layout.state.hydro_count {
         let hydro_sys = HydroSys::new(h_idx);
         for blk in 0..layout.n_blks {
             let b = BlockIdx::new(blk);

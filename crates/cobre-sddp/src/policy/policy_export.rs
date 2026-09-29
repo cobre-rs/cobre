@@ -1015,24 +1015,27 @@ mod tests {
 
     /// The `N=2, L=2, A=1, k_max=2` global layout the fixture system maps onto.
     fn layout_2h_1ant() -> StateSpace {
-        let mut state = test_support::state_layout_full(2, 2, 1, vec![2]);
-        state.set_anticipated_resolution(single_plant_lead2_one_stage_resolution());
-        state
+        test_support::state_layout_with_transit_buckets_and_resolution(
+            2,
+            2,
+            0,
+            Vec::new(),
+            vec![2],
+            single_plant_lead2_one_stage_resolution(),
+        )
     }
 
     /// The `N=2, L=2, B=2, A=1, k_max=2` global layout with two travel-time
     /// buckets, sharing [`layout_2h_1ant`]'s attached single-plant resolution.
     fn layout_2h_2buckets_1ant() -> StateSpace {
-        let mut state = test_support::state_layout_with_transit_buckets(
+        test_support::state_layout_with_transit_buckets_and_resolution(
             2,
             2,
             2,
             vec![(0, 1), (1, 2)],
-            1,
             vec![2],
-        );
-        state.set_anticipated_resolution(single_plant_lead2_one_stage_resolution());
-        state
+            single_plant_lead2_one_stage_resolution(),
+        )
     }
 
     /// All-enabled projection: length 8 (2 storage + 4 lag + 2 anticipated), with
@@ -1816,15 +1819,21 @@ mod tests {
     #[test]
     fn anticipated_slot_delivery_anchor_matches_delivery_stage_year_month() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadStages(2));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // stage_id 1 is the middle stage (2024-05), study index 1.
@@ -1881,15 +1890,21 @@ mod tests {
     #[test]
     fn anticipated_slot_delivery_anchor_past_horizon_is_sentinel() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadStages(2));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // stage_id 2 is the terminal stage (2024-06), study index 2.
@@ -1923,15 +1938,21 @@ mod tests {
     #[test]
     fn anticipated_slot_leadtime_mode_yields_real_anchor() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadTime(720.0));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Time(720.0)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Time(720.0)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         let manifest = build_stage_entity_manifest(
@@ -1962,15 +1983,21 @@ mod tests {
     #[test]
     fn mixed_lead_manifest_dates_exactly_the_slots_the_lp_latches() {
         let system = system_1h_2ant_monthly(4);
-        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 3]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(1), LeadTime::Stages(3)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 4],
-                n_decision: 4,
-                n_delivery: 4,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![1, 3],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(1), LeadTime::Stages(3)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 4],
+                    n_decision: 4,
+                    n_delivery: 4,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // (stage_id, entity_id, subindex) -> expected interval_start; every
@@ -2029,15 +2056,21 @@ mod tests {
     #[test]
     fn anticipated_short_lead_slot_dates_the_residue_it_latches() {
         let system = system_1h_2ant_monthly(3);
-        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(1), LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![1, 2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(1), LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         let manifest = build_stage_entity_manifest(
@@ -2087,7 +2120,6 @@ mod tests {
     #[test]
     fn anticipated_leadtime_undecided_in_window_slot_stays_sentinel() {
         let system = system_1h_2ant_monthly(3);
-        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0), LeadTime::Stages(2)],
             DeliveryAxis {
@@ -2111,7 +2143,14 @@ mod tests {
         assert_eq!(point.decider[1], Some(0));
         assert!(point.is_ready_at(1, 0), "target 1 is a deposit at stage 0");
 
-        global.set_anticipated_resolution(resolution);
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![1, 2],
+            resolution,
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
         let manifest = build_stage_entity_manifest(
             &system,
@@ -2151,15 +2190,21 @@ mod tests {
     fn ring_slot_targeting_post_study_carries_a_real_anchor() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
         let system = system_1h_1ant_3monthly_lead3(post_study_stages_from(start));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![3]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(3)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 4,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![3],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(3)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 4,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // Terminal stage index 2 (2024-06).
@@ -2199,15 +2244,21 @@ mod tests {
     #[test]
     fn anticipated_slot_interval_matches_its_delivery_stage_span() {
         let system = system_1h_1ant_3monthly(AnticipatedConfig::LeadStages(2));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // stage_id 1 is the middle stage (2024-05), study index 1; ring slot 0
@@ -2238,15 +2289,21 @@ mod tests {
     #[test]
     fn anticipated_slot_interval_on_a_five_week_stage_spans_thirty_five_days() {
         let system = system_1h_1ant_short_then_five_week_terminal();
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![1]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(1)],
-            DeliveryAxis {
-                stage_lengths_hours: &[336.0, 840.0],
-                n_decision: 2,
-                n_delivery: 2,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![1],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(1)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[336.0, 840.0],
+                    n_decision: 2,
+                    n_delivery: 2,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // stage_id 0's single ring slot matures at the outgoing anchor
@@ -2289,15 +2346,21 @@ mod tests {
     fn anticipated_slot_dated_iff_intervalled() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
         let system = system_1h_1ant_3monthly_lead3(post_study_stages_from(start));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![3]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(3)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 4,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![3],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(3)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 4,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         let mut saw_in_study_live = false;
@@ -2351,15 +2414,21 @@ mod tests {
     fn terminal_maturing_residue_dates_onto_its_post_study_delivery() {
         let post_study = post_study_stages_from_months(&[(2031, 12), (2032, 1)]);
         let system = system_1h_1ant_64monthly_lead2(Some(post_study));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 64],
-                n_decision: 64,
-                n_delivery: 66,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 64],
+                    n_decision: 64,
+                    n_delivery: 66,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // Terminal stage id 63 (2031-11), study index 63.
@@ -2396,15 +2465,21 @@ mod tests {
     #[test]
     fn terminal_maturing_residue_stays_sentinel_without_a_post_study_calendar() {
         let system = system_1h_1ant_64monthly_lead2(None);
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 64],
-                n_decision: 64,
-                n_delivery: 64,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 64],
+                    n_decision: 64,
+                    n_delivery: 64,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         let manifest = build_stage_entity_manifest(
@@ -2436,15 +2511,21 @@ mod tests {
     fn anticipated_slot_date_matches_the_resolved_physical_delivery_stage() {
         let start = chrono::NaiveDate::from_ymd_opt(2024, 7, 1).unwrap();
         let system = system_1h_1ant_3monthly_lead3(post_study_stages_from(start));
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![3]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(3)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![3],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(3)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
         let post_study_calendar = post_study_delivery_calendar(&system);
@@ -2499,15 +2580,21 @@ mod tests {
     #[test]
     fn anticipated_slots_the_lp_does_not_latch_stay_sentinel() {
         let system = system_1h_2ant_monthly(3);
-        let mut global = test_support::state_layout_full(1, 1, 2, vec![1, 2]);
-        global.set_anticipated_resolution(AnticipatedResolution::resolve(
-            &[LeadTime::Stages(1), LeadTime::Stages(2)],
-            DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
-            },
-        ));
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![1, 2],
+            AnticipatedResolution::resolve(
+                &[LeadTime::Stages(1), LeadTime::Stages(2)],
+                DeliveryAxis {
+                    stage_lengths_hours: &[720.0; 3],
+                    n_decision: 3,
+                    n_delivery: 3,
+                },
+            ),
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // (stage_id, subindex) -> expected interval_start for the ℓ=1 plant
@@ -2601,8 +2688,14 @@ mod tests {
         assert_eq!(point.physical_target(6), 9);
 
         let k_max = resolution.k_max;
-        let mut global = test_support::state_layout_full(1, 1, 1, vec![k_max]);
-        global.set_anticipated_resolution(resolution);
+        let global = test_support::state_layout_with_transit_buckets_and_resolution(
+            1,
+            1,
+            0,
+            Vec::new(),
+            vec![k_max],
+            resolution,
+        );
         let projection = CutStateProjection::new(&global, ALL_ENABLED);
 
         // Terminal study stage (index 3, 2024-04).

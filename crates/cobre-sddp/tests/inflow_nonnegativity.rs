@@ -49,6 +49,7 @@ use cobre_sddp::{
     hydro_models::PrepareHydroModelsResult,
     indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
+    lead_time::AnticipatedResolution,
     lp::builder::{PatchBuffer, StageGeometry, StateBox, build_stage_templates_resolving_layout},
     risk_measure::RiskMeasure,
     setup::node_graph::Traversal,
@@ -75,9 +76,8 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
         max_par_order,
         0,
         Vec::new(),
-        0,
-        0,
         vec![],
+        AnticipatedResolution::default(),
         &vec![max_par_order; hydro_count],
     )
 }

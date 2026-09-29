@@ -897,6 +897,7 @@ mod sparse_dense {
     use cobre_sddp::FutureCostFunction;
     use cobre_sddp::build_cut_row_batch_into;
     use cobre_sddp::indexer::StateSpace;
+    use cobre_sddp::lead_time::AnticipatedResolution;
     use cobre_sddp::setup::NodeId;
     use cobre_sddp::test_support::cut_state_projection;
     use cobre_solver::RowBatch;
@@ -914,9 +915,8 @@ mod sparse_dense {
             max_par_order,
             0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &[0, 1, 2],
         );
         // Expected mask = storage [0,1,2] + lag0 of h1,h2 [4,5] + lag1 of h2 [8].

@@ -1340,8 +1340,7 @@ fn extract_thermals_marks_anticipated_thermals_when_indices_nonempty() {
 /// `delivery_dates[2]`.
 #[test]
 fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decision() {
-    let mut state = test_support::state_layout_full(0, 0, 1, vec![2]);
-    state.set_anticipated_resolution(AnticipatedResolution {
+    let resolution = AnticipatedResolution {
         per_plant: vec![PointResolution {
             decider: vec![None, Some(0), Some(1)],
             decision_sets: vec![vec![1], vec![2]],
@@ -1350,7 +1349,15 @@ fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decisio
         }],
         k_max: 2,
         max_fanout: 0,
-    });
+    };
+    let state = test_support::state_layout_with_transit_buckets_and_resolution(
+        0,
+        0,
+        0,
+        Vec::new(),
+        vec![2],
+        resolution,
+    );
     assert_eq!(state.commit_out.start, 0);
 
     let geometry = StageGeometry {
@@ -2012,8 +2019,7 @@ fn extract_thermals_decision_uses_attached_resolution_delivery_stage() {
     };
     let indexer = test_support::geometry(&eq_counts, vec![], &[], vec![]);
     let study_dims = test_support::study_dims_for(&eq_counts);
-    let mut state = test_support::state_layout_full(0, 0, 1, vec![3]);
-    state.set_anticipated_resolution(AnticipatedResolution {
+    let resolution = AnticipatedResolution {
         per_plant: vec![PointResolution {
             decider: vec![None, Some(0), None],
             decision_sets: vec![vec![1], vec![], vec![]],
@@ -2022,7 +2028,15 @@ fn extract_thermals_decision_uses_attached_resolution_delivery_stage() {
         }],
         k_max: 3,
         max_fanout: 1,
-    });
+    };
+    let state = test_support::state_layout_with_transit_buckets_and_resolution(
+        0,
+        0,
+        0,
+        Vec::new(),
+        vec![3],
+        resolution,
+    );
 
     let n_cols = indexer.anticipated_decision.end.max(indexer.thermal.end);
     let mut primal = vec![0.0_f64; n_cols];

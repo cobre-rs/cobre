@@ -952,7 +952,6 @@ pub(crate) fn resolve_state_layout(
     inflow_lag_depth: Option<u32>,
 ) -> Result<ResolvedStateLayout, SddpError> {
     let anticipated_plants = AnticipatedPlants::build(system.thermals());
-    let n_anticipated = anticipated_plants.len();
 
     // Single resolve_point consumer: map each anticipated plant's config to a
     // delivery-anchored PointResolution and derive the constant-lead K_i the
@@ -977,12 +976,6 @@ pub(crate) fn resolve_state_layout(
             plant_id.unwrap_or(EntityId(-1))
         )));
     }
-
-    // Ring depth: ring_size clamps the delivery-anchored depth up to the
-    // constant-lead machinery's per-plant K_i so its slot indexing stays in
-    // range; a LeadStages plant's depth is already bounded by ℓ, so the ring
-    // sizing stays byte-for-byte unchanged.
-    let k_max = anticipated_resolution.ring_size(&anticipated_lead_stages);
 
     let hydro_count = system.hydros().len();
     let max_par_order: usize = widen_lag_state_depth(
@@ -1029,17 +1022,15 @@ pub(crate) fn resolve_state_layout(
     // no separate post-horizon commitment-hold block: a post-study-targeted
     // delivery is carried by the in-study ring slot its modular residue
     // resolves to.
-    let mut state = StateSpace::new(
+    let state = StateSpace::new(
         hydro_count,
         max_par_order,
         transit_bucket_topology.n_buckets,
         transit_bucket_topology.column_order.clone(),
-        n_anticipated,
-        k_max,
         anticipated_lead_stages,
+        anticipated_resolution,
         &effective_lag_counts,
     );
-    state.set_anticipated_resolution(anticipated_resolution);
 
     debug_assert_eq!(
         state.n_anticipated,

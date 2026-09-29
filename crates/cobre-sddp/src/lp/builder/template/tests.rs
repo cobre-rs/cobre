@@ -29,7 +29,7 @@ use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
     AnticipatedLocal, AnticipatedPlants, BlockIdx, BlockRowFamily, Boundary, BusSys,
     FillingTargetLocal, FloorLocal, HydroCell, HydroCellIndex, HydroSys, NcsSys, PumpingSys,
-    StateSpace, ThermalSys, anticipated_resolution_for,
+    ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
@@ -5397,7 +5397,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     );
     let expected_decider = vec![None, Some(0), Some(1)];
     assert_eq!(
-        anticipated_resolution_for(&template_state, AnticipatedLocal::new(0), 3).decider,
+        anticipated_resolution_for(&template_state, AnticipatedLocal::new(0)).decider,
         expected_decider,
         "template's threaded resolution must resolve the calendar-derived decider"
     );
@@ -5420,33 +5420,6 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     assert_eq!(
         setup_resolution.per_plant[0].decider, expected_decider,
         "setup vs template decider"
-    );
-}
-
-/// Mutation companion: builds the WRONG-BUT-COMPILING `StateSpace` for a
-/// `LeadTime` plant — `anticipated_lead_stages` from
-/// `cfg.lead_stages().unwrap_or(0)` (which is `0` for `LeadTime`) and no
-/// [`crate::indexer::StateSpace::set_anticipated_resolution`] attach — and
-/// shows its decider differs from the correct layout's: the resulting
-/// `Stages(0)` fallback resolves every delivery stage as self-delivered
-/// (`decider[m] == m` for all `m`), never the calendar-derived
-/// `[None, Some(0), Some(1)]` the correct resolution produces for the same
-/// system (`template_anticipated_resolution_matches_setup_lead_time`).
-#[test]
-fn pre_fix_template_state_layout_yields_differing_all_self_delivered_decider() {
-    let pre_fix_state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![0], &[]);
-    let pre_fix_decider = anticipated_resolution_for(&pre_fix_state, AnticipatedLocal::new(0), 3)
-        .decider
-        .clone();
-    assert_eq!(
-        pre_fix_decider,
-        vec![Some(0), Some(1), Some(2)],
-        "pre-fix Stages(0) fallback resolves every delivery stage as self-delivered"
-    );
-    assert_ne!(
-        pre_fix_decider,
-        vec![None, Some(0), Some(1)],
-        "pre-fix decider must differ from the calendar-derived fixed resolution"
     );
 }
 
@@ -5496,7 +5469,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     assert_eq!(ctx.anticipated_lead_stages, vec![1]);
 
     let template_state = super::super::test_support::state_layout_with_resolution(&ctx);
-    let template_decider = anticipated_resolution_for(&template_state, AnticipatedLocal::new(0), 3)
+    let template_decider = anticipated_resolution_for(&template_state, AnticipatedLocal::new(0))
         .decider
         .clone();
 
@@ -5509,7 +5482,7 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     assert_eq!(setup_resolution.per_plant[0].decider, template_decider);
 
     let fallback_state = state_layout_for(&ctx);
-    let fallback_decider = anticipated_resolution_for(&fallback_state, AnticipatedLocal::new(0), 3)
+    let fallback_decider = anticipated_resolution_for(&fallback_state, AnticipatedLocal::new(0))
         .decider
         .clone();
     assert_eq!(

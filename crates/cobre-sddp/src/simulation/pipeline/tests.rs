@@ -2413,11 +2413,17 @@ mod anticipated_ring_matches_forward_propagation {
     /// copy-outgoing convention, not a residual shift.
     #[test]
     fn simulation_ring_matches_forward_pass_for_identical_solves() {
-        let mut state = test_support::state_layout_full(0, 0, 1, vec![2]);
         // Matches this fixture's own N_STAGES, not state_layout_full's wider
-        // internal margin — the retired fallback (no resolution attached)
-        // resolved exactly this axis via the caller's own n_stages.
-        state.set_anticipated_resolution(test_support::constant_lead_resolution(&[2], N_STAGES));
+        // internal margin.
+        let resolution = test_support::constant_lead_resolution(&[2], N_STAGES);
+        let state = test_support::state_layout_with_transit_buckets_and_resolution(
+            0,
+            0,
+            0,
+            Vec::new(),
+            vec![2],
+            resolution,
+        );
         let num_cols = state.theta + 1;
         let template = ring_template(num_cols, state.n_state);
         let templates = vec![template.clone(), template.clone(), template];

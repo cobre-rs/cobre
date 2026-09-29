@@ -773,6 +773,7 @@ mod lb_conformance {
         horizon_mode::HorizonMode,
         indexer::{StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
+        lead_time::AnticipatedResolution,
         lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound},
         lp::builder::PatchBuffer,
         risk_measure::RiskMeasure,
@@ -796,9 +797,8 @@ mod lb_conformance {
             max_par_order,
             0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &vec![max_par_order; hydro_count],
         )
     }

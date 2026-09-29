@@ -196,7 +196,7 @@ fn compute_anticipated_decision_mw(
     thermal_local: usize,
 ) -> Option<f64> {
     let local_idx = anticipated_plants.local_of(ThermalSys::new(thermal_local))?;
-    let resolution = anticipated_resolution_for(spec.state, local_idx, spec.n_stages);
+    let resolution = anticipated_resolution_for(spec.state, local_idx);
     let mut genuine = resolution.genuine_decisions_at(spec.stage_index);
     let delivery_stage = genuine.next()?;
     // TODO(anticipated-fanout-output): gated by resolve_state_layout's max_fanout > 1 reject
@@ -289,8 +289,7 @@ pub(crate) fn extract_anticipated_lanes(
     let state = spec.state;
     let mut results = Vec::new();
     for local in 0..state.n_anticipated {
-        let resolution =
-            anticipated_resolution_for(state, AnticipatedLocal::new(local), spec.n_stages);
+        let resolution = anticipated_resolution_for(state, AnticipatedLocal::new(local));
         for m in resolution.genuine_decisions_at(spec.stage_index) {
             if m < spec.n_stages {
                 continue;

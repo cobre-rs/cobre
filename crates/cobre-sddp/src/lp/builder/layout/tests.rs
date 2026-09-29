@@ -29,7 +29,7 @@ use crate::resolved_parameters::ResolvedParameters;
 use crate::test_support::ctx_fixture::CtxFixture;
 use crate::test_support::{
     anticipated_plants_at, constant_lead_resolution, make_unit_group, state_layout,
-    state_layout_full, state_layout_with_transit_buckets,
+    state_layout_with_transit_buckets, state_layout_with_transit_buckets_and_resolution,
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 
@@ -2164,23 +2164,19 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
 
 /// Build a one-plant `StateSpace` carrying an attached delivery-anchored
 /// `AnticipatedResolution` directly — never `state_layout_for`'s own
-/// saturating constant-lead default, nor the constant-lead fallback
-/// `anticipated_resolution_for` falls back to when no resolution is
-/// attached; these tests need the real resolved axis instead.
+/// saturating constant-lead default; these tests need the real resolved
+/// axis instead.
 fn state_with_attached_resolution(k_max: usize, resolution: AnticipatedResolution) -> StateSpace {
     let n_anticipated = resolution.per_plant.len();
-    let mut state = StateSpace::new(
+    StateSpace::new(
         0,
         0,
         0,
         Vec::new(),
-        n_anticipated,
-        k_max,
         vec![k_max; n_anticipated],
+        resolution,
         &[],
-    );
-    state.set_anticipated_resolution(resolution);
-    state
+    )
 }
 
 /// Study-only axis (`delivery_stage_count(n_stages) == n_stages`): every
@@ -2274,8 +2270,8 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
 #[test]
 fn anticipated_slot_row_pos_identity_axis_matches_the_recorded_pre_excision_mapping() {
     let leads = vec![1, 2];
-    let mut state = StateSpace::new(0, 0, 0, Vec::new(), 2, 2, leads.clone(), &[]);
-    state.set_anticipated_resolution(constant_lead_resolution(&leads, 5));
+    let resolution = constant_lead_resolution(&leads, 5);
+    let state = StateSpace::new(0, 0, 0, Vec::new(), leads, resolution, &[]);
     assert_eq!(
         state.k_max, 2,
         "fixture sanity: ring_size(&[1, 2]) must be 2"
@@ -2474,15 +2470,22 @@ fn anticipated_slot_row_pos_masks_per_plant_at_the_extended_axis_bound() {
 /// deposit).
 #[test]
 fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
-    let mut state = state_layout_full(1, 1, 2, vec![1, 3]);
-    state.set_anticipated_resolution(AnticipatedResolution::resolve(
+    let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Stages(1), LeadTime::Stages(3)],
         DeliveryAxis {
             stage_lengths_hours: &[720.0; 4],
             n_decision: 4,
             n_delivery: 4,
         },
-    ));
+    );
+    let state = state_layout_with_transit_buckets_and_resolution(
+        1,
+        1,
+        0,
+        Vec::new(),
+        vec![1, 3],
+        resolution,
+    );
 
     let expected_by_stage: [&[usize]; 4] = [&[2, 3, 5, 1], &[4, 5, 1], &[0, 1], &[]];
 
@@ -2499,7 +2502,7 @@ fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
             build_anticipated_decision_row_pos(&state, 4, t, &[(None, None); 2], &[0, 1, 2, 3]);
         for (p, pos) in decision_pos.iter().enumerate() {
             if pos.is_some() {
-                let m = anticipated_resolution_for(&state, AnticipatedLocal::new(p), 4)
+                let m = anticipated_resolution_for(&state, AnticipatedLocal::new(p))
                     .genuine_decisions_at(t)
                     .next()
                     .expect("a decision-row position implies a genuine decision this stage");
@@ -3964,7 +3967,15 @@ fn column_address_pins_cover_every_family() {
 /// outgoing/incoming column. This test's left side never changes.
 #[test]
 fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
-    let state = StateSpace::new(0, 0, 3, vec![(0, 0), (0, 1), (1, 0)], 0, 0, vec![], &[]);
+    let state = StateSpace::new(
+        0,
+        0,
+        3,
+        vec![(0, 0), (0, 1), (1, 0)],
+        vec![],
+        AnticipatedResolution::default(),
+        &[],
+    );
     let mut compared = 0usize;
     for range in transit_bucket_plant_ranges(&state) {
         let ring = transit_bucket_ring(&state, range.clone());

@@ -123,7 +123,7 @@ fn fill_commitment_hold_box(
     let n_stages = bounds.n_stages();
     let n_delivery = layout.delivery_stage_count(n_stages);
     let points: Vec<_> = (0..layout.n_anticipated)
-        .map(|plant| anticipated_resolution_for(layout, AnticipatedLocal::new(plant), n_stages))
+        .map(|plant| anticipated_resolution_for(layout, AnticipatedLocal::new(plant)))
         .collect();
     let ring = DeliveryRing::anticipated(layout);
 

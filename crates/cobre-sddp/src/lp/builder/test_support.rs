@@ -66,15 +66,10 @@ pub(super) fn ctx_anticipated_and_mask_inputs(
     )
 }
 
-/// Build the role-(a) [`StateSpace`] a `StageLayout` borrows, from a test
-/// [`TemplateBuildCtx`]. Mirrors `crate::setup::resolve_state_layout` (same state
-/// dimensions and PAR-derived lag counts), so the handle is byte-identical to
-/// production's. Attaches the [`constant_lead_resolution`] over the ctx's own
-/// study horizon, the resolution `anticipated_resolution_for` falls back to when
-/// none is attached; a caller needing the ctx's own attached resolution uses
-/// [`state_layout_with_resolution`] instead.
-pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
-    let effective_lag_counts: Vec<usize> = if ctx.max_par_order > 0 {
+/// Per-hydro effective lag-slot count for `ctx` — shared by [`state_layout_for`]
+/// and [`state_layout_with_resolution`].
+fn effective_lag_counts_for(ctx: &TemplateBuildCtx<'_>) -> Vec<usize> {
+    if ctx.max_par_order > 0 {
         (0..ctx.n_hydros)
             .map(|h| {
                 if h < ctx.par_lp.n_hydros() {
@@ -86,22 +81,28 @@ pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
             .collect()
     } else {
         vec![0; ctx.n_hydros]
-    };
+    }
+}
+
+/// Build the role-(a) [`StateSpace`] a `StageLayout` borrows, from a test
+/// [`TemplateBuildCtx`]. Mirrors `crate::setup::resolve_state_layout` (same state
+/// dimensions and PAR-derived lag counts), so the handle is byte-identical to
+/// production's. Attaches the [`constant_lead_resolution`] over the ctx's own
+/// study horizon; a caller needing the ctx's own attached resolution uses
+/// [`state_layout_with_resolution`] instead.
+pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
+    let effective_lag_counts = effective_lag_counts_for(ctx);
     let resolution =
         constant_lead_resolution(&ctx.anticipated_lead_stages, ctx.resolved.bounds.n_stages());
-    let k_max = resolution.ring_size(&ctx.anticipated_lead_stages);
-    let mut state = StateSpace::new(
+    StateSpace::new(
         ctx.n_hydros,
         ctx.max_par_order,
         0,
         Vec::new(),
-        ctx.n_anticipated,
-        k_max,
         ctx.anticipated_lead_stages.clone(),
+        resolution,
         &effective_lag_counts,
-    );
-    state.set_anticipated_resolution(resolution);
-    state
+    )
 }
 
 /// [`state_layout_for`] with the ctx's own attached `AnticipatedResolution`
@@ -109,9 +110,16 @@ pub(super) fn state_layout_for(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
 /// Tests asserting `anticipated_resolution_for` byte-identity with production
 /// must build through this.
 pub(super) fn state_layout_with_resolution(ctx: &TemplateBuildCtx<'_>) -> StateSpace {
-    let mut state = state_layout_for(ctx);
-    state.set_anticipated_resolution(ctx.anticipated_resolution.clone());
-    state
+    let effective_lag_counts = effective_lag_counts_for(ctx);
+    StateSpace::new(
+        ctx.n_hydros,
+        ctx.max_par_order,
+        0,
+        Vec::new(),
+        ctx.anticipated_lead_stages.clone(),
+        ctx.anticipated_resolution.clone(),
+        &effective_lag_counts,
+    )
 }
 
 /// All-zero `HydroPenalties` so no fixture-side penalty cost contaminates the

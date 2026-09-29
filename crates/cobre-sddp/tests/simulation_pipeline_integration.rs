@@ -38,6 +38,7 @@ use cobre_sddp::{
     horizon_mode::HorizonMode,
     indexer::{StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
+    lead_time::AnticipatedResolution,
     lp::builder::{PatchBuffer, StateBox},
     setup::node_graph::{
         NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
@@ -66,9 +67,8 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
         max_par_order,
         0,
         Vec::new(),
-        0,
-        0,
         vec![],
+        AnticipatedResolution::default(),
         &vec![max_par_order; hydro_count],
     )
 }

@@ -178,7 +178,16 @@ fn n_state_matches_indexer() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
-    let expected = StateSpace::new(1, 2, 0, Vec::new(), 0, 0, vec![], &[2; 1]).n_state;
+    let expected = StateSpace::new(
+        1,
+        2,
+        0,
+        Vec::new(),
+        vec![],
+        AnticipatedResolution::default(),
+        &[2; 1],
+    )
+    .n_state;
     assert_eq!(t.n_state, expected, "n_state must match StateSpace");
 }
 
@@ -269,8 +278,16 @@ fn theta_column_has_unit_objective() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
-    let theta_col =
-        StateSpace::new(1, lag_order, 0, Vec::new(), 0, 0, vec![], &[lag_order; 1]).theta;
+    let theta_col = StateSpace::new(
+        1,
+        lag_order,
+        0,
+        Vec::new(),
+        vec![],
+        AnticipatedResolution::default(),
+        &[lag_order; 1],
+    )
+    .theta;
     assert_eq!(
         t.objective[theta_col], 1.0,
         "theta column objective must be 1.0 (theta is not scaled by COST_SCALE_FACTOR)"

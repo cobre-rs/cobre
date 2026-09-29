@@ -6,6 +6,7 @@
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
 use cobre_sddp::indexer::{BlockGrid, BlockRowFamily, StateSpace};
+use cobre_sddp::lead_time::AnticipatedResolution;
 use cobre_sddp::lp::builder::PatchBuffer;
 use cobre_sddp::test_support::equipment_free_geometry;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -17,7 +18,15 @@ const SHAPES: &[(&str, usize, usize, usize)] =
 fn bench_patch_fill(c: &mut Criterion) {
     let mut group = c.benchmark_group("patch_fill");
     for &(name, n_buses, n_blocks, n_hydros) in SHAPES {
-        let state = StateSpace::new(n_hydros, 0, 0, Vec::new(), 0, 0, vec![], &vec![0; n_hydros]);
+        let state = StateSpace::new(
+            n_hydros,
+            0,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &vec![0; n_hydros],
+        );
         let bus_positions: Vec<usize> = (0..n_buses).rev().collect();
         let geometry = equipment_free_geometry(&[n_blocks]);
         let mut buf = PatchBuffer::new(&state, &bus_positions, &geometry);

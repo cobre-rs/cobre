@@ -295,14 +295,12 @@ mod constant_lead_resolution_tests {
         for lead_stages in [vec![1_usize], vec![3], vec![1, 3], vec![2, 2]] {
             let k_max = lead_stages.iter().copied().max().unwrap_or(0);
             let n_stages = k_max + 2;
-            let resolution = constant_lead_resolution(&lead_stages, n_stages);
             let n_anticipated = lead_stages.len();
-            let mut state =
-                StateSpace::new(0, 0, 0, Vec::new(), n_anticipated, k_max, lead_stages, &[]);
-            state.set_anticipated_resolution(resolution);
+            let resolution = constant_lead_resolution(&lead_stages, n_stages);
+            let state = StateSpace::new(0, 0, 0, Vec::new(), lead_stages, resolution, &[]);
 
             let start = state.commit_out.start;
-            let expected: Vec<StateDim> = (start..start + n_anticipated * k_max)
+            let expected: Vec<StateDim> = (start..start + state.n_anticipated * state.k_max)
                 .map(StateDim::new)
                 .collect();
             assert_eq!(
@@ -1056,9 +1054,8 @@ pub fn state_layout_full(
 /// thermals. `effective_lag_count` is dense (full `max_par_order` for every
 /// hydro), matching [`state_layout_full`]. Attaches a [`constant_lead_resolution`]
 /// over a margin wide enough (`max(lead) + 2`) to saturate the commitment-hold
-/// mask to the whole region, byte-identical to the retired provisional
-/// whole-region default; a caller needing a specific reachability shape
-/// attaches its own resolution afterward.
+/// mask to the whole region; [`state_layout_with_transit_buckets_and_resolution`]
+/// is the sibling for a caller that needs a specific reachability shape.
 #[must_use]
 pub fn state_layout_with_transit_buckets(
     hydro_count: usize,
@@ -1068,22 +1065,45 @@ pub fn state_layout_with_transit_buckets(
     n_anticipated: usize,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
-    let effective_lag_count = vec![max_par_order; hydro_count];
+    debug_assert_eq!(
+        n_anticipated,
+        anticipated_lead_stages.len(),
+        "n_anticipated must equal anticipated_lead_stages.len()"
+    );
     let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
     let resolution = constant_lead_resolution(&anticipated_lead_stages, n_stages);
-    let k_max = resolution.ring_size(&anticipated_lead_stages);
-    let mut state = StateSpace::new(
+    state_layout_with_transit_buckets_and_resolution(
         hydro_count,
         max_par_order,
         n_buckets,
         transit_bucket_column_order,
-        n_anticipated,
-        k_max,
         anticipated_lead_stages,
+        resolution,
+    )
+}
+
+/// Like [`state_layout_with_transit_buckets`] but with a caller-supplied
+/// [`AnticipatedResolution`] instead of the saturating [`constant_lead_resolution`]
+/// default.
+#[must_use]
+pub fn state_layout_with_transit_buckets_and_resolution(
+    hydro_count: usize,
+    max_par_order: usize,
+    n_buckets: usize,
+    transit_bucket_column_order: Vec<(usize, usize)>,
+    anticipated_lead_stages: Vec<usize>,
+    anticipated_resolution: AnticipatedResolution,
+) -> StateSpace {
+    let effective_lag_count = vec![max_par_order; hydro_count];
+    StateSpace::new(
+        hydro_count,
+        max_par_order,
+        n_buckets,
+        transit_bucket_column_order,
+        anticipated_lead_stages,
+        anticipated_resolution,
         &effective_lag_count,
-    );
-    state.set_anticipated_resolution(resolution);
-    state
+    )
 }
 
 /// Per-hydro inflow `extract_hydros`/`extract_hydro_bus_generation` read from

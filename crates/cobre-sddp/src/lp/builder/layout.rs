@@ -646,7 +646,7 @@ fn build_anticipated_decision_row_pos(
     let mut n_active = 0_usize;
     for (plant, pos) in row_pos.iter_mut().enumerate() {
         let plant = AnticipatedLocal::new(plant);
-        let point = anticipated_resolution_for(state, plant, n_stages);
+        let point = anticipated_resolution_for(state, plant);
         let Some(m) = point.genuine_decisions_at(stage_idx).next() else {
             continue;
         };
@@ -706,7 +706,7 @@ fn build_anticipated_fishing_row_pos(
     let mut row_pos = vec![None; n_anticipated];
     let mut n_active = 0_usize;
     for (plant, pos) in row_pos.iter_mut().enumerate() {
-        if anticipated_resolution_for(state, AnticipatedLocal::new(plant), n_stages)
+        if anticipated_resolution_for(state, AnticipatedLocal::new(plant))
             .is_anticipated_at(stage_idx)
         {
             *pos = Some(n_active);

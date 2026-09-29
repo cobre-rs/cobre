@@ -772,6 +772,7 @@ mod tests {
     use crate::cut::{CutPool, CutRowMap};
     use crate::cut_selection::{CutMetadata, CutSelectionStrategy};
     use crate::indexer::{CutSlot, CutStateProjection, StateSpace};
+    use crate::lead_time::AnticipatedResolution;
     use crate::setup::{NodeId, StageIdx};
     use crate::workspace::CapturedBasis;
 
@@ -883,7 +884,7 @@ mod tests {
     // score_violated_candidates fixtures
     // -----------------------------------------------------------------------
 
-    // All scoring tests use n_state = 2 (StateSpace::new(2, 0, 0, [], 0, 0, …)):
+    // All scoring tests use n_state = 2 (StateSpace::new(2, 0, 0, [], [], default, …)):
     //   - state columns 0, 1 (identity state_to_lp_column for j < hydro_count)
     //   - theta column 6 (= n * (3 + l) with n = 2, l = 0)
     // So `primal` must be at least length 7.
@@ -892,7 +893,15 @@ mod tests {
     const PRIMAL_LEN: usize = THETA_COL + 1;
 
     fn indexer() -> StateSpace {
-        StateSpace::new(2, 0, 0, Vec::new(), 0, 0, vec![], &[0, 0])
+        StateSpace::new(
+            2,
+            0,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[0, 0],
+        )
     }
 
     /// A pool with capacity 16, state_dimension 2, forward_passes 16, no
@@ -1729,7 +1738,15 @@ mod tests {
     const LAZY_THETA_COL: usize = 3;
 
     fn lazy_indexer() -> StateSpace {
-        StateSpace::new(1, 0, 0, Vec::new(), 0, 0, vec![], &[0])
+        StateSpace::new(
+            1,
+            0,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[0],
+        )
     }
 
     /// Cut-free core template with x0 pinned to `STATE_X0` and theta free.

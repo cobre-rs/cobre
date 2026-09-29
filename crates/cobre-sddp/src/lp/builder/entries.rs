@@ -2496,8 +2496,8 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(1, 0, 1);
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let mut state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![0], &[]);
-        state.set_anticipated_resolution(constant_lead_resolution(&[0], 1));
+        let resolution = constant_lead_resolution(&[0], 1);
+        let state = StateSpace::new(0, 0, 0, Vec::new(), vec![0], resolution, &[]);
         assert_eq!(
             state.n_anticipated, 1,
             "fixture sanity: one anticipated plant"
@@ -2878,15 +2878,23 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(4, 0, 1);
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
 
-        let mut state = state_layout_for(&ctx);
-        state.set_anticipated_resolution(AnticipatedResolution::resolve(
+        let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0)],
             DeliveryAxis {
                 stage_lengths_hours: &[744.0, 744.0, 744.0, 744.0],
                 n_decision: 4,
                 n_delivery: 4,
             },
-        ));
+        );
+        let state = StateSpace::new(
+            ctx.n_hydros,
+            ctx.max_par_order,
+            0,
+            Vec::new(),
+            ctx.anticipated_lead_stages.clone(),
+            resolution,
+            &vec![0; ctx.n_hydros],
+        );
 
         for stage_idx in 0..4 {
             let stage = two_block_stage(stage_idx, [372.0, 372.0]);
@@ -2949,8 +2957,8 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(2, 0, 1);
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let mut state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![0], &[]);
-        state.set_anticipated_resolution(constant_lead_resolution(&[0], 2));
+        let resolution = constant_lead_resolution(&[0], 2);
+        let state = StateSpace::new(0, 0, 0, Vec::new(), vec![0], resolution, &[]);
         assert_eq!(
             state.n_anticipated, 1,
             "fixture sanity: one anticipated plant"
@@ -6366,10 +6374,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -6477,10 +6483,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -6559,10 +6563,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
 
@@ -6679,10 +6681,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -6768,10 +6768,8 @@ mod pumping_water_tests {
                 (down3_idx, 3),
                 (down1_idx, 1),
             ],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -6899,10 +6897,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -6981,10 +6977,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -7112,11 +7106,8 @@ mod pumping_water_tests {
             par_ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            par_ctx.n_anticipated,
-            par_ctx
-                .anticipated_resolution
-                .ring_size(&par_ctx.anticipated_lead_stages),
             par_ctx.anticipated_lead_stages.clone(),
+            par_ctx.anticipated_resolution.clone(),
             &vec![0; par_ctx.n_hydros],
         );
         let par_layout = StageLayout::new(&par_ctx, &par_state, &par_stage, 0);
@@ -7135,11 +7126,8 @@ mod pumping_water_tests {
             chr_ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            chr_ctx.n_anticipated,
-            chr_ctx
-                .anticipated_resolution
-                .ring_size(&chr_ctx.anticipated_lead_stages),
             chr_ctx.anticipated_lead_stages.clone(),
+            chr_ctx.anticipated_resolution.clone(),
             &vec![0; chr_ctx.n_hydros],
         );
         let chr_layout = StageLayout::new(&chr_ctx, &chr_state, &chr_stage, 0);
@@ -7204,10 +7192,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -7257,10 +7243,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -7417,10 +7401,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
@@ -7471,10 +7453,8 @@ mod pumping_water_tests {
             ctx.max_par_order,
             1,
             vec![(down_idx, 1)],
-            ctx.n_anticipated,
-            ctx.anticipated_resolution
-                .ring_size(&ctx.anticipated_lead_stages),
             ctx.anticipated_lead_stages.clone(),
+            ctx.anticipated_resolution.clone(),
             &vec![0; ctx.n_hydros],
         );
         let layout = StageLayout::new(&ctx, &state, &stage, 0);

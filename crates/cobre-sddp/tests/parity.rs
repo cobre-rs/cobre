@@ -790,6 +790,7 @@ mod determinism {
         horizon_mode::HorizonMode,
         indexer::{CutStateProjection, StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
+        lead_time::AnticipatedResolution,
         lp::builder::{PatchBuffer, StageGeometry, StateBox},
         risk_measure::RiskMeasure,
         setup::node_graph::Traversal,
@@ -820,9 +821,8 @@ mod determinism {
             max_par_order,
             0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &vec![max_par_order; hydro_count],
         )
     }

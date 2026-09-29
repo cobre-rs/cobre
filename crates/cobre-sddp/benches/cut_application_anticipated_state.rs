@@ -29,6 +29,7 @@ use cobre_core::temporal::StageStateConfig;
 use cobre_sddp::build_cut_row_batch_into;
 use cobre_sddp::cut::fcf::FutureCostFunction;
 use cobre_sddp::indexer::{CutStateProjection, StateSpace};
+use cobre_sddp::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
 use cobre_sddp::setup::NodeId;
 use cobre_solver::RowBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -80,7 +81,15 @@ fn bench_cut_application_baseline(c: &mut Criterion) {
     // `StateSpace::new` finalizes the mask and column-map cache in its
     // constructor, mirroring production `build_wired_indexer`.
     let lag_counts: Vec<usize> = vec![L_BASELINE; N];
-    let state = StateSpace::new(N, L_BASELINE, 0, Vec::new(), 0, 0, vec![], &lag_counts);
+    let state = StateSpace::new(
+        N,
+        L_BASELINE,
+        0,
+        Vec::new(),
+        vec![],
+        AnticipatedResolution::default(),
+        &lag_counts,
+    );
     debug_assert_eq!(
         state.n_state, N_STATE,
         "baseline n_state must equal {N_STATE}"
@@ -114,7 +123,24 @@ fn bench_cut_application_baseline(c: &mut Criterion) {
 fn bench_cut_application_with_anticipated(c: &mut Criterion) {
     // All anticipated plants at K_i = K_max so every slot 0..K_max is nonzero;
     // this keeps the mask fully dense at n_state = 130, matching the baseline.
+    // The resolution is built inline (not through `test_support`, which this
+    // bench cannot reach without the `test-support` feature) over a margin
+    // (`K_max + 2`) wide enough to saturate every plant's ring, mirroring
+    // `constant_lead_resolution`.
     let anticipated_lead_stages: Vec<usize> = vec![K_MAX; N_ANTICIPATED];
+    let leads: Vec<LeadTime> = anticipated_lead_stages
+        .iter()
+        .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
+        .collect();
+    let n_margin_stages = K_MAX + 2;
+    let resolution = AnticipatedResolution::resolve(
+        &leads,
+        DeliveryAxis {
+            stage_lengths_hours: &[],
+            n_decision: n_margin_stages,
+            n_delivery: n_margin_stages,
+        },
+    );
 
     // `StateSpace::new` finalizes both layout caches in its constructor.
     let lag_counts: Vec<usize> = vec![L_ANTICIPATED; N];
@@ -123,9 +149,8 @@ fn bench_cut_application_with_anticipated(c: &mut Criterion) {
         L_ANTICIPATED,
         0,
         Vec::new(),
-        N_ANTICIPATED,
-        K_MAX,
         anticipated_lead_stages,
+        resolution,
         &lag_counts,
     );
     debug_assert_eq!(

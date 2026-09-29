@@ -384,6 +384,7 @@ mod tests {
     }
 
     use crate::indexer::StateSpace;
+    use crate::lead_time::AnticipatedResolution;
     use crate::test_support::constant_lead_resolution;
 
     // =========================================================================
@@ -396,8 +397,8 @@ mod tests {
     /// while leaving every other index byte-identical to its seed.
     #[test]
     fn apply_commitment_hold_col_scale_unscale_forces_hold_to_one() {
-        let mut state_layout = StateSpace::new(2, 0, 0, vec![], 1, 2, vec![2], &[0, 0]);
-        state_layout.set_anticipated_resolution(constant_lead_resolution(&[2], 4));
+        let resolution = constant_lead_resolution(&[2], 4);
+        let state_layout = StateSpace::new(2, 0, 0, vec![], vec![2], resolution, &[0, 0]);
 
         assert_eq!(state_layout.commit_out, 2..4);
         assert_eq!(state_layout.commit_in, 8..10);
@@ -428,7 +429,15 @@ mod tests {
     /// exactly as the generic computation produced it.
     #[test]
     fn apply_commitment_hold_col_scale_unscale_is_noop_when_empty() {
-        let state_layout = StateSpace::new(2, 0, 0, vec![], 0, 0, vec![], &[0, 0]);
+        let state_layout = StateSpace::new(
+            2,
+            0,
+            0,
+            vec![],
+            vec![],
+            AnticipatedResolution::default(),
+            &[0, 0],
+        );
         let mut col_scale = vec![1.0_f64; state_layout.theta + 1];
         col_scale[0] = 3.0;
 

@@ -9733,10 +9733,19 @@ fn cut_selection_scores_reduced_projection_in_projected_space() {
     use cobre_sddp::cut::CutPool;
     use cobre_sddp::cut_selection::CutSelectionStrategy;
     use cobre_sddp::indexer::{CutSlot, CutStateProjection, StateSpace};
+    use cobre_sddp::lead_time::AnticipatedResolution;
     use cobre_sddp::setup::NodeId;
 
     // 1 hydro, PAR(1): global state = [storage, lag] → n_state = 2.
-    let global = StateSpace::new(1, 1, 0, Vec::new(), 0, 0, Vec::new(), &[1]);
+    let global = StateSpace::new(
+        1,
+        1,
+        0,
+        Vec::new(),
+        Vec::new(),
+        AnticipatedResolution::default(),
+        &[1],
+    );
     assert_eq!(global.n_state, 2);
 
     let proj = CutStateProjection::new(

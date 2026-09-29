@@ -13,7 +13,6 @@ use super::{contract_family_slot, resolve_variable_ref, variable_ref_is_block_in
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet, ResolvedProductionModel,
 };
-use crate::lead_time::AnticipatedResolution;
 use crate::lp::builder::{StageLayout, TemplateBuildCtx};
 use crate::lp::indexer::{
     AnticipatedPlants, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
@@ -103,23 +102,18 @@ impl ResolverFixture {
         let anticipated_plants = AnticipatedPlants::build(&thermals);
         let n_anticipated = anticipated_lead_stages.len();
         debug_assert_eq!(anticipated_plants.len(), n_anticipated);
-        let k_max = AnticipatedResolution::default().ring_size(&anticipated_lead_stages);
         let n_hydros = hydros.len();
         let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
-        let mut state = StateSpace::new(
+        let resolution = constant_lead_resolution(&anticipated_lead_stages, n_stages);
+        let state = StateSpace::new(
             n_hydros,
             0,
             0,
             Vec::new(),
-            n_anticipated,
-            k_max,
             anticipated_lead_stages.clone(),
+            resolution,
             &vec![0; n_hydros],
         );
-        state.set_anticipated_resolution(constant_lead_resolution(
-            &anticipated_lead_stages,
-            n_stages,
-        ));
         let stage = fixture_stage(n_blks);
         // Delivery axis wide enough to cover stage 0 + the widest declared
         // lead, matching state.n_delivery above — otherwise a

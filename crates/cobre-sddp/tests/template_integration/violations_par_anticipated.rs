@@ -332,7 +332,15 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     // count, and an arbitrary `m`-long index slice supplies M.
     let load_bus_indices: Vec<usize> = (0..m).collect();
     let geometry_per_stage = equipment_free_geometry(&[b_max]);
-    let state = StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]);
+    let state = StateSpace::new(
+        n,
+        l,
+        0,
+        Vec::new(),
+        vec![],
+        AnticipatedResolution::default(),
+        &vec![l; n],
+    );
 
     let capacity_formula = m * b_max + n;
     let mut buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);

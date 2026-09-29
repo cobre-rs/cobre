@@ -293,32 +293,21 @@ impl CutStateProjection {
 mod tests {
     use super::{CutSlot, CutStateProjection, InCol, OutCol, StageStateConfig, StateDim};
     use crate::indexer::{StateRegion, StateSpace};
+    use crate::lead_time::AnticipatedResolution;
     use crate::test_support::constant_lead_resolution;
 
     fn finalized(
         hydro_count: usize,
         max_par_order: usize,
-        n_anticipated: usize,
-        k_max: usize,
         anticipated_lead_stages: &[usize],
     ) -> StateSpace {
-        let lag_counts = vec![max_par_order; hydro_count];
-        let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
-        let mut state = StateSpace::new(
+        finalized_with_transit_buckets(
             hydro_count,
             max_par_order,
             0,
             Vec::new(),
-            n_anticipated,
-            k_max,
-            anticipated_lead_stages.to_owned(),
-            &lag_counts,
-        );
-        state.set_anticipated_resolution(constant_lead_resolution(
             anticipated_lead_stages,
-            n_stages,
-        ));
-        state
+        )
     }
 
     /// Like [`finalized`] but with a declared bucket block.
@@ -327,27 +316,20 @@ mod tests {
         max_par_order: usize,
         n_buckets: usize,
         transit_bucket_column_order: Vec<(usize, usize)>,
-        n_anticipated: usize,
-        k_max: usize,
         anticipated_lead_stages: &[usize],
     ) -> StateSpace {
         let lag_counts = vec![max_par_order; hydro_count];
         let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
-        let mut state = StateSpace::new(
+        let resolution = constant_lead_resolution(anticipated_lead_stages, n_stages);
+        StateSpace::new(
             hydro_count,
             max_par_order,
             n_buckets,
             transit_bucket_column_order,
-            n_anticipated,
-            k_max,
             anticipated_lead_stages.to_owned(),
+            resolution,
             &lag_counts,
-        );
-        state.set_anticipated_resolution(constant_lead_resolution(
-            anticipated_lead_stages,
-            n_stages,
-        ));
-        state
+        )
     }
 
     const ALL_ENABLED: StageStateConfig = StageStateConfig {
@@ -361,7 +343,7 @@ mod tests {
 
     #[test]
     fn default_projection_is_identity() {
-        let global = finalized(3, 2, 0, 0, &[]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.n_state, 9);
@@ -377,7 +359,7 @@ mod tests {
 
     #[test]
     fn storage_only_projection() {
-        let global = finalized(3, 2, 0, 0, &[]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 3);
@@ -392,7 +374,7 @@ mod tests {
 
     #[test]
     fn global_state_index_is_identity_for_all_enabled() {
-        let global = finalized(3, 2, 0, 0, &[]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(cut.n_slots(), global.n_state);
@@ -406,7 +388,7 @@ mod tests {
     /// off the `StateDim` axis; `global_state_index` selects the raw lag dims.
     #[test]
     fn global_state_index_selects_nonprefix_enabled_dims() {
-        let global = finalized(2, 1, 0, 0, &[]);
+        let global = finalized(2, 1, &[]);
         let cut = CutStateProjection::new(
             &global,
             StageStateConfig {
@@ -434,7 +416,7 @@ mod tests {
     fn dot_trial_state_gathers_reduced_projection_not_positional() {
         // N=2 storage, L=3 (6 lag dims), A=1/k_max=1 (1 anticipated): full state
         // is 9 dims — storage [0,2), lag [2,8), anticipated {8}.
-        let global = finalized(2, 3, 1, 1, &[1]);
+        let global = finalized(2, 3, &[1]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 3, "storage(2) + anticipated(1), lag dropped");
@@ -465,7 +447,7 @@ mod tests {
     /// gather must not disturb.
     #[test]
     fn dot_trial_state_all_enabled_matches_positional_zip() {
-        let global = finalized(3, 2, 0, 0, &[]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         let x_hat = vec![1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5];
@@ -481,7 +463,7 @@ mod tests {
     /// `n_slots() = N + A*k_max = 2 + 2 = 4`.
     #[test]
     fn storage_only_with_anticipated_includes_anticipated() {
-        let global = finalized(2, 1, 1, 2, &[2]);
+        let global = finalized(2, 1, &[2]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 4);
@@ -504,7 +486,7 @@ mod tests {
     /// inflow lags (`N*L = 2` slots, no storage or anticipated).
     #[test]
     fn storage_disabled_begins_at_first_enabled_dimension() {
-        let global = finalized(2, 1, 0, 0, &[]);
+        let global = finalized(2, 1, &[]);
         let cut = CutStateProjection::new(
             &global,
             StageStateConfig {
@@ -527,7 +509,7 @@ mod tests {
 
     #[test]
     fn default_render_matches_global_nonzero_mask() {
-        let global = finalized(3, 2, 0, 0, &[]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(cut.n_slots(), global.n_state);
@@ -554,7 +536,7 @@ mod tests {
 
     #[test]
     fn storage_only_render_touches_only_storage_columns() {
-        let global = finalized(3, 2, 0, 0, &[]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 3);
@@ -587,7 +569,15 @@ mod tests {
     #[test]
     fn render_drops_ar_padding_slots() {
         let lag_counts = [1usize, 3];
-        let global = StateSpace::new(2, 3, 0, Vec::new(), 0, 0, vec![], &lag_counts);
+        let global = StateSpace::new(
+            2,
+            3,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &lag_counts,
+        );
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(cut.n_slots(), global.n_state);
@@ -613,7 +603,7 @@ mod tests {
     /// bucket slots between storage and anticipated.
     #[test]
     fn bucket_block_always_included_with_storage_only() {
-        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], 1, 2, &[2]);
+        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], &[2]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 6);
@@ -648,7 +638,7 @@ mod tests {
     /// column.
     #[test]
     fn bucket_render_pairs_sit_between_lag_and_anticipated() {
-        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], 1, 2, &[2]);
+        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], &[2]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.transit_buckets_out, 4..6);
@@ -685,7 +675,7 @@ mod tests {
     /// byte-identically to the pre-bucket walk.
     #[test]
     fn b_zero_projection_matches_pre_transit_bucket_walk() {
-        let global = finalized_with_transit_buckets(3, 2, 0, vec![], 2, 2, &[1, 2]);
+        let global = finalized_with_transit_buckets(3, 2, 0, vec![], &[1, 2]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.n_buckets, 0);
@@ -723,15 +713,8 @@ mod tests {
         // `n_stages − 1 − t` (which reaches 0 at the terminal, keeping only lag 0),
         // so they are frozen `[0, 0]` in the LP today; the state layout retains
         // them (sized from the global max over every anchor).
-        let global = finalized_with_transit_buckets(
-            1,
-            1,
-            4,
-            vec![(0, 0), (0, 1), (0, 2), (0, 3)],
-            0,
-            0,
-            &[],
-        );
+        let global =
+            finalized_with_transit_buckets(1, 1, 4, vec![(0, 0), (0, 1), (0, 2), (0, 3)], &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert!(
@@ -795,8 +778,8 @@ mod tests {
     /// this inclusion.
     #[test]
     fn commitment_hold_post_study_target_joins_the_projection() {
-        let pre_ring = finalized(2, 1, 0, 0, &[]);
-        let with_ring = finalized(2, 1, 1, 2, &[2]);
+        let pre_ring = finalized(2, 1, &[]);
+        let with_ring = finalized(2, 1, &[2]);
 
         let cut_pre = CutStateProjection::new(&pre_ring, ALL_ENABLED);
         let cut_with = CutStateProjection::new(&with_ring, ALL_ENABLED);
@@ -874,7 +857,7 @@ mod proptests {
                     hydro_count,
                     max_par_order,
                     n_buckets,
-                    n_anticipated,
+                    _n_anticipated,
                     anticipated_lead_stages,
                     n_decision,
                     extra_delivery,
@@ -893,19 +876,15 @@ mod proptests {
                             n_delivery: n_decision + extra_delivery,
                         },
                     );
-                    let k_max = resolution.ring_size(&anticipated_lead_stages);
-                    let mut state = StateSpace::new(
+                    StateSpace::new(
                         hydro_count,
                         max_par_order,
                         n_buckets,
                         transit_bucket_column_order,
-                        n_anticipated,
-                        k_max,
                         anticipated_lead_stages,
+                        resolution,
                         &effective_lag_count,
-                    );
-                    state.set_anticipated_resolution(resolution);
-                    state
+                    )
                 },
             )
     }

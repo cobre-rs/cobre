@@ -40,6 +40,7 @@ use cobre_sddp::{
     },
     indexer::{BlockGrid, BlockRowFamily, StateSpace},
     inflow_method::InflowNonNegativityMethod,
+    lead_time::AnticipatedResolution,
     lp::builder::PatchBuffer,
     resolved_parameters::ResolvedParameters,
 };

@@ -93,39 +93,80 @@ impl PatchBuffer {
     /// # Examples
     ///
     /// ```
+    /// use cobre_sddp::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
     /// use cobre_sddp::lp::builder::PatchBuffer;
     /// use cobre_sddp::lp::indexer::StateSpace;
     ///
     /// // 3-hydro AR(2) system, no stochastic load, no buckets, no anticipated thermals
     /// // Row capacity = M*B + N = 0 + 3 = 3
     /// // Col capacity = N*(1+L) + n_buckets + A*K = 3*(1+2) + 0 + 0 = 9
-    /// let state = StateSpace::new(3, 2, 0, Vec::new(), 0, 0, Vec::new(), &[2, 2, 2]);
+    /// let state = StateSpace::new(
+    ///     3,
+    ///     2,
+    ///     0,
+    ///     Vec::new(),
+    ///     Vec::new(),
+    ///     AnticipatedResolution::default(),
+    ///     &[2, 2, 2],
+    /// );
     /// let buf = PatchBuffer::new(&state, &[], &[]);
     /// assert_eq!(buf.indices.len(), 3);
     /// assert_eq!(buf.col_indices.len(), 9);
     ///
     /// // Production scale: N = 160, L = 12, no stochastic load
     /// // Row capacity = M*B + N = 0 + 160 = 160
-    /// let big_state = StateSpace::new(160, 12, 0, Vec::new(), 0, 0, Vec::new(), &vec![12; 160]);
+    /// let big_state = StateSpace::new(
+    ///     160,
+    ///     12,
+    ///     0,
+    ///     Vec::new(),
+    ///     Vec::new(),
+    ///     AnticipatedResolution::default(),
+    ///     &vec![12; 160],
+    /// );
     /// let big = PatchBuffer::new(&big_state, &[], &[]);
     /// assert_eq!(big.indices.len(), 160);
     ///
     /// // Edge case: no lags (L = 0)
     /// // Row capacity = M*B + N = 0 + 5 = 5
-    /// let no_lag_state = StateSpace::new(5, 0, 0, Vec::new(), 0, 0, Vec::new(), &vec![0; 5]);
+    /// let no_lag_state = StateSpace::new(
+    ///     5,
+    ///     0,
+    ///     0,
+    ///     Vec::new(),
+    ///     Vec::new(),
+    ///     AnticipatedResolution::default(),
+    ///     &vec![0; 5],
+    /// );
     /// let no_lag = PatchBuffer::new(&no_lag_state, &[], &[]);
     /// assert_eq!(no_lag.indices.len(), 5);
     ///
     /// // Anticipated thermals: 1 plant, K=2 — row capacity unchanged (A*K is col-only)
     /// // Row capacity = M*B + N = 0 + 3 = 3
-    /// let ant_state = StateSpace::new(3, 2, 0, Vec::new(), 1, 2, vec![2], &[2, 2, 2]);
+    /// let resolution = AnticipatedResolution::resolve(
+    ///     &[LeadTime::Stages(2)],
+    ///     DeliveryAxis {
+    ///         stage_lengths_hours: &[],
+    ///         n_decision: 3,
+    ///         n_delivery: 3,
+    ///     },
+    /// );
+    /// let ant_state = StateSpace::new(3, 2, 0, Vec::new(), vec![2], resolution, &[2, 2, 2]);
     /// let ant = PatchBuffer::new(&ant_state, &[], &[]);
     /// assert_eq!(ant.indices.len(), 3);
     ///
     /// // Travel-time buckets: n_buckets=4 — row capacity unchanged (bucket state is col-only)
     /// // Col capacity = N*(1+L) + n_buckets + A*K = 3*3 + 4 + 0 = 13
     /// let bucket_order = vec![(0, 0), (1, 0), (0, 1), (1, 1)];
-    /// let bucket_state = StateSpace::new(3, 2, 4, bucket_order, 0, 0, Vec::new(), &[2, 2, 2]);
+    /// let bucket_state = StateSpace::new(
+    ///     3,
+    ///     2,
+    ///     4,
+    ///     bucket_order,
+    ///     Vec::new(),
+    ///     AnticipatedResolution::default(),
+    ///     &[2, 2, 2],
+    /// );
     /// let transit_buckets = PatchBuffer::new(&bucket_state, &[], &[]);
     /// assert_eq!(transit_buckets.col_indices.len(), 13);
     /// assert_eq!(transit_buckets.indices.len(), 3);

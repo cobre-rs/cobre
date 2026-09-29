@@ -75,10 +75,19 @@ impl StorageBoundaryGrid {
 #[cfg(test)]
 mod tests {
     use super::{Boundary, HydroSys, StateSpace, StorageBoundaryGrid};
+    use crate::lead_time::AnticipatedResolution;
 
     #[test]
     fn storage_boundary_grid_resolves_endpoints_and_interior() {
-        let state = StateSpace::new(4, 0, 0, Vec::new(), 0, 0, vec![], &[0, 0, 0, 0]);
+        let state = StateSpace::new(
+            4,
+            0,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[0, 0, 0, 0],
+        );
         let grid = StorageBoundaryGrid::new(50, 3);
 
         for h in 0..state.hydro_count {

@@ -873,6 +873,7 @@ mod tests {
 
     use crate::{
         indexer::StateSpace,
+        lead_time::AnticipatedResolution,
         setup::{StudySetup, node_graph::Traversal},
         test_support,
         training::forward::build_sampler_from_ctx,
@@ -885,7 +886,15 @@ mod tests {
     /// construction rather than by re-deriving the `rc`/`col_scale` math a second time.
     #[test]
     fn capture_fused_terminal_slice_matches_extract_state_duals_only() {
-        let state = StateSpace::new(2, 1, 0, Vec::new(), 0, 0, vec![], &[1, 1]);
+        let state = StateSpace::new(
+            2,
+            1,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[1, 1],
+        );
         let cut_state = CutStateProjection::new(
             &state,
             StageStateConfig {

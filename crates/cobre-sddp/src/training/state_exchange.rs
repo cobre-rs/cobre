@@ -73,11 +73,20 @@ use crate::{
 /// use cobre_sddp::ExchangeBuffers;
 /// use cobre_sddp::TrajectoryRecord;
 /// use cobre_sddp::indexer::StateSpace;
+/// use cobre_sddp::lead_time::AnticipatedResolution;
 /// use cobre_sddp::setup::NodeId;
 /// use cobre_sddp::setup::StageIdx;
 ///
 /// // Three scenarios, two-element state vectors, single rank.
-/// let state = StateSpace::new(2, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0, 0]);
+/// let state = StateSpace::new(
+///     2,
+///     0,
+///     0,
+///     Vec::new(),
+///     Vec::new(),
+///     AnticipatedResolution::default(),
+///     &[0, 0],
+/// );
 /// let mut bufs = ExchangeBuffers::new(&state, 3, 1);
 ///
 /// let records: Vec<TrajectoryRecord> = vec![

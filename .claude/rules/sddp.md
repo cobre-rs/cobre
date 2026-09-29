@@ -2066,11 +2066,10 @@ residue, so a slot beyond its own lead can still be a live carry or
 deposit — the multi-plant heterogeneous-lead case, where plants sharing one
 `k_max`-wide ring have different reachable widths.
 `build_stage_entity_manifest` applies this same rule before populating
-`EntitySlot::interval_start`/`interval_end`, and
-`StateSpace::set_anticipated_resolution` applies it to the cut mask as the
-union of this rule over every decision stage (`StateSpace::set_nonzero_mask`
-includes the whole commitment-hold region until a resolution is attached,
-since nothing can be excluded without reachability data).
+`EntitySlot::interval_start`/`interval_end`, and `StateSpace::set_nonzero_mask`
+applies it to the cut mask's `CommitmentHold` region as the union of this rule
+over every decision stage, computed once at construction from the attached
+resolution.
 
 The sign / `col_scale` invariants are unchanged from storage and the water buckets:
 the incoming column's reduced cost is DIVIDED by `col_scale` on extract

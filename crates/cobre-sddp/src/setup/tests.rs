@@ -7546,17 +7546,15 @@ fn assert_state_layout_finalized(state: &StateSpace) {
         state.n_state,
         "state_to_lp_column_map must be finalized to n_state length"
     );
-    let mut reference = StateSpace::new(
+    let reference = StateSpace::new(
         state.hydro_count,
         state.max_par_order,
         state.n_buckets,
         state.transit_bucket_column_order.clone(),
-        state.n_anticipated,
-        state.k_max,
         state.anticipated_lead_stages.clone(),
+        state.anticipated_resolution.clone(),
         &vec![state.max_par_order; state.hydro_count],
     );
-    reference.set_anticipated_resolution(state.anticipated_resolution.clone());
     assert_eq!(
         state.state_to_lp_column_map, reference.state_to_lp_column_map,
         "state_to_lp_column_map must match a fresh StateSpace::new"

@@ -26,6 +26,7 @@ use cobre_core::EntityId;
 use cobre_core::HydroPastDefluence;
 
 use crate::energy_conversion::EnergyConversionSet;
+use crate::horizon_mode::HorizonMode;
 use crate::lp::builder::{
     GenericConstraintRowEntry, StageGeometry, evaporation_slot, evaporation_slot_count,
 };
@@ -211,7 +212,7 @@ fn compute_anticipated_decision_mw(
         spec.state,
         local_idx,
         delivery_stage,
-        spec.n_stages,
+        spec.horizon.num_stages(),
         spec.anticipated_windows,
         spec.study_stage_ids,
     ) {
@@ -292,7 +293,7 @@ pub(crate) fn extract_anticipated_lanes(
     for local in 0..state.n_anticipated {
         let resolution = anticipated_resolution_for(state, AnticipatedLocal::new(local));
         for m in resolution.genuine_decisions_at(spec.stage_index) {
-            if m < spec.n_stages {
+            if m < spec.horizon.num_stages() {
                 continue;
             }
             let decision_col = spec
@@ -701,8 +702,9 @@ pub struct StageExtractionSpec<'a> {
     pub hydro_min_storage_hm3: &'a [f64],
     /// Stage index within the planning horizon (0-based).
     pub stage_index: usize,
-    /// Total study stages. Evaluates the horizon-boundary predicate `t + K_i <= n_stages`.
-    pub n_stages: usize,
+    /// Horizon mode; evaluates the horizon-boundary predicate `t + K_i <=
+    /// horizon.num_stages()`.
+    pub horizon: &'a HorizonMode,
     /// Per-plant commissioning window `(entry_stage_id, exit_stage_id)` for
     /// anticipated thermals, by anticipated-local position. Gates the
     /// anticipated-decision read via `is_anticipated_decision_active`
@@ -711,7 +713,7 @@ pub struct StageExtractionSpec<'a> {
     pub anticipated_windows: &'a [(Option<i32>, Option<i32>)],
     /// Study-stage commissioning id per stage index (`study_stage_ids[t] = stage.id`).
     /// The gate keys its operation-window clause on the DELIVERY stage's id
-    /// (`t + K_i`). Length equals `n_stages`.
+    /// (`t + K_i`). Length equals `horizon.num_stages()`.
     pub study_stage_ids: &'a [i32],
 }
 

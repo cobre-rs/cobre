@@ -32,7 +32,7 @@ use crate::{
     FutureCostFunction, SddpError,
     context::{StageContext, TrainingContext},
     dcs::{DcsSolveContext, build_initial_resident_set, lazy_solve_preloaded},
-    lp::indexer::{HydroCellIndex, StateSpace},
+    lp::indexer::HydroCellIndex,
     setup::node_graph::{NodeId, NodePos, StageIdx, Traversal, advance_sampled_node},
     simulation::{
         config::SimulationConfig,
@@ -518,8 +518,7 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
         include_terminal_theta,
         ctx,
         output,
-        state,
-        study_dims,
+        training_ctx,
         ids,
         stage_id,
         n_stochastic_ncs,
@@ -591,8 +590,7 @@ pub(crate) fn extract_sim_stage_result(
     include_terminal_theta: bool,
     ctx: &StageContext<'_>,
     output: &SimulationOutputSpec<'_>,
-    state: &StateSpace,
-    study_dims: &StudyDimensions,
+    training_ctx: &TrainingContext<'_>,
     ids: &SimStageIds,
     stage_id: i32,
     n_stochastic_ncs: usize,
@@ -609,16 +607,16 @@ pub(crate) fn extract_sim_stage_result(
         let theta_obj_coeff = ctx
             .templates
             .get(t.0)
-            .and_then(|tmpl| tmpl.objective.get(state.theta).copied())
+            .and_then(|tmpl| tmpl.objective.get(training_ctx.state.theta).copied())
             .unwrap_or(1.0);
-        let theta_contribution = unscaled_primal[state.theta] * theta_obj_coeff;
+        let theta_contribution = unscaled_primal[training_ctx.state.theta] * theta_obj_coeff;
         (view_objective - theta_contribution) * ctx.cost_scale_factor
     };
     // Realized inflow Z_t from the z_h primal: total natural inflow (PAR lag
     // included), gross of withdrawal.
     inflow_m3s_buf.clear();
-    inflow_m3s_buf.extend_from_slice(&unscaled_primal[state.z_inflow.clone()]);
-    debug_assert_eq!(inflow_m3s_buf.len(), state.hydro_count);
+    inflow_m3s_buf.extend_from_slice(&unscaled_primal[training_ctx.state.z_inflow.clone()]);
+    debug_assert_eq!(inflow_m3s_buf.len(), training_ctx.state.hydro_count);
     let blk_hrs = output.block_hours_per_stage[t.0].as_slice();
     let (load_rows, load_n_blks) = resolve_load_rows(ctx, t);
     let row_lower_ref = build_row_lower_unscaled(
@@ -679,8 +677,8 @@ pub(crate) fn extract_sim_stage_result(
         row_lower: row_lower_ref,
     };
     let spec = StageExtractionSpec {
-        state,
-        study_dims,
+        state: training_ctx.state,
+        study_dims: training_ctx.study_dims,
         geometry,
         hydro_cell_index: output.hydro_cell_index,
         entity_counts: output.entity_counts,
@@ -703,7 +701,7 @@ pub(crate) fn extract_sim_stage_result(
         energy_conversion: output.energy_conversion,
         hydro_min_storage_hm3: output.hydro_min_storage_hm3,
         stage_index: t.0,
-        n_stages: ctx.templates.len(),
+        horizon: training_ctx.horizon,
         anticipated_windows: ctx.anticipated_windows,
         study_stage_ids: ctx.study_stage_ids,
     };

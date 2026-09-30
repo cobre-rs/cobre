@@ -352,28 +352,16 @@ fn resolve_hydro_inflow(
     };
 
     let upstream = ctx.cascade.upstream(hydro_id);
-    let diversion_into = ctx
-        .diversion_upstream
-        .get(&hydro_id)
-        .map_or(&[][..], Vec::as_slice);
 
-    let mut result = Vec::with_capacity(2 + 2 * upstream.len() + diversion_into.len());
+    let mut result = Vec::with_capacity(2 + 2 * upstream.len());
 
-    result.push((layout.state.z_inflow_col(HydroSys::new(pos_h)).get(), 1.0));
+    push_local_inflow_rate(pos_h, blk, ctx, layout, &mut result);
 
     if !layout.equipment.turbine.is_empty() && !layout.equipment.spillage.is_empty() {
         for &up_id in upstream {
             if let Some(pos_up) = ctx.positions.hydro(up_id) {
                 push_upstream_release_rate(pos_up, blk, stage_idx, ctx, layout, &mut result);
             }
-        }
-    }
-
-    // `diversion_upstream[h]` already holds system indices, so no position lookup
-    // (mirrors the `fill_state_and_water_entries` diversion-inflow loop).
-    if !layout.equipment.diversion.is_empty() {
-        for &d_idx in diversion_into {
-            result.push((layout.diversion_col(HydroSys::new(d_idx), blk), 1.0));
         }
     }
 
@@ -391,6 +379,33 @@ fn resolve_hydro_inflow(
     }
 
     result
+}
+
+/// Push plant `plant_idx`'s own local inflow rate onto `out`: its `z_inflow`
+/// column, then each `diversion_upstream` source into it, both at `1.0`
+/// (mirrors `push_z_inflow_coupling`'s z coupling and the diversion-inflow
+/// loop in `fill_state_and_water_entries`, both `lp/builder/entries.rs`).
+fn push_local_inflow_rate(
+    plant_idx: usize,
+    blk: BlockIdx,
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout<'_>,
+    out: &mut Vec<(usize, f64)>,
+) {
+    out.push((
+        layout.state.z_inflow_col(HydroSys::new(plant_idx)).get(),
+        1.0,
+    ));
+
+    if !layout.equipment.diversion.is_empty() {
+        let diversion_into = ctx
+            .diversion_upstream
+            .get(&ctx.hydros[plant_idx].id)
+            .map_or(&[][..], Vec::as_slice);
+        for &d_idx in diversion_into {
+            out.push((layout.diversion_col(HydroSys::new(d_idx), blk), 1.0));
+        }
+    }
 }
 
 /// Push arc `u_idx → h`'s per-block release rate onto `out`, mirroring the water

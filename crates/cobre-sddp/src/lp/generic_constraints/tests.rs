@@ -1995,8 +1995,10 @@ fn hydro_inflow_none_matches_some_block_idx() {
 }
 
 /// A hydro that also has a plant diverting into it gets the diversion column
-/// appended after the upstream terms. `diversion_upstream[40] = [2]` (system
-/// index 2), diversion.start=37, n_blks=3, k=1 → (37 + 2*3 + 1, 1.0) = (44, 1.0).
+/// appended right after its own `z_inflow` column, before the upstream terms
+/// (both are the hydro's own local inflow rate). `diversion_upstream[40] =
+/// [2]` (system index 2), diversion.start=37, n_blks=3, k=1 →
+/// (37 + 2*3 + 1, 1.0) = (44, 1.0).
 #[test]
 fn hydro_inflow_diversion_into_appends_diversion_column() {
     let mut fx = default_fixture();
@@ -2027,11 +2029,11 @@ fn hydro_inflow_diversion_into_appends_diversion_column() {
         result,
         vec![
             (z_col, 1.0),
+            (div_start + 2 * nb + blk, 1.0), // diversion-into, system index 2
             (turb + 0 * nb + blk, 1.0),
             (spill + 0 * nb + blk, 1.0),
             (turb + 1 * nb + blk, 1.0),
             (spill + 1 * nb + blk, 1.0),
-            (div_start + 2 * nb + blk, 1.0), // diversion-into, system index 2
         ]
     );
 }

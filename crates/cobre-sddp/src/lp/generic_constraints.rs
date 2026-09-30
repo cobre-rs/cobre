@@ -597,7 +597,7 @@ fn resolve_bus_deficit(
 ) -> Vec<(usize, f64)> {
     if let Some(b_pos) = ctx.positions.bus(bus_id) {
         (0..layout.equipment.max_deficit_segments)
-            .map(|seg| (layout.deficit_col(b_pos, seg, blk), 1.0))
+            .map(|seg| (layout.deficit_col(BusSys::new(b_pos), seg, blk), 1.0))
             .collect()
     } else {
         vec![]

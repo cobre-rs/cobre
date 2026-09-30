@@ -10,9 +10,9 @@ use std::ops::Range;
 use chrono::NaiveDate;
 use cobre_core::{
     AffineBound, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, CascadeTopology,
-    ConstraintExpression, ContractBlockBounds, ContractType, EnergyContract, EntityId,
-    FillingConfig, GenericConstraint, Hydro, HydroBlockBounds, HydroGenerationModel,
-    HydroStageBounds, LineBlockBounds, LinearTerm, NoiseMethod, NonControllableSource,
+    ConstraintExpression, ContractBlockBounds, ContractType, DeficitSegment, EnergyContract,
+    EntityId, FillingConfig, GenericConstraint, Hydro, HydroBlockBounds, HydroGenerationModel,
+    HydroStageBounds, Line, LineBlockBounds, LinearTerm, NoiseMethod, NonControllableSource,
     PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedGenericConstraintBounds,
     ScenarioSourceConfig, SlackConfig, Stage, StageRiskConfig, StageStateConfig, Thermal,
     ThermalBlockBounds, ThermalStageBounds, VariableRef,
@@ -1261,6 +1261,213 @@ fn parallel_z_inflow_column_enters_each_target_water_row_once() {
             water_row_entries, 1,
             "hydro {h}'s z-inflow column must carry exactly one water-row entry in parallel mode"
         );
+    }
+}
+
+/// A `Line` carrying only the `id`; every other field is an inert value.
+fn dormant_line(idx: usize) -> Line {
+    Line {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        source_bus_id: EntityId(0),
+        target_bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        direct_capacity_mw: 0.0,
+        reverse_capacity_mw: 0.0,
+        losses_percent: 0.0,
+        exchange_cost: 0.0,
+    }
+}
+
+/// N=1 hydro (FPHA, single cell), 1 thermal, 1 line, 1 bus with two deficit
+/// segments, 1 import + 1 export contract — every one of the 15 block-major
+/// families [`StageGeometry`]'s column accessors address is non-empty.
+struct AllFamiliesFixtures {
+    base: CtxFixture,
+}
+
+impl AllFamiliesFixtures {
+    fn new() -> Self {
+        use crate::hydro_models::{EvaporationModel, FphaPlane, ResolvedProductionModel};
+
+        let hydros = vec![membership_hydro(1, true, None, None)];
+        let cascade = CascadeTopology::build(&hydros);
+        let hydro_cell_index = HydroCellIndex::build(&hydros);
+        let fpha = ResolvedProductionModel::Fpha {
+            planes: vec![FphaPlane {
+                intercept: 0.0,
+                gamma_v: 0.0,
+                gamma_q: 0.0,
+                gamma_s: 0.0,
+            }],
+        };
+        let mut bus = dormant_bus(0);
+        bus.deficit_segments = vec![
+            DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 0.0,
+            };
+            2
+        ];
+        Self {
+            base: CtxFixture {
+                hydros,
+                hydro_cell_index,
+                cascade,
+                production_models: ProductionModelSet::new(vec![vec![fpha]], 1, 1),
+                evaporation_models: EvaporationModelSet::new(vec![EvaporationModel::None]),
+                thermals: vec![dormant_thermal(0)],
+                lines: vec![dormant_line(0)],
+                buses: vec![bus],
+                contracts: vec![
+                    dormant_contract(0, ContractType::Import),
+                    dormant_contract(1, ContractType::Export),
+                ],
+                ..CtxFixture::default()
+            },
+        }
+    }
+
+    fn make_ctx(&mut self) -> TemplateBuildCtx<'_> {
+        self.base.anticipated_plants = anticipated_plants_at(&[]);
+        self.base.anticipated_lead_stages = vec![];
+        self.base.ctx()
+    }
+}
+
+/// Every [`StageGeometry`] block-strided column accessor equals its
+/// [`StageLayout`] twin, for every entity, block and (for deficit) segment, in
+/// both block modes — the row-family counterpart of
+/// [`layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes`],
+/// extended to every block-major column family.
+#[test]
+fn geometry_column_accessors_agree_with_the_layout_in_both_block_modes() {
+    let mut fixtures = AllFamiliesFixtures::new();
+    let ctx = fixtures.make_ctx();
+
+    for (block_mode, n_blks) in [(BlockMode::Chronological, 3), (BlockMode::Parallel, 2)] {
+        let stage = stage_with_blocks(block_mode, n_blks);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let geometry = layout.geometry(block_mode);
+
+        assert!(
+            !geometry.turbine.is_empty()
+                && !geometry.spillage.is_empty()
+                && !geometry.diversion.is_empty()
+                && !geometry.outflow_below_slack.is_empty()
+                && !geometry.outflow_above_slack.is_empty()
+                && !geometry.generation.is_empty()
+                && !geometry.thermal.is_empty()
+                && !geometry.line_fwd.is_empty()
+                && !geometry.line_rev.is_empty()
+                && !geometry.excess.is_empty()
+                && !geometry.turbine_below_slack.is_empty()
+                && !geometry.generation_below_slack.is_empty()
+                && !geometry.contract_import.is_empty()
+                && !geometry.contract_export.is_empty()
+                && !geometry.deficit.is_empty(),
+            "fixture must exercise all 15 block-major families under {block_mode:?}"
+        );
+
+        let h = HydroSys::new(0);
+        let c = HydroCell::new(0);
+        let t = ThermalSys::new(0);
+        let l = LineSys::new(0);
+        let bus = BusSys::new(0);
+        let fpha_cell = FphaCellLocal::new(0);
+        let max_segs = ctx.study_dims.max_deficit_segments;
+
+        for k in 0..=n_blks {
+            let boundary = Boundary::from_index(k, n_blks);
+            assert_eq!(
+                layout.storage_boundary_grid().col(ctx.state, h, boundary),
+                geometry.storage_boundary_grid().col(ctx.state, h, boundary),
+                "storage boundary {k} disagrees under {block_mode:?}"
+            );
+        }
+
+        for b in 0..n_blks {
+            let blk = BlockIdx::new(b);
+            assert_eq!(
+                layout.turbine_col(c, blk),
+                geometry.turbine_col(c, blk),
+                "turbine_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.spillage_col(h, blk),
+                geometry.spillage_col(h, blk),
+                "spillage_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.diversion_col(h, blk),
+                geometry.diversion_col(h, blk),
+                "diversion_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.outflow_below_col(h, blk),
+                geometry.outflow_below_col(h, blk),
+                "outflow_below_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.outflow_above_col(h, blk),
+                geometry.outflow_above_col(h, blk),
+                "outflow_above_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.generation_col(fpha_cell, blk),
+                geometry.generation_col(fpha_cell, blk),
+                "generation_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.thermal_col(t, blk),
+                geometry.thermal_col(t, blk),
+                "thermal_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.line_fwd_col(l, blk),
+                geometry.line_fwd_col(l, blk),
+                "line_fwd_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.line_rev_col(l, blk),
+                geometry.line_rev_col(l, blk),
+                "line_rev_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.excess_col(bus, blk),
+                geometry.excess_col(bus, blk),
+                "excess_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.turbine_below_col(c, blk),
+                geometry.turbine_below_col(c, blk),
+                "turbine_below_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.generation_below_col(c, blk),
+                geometry.generation_below_col(c, blk),
+                "generation_below_col disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.contract_col(ContractType::Import, 0, blk),
+                geometry.contract_col(ContractType::Import, 0, blk),
+                "contract_col(Import) disagrees at block {b} under {block_mode:?}"
+            );
+            assert_eq!(
+                layout.contract_col(ContractType::Export, 0, blk),
+                geometry.contract_col(ContractType::Export, 0, blk),
+                "contract_col(Export) disagrees at block {b} under {block_mode:?}"
+            );
+            for seg in 0..max_segs {
+                assert_eq!(
+                    layout.deficit_col(bus, seg, blk),
+                    geometry.deficit_col(bus, seg, blk, max_segs),
+                    "deficit_col disagrees at block {b} segment {seg} under {block_mode:?}"
+                );
+            }
+        }
     }
 }
 
@@ -3206,7 +3413,7 @@ fn column_accessors_match_open_coded_formulas() {
         for seg_idx in [0_usize, 1] {
             for blk in 0..n_blks {
                 assert_eq!(
-                    layout.deficit_col(b_idx, seg_idx, BlockIdx::new(blk)),
+                    layout.deficit_col(BusSys::new(b_idx), seg_idx, BlockIdx::new(blk)),
                     layout.equipment.deficit.start
                         + b_idx * layout.equipment.max_deficit_segments * n_blks
                         + seg_idx * n_blks

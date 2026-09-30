@@ -1212,9 +1212,9 @@ fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
             .filter(|&c| csc_entry(t, c, ei.evap_row).is_some())
             .collect();
         let mut expected_cols = vec![
-            g.storage_boundary_grid
+            g.storage_boundary_grid()
                 .col(state, HydroSys::new(0), Boundary::Incoming),
-            g.storage_boundary_grid
+            g.storage_boundary_grid()
                 .col(state, HydroSys::new(0), Boundary::Outgoing),
             ei.evaporation_flow_col,
             ei.f_evap_plus_col,

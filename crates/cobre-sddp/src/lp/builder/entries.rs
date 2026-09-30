@@ -1097,7 +1097,7 @@ pub(super) fn fill_load_balance_entries(
         for blk in (0..n_blks).map(BlockIdx::new) {
             let row = layout.load_balance_row(BusSys::new(b_idx), blk);
             for seg_idx in 0..bus.deficit_segments.len() {
-                let col_def = layout.deficit_col(b_idx, seg_idx, blk);
+                let col_def = layout.deficit_col(BusSys::new(b_idx), seg_idx, blk);
                 col_entries[col_def].push((row, 1.0));
             }
             let col_exc = layout.excess_col(BusSys::new(b_idx), blk);
@@ -3396,8 +3396,8 @@ mod pumping_water_tests {
         ResolvedProductionModel,
     };
     use crate::indexer::{
-        AnticipatedPlants, BlockIdx, Boundary, EvapLocal, FphaCellLocal, HydroCell, HydroCellIndex,
-        HydroSys, LineSys, StateDim,
+        AnticipatedPlants, BlockIdx, Boundary, BusSys, EvapLocal, FphaCellLocal, HydroCell,
+        HydroCellIndex, HydroSys, LineSys, StateDim,
     };
     use crate::lead_time::{SpreadResolution, resolve_spread};
 
@@ -4811,7 +4811,7 @@ mod pumping_water_tests {
             // BusDeficit(2): +1.0 on each of bus 2's two deficit-segment columns.
             for seg in 0..2 {
                 assert_eq!(
-                    coeff_at(layout_a.deficit_col(b_pos, seg, BlockIdx::new(blk))),
+                    coeff_at(layout_a.deficit_col(BusSys::new(b_pos), seg, BlockIdx::new(blk))),
                     1.0,
                     "blk {blk}: generic row must carry +1.0 on bus 2 deficit segment {seg} \
                      (resolver path through bus_pos)"

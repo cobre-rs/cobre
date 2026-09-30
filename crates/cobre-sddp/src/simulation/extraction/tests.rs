@@ -5764,7 +5764,7 @@ fn entity_counts_1_hydro() -> EntityCounts {
 /// evaporation triples. In parallel mode the interior family is empty and turbine
 /// begins at 4.
 fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry {
-    use crate::lp::indexer::{EvaporationIndices, StorageBoundaryGrid};
+    use crate::lp::indexer::EvaporationIndices;
     let n_interior = match block_mode {
         BlockMode::Chronological => k - 1,
         BlockMode::Parallel => 0,
@@ -5795,7 +5795,7 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
         turbine: turbine_start..spillage_start,
         spillage: spillage_start..evap_start,
         n_blks: k,
-        storage_boundary_grid: StorageBoundaryGrid::new(storage_internal_start, k),
+        storage_internal_start,
         block_mode,
         evap_indices,
         evap_hydro_indices: vec![HydroSys::new(0)],

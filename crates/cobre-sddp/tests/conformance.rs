@@ -26,7 +26,7 @@
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::BlockMode;
-use cobre_sddp::indexer::{BlockRowFamily, HydroSys, StorageBoundaryGrid};
+use cobre_sddp::indexer::{BlockRowFamily, HydroSys};
 use cobre_sddp::lp::builder::StageGeometry;
 use cobre_sddp::{FutureCostFunction, SyncResult};
 use cobre_solver::{
@@ -1075,7 +1075,7 @@ fn build_geometry(
         filled_min_storage_floor: 0..0,
         filled_min_storage_floor_col: 0..0,
         n_blks,
-        storage_boundary_grid: StorageBoundaryGrid::new(0, n_blks),
+        storage_internal_start: 0,
         block_mode: BlockMode::Parallel,
         fpha_hydro_indices,
         evap_hydro_indices: Vec::new(),

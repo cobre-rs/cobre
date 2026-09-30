@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use cobre_core::{BlockMode, EntityId, Stage, System};
+use cobre_core::{BlockMode, ContractType, EntityId, Stage, System};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
@@ -13,7 +13,8 @@ use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx, entity_flat};
 use super::{GenericConstraintRowEntry, LpBuildInputs, StateBox, columns, entries, rows, scaling};
 use crate::lp::indexer::{
     AnticipatedLocal, BlockGrid, BlockIdx, BlockRowFamily, Boundary, BusSys, EvaporationIndices,
-    FillingTargetLocal, FloorLocal, HydroSys, NcsSys, PumpingSys, StateSpace, StorageBoundaryGrid,
+    FillingTargetLocal, FloorLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys,
+    PumpingSys, StateSpace, StorageBoundaryGrid, ThermalSys,
 };
 
 #[cfg(any(test, feature = "test-support"))]
@@ -210,10 +211,10 @@ pub struct StageGeometry {
     /// Number of operating blocks (K) at this stage — the block-major stride for
     /// every equipment family.
     pub n_blks: usize,
-    /// Storage-boundary address primitive for this stage, carrying the
-    /// interior control-region anchor mirroring
-    /// `StageLayout::storage_boundary_grid`; feeds [`StageGeometry::block_storage_col`].
-    pub storage_boundary_grid: StorageBoundaryGrid,
+    /// Interior storage-boundary anchor for this stage, mirroring
+    /// `StageLayout`'s own `equipment.storage_internal_start`; feeds
+    /// [`StageGeometry::storage_boundary_grid`].
+    pub storage_internal_start: usize,
     /// Block formulation mode at this stage. Selects per-block storage extraction
     /// (`Chronological` reads each block's own `(Sᵇ, Sᵇ⁺¹)` boundary) versus the
     /// stage-level `(S⁰, Sᴷ)` pair (`Parallel`); defaults to `Parallel`.
@@ -254,7 +255,152 @@ impl StageGeometry {
     #[inline]
     #[must_use]
     pub fn block_storage_col(&self, state: &StateSpace, h: HydroSys, boundary: Boundary) -> usize {
-        self.storage_boundary_grid.col(state, h, boundary)
+        self.storage_boundary_grid().col(state, h, boundary)
+    }
+
+    /// The [`StorageBoundaryGrid`] address primitive for this stage's LP,
+    /// carrying its interior anchor.
+    #[inline]
+    #[must_use]
+    pub fn storage_boundary_grid(&self) -> StorageBoundaryGrid {
+        StorageBoundaryGrid::new(self.storage_internal_start, self.n_blks)
+    }
+
+    /// Resolve a block-major column within `family` and debug-assert it stays
+    /// inside it — the single home for the bounds check every accessor below
+    /// shares.
+    #[inline]
+    fn block_flat(&self, family: &Range<usize>, entity: usize, blk: BlockIdx) -> usize {
+        let col = BlockGrid::new(self.n_blks, 0).flat(family.start, entity, blk);
+        debug_assert!(col < family.end, "column {col} outside {family:?}");
+        col
+    }
+
+    /// Turbine-flow column for cell `c`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn turbine_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
+        self.block_flat(&self.turbine, c.get(), blk)
+    }
+
+    /// Spillage column for hydro `h`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn spillage_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.spillage, h.get(), blk)
+    }
+
+    /// Diversion-flow column for hydro `h`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn diversion_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.diversion, h.get(), blk)
+    }
+
+    /// Outflow-below-minimum slack column for hydro `h`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn outflow_below_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.outflow_below_slack, h.get(), blk)
+    }
+
+    /// Outflow-above-maximum slack column for hydro `h`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn outflow_above_col(&self, h: HydroSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.outflow_above_slack, h.get(), blk)
+    }
+
+    /// FPHA generation column for FPHA-cell-local index `c`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn generation_col(&self, c: FphaCellLocal, blk: BlockIdx) -> usize {
+        self.block_flat(&self.generation, c.get(), blk)
+    }
+
+    /// Thermal-generation column for thermal `t`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn thermal_col(&self, t: ThermalSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.thermal, t.get(), blk)
+    }
+
+    /// Forward line-flow column for line `l`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn line_fwd_col(&self, l: LineSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.line_fwd, l.get(), blk)
+    }
+
+    /// Reverse line-flow column for line `l`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn line_rev_col(&self, l: LineSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.line_rev, l.get(), blk)
+    }
+
+    /// Bus-excess column for bus `bus`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn excess_col(&self, bus: BusSys, blk: BlockIdx) -> usize {
+        self.block_flat(&self.excess, bus.get(), blk)
+    }
+
+    /// Turbine-below-minimum slack column for cell `c`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn turbine_below_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
+        self.block_flat(&self.turbine_below_slack, c.get(), blk)
+    }
+
+    /// Generation-below-minimum slack column for cell `c`, block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn generation_below_col(&self, c: HydroCell, blk: BlockIdx) -> usize {
+        self.block_flat(&self.generation_below_slack, c.get(), blk)
+    }
+
+    /// `contract_type`'s contract column at per-direction slot `family_slot`
+    /// (from [`contract_family_slot`](crate::generic_constraints::contract_family_slot))
+    /// for block `blk`.
+    #[inline]
+    #[must_use]
+    pub fn contract_col(
+        &self,
+        contract_type: ContractType,
+        family_slot: usize,
+        blk: BlockIdx,
+    ) -> usize {
+        let family = match contract_type {
+            ContractType::Import => &self.contract_import,
+            ContractType::Export => &self.contract_export,
+        };
+        self.block_flat(family, family_slot, blk)
+    }
+
+    /// Deficit column for bus `bus`, segment `seg`, block `blk`, given the
+    /// study's `max_segments` ([`StudyDimensions::max_deficit_segments`](crate::lp::indexer::StudyDimensions::max_deficit_segments)).
+    #[inline]
+    #[must_use]
+    pub fn deficit_col(
+        &self,
+        bus: BusSys,
+        seg: usize,
+        blk: BlockIdx,
+        max_segments: usize,
+    ) -> usize {
+        let col = BlockGrid::new(self.n_blks, max_segments).deficit(
+            self.deficit.start,
+            bus.get(),
+            seg,
+            blk,
+        );
+        debug_assert!(
+            col < self.deficit.end,
+            "deficit column {col} outside {:?}",
+            self.deficit
+        );
+        col
     }
 
     /// Hydro `h`'s water-balance row for block `blk`: its own block row on a
@@ -278,28 +424,14 @@ impl StageGeometry {
     #[inline]
     #[must_use]
     pub fn ncs_generation_col(&self, ncs_sys: NcsSys, blk: BlockIdx) -> usize {
-        let col =
-            BlockGrid::new(self.n_blks, 0).flat(self.ncs_generation.start, ncs_sys.get(), blk);
-        debug_assert!(
-            col < self.ncs_generation.end,
-            "NCS column {col} outside {:?}",
-            self.ncs_generation
-        );
-        col
+        self.block_flat(&self.ncs_generation, ncs_sys.get(), blk)
     }
 
     /// Pumping station `pumping_sys`'s flow column for block `blk`.
     #[inline]
     #[must_use]
     pub fn pumping_flow_col(&self, pumping_sys: PumpingSys, blk: BlockIdx) -> usize {
-        let col =
-            BlockGrid::new(self.n_blks, 0).flat(self.pumping_flow.start, pumping_sys.get(), blk);
-        debug_assert!(
-            col < self.pumping_flow.end,
-            "pumping column {col} outside {:?}",
-            self.pumping_flow
-        );
-        col
+        self.block_flat(&self.pumping_flow, pumping_sys.get(), blk)
     }
 
     /// Anticipated-local `local`'s ring decision column.

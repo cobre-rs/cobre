@@ -8,7 +8,9 @@ use cobre_core::{BlockMode, EntityId, PostStudyThermalBound};
 use cobre_solver::StageTemplate;
 
 use crate::lp::builder::{GenericConstraintRowEntry, StateBox};
-use crate::lp::indexer::{BlockRowFamily, EvaporationIndices, HydroSys, StateSpace};
+use crate::lp::indexer::{
+    BlockRowFamily, EvaporationIndices, HydroSys, StateSpace, StorageBoundaryGrid,
+};
 use crate::time_value::TimeValue;
 
 use super::{StageGeometry, StageTemplates};
@@ -242,7 +244,7 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
         filled_min_storage_floor,
         filled_min_storage_floor_col,
         n_blks,
-        storage_boundary_grid,
+        storage_internal_start,
         block_mode,
         fpha_hydro_indices,
         evap_hydro_indices,
@@ -289,7 +291,7 @@ fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace)
 
     put_usize(buf, state.storage_in.start);
     put_usize(buf, state.storage.start);
-    for field in storage_boundary_grid.canonical_fields() {
+    for field in StorageBoundaryGrid::new(*storage_internal_start, *n_blks).canonical_fields() {
         put_usize(buf, field);
     }
 

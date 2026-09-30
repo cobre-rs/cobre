@@ -1747,12 +1747,12 @@ impl StageLayout<'_> {
         self.evap_triple_base(local_idx.get(), blk) + EVAP_F_MINUS_OFFSET
     }
 
-    /// Deficit column for bus `b_idx`, segment `seg_idx`, block `blk`. Three-term
+    /// Deficit column for bus `bus`, segment `seg_idx`, block `blk`. Three-term
     /// stride owned by [`BlockGrid::deficit`](crate::indexer::BlockGrid::deficit).
     #[inline]
-    pub(crate) fn deficit_col(&self, b_idx: usize, seg_idx: usize, blk: BlockIdx) -> usize {
+    pub(crate) fn deficit_col(&self, bus: BusSys, seg_idx: usize, blk: BlockIdx) -> usize {
         self.block_grid()
-            .deficit(self.equipment.deficit.start, b_idx, seg_idx, blk)
+            .deficit(self.equipment.deficit.start, bus.get(), seg_idx, blk)
     }
 
     #[inline]
@@ -1987,7 +1987,7 @@ impl StageLayout<'_> {
             filled_min_storage_floor: self.filled_min_storage_floor(),
             filled_min_storage_floor_col: self.filled_min_storage_floor_col(),
             n_blks: self.clock.n_blks(),
-            storage_boundary_grid: self.storage_boundary_grid(),
+            storage_internal_start: self.equipment.storage_internal_start,
             block_mode,
             fpha_hydro_indices: self.fpha_hydro_indices.clone(),
             evap_hydro_indices: self.evap_hydro_indices.clone(),

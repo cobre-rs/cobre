@@ -536,7 +536,7 @@ fn build_transit_bucket_row_pos(
 /// slot's physical delivery target `m` is a genuine fresh decision this stage
 /// (`decider[m] == Some(stage_idx)`, the deposit-row family
 /// `row_anticipated_state_out_def_start` owns it instead), beyond the
-/// EXTENDED delivery calendar (`m >= state.delivery_stage_count(n_stages)`),
+/// EXTENDED delivery calendar (`m >= state.n_delivery()`),
 /// or not yet ready ([`for_each_live_commitment_slot`]'s own filter,
 /// structural padding). Masking on the study horizon (`m >= n_stages`)
 /// instead is the wrong-but-compiling alternative: it would freeze `[0, 0]`
@@ -552,13 +552,12 @@ fn build_transit_bucket_row_pos(
 /// and the reachable count.
 fn build_anticipated_slot_row_pos(
     state: &StateSpace,
-    n_stages: usize,
     stage_idx: usize,
 ) -> (Vec<Option<usize>>, usize) {
     let n_anticipated = state.n_anticipated;
     let mut row_pos = vec![None; n_anticipated * state.k_max];
     let mut n_reachable = 0_usize;
-    for_each_live_commitment_slot(state, n_stages, stage_idx, |res, point| {
+    for_each_live_commitment_slot(state, stage_idx, |res, point| {
         let is_deposit = point.decider.get(res.target).copied().flatten() == Some(stage_idx);
         if !is_deposit {
             row_pos[res.slot * n_anticipated + res.plant] = Some(n_reachable);
@@ -584,7 +583,6 @@ fn build_anticipated_slot_row_pos(
 /// mapping and the active count.
 fn build_anticipated_decision_row_pos(
     state: &StateSpace,
-    n_stages: usize,
     stage_idx: usize,
     anticipated_windows: &[(Option<i32>, Option<i32>)],
     delivery_stage_ids: &[i32],
@@ -594,7 +592,7 @@ fn build_anticipated_decision_row_pos(
     if n_anticipated == 0 || k_max == 0 {
         return (Vec::new(), 0);
     }
-    let n_delivery = state.delivery_stage_count(n_stages);
+    let n_delivery = state.n_delivery();
     let mut row_pos = vec![None; n_anticipated];
     let mut n_active = 0_usize;
     for (plant, pos) in row_pos.iter_mut().enumerate() {
@@ -1280,7 +1278,6 @@ impl<'a> StageLayout<'a> {
         let (anticipated_decision_row_pos, n_anticipated_state_out_def_rows) =
             build_anticipated_decision_row_pos(
                 state,
-                n_stages,
                 stage_idx,
                 ctx.study_dims.anticipated_plants.windows(),
                 ctx.time_value.delivery_stage_ids(),
@@ -1292,7 +1289,7 @@ impl<'a> StageLayout<'a> {
         // deliveries only; the commitment maturing this stage is fished by
         // the maturity row above instead.
         let (anticipated_slot_row_pos, n_anticipated_slot_definition_rows) =
-            build_anticipated_slot_row_pos(state, n_stages, stage_idx);
+            build_anticipated_slot_row_pos(state, stage_idx);
         let row_anticipated_slot_definition_start =
             row.alloc(n_anticipated_slot_definition_rows).start;
 

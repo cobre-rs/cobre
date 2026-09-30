@@ -591,7 +591,7 @@ pub(super) fn fill_anticipated_columns(
     bufs: &mut ColumnBufs<'_>,
 ) {
     let n_stages = ctx.resolved.bounds.n_stages();
-    let n_delivery = layout.state.delivery_stage_count(n_stages);
+    let n_delivery = layout.state.n_delivery();
     let n_ant = ctx.study_dims.anticipated_plants.len();
     let ring = DeliveryRing::anticipated(layout.state);
 
@@ -602,7 +602,7 @@ pub(super) fn fill_anticipated_columns(
     }
 
     let mut active_count = 0_usize;
-    for_each_ring_residue(layout.state, n_stages, stage_idx, |res, point| {
+    for_each_ring_residue(layout.state, stage_idx, |res, point| {
         let Some(delivery_stage) = point.genuine_decisions_at(stage_idx).next() else {
             return;
         };

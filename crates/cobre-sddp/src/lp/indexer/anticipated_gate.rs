@@ -9,8 +9,6 @@
 //! and `anticipated_resolution` (`pub(crate)`) it already carries where
 //! needed; nothing new is threaded.
 
-use std::borrow::Cow;
-
 use super::{AnticipatedLocal, StateSpace};
 use crate::lead_time::PointResolution;
 
@@ -120,8 +118,8 @@ pub(crate) fn is_anticipated_decision_active_for_delivery(
 pub(crate) fn anticipated_resolution_for(
     state: &StateSpace,
     local_idx: AnticipatedLocal,
-) -> Cow<'_, PointResolution> {
-    Cow::Borrowed(&state.anticipated_resolution.per_plant[local_idx.get()])
+) -> &PointResolution {
+    &state.anticipated_resolution.per_plant[local_idx.get()]
 }
 
 /// One anticipated ring-window visit: a plant's modular ring slot and its own
@@ -158,16 +156,12 @@ pub(crate) struct RingResidue {
 /// The depth-major/plant-minor order is load-bearing: the carry-row family
 /// compacts its row positions in exactly this order. A plant whose physical
 /// target lands beyond the extended delivery calendar
-/// (`target >= delivery_stage_count`) is skipped, never visited. The closure
+/// (`target >= state.n_delivery()`) is skipped, never visited. The closure
 /// is a monomorphised `FnMut` reusing the caller's buffers — no `Box<dyn>` and
 /// no per-residue allocation; the per-stage resolution set is built once and
 /// reused across the whole window.
-pub(crate) fn for_each_ring_residue<F>(
-    state: &StateSpace,
-    n_stages: usize,
-    stage_idx: usize,
-    mut visit: F,
-) where
+pub(crate) fn for_each_ring_residue<F>(state: &StateSpace, stage_idx: usize, mut visit: F)
+where
     F: FnMut(RingResidue, &PointResolution),
 {
     let n_anticipated = state.n_anticipated;
@@ -175,8 +169,8 @@ pub(crate) fn for_each_ring_residue<F>(
     if n_anticipated == 0 || k_max == 0 {
         return;
     }
-    let n_delivery = state.delivery_stage_count(n_stages);
-    let points: Vec<Cow<'_, PointResolution>> = (0..n_anticipated)
+    let n_delivery = state.n_delivery();
+    let points: Vec<&PointResolution> = (0..n_anticipated)
         .map(|plant| anticipated_resolution_for(state, AnticipatedLocal::new(plant)))
         .collect();
     for depth in 0..k_max {
@@ -204,15 +198,11 @@ pub(crate) fn for_each_ring_residue<F>(
 /// holds for its target — the union of every carry row (interior, not yet
 /// due) and every deposit row (`decider[target] == Some(stage_idx)`, itself
 /// always ready). The order stays depth-major, then plant-minor.
-pub(crate) fn for_each_live_commitment_slot<F>(
-    state: &StateSpace,
-    n_stages: usize,
-    stage_idx: usize,
-    mut visit: F,
-) where
+pub(crate) fn for_each_live_commitment_slot<F>(state: &StateSpace, stage_idx: usize, mut visit: F)
+where
     F: FnMut(RingResidue, &PointResolution),
 {
-    for_each_ring_residue(state, n_stages, stage_idx, |res, point| {
+    for_each_ring_residue(state, stage_idx, |res, point| {
         if point.is_ready_at(res.target, stage_idx) {
             visit(res, point);
         }

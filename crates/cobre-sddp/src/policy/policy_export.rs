@@ -135,7 +135,7 @@ pub fn build_stage_entity_manifest(
     let n_anticipated = global_layout.n_anticipated;
     let mut live_target = vec![None; n_anticipated * global_layout.k_max];
     if let Some(t) = current_stage_idx {
-        for_each_live_commitment_slot(global_layout, study_stages.len(), t, |res, _| {
+        for_each_live_commitment_slot(global_layout, t, |res, _| {
             live_target[res.slot * n_anticipated + res.plant] = Some(res.target);
         });
     }
@@ -2501,7 +2501,7 @@ mod tests {
         let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
         let post_study_calendar = post_study_delivery_calendar(&system);
         let delivery_stages = extended_delivery_stages(&study_stages, &post_study_calendar);
-        let n_delivery = global.delivery_stage_count(study_stages.len());
+        let n_delivery = global.n_delivery();
         let resolution = &global.anticipated_resolution.per_plant[0];
 
         let anticipated_plants = AnticipatedPlants::build(system.thermals());

@@ -2387,14 +2387,14 @@ fn state_with_attached_resolution(k_max: usize, resolution: AnticipatedResolutio
     )
 }
 
-/// Study-only axis (`delivery_stage_count(n_stages) == n_stages`): every
-/// returned position must be byte-identical to the pre-generalization
-/// `m >= n_stages` skip. `k_max = 2`, `LeadTime::Stages(2)` over 3 study
-/// stages, `stage_idx = 1`. Depths `[2, 3]` reach delivery targets `m = [2,
-/// 3]`: `m=2` (`decider[2] = Some(0)`) is ready at stage 1 and not a fresh
-/// deposit there, so slot `2 % 2 = 0` is an interior carry; `m=3 >=
-/// n_delivery(3)` is masked. Hand-written, not recomputed, so a regression in
-/// the residue arithmetic is caught rather than reproduced.
+/// Study-only axis (`state.n_delivery() == 3`, the same width as the study
+/// horizon): every returned position must be byte-identical to the
+/// pre-generalization `m >= n_stages` skip. `k_max = 2`, `LeadTime::Stages(2)`
+/// over 3 study stages, `stage_idx = 1`. Depths `[2, 3]` reach delivery
+/// targets `m = [2, 3]`: `m=2` (`decider[2] = Some(0)`) is ready at stage 1
+/// and not a fresh deposit there, so slot `2 % 2 = 0` is an interior carry;
+/// `m=3 >= n_delivery(3)` is masked. Hand-written, not recomputed, so a
+/// regression in the residue arithmetic is caught rather than reproduced.
 #[test]
 fn build_anticipated_slot_row_pos_study_only_byte_identity() {
     let k_max = 2;
@@ -2412,7 +2412,7 @@ fn build_anticipated_slot_row_pos_study_only_byte_identity() {
     );
     let state = state_with_attached_resolution(k_max, resolution);
 
-    let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 3, 1);
+    let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 1);
 
     assert_eq!(
         row_pos,
@@ -2446,7 +2446,7 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
     );
     let state = state_with_attached_resolution(k_max, resolution);
 
-    let (row_pos, _n_reachable) = build_anticipated_slot_row_pos(&state, 4, 2);
+    let (row_pos, _n_reachable) = build_anticipated_slot_row_pos(&state, 2);
 
     let slot = 5 % k_max;
     assert!(
@@ -2499,7 +2499,7 @@ fn anticipated_slot_row_pos_identity_axis_matches_the_recorded_pre_excision_mapp
     ];
 
     for (stage_idx, (expected_row_pos, expected_n_reachable)) in expected.into_iter().enumerate() {
-        let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 5, stage_idx);
+        let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, stage_idx);
         assert_eq!(
             row_pos, expected_row_pos,
             "stage_idx={stage_idx}: row_pos must match the recorded pre-excision mapping"
@@ -2576,7 +2576,7 @@ fn two_plant_excised_window_fixture() -> StateSpace {
 fn anticipated_slot_row_pos_walks_physical_targets_across_the_excised_window() {
     let state = two_plant_excised_window_fixture();
 
-    let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 4, 0);
+    let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 0);
 
     assert_eq!(
         row_pos,
@@ -2613,7 +2613,7 @@ fn anticipated_slot_row_pos_gives_no_row_to_an_excised_delivery() {
     let slot = 4 % state.k_max;
 
     for stage_idx in 0..=3 {
-        let (row_pos, _n_reachable) = build_anticipated_slot_row_pos(&state, 4, stage_idx);
+        let (row_pos, _n_reachable) = build_anticipated_slot_row_pos(&state, stage_idx);
         let plant0_at_r4 = row_pos[slot * state.n_anticipated];
         if stage_idx == 0 {
             assert!(
@@ -2657,7 +2657,7 @@ fn anticipated_slot_row_pos_masks_per_plant_at_the_extended_axis_bound() {
     };
     let state = state_with_attached_resolution(3, resolution);
 
-    let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 2, 1);
+    let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 1);
 
     assert_eq!(
         row_pos,
@@ -2693,7 +2693,7 @@ fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
 
     let mut latched: Vec<usize> = Vec::new();
     for (t, &expected) in expected_by_stage.iter().enumerate() {
-        let mut this_stage: Vec<usize> = build_anticipated_slot_row_pos(&state, 4, t)
+        let mut this_stage: Vec<usize> = build_anticipated_slot_row_pos(&state, t)
             .0
             .iter()
             .enumerate()
@@ -2701,7 +2701,7 @@ fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
             .collect();
 
         let (decision_pos, _) =
-            build_anticipated_decision_row_pos(&state, 4, t, &[(None, None); 2], &[0, 1, 2, 3]);
+            build_anticipated_decision_row_pos(&state, t, &[(None, None); 2], &[0, 1, 2, 3]);
         for (p, pos) in decision_pos.iter().enumerate() {
             if pos.is_some() {
                 let m = anticipated_resolution_for(&state, AnticipatedLocal::new(p))

@@ -90,15 +90,13 @@ pub(super) fn fill_anticipated_fishing_entries(
 /// the active-count assert below covers the case a genuine target were ever
 /// excised (never latched, so short by one).
 pub(super) fn fill_anticipated_state_out_def_entries(
-    ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let n_stages = ctx.resolved.bounds.n_stages();
     let ring = DeliveryRing::anticipated(layout.state);
     let mut n_active: usize = 0;
-    for_each_ring_residue(layout.state, n_stages, stage_idx, |res, point| {
+    for_each_ring_residue(layout.state, stage_idx, |res, point| {
         let Some(delivery_stage) = point.genuine_decisions_at(stage_idx).next() else {
             return;
         };
@@ -1518,7 +1516,7 @@ pub(super) fn build_stage_matrix_entries(
     fill_filling_target_entries(layout, &mut col_entries);
     fill_filled_min_storage_floor_entries(layout, &mut col_entries);
     fill_pumping_water_entries(ctx, layout, &mut col_entries);
-    fill_anticipated_state_out_def_entries(ctx, stage_idx, layout, &mut col_entries);
+    fill_anticipated_state_out_def_entries(stage_idx, layout, &mut col_entries);
     fill_anticipated_slot_definition_entries(layout, &mut col_entries);
     fill_load_balance_entries(ctx, stage_idx, layout, &mut col_entries);
     fill_ncs_load_balance_entries(ctx, layout, &mut col_entries);
@@ -2699,7 +2697,7 @@ mod zero_cost_tests {
         let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
-        fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
+        fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
         let leads = [2_usize, 3];
         let k_max = 3_usize;
@@ -2935,7 +2933,7 @@ mod zero_cost_tests {
 
             let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
             fill_anticipated_fishing_entries(&ctx, &stage, stage_idx, &layout, &mut col_entries);
-            fill_anticipated_state_out_def_entries(&ctx, stage_idx, &layout, &mut col_entries);
+            fill_anticipated_state_out_def_entries(stage_idx, &layout, &mut col_entries);
 
             // The plant's ordinary thermal generation columns carry no entry
             // at all from either anticipated row family — unconstrained by
@@ -2993,7 +2991,7 @@ mod zero_cost_tests {
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 0, &layout, &mut col_entries);
-        fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
+        fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
 
         assert!(
@@ -3031,7 +3029,7 @@ mod zero_cost_tests {
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
-        fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
+        fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
         let out_start = layout.state.commit_out.start;
         let n_ant_state = layout.state.n_anticipated * layout.state.k_max;
@@ -3074,7 +3072,7 @@ mod zero_cost_tests {
         let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
-        fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
+        fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
         let row = layout.anticipated.row_anticipated_state_out_def_start;
         let slot = 3_usize;
@@ -3153,7 +3151,7 @@ mod zero_cost_tests {
         let layout = StageLayout::new(&ctx, state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
-        fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
+        fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
         let row = layout.anticipated.row_anticipated_state_out_def_start;
         let col_decision = layout.anticipated.col_anticipated_decision_start;
@@ -3206,7 +3204,7 @@ mod zero_cost_tests {
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
-        fill_anticipated_state_out_def_entries(&ctx, 0, &layout, &mut col_entries);
+        fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
         let out_start = layout.state.commit_out.start;
         let n_ant_state = layout.state.n_anticipated * layout.state.k_max;

@@ -426,12 +426,8 @@ impl StudySetup {
             config.cut_selection.as_ref(),
         )?;
 
-        let extended_delivery_anchors = build_extended_delivery_anchors(
-            system,
-            &stage_data.state,
-            n_stages,
-            stage_data.time_value.calendar(),
-        );
+        let extended_delivery_anchors =
+            build_extended_delivery_anchors(system, stage_data.time_value.calendar());
 
         Ok(Self {
             inputs: SolveInputs {
@@ -1062,22 +1058,17 @@ pub(crate) fn extended_delivery_stages<'a>(
 /// matching the policy manifest's `delivery_anchor_at` walk over the same
 /// extended calendar. Study-only, byte-identical to a study-stages walk, when
 /// no post-study stage is declared.
-fn build_extended_delivery_anchors(
-    system: &System,
-    state: &StateSpace,
-    n_stages: usize,
-    calendar: &DeliveryCalendar,
-) -> Vec<i32> {
+fn build_extended_delivery_anchors(system: &System, calendar: &DeliveryCalendar) -> Vec<i32> {
     let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let anchors: Vec<i32> = extended_delivery_stages(&study_stages, calendar.post_study_stages())
         .iter()
         .map(|s| year_month_day_anchor(s.start_date))
         .collect();
     debug_assert!(
-        anchors.len() >= state.delivery_stage_count(n_stages),
+        anchors.len() >= calendar.n_delivery(),
         "extended delivery anchors ({}) must cover the delivery axis ({})",
         anchors.len(),
-        state.delivery_stage_count(n_stages),
+        calendar.n_delivery(),
     );
     anchors
 }

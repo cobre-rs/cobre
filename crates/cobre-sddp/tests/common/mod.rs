@@ -250,6 +250,26 @@ pub fn for_each_study(mut visit: impl FnMut(&str, &StudySetup)) -> usize {
     count
 }
 
+/// [`for_each_study`]'s visit count, for a caller confirming its sweep saw
+/// every study: every committed deck minus its [`SLOW_DECKS`] skips, plus
+/// every [`in_code_studies::keyed_setups`] and
+/// [`in_code_studies::structural_studies`] entry.
+#[must_use]
+pub fn expected_study_count() -> usize {
+    let slow_tests_enabled = cfg!(feature = "slow-tests");
+    let skipped = if slow_tests_enabled {
+        0
+    } else {
+        committed_decks()
+            .iter()
+            .filter(|deck| SLOW_DECKS.contains(&deck.key.as_str()))
+            .count()
+    };
+    committed_decks().len() - skipped
+        + in_code_studies::keyed_setups().len()
+        + in_code_studies::structural_studies().len()
+}
+
 /// Build a [`StochasticContext`] for an in-code `System`, hermetic (no external
 /// scenario files) — the construction shared by [`build_setup_in_code`] and
 /// [`try_build_setup_in_code`].

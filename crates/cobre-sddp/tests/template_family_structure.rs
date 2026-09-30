@@ -2,8 +2,8 @@
 //!
 //! Each test reads its family through the address owners (`StageGeometry`,
 //! `StateSpace`, `DeliveryRing`, via `cobre_sddp::test_support::template_structure`),
-//! never `start + h` arithmetic, over every committed deck and in-code study
-//! (`common::for_each_study`).
+//! never hand-rolled column/row arithmetic, over every committed deck and
+//! in-code study (`common::for_each_study`).
 
 #![allow(
     clippy::unwrap_used,
@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 
 use cobre_core::BlockMode;
 use cobre_sddp::indexer::{BlockIdx, Boundary, FphaCellLocal, HydroSys};
-use cobre_sddp::test_support::decks::{SLOW_DECKS, committed_decks};
 use cobre_sddp::test_support::template_structure::{
     RingLane, RingLaneKind, UnscaledMatrix, generation_column_owners, hours_to_hm3, ring_lanes,
     storage_column_owners, water_row_owners,
@@ -26,24 +25,12 @@ use cobre_sddp::test_support::template_structure::{
 
 const TOL: f64 = 1e-12;
 
-/// Asserts `common::for_each_study`'s visit count against the same formula
-/// `cobre-cli`'s non-root-rebuild parity test uses, extended by the in-code
-/// studies `for_each_study` also visits.
+/// Asserts `common::for_each_study`'s visit count against
+/// [`common::expected_study_count`].
 fn assert_full_sweep_count(count: usize) {
-    let slow_tests_enabled = cfg!(feature = "slow-tests");
-    let skipped = if slow_tests_enabled {
-        0
-    } else {
-        committed_decks()
-            .iter()
-            .filter(|deck| SLOW_DECKS.contains(&deck.key.as_str()))
-            .count()
-    };
     assert_eq!(
         count,
-        committed_decks().len() - skipped
-            + common::in_code_studies::keyed_setups().len()
-            + common::in_code_studies::structural_studies().len(),
+        common::expected_study_count(),
         "every committed deck (minus SLOW_DECKS skips) plus every in-code and \
          structural study must be swept"
     );

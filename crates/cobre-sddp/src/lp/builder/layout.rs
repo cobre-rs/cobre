@@ -252,8 +252,7 @@ pub(crate) struct EquipmentColumns {
     /// the block is empty and `col_pumping_start == col_ncs_end`.
     pub(crate) col_pumping_start: usize,
     /// Full station count (identical at every stage); contributes `n_blks` columns
-    /// each. Read into the scalar `StageTemplates::n_pumping` that bounds the
-    /// per-(station, block) simulation primal read.
+    /// each.
     pub(crate) n_pumping: usize,
     /// Full import-contract count (identical at every stage).
     pub(crate) n_contract_import: usize,

@@ -656,16 +656,9 @@ pub struct StageExtractionSpec<'a> {
     pub block_hours: &'a [f64],
     /// Per-row metadata for active generic constraint rows at this stage.
     pub generic_constraint_entries: &'a [GenericConstraintRowEntry],
-    /// Number of active NCS entities at this stage.
-    pub n_ncs: usize,
-    /// IDs of active NCS entities, in ID-sorted order. Length equals `n_ncs`.
-    pub ncs_entity_ids: &'a [i32],
     /// Per-(ncs, block) column upper bounds, `available_gen * factor`. Same
-    /// block-major layout as the NCS columns, length `n_ncs * n_blks`.
+    /// block-major layout as the NCS columns: one run of `n_blks` per NCS entity.
     pub ncs_col_upper: &'a [f64],
-    /// Full system station count (dense); a commissioning-dormant station keeps
-    /// its column pinned to `[0, 0]`.
-    pub n_pumping: usize,
     /// Per-station pumping power-consumption rate \[MW/(m³/s)\]. ID-sorted, indexed
     /// by SYSTEM station index — which under the dense layout IS the column-block
     /// position, so extraction reads it at the enumeration index.
@@ -1668,16 +1661,15 @@ fn extract_non_controllables(
     spec: &StageExtractionSpec<'_>,
     stage_id: u32,
 ) -> (Vec<SimulationNonControllableResult>, f64) {
-    let n_ncs = spec.n_ncs;
-    if n_ncs == 0 {
+    if spec.geometry.ncs_generation.is_empty() {
         return (Vec::new(), 0.0);
     }
 
     let n_blks = spec.geometry.n_blks;
-    let mut results = Vec::with_capacity(n_ncs * n_blks);
+    let mut results = Vec::with_capacity(spec.geometry.ncs_generation.len());
     let mut total_curtailment_cost = 0.0;
 
-    for (ncs_sys, &ncs_id) in spec.ncs_entity_ids.iter().enumerate() {
+    for (ncs_sys, &ncs_id) in spec.entity_counts.non_controllable_ids.iter().enumerate() {
         for blk in 0..n_blks {
             let col = spec
                 .geometry
@@ -1728,11 +1720,7 @@ fn extract_pumping_stations(
     spec: &StageExtractionSpec<'_>,
     stage_id: u32,
 ) -> Vec<SimulationPumpingResult> {
-    let n_pumping = spec.n_pumping;
     let n_blks = spec.geometry.n_blks;
-    if n_pumping == 0 || n_blks == 0 {
-        return Vec::new();
-    }
 
     debug_assert!(
         view.primal.len() >= spec.geometry.pumping_flow.end,
@@ -1741,14 +1729,8 @@ fn extract_pumping_stations(
         view.primal.len()
     );
 
-    let mut results = Vec::with_capacity(n_pumping * n_blks);
-    for p_sys in 0..n_pumping {
-        debug_assert!(
-            p_sys < spec.entity_counts.pumping_station_ids.len(),
-            "pumping system index {p_sys} out of bounds for pumping_station_ids len {}",
-            spec.entity_counts.pumping_station_ids.len()
-        );
-        let pumping_station_id = spec.entity_counts.pumping_station_ids[p_sys];
+    let mut results = Vec::with_capacity(spec.geometry.pumping_flow.len());
+    for (p_sys, &pumping_station_id) in spec.entity_counts.pumping_station_ids.iter().enumerate() {
         let consumption = spec.pumping_consumption_mw_per_m3s[p_sys];
         for blk in 0..n_blks {
             let col = spec

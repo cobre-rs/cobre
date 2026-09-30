@@ -535,10 +535,9 @@ mod run_phase_plan_tests {
 // from_broadcast_params sub-phase helpers
 // ---------------------------------------------------------------------------
 
-/// Grouped per-stage and per-slot NCS entity data, held on [`SolveInputs::ncs`].
+/// Grouped per-slot NCS entity data, held on [`SolveInputs::ncs`].
 #[derive(Debug)]
 pub(crate) struct NcsEntityData {
-    pub(crate) entity_ids_per_stage: Vec<Vec<i32>>,
     /// Stage-invariant stochastic-slot → dense NCS column index map (slot in
     /// `StochasticContext::ncs_entity_ids` id-sorted order).
     ///
@@ -565,7 +564,7 @@ pub(crate) struct NcsEntityData {
     pub(crate) allow_curtailment: Vec<bool>,
 }
 
-/// Build the per-stage and per-slot NCS entity data from the system.
+/// Build the per-slot NCS entity data from the system.
 ///
 /// `stochastic_dense_col`, `stochastic_windows`, `max_gen`, and
 /// `allow_curtailment` are aligned 1:1 in stochastic NCS-entity (slot) order;
@@ -581,13 +580,6 @@ fn build_ncs_entity_data(
     stage_data: &StageData,
     stochastic: &StochasticContext,
 ) -> Result<NcsEntityData, SddpError> {
-    let n_study = stage_data.stage_templates.templates.len();
-
-    // Every stage repeats the full id-sorted NCS list, so a dormant NCS still
-    // occupies its slot and reports a zero row rather than being absent.
-    let entity_ids_per_stage: Vec<Vec<i32>> =
-        vec![stage_data.entity_counts.non_controllable_ids.clone(); n_study];
-
     let stoch_ncs_ids = stochastic.ncs_entity_ids();
 
     // Bridge each slot to its dense column via entity id (not a direct index) so the
@@ -622,7 +614,6 @@ fn build_ncs_entity_data(
     }
 
     Ok(NcsEntityData {
-        entity_ids_per_stage,
         stochastic_dense_col,
         stochastic_windows,
         max_gen,

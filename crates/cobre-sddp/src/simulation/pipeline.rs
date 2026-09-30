@@ -101,14 +101,6 @@ pub struct SimulationOutputSpec<'a> {
     /// Per-stage active generic-constraint row metadata for extraction.
     pub generic_constraint_row_entries: &'a [Vec<GenericConstraintRowEntry>],
 
-    /// NCS column count — a single scalar, identical at every stage: under the
-    /// dense layout a dormant NCS keeps its column.
-    pub n_ncs: usize,
-
-    /// Pumping-station column count — a single scalar, identical at every stage:
-    /// a commissioning-dormant station keeps its column (pinned to `[0, 0]`).
-    pub n_pumping: usize,
-
     /// Study-scope hydro-cell partition, threaded into every stage's
     /// `StageExtractionSpec`.
     pub hydro_cell_index: &'a HydroCellIndex,
@@ -128,9 +120,6 @@ pub struct SimulationOutputSpec<'a> {
     /// Per-contract `(ContractType, per-family slot)`, ID-sorted parallel to
     /// `entity_counts.contract_ids`. Stage-invariant.
     pub contract_slots: &'a [(ContractType, usize)],
-
-    /// Per-stage NCS entity IDs, in ID-sorted system order (dense — all NCS).
-    pub ncs_entity_ids_per_stage: &'a [Vec<i32>],
 
     /// Map from target hydro ID to source hydro indices that divert to it; empty
     /// when no hydros have diversion.
@@ -630,15 +619,15 @@ pub(crate) fn extract_sim_stage_result(
     );
     // NCS upper bounds for extraction, in dense system-column order
     // (`ncs_sys * stage_n_blks + blk`).
-    let ncs_n = output.n_ncs;
     let stage_n_blks = ctx.block_count(t);
-    let n_pumping = output.n_pumping;
     let geometry = &ctx.geometry_per_stage[t.0];
     // Start from the template `col_upper`, then overwrite each non-dormant
     // stochastic column with the per-scenario realized availability. A dormant slot
     // is skipped so its template `0` survives — copying its stochastic cap would
     // report a nonzero available for a column the LP pinned to `0`.
-    let ncs_col_upper: &[f64] = if ncs_n > 0 && stage_n_blks > 0 {
+    let ncs_col_upper: &[f64] = if geometry.ncs_generation.is_empty() {
+        &[]
+    } else {
         let ncs_cols = geometry.ncs_generation.clone();
         ncs_col_upper_extract_buf.clear();
         ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[ncs_cols]);
@@ -665,8 +654,6 @@ pub(crate) fn extract_sim_stage_result(
             }
         }
         ncs_col_upper_extract_buf.as_slice()
-    } else {
-        &[]
     };
     let hydro_lookup = &lookups.hydro_per_stage[t.0];
     let view = SolutionView {
@@ -685,10 +672,7 @@ pub(crate) fn extract_sim_stage_result(
         inflow_m3s_per_hydro: inflow_m3s_buf,
         block_hours: blk_hrs,
         generic_constraint_entries: &output.generic_constraint_row_entries[t.0],
-        n_ncs: ncs_n,
-        ncs_entity_ids: &output.ncs_entity_ids_per_stage[t.0],
         ncs_col_upper,
-        n_pumping,
         pumping_consumption_mw_per_m3s: output.pumping_consumption_mw_per_m3s,
         contract_prices: &output.contract_prices_per_stage[t.0],
         contract_slots: output.contract_slots,

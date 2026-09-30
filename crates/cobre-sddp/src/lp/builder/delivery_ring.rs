@@ -11,7 +11,8 @@
 //! out/in state-index ranges: a [`DeliveryRing`] borrows them for one
 //! construction and never re-derives or persists an independent copy. The
 //! block-mode-coupled per-lag deposit fill stays at each ring's own call
-//! site; this module owns only the shared skeleton — the anticipated ring's
+//! site; this module owns only the shared skeleton, plus the column-bound
+//! buffers the ring's column-freeze writes — the anticipated ring's
 //! delivery-axis → ring-slot map is owned by
 //! [`crate::lp::indexer::for_each_ring_residue`].
 
@@ -19,8 +20,14 @@ use std::ops::Range;
 
 use crate::indexer::StateSpace;
 
-use super::columns::ColumnBufs;
 use super::layout::position_table_row;
+
+/// Mutable column-bound and objective buffers shared by all fill helpers.
+pub(super) struct ColumnBufs<'a> {
+    pub(super) col_lower: &'a mut [f64],
+    pub(super) col_upper: &'a mut [f64],
+    pub(super) objective: &'a mut [f64],
+}
 
 /// A lagged-delivery ring over one dense, slot-major/lane-minor state-column
 /// grid: `n_lanes` parallel delivery lanes (plants), each `depth` slots deep.

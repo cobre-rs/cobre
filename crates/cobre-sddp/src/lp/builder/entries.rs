@@ -2147,7 +2147,8 @@ mod zero_cost_tests {
     use crate::test_support::{anticipated_plants_at, constant_lead_resolution};
     use crate::time_value::{PostStudyResolved, TimeValue};
 
-    use super::super::columns::{ColumnBufs, fill_stage_columns, fill_thermal_columns};
+    use super::super::columns::{fill_stage_columns, fill_thermal_columns};
+    use super::super::delivery_ring::ColumnBufs;
     use super::super::layout::{StageLayout, TemplateBuildCtx};
     use super::super::rows::{
         fill_anticipated_fishing_rows, fill_anticipated_state_out_def_rows, fill_stage_rows,
@@ -3398,7 +3399,8 @@ mod pumping_water_tests {
     use crate::test_support::make_unit_group;
     use crate::time_value::{PostStudyResolved, TimeValue};
 
-    use super::super::columns::{ColumnBufs, fill_pumping_columns, fill_stage_columns};
+    use super::super::columns::{fill_pumping_columns, fill_stage_columns};
+    use super::super::delivery_ring::ColumnBufs;
     use super::super::layout::{StageLayout, TemplateBuildCtx};
     use super::super::rows::fill_stage_rows;
     use super::super::test_support::{

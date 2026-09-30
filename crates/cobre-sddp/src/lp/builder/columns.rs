@@ -11,16 +11,9 @@ use crate::indexer::{
 };
 
 use super::EVAPORATION_FLOW_SAFETY_MARGIN;
-use super::delivery_ring::DeliveryRing;
+use super::delivery_ring::{ColumnBufs, DeliveryRing};
 use super::layout::{StageLayout, TemplateBuildCtx};
 use crate::generic_constraints::contract_family_slot;
-
-/// Mutable column-bound and objective buffers shared by all fill helpers.
-pub(super) struct ColumnBufs<'a> {
-    pub(super) col_lower: &'a mut [f64],
-    pub(super) col_upper: &'a mut [f64],
-    pub(super) objective: &'a mut [f64],
-}
 
 /// Fill column lower/upper bounds and objective coefficients for one stage.
 pub(super) fn fill_stage_columns(

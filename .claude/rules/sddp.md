@@ -1635,7 +1635,8 @@ that must not be flattened into one shared keep-live helper:
   whole `anticipated_slot_row_pos`, never a boundary-conditional appended block. Its
   EXISTENCE is gated on the study declaring a `post_study_stages.json` calendar (the
   only thing that extends the delivery axis past the horizon:
-  `delivery_stage_count = n_delivery.max(n_stages)`, so
+  `StateSpace::n_delivery` is the attached resolution's decider length, the
+  study stages plus the post-study continuation, so
   `build_anticipated_slot_row_pos` gates reachability on `m < n_delivery`, not
   `m < n_stages`) plus the plant's own lead reaching the slot — never on a loaded
   boundary. With no post-study calendar the axis is study-only and every
@@ -2172,7 +2173,7 @@ commitment — in-study or post-study-targeted — is ever discarded at the
 delivery-axis boundary; none is created past it in the first place.
 `is_anticipated_decision_active_for_delivery` gates a decision column's
 existence on the strict clause `stage_idx + K_i < n_delivery`, against the
-EXTENDED delivery calendar (`n_delivery = StateSpace::delivery_stage_count`, the
+EXTENDED delivery calendar (`n_delivery = StateSpace::n_delivery`, the
 study stages plus the `post_study_stages.json` continuation), not merely
 `n_stages`; `PointResolution::decider` has the matching domain
 `m in [0, n_delivery)`, so no code path ever computes a commitment targeting a
@@ -2198,7 +2199,7 @@ computed, for a delivery target past the extended delivery axis `n_delivery`.
 Read: `lp/indexer/anticipated_gate.rs`
 (`is_anticipated_decision_active_for_delivery`), `lead_time/mod.rs`
 (`PointResolution::decider`), `lp/indexer/state_space.rs`
-(`StateSpace::delivery_stage_count`), `lp/builder/layout.rs`
+(`StateSpace::n_delivery`), `lp/builder/layout.rs`
 (`build_anticipated_slot_row_pos`), `lp/builder/columns.rs`
 (`fill_anticipated_slot_columns`). Pinned by
 `is_anticipated_decision_active_for_delivery_strict_extended_bound` (the strict

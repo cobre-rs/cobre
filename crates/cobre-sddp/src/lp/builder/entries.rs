@@ -1,18 +1,20 @@
-use cobre_core::commissioning::{Phase, filling_phase};
-use cobre_core::{BlockMode, CoefficientRef, ContractType, EntityId, Stage};
+use cobre_core::commissioning::Phase;
+use cobre_core::{
+    BlockMode, CascadeTopology, CoefficientRef, ContractType, EntityId, Hydro, Stage,
+};
 
 use crate::block_clock::BlockClock;
 use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
-    FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace, ThermalSys,
-    for_each_ring_residue,
+    AnticipatedLocal, BlockIdx, Boundary, BusSys, EntityPositions, EvapLocal, FillingTargetLocal,
+    FloorLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace,
+    ThermalSys, for_each_ring_residue,
 };
 
 use super::delivery_ring::DeliveryRing;
 use super::fpha_cursor::for_each_fpha_plane;
-use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
+use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx, hydro_phase};
 use crate::generic_constraints::contract_family_slot;
 
 /// Fishing (consumption) coupling: for every anticipated plant whose
@@ -150,21 +152,6 @@ fn fill_anticipated_slot_definition_entries(
     );
 }
 
-/// Returns `true` when hydro `h_idx` is in the `PreFilling` phase at this stage.
-#[inline]
-pub(super) fn is_prefilling(ctx: &TemplateBuildCtx<'_>, stage: &Stage, h_idx: usize) -> bool {
-    let hydro = &ctx.hydros[h_idx];
-    matches!(
-        filling_phase(
-            hydro.filling.as_ref(),
-            hydro.entry_stage_id,
-            hydro.exit_stage_id,
-            stage.id,
-        ),
-        Phase::PreFilling
-    )
-}
-
 /// Resolve the cascade target an absent `PreFilling` hydro `h_idx` routes its water
 /// onto: the FIRST downstream hydro NOT `PreFilling` at this stage. `None` (SINK) when
 /// the chain reaches a terminal, an unresolved id, or stays `PreFilling` all the way
@@ -177,17 +164,23 @@ pub(super) fn is_prefilling(ctx: &TemplateBuildCtx<'_>, stage: &Stage, h_idx: us
 /// `PreFilling` (see [`fill_prefilling_shortcircuit`]).
 ///
 /// The `hydros.len()`-bounded loop is defense-in-depth: `check_cascade_acyclic` already
-/// proves the walk terminates.
+/// proves the walk terminates. `None` also when `h` is not `PreFilling`, because its
+/// water stays on its own row.
 pub(super) fn resolve_shortcircuit_target(
-    ctx: &TemplateBuildCtx<'_>,
-    stage: &Stage,
+    hydros: &[Hydro],
+    cascade: &CascadeTopology,
+    positions: &EntityPositions,
+    stage_id: i32,
     h_idx: usize,
 ) -> Option<usize> {
-    let mut current_id = ctx.hydros[h_idx].id;
-    for _ in 0..ctx.hydros.len() {
-        let down_id = ctx.cascade.downstream(current_id)?;
-        let d_idx = ctx.positions.hydro(down_id)?;
-        if !is_prefilling(ctx, stage, d_idx) {
+    if !matches!(hydro_phase(&hydros[h_idx], stage_id), Phase::PreFilling) {
+        return None;
+    }
+    let mut current_id = hydros[h_idx].id;
+    for _ in 0..hydros.len() {
+        let down_id = cascade.downstream(current_id)?;
+        let d_idx = positions.hydro(down_id)?;
+        if !matches!(hydro_phase(&hydros[d_idx], stage_id), Phase::PreFilling) {
             return Some(d_idx);
         }
         current_id = down_id;
@@ -255,7 +248,7 @@ fn fill_parallel_water_entries(
             .storage_incoming_col(HydroSys::new(h_idx))
             .get();
 
-        if is_prefilling(ctx, stage, h_idx) {
+        if matches!(hydro_phase(hydro, stage.id), Phase::PreFilling) {
             // Frozen-storage identity `v_h − v_h_in = 0`: emit ONLY these two entries.
             // Any inflow/upstream/AR-lag/withdrawal/evaporation coupling left here makes
             // `β_h` stale-nonzero — a wrong cut that still compiles.
@@ -312,7 +305,7 @@ fn fill_parallel_water_entries(
     // The PreFilling `continue` below keeps the frozen identity row free of slack/flow
     // terms (the contract above); `evap_hydro_indices` already excludes PreFilling hydros.
     for h_idx in 0..n_h {
-        if is_prefilling(ctx, stage, h_idx) {
+        if matches!(hydro_phase(&ctx.hydros[h_idx], stage.id), Phase::PreFilling) {
             continue;
         }
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
@@ -490,7 +483,7 @@ fn fill_chronological_water_entries(
     for h_idx in 0..n_h {
         let hydro = &ctx.hydros[h_idx];
 
-        if is_prefilling(ctx, stage, h_idx) {
+        if matches!(hydro_phase(hydro, stage.id), Phase::PreFilling) {
             for k in 1..=n_blks {
                 let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(k - 1));
                 col_entries[layout
@@ -827,7 +820,9 @@ fn fill_prefilling_shortcircuit(
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
     let hydro = &ctx.hydros[h_idx];
-    let Some(d_idx) = resolve_shortcircuit_target(ctx, stage, h_idx) else {
+    let Some(d_idx) =
+        resolve_shortcircuit_target(ctx.hydros, ctx.cascade, ctx.positions, stage.id, h_idx)
+    else {
         return;
     };
     let n_blks = layout.clock.n_blks();

@@ -9,7 +9,7 @@
 //! any magnitude on either side, so driving a lag to an extreme value never
 //! produces a false infeasibility.
 //!
-//! The PreFilling frozen identity `v_h - v_h_in = 0` (`is_prefilling`,
+//! The PreFilling frozen identity `v_h - v_h_in = 0` (`hydro_phase`,
 //! `fill_parallel_water_entries`) couples only the outgoing storage column,
 //! which `fill_storage_columns`'s own relaxed `[0, max_storage_hm3]` floor
 //! already covers — PreFilling needs no separate admissible box.

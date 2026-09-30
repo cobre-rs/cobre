@@ -1,3 +1,4 @@
+use cobre_core::commissioning::Phase;
 use cobre_core::{BlockMode, Stage};
 
 use crate::hydro_models::EvaporationModel;
@@ -7,7 +8,7 @@ use crate::indexer::{
 
 use super::fpha_cursor::for_each_fpha_plane;
 use super::hydro_state::{GroupBoundLookup, cell_min_generation, cell_min_turbined};
-use super::layout::{StageLayout, TemplateBuildCtx, position_table_row};
+use super::layout::{StageLayout, TemplateBuildCtx, hydro_phase, position_table_row};
 
 /// Fill row lower/upper bounds for one stage.
 ///
@@ -93,7 +94,7 @@ fn fill_parallel_water_rows(
 ) {
     for h_idx in 0..layout.state.hydro_count {
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
-        if super::entries::is_prefilling(ctx, stage, h_idx) {
+        if matches!(hydro_phase(&ctx.hydros[h_idx], stage.id), Phase::PreFilling) {
             row_lower[row] = 0.0;
             row_upper[row] = 0.0;
             continue;
@@ -116,10 +117,13 @@ fn fill_parallel_water_rows(
     // (which must stay `0`). A second pass, since `d` may be filled before or after
     // `h` in index order; sink case transfers nothing.
     for h_idx in 0..layout.state.hydro_count {
-        if !super::entries::is_prefilling(ctx, stage, h_idx) {
-            continue;
-        }
-        let Some(d_idx) = super::entries::resolve_shortcircuit_target(ctx, stage, h_idx) else {
+        let Some(d_idx) = super::entries::resolve_shortcircuit_target(
+            ctx.hydros,
+            ctx.cascade,
+            ctx.positions,
+            stage.id,
+            h_idx,
+        ) else {
             continue;
         };
         let withdrawal_h = ctx
@@ -150,7 +154,7 @@ fn fill_chronological_water_rows(
 ) {
     let n_blks = layout.clock.n_blks();
     for h_idx in 0..layout.state.hydro_count {
-        if super::entries::is_prefilling(ctx, stage, h_idx) {
+        if matches!(hydro_phase(&ctx.hydros[h_idx], stage.id), Phase::PreFilling) {
             for blk in 0..n_blks {
                 let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(blk));
                 row_lower[row] = 0.0;
@@ -173,10 +177,13 @@ fn fill_chronological_water_rows(
     }
 
     for h_idx in 0..layout.state.hydro_count {
-        if !super::entries::is_prefilling(ctx, stage, h_idx) {
-            continue;
-        }
-        let Some(d_idx) = super::entries::resolve_shortcircuit_target(ctx, stage, h_idx) else {
+        let Some(d_idx) = super::entries::resolve_shortcircuit_target(
+            ctx.hydros,
+            ctx.cascade,
+            ctx.positions,
+            stage.id,
+            h_idx,
+        ) else {
             continue;
         };
         let withdrawal_h = ctx

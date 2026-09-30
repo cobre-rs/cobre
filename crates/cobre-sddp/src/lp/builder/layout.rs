@@ -706,7 +706,7 @@ fn build_evap_indices(
 
 // ── Private helper functions ───────────────────────────────────────────────────
 
-fn hydro_phase(hydro: &Hydro, stage_id: i32) -> Phase {
+pub(super) fn hydro_phase(hydro: &Hydro, stage_id: i32) -> Phase {
     filling_phase(
         hydro.filling.as_ref(),
         hydro.entry_stage_id,

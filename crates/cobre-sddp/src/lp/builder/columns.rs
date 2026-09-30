@@ -1,4 +1,4 @@
-use cobre_core::commissioning::{Phase, commissioning_active, filling_phase};
+use cobre_core::commissioning::{Phase, commissioning_active};
 use cobre_core::{BlockMode, ContractType, Stage};
 
 use crate::hydro_models::EvaporationModel;
@@ -14,7 +14,7 @@ use super::hydro_state::{
     GroupBoundLookup, cell_max_generation, cell_max_turbined, cell_min_generation,
     cell_min_turbined,
 };
-use super::layout::{StageLayout, TemplateBuildCtx};
+use super::layout::{StageLayout, TemplateBuildCtx, hydro_phase};
 use crate::generic_constraints::contract_family_slot;
 
 /// Fill column lower/upper bounds and objective coefficients for one stage.
@@ -85,16 +85,8 @@ fn fill_storage_columns(
         // Operating hydros (makes dead volume soft system-wide); keeping it hard
         // through a dormant non-filling stage (rejects the IC pin). The dormant relax
         // disappears at `Operating`, restoring the hard floor.
-        let floor_off = hydro.filling.is_some()
-            || matches!(
-                filling_phase(
-                    hydro.filling.as_ref(),
-                    hydro.entry_stage_id,
-                    hydro.exit_stage_id,
-                    stage.id,
-                ),
-                Phase::PreFilling
-            );
+        let floor_off =
+            hydro.filling.is_some() || matches!(hydro_phase(hydro, stage.id), Phase::PreFilling);
         let hb = ctx.resolved.bounds.hydro_bounds(h_idx, stage_idx);
         let storage_lower = if floor_off { 0.0 } else { hb.min_storage_hm3 };
         let storage_out_col = layout
@@ -198,12 +190,7 @@ fn fill_turbine_columns(
     for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
         let suspended = matches!(
-            filling_phase(
-                hydro.filling.as_ref(),
-                hydro.entry_stage_id,
-                hydro.exit_stage_id,
-                stage.id,
-            ),
+            hydro_phase(hydro, stage.id),
             Phase::PreFilling | Phase::Filling
         );
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
@@ -258,15 +245,7 @@ fn fill_spillage_columns(
 ) {
     for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
-        let prefilling = matches!(
-            filling_phase(
-                hydro.filling.as_ref(),
-                hydro.entry_stage_id,
-                hydro.exit_stage_id,
-                stage.id,
-            ),
-            Phase::PreFilling
-        );
+        let prefilling = matches!(hydro_phase(hydro, stage.id), Phase::PreFilling);
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.clock.n_blks() {
             let col = layout.spillage_col(HydroSys::new(h_idx), BlockIdx::new(blk));
@@ -308,12 +287,7 @@ fn fill_diversion_columns(
     for (h_idx, hydro) in ctx.hydros.iter().enumerate() {
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let suspended = matches!(
-            filling_phase(
-                hydro.filling.as_ref(),
-                hydro.entry_stage_id,
-                hydro.exit_stage_id,
-                stage.id,
-            ),
+            hydro_phase(hydro, stage.id),
             Phase::PreFilling | Phase::Filling
         );
         let dormant = hydro.filling.is_some() || suspended;

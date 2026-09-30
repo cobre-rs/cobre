@@ -237,6 +237,167 @@ pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> St
     fresh_system_and_setup_with(case_dir, mutate).1
 }
 
+/// Recursively copies `src` into `dst`, skipping any `output` subdirectory
+/// (`permute.rs`'s own copy discipline for that gitignored generated tree).
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst)
+        .unwrap_or_else(|e| panic!("create_dir_all {}: {e}", dst.display()));
+    for entry in
+        std::fs::read_dir(src).unwrap_or_else(|e| panic!("read_dir {}: {e}", src.display()))
+    {
+        let entry = entry.unwrap_or_else(|e| panic!("dir entry under {}: {e}", src.display()));
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|e| panic!("file_type {}: {e}", src_path.display()));
+        if file_type.is_dir() {
+            if entry.file_name() == "output" {
+                continue;
+            }
+            copy_dir_recursive(&src_path, &dst_path);
+        } else {
+            std::fs::copy(&src_path, &dst_path).unwrap_or_else(|e| {
+                panic!("copy {} -> {}: {e}", src_path.display(), dst_path.display())
+            });
+        }
+    }
+}
+
+/// Builds `case_dir` with every `stages.json` stage forced to `mode`: copies
+/// the case into a temporary directory, rewrites its `"block_mode"` fields,
+/// and builds through [`fresh_system_and_setup_with`] under `catch_unwind`,
+/// turning a build panic into `Err(message)` the way `build_deck_or_panic`
+/// (`tests/template_snapshot.rs`) extracts one.
+pub fn fresh_system_and_setup_in_block_mode(
+    case_dir: &Path,
+    mode: cobre_core::BlockMode,
+) -> Result<(System, StudySetup), String> {
+    let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+    copy_dir_recursive(case_dir, tmp.path());
+
+    let stages_path = tmp.path().join("stages.json");
+    let text = std::fs::read_to_string(&stages_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", stages_path.display()));
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("parse {}: {e}", stages_path.display()));
+    let mode_str = match mode {
+        cobre_core::BlockMode::Parallel => "parallel",
+        cobre_core::BlockMode::Chronological => "chronological",
+    };
+    let stages = value
+        .get_mut("stages")
+        .and_then(serde_json::Value::as_array_mut)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} has no top-level \"stages\" array",
+                stages_path.display()
+            )
+        });
+    for stage in stages {
+        stage
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("{} stage entry is not a JSON object", stages_path.display()))
+            .insert(
+                "block_mode".to_string(),
+                serde_json::Value::String(mode_str.to_string()),
+            );
+    }
+    let rendered = serde_json::to_string_pretty(&value)
+        .unwrap_or_else(|e| panic!("serialize {}: {e}", stages_path.display()));
+    std::fs::write(&stages_path, rendered)
+        .unwrap_or_else(|e| panic!("write {}: {e}", stages_path.display()));
+
+    let case_path = tmp.path().to_path_buf();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fresh_system_and_setup_with(&case_path, |_| {})
+    }))
+    .map_err(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic payload>")
+            .to_string()
+    })
+}
+
+/// Deck keys whose block-mode flip is rejected by a `cobre-io` validation
+/// rule, paired with the rejection's expected message substring: a deck
+/// here must still fail its flip with that substring, or the entry is
+/// stale (D2).
+pub const BLOCK_MODE_FLIP_REJECTED: &[(&str, &str)] = &[];
+
+/// Resolves [`fresh_system_and_setup_in_block_mode`]'s result against
+/// [`BLOCK_MODE_FLIP_REJECTED`]: `None` for a listed, still-failing key
+/// (after asserting its substring), the built pair otherwise, and a panic
+/// for any other failure.
+fn build_flip_or_panic(
+    key: &str,
+    case_dir: &Path,
+    mode: cobre_core::BlockMode,
+) -> Option<(System, StudySetup)> {
+    match fresh_system_and_setup_in_block_mode(case_dir, mode) {
+        Ok(pair) => Some(pair),
+        Err(msg) => match BLOCK_MODE_FLIP_REJECTED.iter().find(|(k, _)| *k == key) {
+            Some((_, substring)) => {
+                assert!(
+                    msg.contains(substring),
+                    "deck {key} in block mode {mode:?}: BLOCK_MODE_FLIP_REJECTED substring \
+                     {substring:?} not found in failure {msg:?}"
+                );
+                None
+            }
+            None => panic!("deck {key} in block mode {mode:?} failed to build: {msg}"),
+        },
+    }
+}
+
+/// Visits every committed deck (skipping [`SLOW_DECKS`] unless `slow-tests`
+/// is enabled) that has a stage of `n_blks > 1` — read from the [`Parallel`]
+/// flip's `block_hours_per_stage` — building both mode flips and visiting
+/// `(key, chronological, parallel)`; returns the visited count.
+///
+/// [`Parallel`]: cobre_core::BlockMode::Parallel
+pub fn for_each_deck_in_both_block_modes(
+    mut visit: impl FnMut(&str, (&System, &StudySetup), (&System, &StudySetup)),
+) -> usize {
+    let slow_tests_enabled = cfg!(feature = "slow-tests");
+    let mut count = 0;
+    for deck in committed_decks() {
+        if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
+            continue;
+        }
+        let Some((parallel_system, parallel_setup)) =
+            build_flip_or_panic(&deck.key, &deck.dir, cobre_core::BlockMode::Parallel)
+        else {
+            continue;
+        };
+        let has_multi_block = parallel_setup
+            .inputs
+            .stage_data
+            .stage_templates
+            .block_hours_per_stage
+            .iter()
+            .any(|hours| hours.len() > 1);
+        if !has_multi_block {
+            continue;
+        }
+        let Some((chrono_system, chrono_setup)) =
+            build_flip_or_panic(&deck.key, &deck.dir, cobre_core::BlockMode::Chronological)
+        else {
+            continue;
+        };
+        visit(
+            &deck.key,
+            (&chrono_system, &chrono_setup),
+            (&parallel_system, &parallel_setup),
+        );
+        count += 1;
+    }
+    count
+}
+
 /// Visits every committed deck (skipping [`SLOW_DECKS`] unless `slow-tests` is
 /// enabled), then every [`in_code_studies::keyed_setups`] entry, then every
 /// [`in_code_studies::structural_studies`] entry, building one [`System`] and

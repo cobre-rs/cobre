@@ -7552,7 +7552,6 @@ fn assert_state_layout_finalized(state: &StateSpace) {
     let reference = StateSpace::new(
         state.hydro_count,
         state.max_par_order,
-        state.n_buckets,
         state.transit_bucket_column_order.clone(),
         state.anticipated_lead_stages.clone(),
         state.anticipated_resolution.clone(),
@@ -7593,6 +7592,79 @@ fn assert_state_layout_finalized(state: &StateSpace) {
         state.transit_buckets_in, reference.transit_buckets_in,
         "transit_buckets_in range must match"
     );
+}
+
+/// `StateSpace::build`, resolved from a system's hydros/topology, must be
+/// byte-for-byte identical to a fresh `StateSpace::new` fed the same six
+/// values — the parity the constructor split (owner + loose) must preserve.
+/// The fixture declares a real travel-time arc (`B > 0`) and a real
+/// anticipated thermal, whose count sizes the independently-built leads
+/// (`A > 0`), at a non-zero lag depth (`L > 0`).
+#[test]
+fn state_space_build_matches_the_loose_constructor() {
+    let downstream = bucket_seed_hydro(1, None, None);
+    let upstream = bucket_seed_hydro(2, Some(1), Some(24.0));
+    let bus = Bus {
+        id: EntityId(1),
+        name: "B1".to_string(),
+        operational_start_date: bucket_seed_date(2024, 1, 1),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 500.0,
+        }],
+        excess_cost: 0.0,
+    };
+    let thermal = Thermal {
+        id: EntityId(3),
+        name: "T1".to_string(),
+        operational_start_date: bucket_seed_date(2024, 1, 1),
+        bus_id: EntityId(1),
+        min_generation_mw: 0.0,
+        max_generation_mw: 100.0,
+        cost_per_mwh: 50.0,
+        anticipated_config: Some(AnticipatedConfig::LeadStages(2)),
+        entry_stage_id: None,
+        exit_stage_id: None,
+    };
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .thermals(vec![thermal])
+        .hydros(vec![downstream, upstream])
+        .stages(bucket_seed_study_stages(4, 24.0))
+        .build()
+        .expect("valid system");
+
+    let calendar = DeliveryCalendar::from_system(&system);
+    let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    let leads = vec![2; anticipated_plants.len()];
+    let n_stages = leads.iter().copied().max().unwrap_or(0) + 2;
+    let resolution = test_support::constant_lead_resolution(&leads, n_stages);
+    let max_par_order = 1;
+    let effective_lag_counts = vec![max_par_order; system.hydros().len()];
+
+    assert!(topology.n_buckets() > 0, "fixture sanity: B > 0");
+    assert!(!leads.is_empty(), "fixture sanity: A > 0");
+    assert!(max_par_order > 0, "fixture sanity: L > 0");
+
+    let built = StateSpace::build(
+        system.hydros(),
+        max_par_order,
+        &effective_lag_counts,
+        &topology,
+        leads.clone(),
+        resolution.clone(),
+    );
+    let loose = StateSpace::new(
+        system.hydros().len(),
+        max_par_order,
+        topology.column_order.clone(),
+        leads,
+        resolution,
+        &effective_lag_counts,
+    );
+
+    assert_eq!(format!("{built:?}"), format!("{loose:?}"));
 }
 
 #[test]

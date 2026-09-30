@@ -9740,7 +9740,6 @@ fn cut_selection_scores_reduced_projection_in_projected_space() {
     let global = StateSpace::new(
         1,
         1,
-        0,
         Vec::new(),
         Vec::new(),
         AnticipatedResolution::default(),

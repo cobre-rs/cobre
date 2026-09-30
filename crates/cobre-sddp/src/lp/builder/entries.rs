@@ -2514,7 +2514,7 @@ mod zero_cost_tests {
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
         let resolution = constant_lead_resolution(&[0], 1);
-        let state = StateSpace::new(0, 0, 0, Vec::new(), vec![0], resolution, &[]);
+        let state = StateSpace::new(0, 0, Vec::new(), vec![0], resolution, &[]);
         assert_eq!(
             state.n_anticipated, 1,
             "fixture sanity: one anticipated plant"
@@ -2900,7 +2900,6 @@ mod zero_cost_tests {
         let state = StateSpace::new(
             ctx.hydros.len(),
             ctx.par_lp.max_order(),
-            0,
             Vec::new(),
             ctx.state.anticipated_lead_stages.clone(),
             resolution,
@@ -2969,7 +2968,7 @@ mod zero_cost_tests {
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
         let resolution = constant_lead_resolution(&[0], 2);
-        let state = StateSpace::new(0, 0, 0, Vec::new(), vec![0], resolution, &[]);
+        let state = StateSpace::new(0, 0, Vec::new(), vec![0], resolution, &[]);
         assert_eq!(
             state.n_anticipated, 1,
             "fixture sanity: one anticipated plant"

@@ -889,7 +889,6 @@ mod tests {
         let state = StateSpace::new(
             2,
             1,
-            0,
             Vec::new(),
             vec![],
             AnticipatedResolution::default(),

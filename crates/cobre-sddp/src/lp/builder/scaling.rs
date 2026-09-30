@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn apply_commitment_hold_col_scale_unscale_forces_hold_to_one() {
         let resolution = constant_lead_resolution(&[2], 4);
-        let state_layout = StateSpace::new(2, 0, 0, vec![], vec![2], resolution, &[0, 0]);
+        let state_layout = StateSpace::new(2, 0, vec![], vec![2], resolution, &[0, 0]);
 
         assert_eq!(state_layout.commit_out, 2..4);
         assert_eq!(state_layout.commit_in, 8..10);
@@ -431,7 +431,6 @@ mod tests {
     fn apply_commitment_hold_col_scale_unscale_is_noop_when_empty() {
         let state_layout = StateSpace::new(
             2,
-            0,
             0,
             vec![],
             vec![],

@@ -382,8 +382,8 @@ mod tests {
     }
 
     /// Canonical `(plant, lag)` order for a bucket-count-only fixture: content
-    /// is irrelevant to capacity, only `.len() == n_buckets` is asserted by
-    /// [`crate::lp::indexer::StateSpace::new`].
+    /// is irrelevant to capacity, only `.len()` is read as `n_buckets` by
+    /// [`crate::lp::indexer::StateSpace::build`].
     fn bucket_order(n_buckets: usize) -> Vec<(usize, usize)> {
         (0..n_buckets).map(|d| (0, d)).collect()
     }
@@ -457,7 +457,6 @@ mod tests {
         let state = StateSpace::new(
             3,
             2,
-            0,
             Vec::new(),
             Vec::new(),
             AnticipatedResolution::default(),
@@ -472,7 +471,6 @@ mod tests {
         let big_state = StateSpace::new(
             160,
             12,
-            0,
             Vec::new(),
             Vec::new(),
             AnticipatedResolution::default(),
@@ -485,7 +483,6 @@ mod tests {
         // Row capacity = M*B + N = 0 + 5 = 5
         let no_lag_state = StateSpace::new(
             5,
-            0,
             0,
             Vec::new(),
             Vec::new(),
@@ -505,7 +502,7 @@ mod tests {
                 n_delivery: 3,
             },
         );
-        let ant_state = StateSpace::new(3, 2, 0, Vec::new(), vec![2], resolution, &[2, 2, 2]);
+        let ant_state = StateSpace::new(3, 2, Vec::new(), vec![2], resolution, &[2, 2, 2]);
         let ant = PatchBuffer::new(&ant_state, &[], &[]);
         assert_eq!(ant.indices.len(), 3);
 
@@ -515,7 +512,6 @@ mod tests {
         let bucket_state = StateSpace::new(
             3,
             2,
-            4,
             bucket_column_order,
             Vec::new(),
             AnticipatedResolution::default(),

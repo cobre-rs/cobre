@@ -84,7 +84,6 @@ fn bench_cut_application_baseline(c: &mut Criterion) {
     let state = StateSpace::new(
         N,
         L_BASELINE,
-        0,
         Vec::new(),
         vec![],
         AnticipatedResolution::default(),
@@ -147,7 +146,6 @@ fn bench_cut_application_with_anticipated(c: &mut Criterion) {
     let state = StateSpace::new(
         N,
         L_ANTICIPATED,
-        0,
         Vec::new(),
         anticipated_lead_stages,
         resolution,

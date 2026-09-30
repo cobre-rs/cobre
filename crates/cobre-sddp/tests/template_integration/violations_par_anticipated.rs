@@ -335,7 +335,6 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     let state = StateSpace::new(
         n,
         l,
-        0,
         Vec::new(),
         vec![],
         AnticipatedResolution::default(),

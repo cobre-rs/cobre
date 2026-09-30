@@ -913,7 +913,6 @@ mod sparse_dense {
         let state = StateSpace::new(
             n_hydro,
             max_par_order,
-            0,
             Vec::new(),
             vec![],
             AnticipatedResolution::default(),

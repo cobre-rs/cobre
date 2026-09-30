@@ -181,7 +181,6 @@ fn n_state_matches_indexer() {
     let expected = StateSpace::new(
         1,
         2,
-        0,
         Vec::new(),
         vec![],
         AnticipatedResolution::default(),
@@ -281,7 +280,6 @@ fn theta_column_has_unit_objective() {
     let theta_col = StateSpace::new(
         1,
         lag_order,
-        0,
         Vec::new(),
         vec![],
         AnticipatedResolution::default(),

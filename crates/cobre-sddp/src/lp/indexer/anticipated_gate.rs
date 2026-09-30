@@ -234,7 +234,7 @@ mod tests {
     fn ant_layout(leads: Vec<usize>) -> StateSpace {
         let n_stages = leads.iter().copied().max().unwrap_or(0) + 2;
         let resolution = constant_lead_resolution(&leads, n_stages);
-        StateSpace::new(0, 0, 0, Vec::new(), leads, resolution, &[])
+        StateSpace::new(0, 0, Vec::new(), leads, resolution, &[])
     }
 
     /// The strict horizon clause is active iff `stage_idx + K_i < n_stages`:
@@ -423,7 +423,7 @@ mod tests {
             k_max: 2,
             max_fanout: 0,
         };
-        let idx = StateSpace::new(0, 0, 0, Vec::new(), vec![2], resolution, &[]);
+        let idx = StateSpace::new(0, 0, Vec::new(), vec![2], resolution, &[]);
 
         let point = anticipated_resolution_for(&idx, AnticipatedLocal::new(0));
 

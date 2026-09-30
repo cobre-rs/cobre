@@ -299,7 +299,7 @@ mod constant_lead_resolution_tests {
             let n_stages = k_max + 2;
             let n_anticipated = lead_stages.len();
             let resolution = constant_lead_resolution(&lead_stages, n_stages);
-            let state = StateSpace::new(0, 0, 0, Vec::new(), lead_stages, resolution, &[]);
+            let state = StateSpace::new(0, 0, Vec::new(), lead_stages, resolution, &[]);
 
             let start = state.commit_out.start;
             let expected: Vec<StateDim> = (start..start + state.n_anticipated * state.k_max)
@@ -1169,11 +1169,15 @@ pub fn state_layout_with_transit_buckets_and_resolution(
     anticipated_lead_stages: Vec<usize>,
     anticipated_resolution: AnticipatedResolution,
 ) -> StateSpace {
+    debug_assert_eq!(
+        transit_bucket_column_order.len(),
+        n_buckets,
+        "transit_bucket_column_order must have exactly n_buckets entries"
+    );
     let effective_lag_count = vec![max_par_order; hydro_count];
     StateSpace::new(
         hydro_count,
         max_par_order,
-        n_buckets,
         transit_bucket_column_order,
         anticipated_lead_stages,
         anticipated_resolution,

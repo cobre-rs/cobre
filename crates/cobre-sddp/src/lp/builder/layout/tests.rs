@@ -2380,7 +2380,6 @@ fn state_with_attached_resolution(k_max: usize, resolution: AnticipatedResolutio
     StateSpace::new(
         0,
         0,
-        0,
         Vec::new(),
         vec![k_max; n_anticipated],
         resolution,
@@ -2479,7 +2478,7 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
 fn anticipated_slot_row_pos_identity_axis_matches_the_recorded_pre_excision_mapping() {
     let leads = vec![1, 2];
     let resolution = constant_lead_resolution(&leads, 5);
-    let state = StateSpace::new(0, 0, 0, Vec::new(), leads, resolution, &[]);
+    let state = StateSpace::new(0, 0, Vec::new(), leads, resolution, &[]);
     assert_eq!(
         state.k_max, 2,
         "fixture sanity: ring_size(&[1, 2]) must be 2"
@@ -4154,7 +4153,6 @@ fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
     let state = StateSpace::new(
         0,
         0,
-        3,
         vec![(0, 0), (0, 1), (1, 0)],
         vec![],
         AnticipatedResolution::default(),

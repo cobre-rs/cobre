@@ -74,7 +74,6 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
     StateSpace::new(
         hydro_count,
         max_par_order,
-        0,
         Vec::new(),
         vec![],
         AnticipatedResolution::default(),

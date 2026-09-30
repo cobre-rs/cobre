@@ -21,7 +21,6 @@ fn bench_patch_fill(c: &mut Criterion) {
         let state = StateSpace::new(
             n_hydros,
             0,
-            0,
             Vec::new(),
             vec![],
             AnticipatedResolution::default(),

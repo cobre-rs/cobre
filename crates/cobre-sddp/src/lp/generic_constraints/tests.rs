@@ -108,7 +108,6 @@ impl ResolverFixture {
         let state = StateSpace::new(
             n_hydros,
             0,
-            0,
             Vec::new(),
             anticipated_lead_stages.clone(),
             resolution,

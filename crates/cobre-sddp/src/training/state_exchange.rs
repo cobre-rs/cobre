@@ -81,7 +81,6 @@ use crate::{
 /// let state = StateSpace::new(
 ///     2,
 ///     0,
-///     0,
 ///     Vec::new(),
 ///     Vec::new(),
 ///     AnticipatedResolution::default(),

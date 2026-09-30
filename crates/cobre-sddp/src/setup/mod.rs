@@ -949,7 +949,7 @@ pub(crate) fn resolve_state_layout(
     // stride for a hydro `par_lp` omits (`h >= par_lp.n_hydros()`) — production's
     // `par_lp` always covers every system hydro, so the fallback is inert there; a
     // hydro-free `PrecomputedPar` test fixture paired with a hydro-bearing system
-    // relies on it to satisfy the `StateSpace::new` length contract.
+    // relies on it to satisfy the `StateSpace::build` length contract.
     let effective_lag_counts: Vec<usize> = if max_par_order > 0 {
         (0..hydro_count)
             .map(|h| {
@@ -970,14 +970,13 @@ pub(crate) fn resolve_state_layout(
     // no separate post-horizon commitment-hold block: a post-study-targeted
     // delivery is carried by the in-study ring slot its modular residue
     // resolves to.
-    let state = StateSpace::new(
-        hydro_count,
+    let state = StateSpace::build(
+        system.hydros(),
         max_par_order,
-        transit_bucket_topology.n_buckets(),
-        transit_bucket_topology.column_order.clone(),
+        &effective_lag_counts,
+        transit_bucket_topology,
         anticipated_lead_stages,
         anticipated_resolution,
-        &effective_lag_counts,
     );
 
     debug_assert_eq!(

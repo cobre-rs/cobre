@@ -80,6 +80,15 @@ pub(crate) struct CtxFixture {
 
 impl Default for CtxFixture {
     fn default() -> Self {
+        let topology = TransitBucketTopology::empty();
+        let state = StateSpace::build(
+            &[],
+            0,
+            &[],
+            &topology,
+            Vec::new(),
+            AnticipatedResolution::default(),
+        );
         Self {
             positions: EntityPositions::from_slices([], [], [], [], [], []),
             hydros: Vec::new(),
@@ -117,16 +126,8 @@ impl Default for CtxFixture {
                 PostStudyResolved::default(),
             ),
             filling_v_target: BTreeMap::new(),
-            topology: TransitBucketTopology::empty(),
-            state: StateSpace::new(
-                0,
-                0,
-                0,
-                Vec::new(),
-                Vec::new(),
-                AnticipatedResolution::default(),
-                &[],
-            ),
+            topology,
+            state,
         }
     }
 }
@@ -232,14 +233,13 @@ impl CtxFixture {
         } else {
             vec![0; self.hydros.len()]
         };
-        StateSpace::new(
-            self.hydros.len(),
+        StateSpace::build(
+            &self.hydros,
             max_par_order,
-            self.topology.n_buckets(),
-            self.topology.column_order.clone(),
+            &effective_lag_counts,
+            &self.topology,
             self.anticipated_lead_stages.clone(),
             resolution,
-            &effective_lag_counts,
         )
     }
 }

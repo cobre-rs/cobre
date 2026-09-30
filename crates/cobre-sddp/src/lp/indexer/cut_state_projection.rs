@@ -307,7 +307,6 @@ mod tests {
         finalized_with_transit_buckets(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
             anticipated_lead_stages,
         )
@@ -317,7 +316,6 @@ mod tests {
     fn finalized_with_transit_buckets(
         hydro_count: usize,
         max_par_order: usize,
-        n_buckets: usize,
         transit_bucket_column_order: Vec<(usize, usize)>,
         anticipated_lead_stages: &[usize],
     ) -> StateSpace {
@@ -327,7 +325,6 @@ mod tests {
         StateSpace::new(
             hydro_count,
             max_par_order,
-            n_buckets,
             transit_bucket_column_order,
             anticipated_lead_stages.to_owned(),
             resolution,
@@ -575,7 +572,6 @@ mod tests {
         let global = StateSpace::new(
             2,
             3,
-            0,
             Vec::new(),
             vec![],
             AnticipatedResolution::default(),
@@ -606,7 +602,7 @@ mod tests {
     /// bucket slots between storage and anticipated.
     #[test]
     fn bucket_block_always_included_with_storage_only() {
-        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], &[2]);
+        let global = finalized_with_transit_buckets(2, 1, vec![(0, 1), (1, 1)], &[2]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 6);
@@ -641,7 +637,7 @@ mod tests {
     /// column.
     #[test]
     fn bucket_render_pairs_sit_between_lag_and_anticipated() {
-        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], &[2]);
+        let global = finalized_with_transit_buckets(2, 1, vec![(0, 1), (1, 1)], &[2]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.transit_buckets_out, 4..6);
@@ -678,7 +674,7 @@ mod tests {
     /// byte-identically to the pre-bucket walk.
     #[test]
     fn b_zero_projection_matches_pre_transit_bucket_walk() {
-        let global = finalized_with_transit_buckets(3, 2, 0, vec![], &[1, 2]);
+        let global = finalized_with_transit_buckets(3, 2, vec![], &[1, 2]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.n_buckets, 0);
@@ -717,7 +713,7 @@ mod tests {
         // so they are frozen `[0, 0]` in the LP today; the state layout retains
         // them (sized from the global max over every anchor).
         let global =
-            finalized_with_transit_buckets(1, 1, 4, vec![(0, 0), (0, 1), (0, 2), (0, 3)], &[]);
+            finalized_with_transit_buckets(1, 1, vec![(0, 0), (0, 1), (0, 2), (0, 3)], &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert!(
@@ -833,10 +829,11 @@ mod proptests {
     /// per-plant leads `0..=3`, a delivery axis `n_decision <= n_delivery`
     /// both `<= 7`), with every dependent-length vector sized and bounded to
     /// satisfy `StateSpace::new`'s debug-asserts:
-    /// `transit_bucket_column_order.len() == n_buckets`,
     /// `anticipated_lead_stages.len() == n_anticipated`, and
     /// `effective_lag_count.len() == hydro_count` (each `<= max_par_order`).
-    /// `k_max` is derived — `AnticipatedResolution::resolve`'s own
+    /// `n_buckets` sizes `transit_bucket_column_order` (`StateSpace::new`
+    /// derives its own bucket count from that vector's length). `k_max` is
+    /// derived — `AnticipatedResolution::resolve`'s own
     /// `ring_size(&anticipated_lead_stages)` — never ranged independently of
     /// the leads: a ring deeper than its leads is covered wherever a
     /// resolution produces one.
@@ -859,7 +856,7 @@ mod proptests {
                 |(
                     hydro_count,
                     max_par_order,
-                    n_buckets,
+                    _n_buckets,
                     _n_anticipated,
                     anticipated_lead_stages,
                     n_decision,
@@ -882,7 +879,6 @@ mod proptests {
                     StateSpace::new(
                         hydro_count,
                         max_par_order,
-                        n_buckets,
                         transit_bucket_column_order,
                         anticipated_lead_stages,
                         resolution,

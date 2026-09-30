@@ -884,7 +884,7 @@ mod tests {
     // score_violated_candidates fixtures
     // -----------------------------------------------------------------------
 
-    // All scoring tests use n_state = 2 (StateSpace::new(2, 0, 0, [], [], default, …)):
+    // All scoring tests use n_state = 2 (StateSpace::new(2, 0, [], [], default, …)):
     //   - state columns 0, 1 (identity state_to_lp_column for j < hydro_count)
     //   - theta column 6 (= n * (3 + l) with n = 2, l = 0)
     // So `primal` must be at least length 7.
@@ -895,7 +895,6 @@ mod tests {
     fn indexer() -> StateSpace {
         StateSpace::new(
             2,
-            0,
             0,
             Vec::new(),
             vec![],
@@ -1740,7 +1739,6 @@ mod tests {
     fn lazy_indexer() -> StateSpace {
         StateSpace::new(
             1,
-            0,
             0,
             Vec::new(),
             vec![],

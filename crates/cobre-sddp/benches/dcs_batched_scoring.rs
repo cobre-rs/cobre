@@ -194,7 +194,6 @@ fn bench_one(c: &mut Criterion, k: usize, n_state: usize) {
     let state = StateSpace::new(
         n_state,
         0,
-        0,
         Vec::new(),
         vec![],
         AnticipatedResolution::default(),

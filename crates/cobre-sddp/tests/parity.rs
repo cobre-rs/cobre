@@ -819,7 +819,6 @@ mod determinism {
         StateSpace::new(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
             vec![],
             AnticipatedResolution::default(),

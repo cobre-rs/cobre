@@ -1200,6 +1200,8 @@ pub struct ChronologicalNoiseSpec {
     pub pumping_station: bool,
     /// Reverses every entity vector before `SystemBuilder::build`.
     pub reverse_declaration_order: bool,
+    /// Withdrawal \[m³/s\] on hydro id 1's stage-0 water-balance row only.
+    pub water_withdrawal_m3s: f64,
 }
 
 impl Default for ChronologicalNoiseSpec {
@@ -1210,6 +1212,7 @@ impl Default for ChronologicalNoiseSpec {
             branching_factor: 1,
             pumping_station: false,
             reverse_declaration_order: false,
+            water_withdrawal_m3s: 0.0,
         }
     }
 }
@@ -1338,7 +1341,7 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
         })
         .collect();
 
-    let bounds = ResolvedBounds::new(
+    let mut bounds = ResolvedBounds::new(
         &BoundsCountsSpec {
             n_hydros: CHRONOLOGICAL_NOISE_HYDRO_IDS.len(),
             n_thermals: 1,
@@ -1382,6 +1385,7 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
             },
         },
     );
+    bounds.hydro_bounds_mut(0, 0).water_withdrawal_m3s = spec.water_withdrawal_m3s;
 
     let penalties = ResolvedPenalties::new(
         &PenaltiesCountsSpec {
@@ -1484,7 +1488,9 @@ pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::
 /// once with every stage [`BlockMode::Chronological`] and once
 /// [`BlockMode::Parallel`] through the spec's own per-stage `block_modes`:
 /// the chronological-vs-parallel sum identity's pumping non-vacuity case, no
-/// committed deck combining a pumping station with a multi-block stage.
+/// committed deck combining a pumping station with a multi-block stage. Also
+/// carries a small nonzero `water_withdrawal_m3s` (no committed deck or other
+/// in-code study sets one), reaching AC2's withdrawal-RHS mutation.
 ///
 /// Each build's builder is called twice — see [`keyed_setups`]'s doc comment
 /// for why.
@@ -1495,11 +1501,13 @@ pub fn chronological_pumping_pair() -> (
 ) {
     let chrono_spec = ChronologicalNoiseSpec {
         pumping_station: true,
+        water_withdrawal_m3s: 2.0,
         ..Default::default()
     };
     let parallel_spec = ChronologicalNoiseSpec {
         block_modes: [BlockMode::Parallel; 2],
         pumping_station: true,
+        water_withdrawal_m3s: 2.0,
         ..Default::default()
     };
 

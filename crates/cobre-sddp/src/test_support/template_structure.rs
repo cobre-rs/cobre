@@ -6,12 +6,17 @@
 
 use std::collections::HashMap;
 
-use cobre_core::BlockMode;
+use cobre_core::{BlockMode, ContractType, System};
 use cobre_solver::StageTemplate;
 
-use crate::indexer::{AnticipatedLocal, BlockGrid, BlockIdx, Boundary, FphaCellLocal, HydroSys};
-use crate::lp::builder::{DeliveryRing, StageGeometry};
-use crate::lp::indexer::StateSpace;
+use crate::indexer::{
+    AnticipatedLocal, BlockGrid, BlockIdx, Boundary, BusSys, FphaCellLocal, HydroCell, HydroSys,
+    LineSys, NcsSys, PumpingSys, ThermalSys,
+};
+use crate::lp::builder::{
+    DeliveryRing, StageGeometry, contract_family_slot, evaporation_slot_count,
+};
+use crate::lp::indexer::{HydroCellIndex, StateSpace};
 
 /// Column- and row-major unscaled view of one stage's structural LP.
 /// Duplicate `(row, col)` entries are kept exactly as `assemble_csc` wrote
@@ -203,4 +208,458 @@ pub fn ring_lanes(state: &StateSpace, geom: &StageGeometry) -> Vec<RingLane> {
 #[must_use]
 pub fn hours_to_hm3(hours: f64) -> f64 {
     hours * crate::block_clock::M3S_TO_HM3
+}
+
+/// Decoded owner of a water-balance, load-balance or z-inflow row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowOwner {
+    /// A water-balance row: hydro `hydro`'s row for block `blk`.
+    Water {
+        /// The row's owning hydro.
+        hydro: HydroSys,
+        /// The row's block.
+        blk: BlockIdx,
+    },
+    /// A load-balance row: bus `bus`'s row for block `blk`.
+    Load {
+        /// The row's owning bus.
+        bus: BusSys,
+        /// The row's block.
+        blk: BlockIdx,
+    },
+    /// Hydro `hydro`'s z-inflow definition row.
+    ZInflow {
+        /// The row's owning hydro.
+        hydro: HydroSys,
+    },
+}
+
+/// Inverts [`StageGeometry::water_balance_row`], [`StageGeometry::load_balance_row`]
+/// and [`StateSpace::z_inflow_row`] over the `System`'s own entity counts and
+/// `0..family.rows_per_entity(geom.n_blks)`.
+#[must_use]
+pub fn row_owners(
+    system: &System,
+    geom: &StageGeometry,
+    state: &StateSpace,
+) -> HashMap<usize, RowOwner> {
+    let mut owners = HashMap::new();
+    for h in 0..system.hydros().len() {
+        let hydro = HydroSys::new(h);
+        for blk in 0..geom.water_balance.rows_per_entity(geom.n_blks) {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.water_balance_row(hydro, blk),
+                RowOwner::Water { hydro, blk },
+            );
+        }
+    }
+    for b in 0..system.buses().len() {
+        let bus = BusSys::new(b);
+        for blk in 0..geom.load_balance.rows_per_entity(geom.n_blks) {
+            let blk = BlockIdx::new(blk);
+            owners.insert(geom.load_balance_row(bus, blk), RowOwner::Load { bus, blk });
+        }
+    }
+    for h in 0..system.hydros().len() {
+        let hydro = HydroSys::new(h);
+        owners.insert(state.z_inflow_row(hydro), RowOwner::ZInflow { hydro });
+    }
+    owners
+}
+
+/// Pass-through to [`StateSpace::z_inflow_col`], so no decoder re-derives
+/// the z-inflow column's address itself.
+#[must_use]
+pub fn z_inflow_column(state: &StateSpace, h: HydroSys) -> usize {
+    state.z_inflow_col(h).get()
+}
+
+/// Decoded owner of a column that can enter a water, load or z-inflow row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColOwner {
+    /// A storage-boundary column for hydro `hydro` at `boundary`.
+    Storage {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The storage boundary this column addresses.
+        boundary: Boundary,
+    },
+    /// Hydro `hydro`'s realized-inflow column.
+    ZInflow {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// An AR inflow-lag column for hydro `hydro` (any lag depth).
+    InflowLag {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// A water-transit-bucket ring column for plant `plant`, ring slot `slot`.
+    Bucket {
+        /// The bucket ring's owning plant.
+        plant: HydroSys,
+        /// The slot within the plant's own bucket-ring run.
+        slot: usize,
+        /// `true` for the outgoing column, `false` for the incoming one.
+        outgoing: bool,
+    },
+    /// A turbine-flow column for hydro-cell `cell` (owned by `hydro`), block `blk`.
+    Turbine {
+        /// The cell's owning plant.
+        hydro: HydroSys,
+        /// The turbine column's cell.
+        cell: HydroCell,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A spillage column for hydro `hydro`, block `blk`.
+    Spillage {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A diversion-flow column for hydro `hydro`, block `blk`.
+    Diversion {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A pumping-flow column for station `station`, block `blk`.
+    Pumping {
+        /// The column's owning pumping station.
+        station: PumpingSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// An evaporation-flow column for hydro `hydro`, evaporation slot `slot`.
+    Evaporation {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The evaporation slot: stage-level on a parallel stage, per-block
+        /// on a chronological one ([`evaporation_slot_count`]).
+        slot: usize,
+    },
+    /// Hydro `hydro`'s inflow non-negativity slack column.
+    InflowSlack {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// Hydro `hydro`'s below-withdrawal-target slack column.
+    WithdrawalNeg {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// Hydro `hydro`'s above-withdrawal-target slack column.
+    WithdrawalPos {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// A thermal-generation column for thermal `thermal`, block `blk`.
+    Thermal {
+        /// The column's owning thermal.
+        thermal: ThermalSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A bus-deficit column for bus `bus`, block `blk` (any segment).
+    Deficit {
+        /// The column's owning bus.
+        bus: BusSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A bus-excess column for bus `bus`, block `blk`.
+    Excess {
+        /// The column's owning bus.
+        bus: BusSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A non-controllable-source generation column for `ncs`, block `blk`.
+    Ncs {
+        /// The column's owning non-controllable source.
+        ncs: NcsSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A forward line-flow column for line `line`, block `blk`.
+    LineFwd {
+        /// The column's owning line.
+        line: LineSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A reverse line-flow column for line `line`, block `blk`.
+    LineRev {
+        /// The column's owning line.
+        line: LineSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// An FPHA-generation column for hydro-cell `cell`, block `blk`.
+    Generation {
+        /// The generation column's cell.
+        cell: HydroCell,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// An in-study anticipated-ring incoming column: ring lane `lane`
+    /// (anticipated-local index), slot `slot`.
+    AnticipatedIn {
+        /// The ring lane's anticipated-local index.
+        lane: usize,
+        /// The ring slot.
+        slot: usize,
+    },
+    /// A contract column of direction `contract_type`, per-direction slot
+    /// `family_slot`, block `blk`.
+    Contract {
+        /// The contract's direction.
+        contract_type: ContractType,
+        /// The contract's per-direction slot.
+        family_slot: usize,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+}
+
+/// Inverts every column family that can enter a water, load or z-inflow row.
+/// [`storage_column_owners`] and [`ring_lanes`] supply the state-ring
+/// families; every other family is read through its own [`StageGeometry`]
+/// accessor, never `start + i`. `HydroCellIndex` is built once, here, and
+/// inverted over every hydro to recover a cell's owning plant — the study's
+/// own partition, never a second one (`HydroCellIndex` has no `plant_of`).
+#[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one insertion loop per column family, each a single accessor call; splitting would fragment the family list with no reuse benefit"
+)]
+pub fn column_owners(
+    system: &System,
+    geom: &StageGeometry,
+    state: &StateSpace,
+) -> HashMap<usize, ColOwner> {
+    let mut owners = HashMap::new();
+
+    let cell_index = HydroCellIndex::build(system.hydros());
+    let mut plant_of = vec![HydroSys::new(0); cell_index.n_cells()];
+    for h in 0..state.hydro_count {
+        let hydro = HydroSys::new(h);
+        for c in cell_index.cells_of(hydro) {
+            plant_of[c] = hydro;
+        }
+    }
+
+    for (&col, &(hydro, boundary)) in &storage_column_owners(geom, state) {
+        owners.insert(col, ColOwner::Storage { hydro, boundary });
+    }
+
+    for h in 0..state.hydro_count {
+        let hydro = HydroSys::new(h);
+        owners.insert(z_inflow_column(state, hydro), ColOwner::ZInflow { hydro });
+    }
+    for lag in 0..state.max_par_order {
+        for h in 0..state.hydro_count {
+            let hydro = HydroSys::new(h);
+            owners.insert(
+                state.lag_incoming_col(lag, hydro).get(),
+                ColOwner::InflowLag { hydro },
+            );
+        }
+    }
+
+    for lane in ring_lanes(state, geom) {
+        match lane.kind {
+            RingLaneKind::Water { plant } => {
+                for (slot, &col) in lane.out_cols.iter().enumerate() {
+                    owners.insert(
+                        col,
+                        ColOwner::Bucket {
+                            plant,
+                            slot,
+                            outgoing: true,
+                        },
+                    );
+                }
+                for (slot, &col) in lane.in_cols.iter().enumerate() {
+                    owners.insert(
+                        col,
+                        ColOwner::Bucket {
+                            plant,
+                            slot,
+                            outgoing: false,
+                        },
+                    );
+                }
+            }
+            RingLaneKind::Anticipated { lane: lane_idx } => {
+                for (slot, &col) in lane.in_cols.iter().enumerate() {
+                    owners.insert(
+                        col,
+                        ColOwner::AnticipatedIn {
+                            lane: lane_idx,
+                            slot,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    for (c, &hydro) in plant_of.iter().enumerate() {
+        let cell = HydroCell::new(c);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.turbine_col(cell, blk),
+                ColOwner::Turbine { hydro, cell, blk },
+            );
+        }
+    }
+
+    for h in 0..state.hydro_count {
+        let hydro = HydroSys::new(h);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.spillage_col(hydro, blk),
+                ColOwner::Spillage { hydro, blk },
+            );
+            owners.insert(
+                geom.diversion_col(hydro, blk),
+                ColOwner::Diversion { hydro, blk },
+            );
+        }
+        if !geom.inflow_slack.is_empty() {
+            owners.insert(
+                geom.inflow_slack_col(hydro),
+                ColOwner::InflowSlack { hydro },
+            );
+        }
+        owners.insert(
+            geom.withdrawal_slack_neg_col(hydro),
+            ColOwner::WithdrawalNeg { hydro },
+        );
+        owners.insert(
+            geom.withdrawal_slack_pos_col(hydro),
+            ColOwner::WithdrawalPos { hydro },
+        );
+    }
+
+    let n_evap_slots = evaporation_slot_count(geom.block_mode, geom.n_blks);
+    for (local_idx, &hydro) in geom.evap_hydro_indices.iter().enumerate() {
+        for slot in 0..n_evap_slots {
+            let evap = &geom.evap_indices[local_idx * n_evap_slots + slot];
+            owners.insert(
+                evap.evaporation_flow_col,
+                ColOwner::Evaporation { hydro, slot },
+            );
+        }
+    }
+
+    for t in 0..system.thermals().len() {
+        let thermal = ThermalSys::new(t);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.thermal_col(thermal, blk),
+                ColOwner::Thermal { thermal, blk },
+            );
+        }
+    }
+
+    let max_deficit_segments = system
+        .buses()
+        .iter()
+        .map(|b| b.deficit_segments.len())
+        .max()
+        .unwrap_or(0);
+    for b in 0..system.buses().len() {
+        let bus = BusSys::new(b);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            for seg in 0..max_deficit_segments {
+                owners.insert(
+                    geom.deficit_col(bus, seg, blk, max_deficit_segments),
+                    ColOwner::Deficit { bus, blk },
+                );
+            }
+            owners.insert(geom.excess_col(bus, blk), ColOwner::Excess { bus, blk });
+        }
+    }
+
+    for n in 0..system.non_controllable_sources().len() {
+        let ncs = NcsSys::new(n);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.ncs_generation_col(ncs, blk),
+                ColOwner::Ncs { ncs, blk },
+            );
+        }
+    }
+
+    for p in 0..system.pumping_stations().len() {
+        let station = PumpingSys::new(p);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.pumping_flow_col(station, blk),
+                ColOwner::Pumping { station, blk },
+            );
+        }
+    }
+
+    for l in 0..system.lines().len() {
+        let line = LineSys::new(l);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.line_fwd_col(line, blk),
+                ColOwner::LineFwd { line, blk },
+            );
+            owners.insert(
+                geom.line_rev_col(line, blk),
+                ColOwner::LineRev { line, blk },
+            );
+        }
+    }
+
+    for (local_idx, &hydro) in geom.fpha_hydro_indices.iter().enumerate() {
+        let cell_base: usize = geom.fpha_hydro_indices[..local_idx]
+            .iter()
+            .map(|&h| cell_index.cells_of(h).len())
+            .sum();
+        for (offset, c) in cell_index.cells_of(hydro).enumerate() {
+            let cell = HydroCell::new(c);
+            let cell_local = FphaCellLocal::new(cell_base + offset);
+            for blk in 0..geom.n_blks {
+                let blk = BlockIdx::new(blk);
+                owners.insert(
+                    geom.generation_col(cell_local, blk),
+                    ColOwner::Generation { cell, blk },
+                );
+            }
+        }
+    }
+
+    for c_sys in 0..system.contracts().len() {
+        let (contract_type, family_slot) = contract_family_slot(system.contracts(), c_sys);
+        for blk in 0..geom.n_blks {
+            let blk = BlockIdx::new(blk);
+            owners.insert(
+                geom.contract_col(contract_type, family_slot, blk),
+                ColOwner::Contract {
+                    contract_type,
+                    family_slot,
+                    blk,
+                },
+            );
+        }
+    }
+
+    owners
 }

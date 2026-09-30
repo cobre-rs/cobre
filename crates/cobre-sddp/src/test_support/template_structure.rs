@@ -139,6 +139,34 @@ pub fn water_row_owners(
     owners
 }
 
+/// Every row family [`StageGeometry`] holds, plus the z-inflow rows
+/// [`StateSpace::z_inflow_rows`] leads every stage with. One entry per
+/// family: `water_balance`, `load_balance`, `fpha`, `filling_target`,
+/// `filled_min_storage_floor`, `evaporation` (every
+/// [`EvaporationIndices`](crate::lp::indexer::EvaporationIndices)'s
+/// `evap_row`), and `z_inflow`.
+#[must_use]
+pub fn geometry_row_families(
+    geom: &StageGeometry,
+    state: &StateSpace,
+) -> Vec<(&'static str, Vec<usize>)> {
+    vec![
+        ("water_balance", geom.water_balance.range().collect()),
+        ("load_balance", geom.load_balance.range().collect()),
+        ("fpha", geom.fpha.clone().collect()),
+        ("filling_target", geom.filling_target.clone().collect()),
+        (
+            "filled_min_storage_floor",
+            geom.filled_min_storage_floor.clone().collect(),
+        ),
+        (
+            "evaporation",
+            geom.evap_indices.iter().map(|e| e.evap_row).collect(),
+        ),
+        ("z_inflow", state.z_inflow_rows().collect()),
+    ]
+}
+
 /// One [`DeliveryRing`] lane's out/in column runs, decoded by [`ring_lanes`].
 pub struct RingLane {
     /// This lane's ring identity.

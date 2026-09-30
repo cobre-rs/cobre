@@ -1490,7 +1490,8 @@ pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::
 /// the chronological-vs-parallel sum identity's pumping non-vacuity case, no
 /// committed deck combining a pumping station with a multi-block stage. Also
 /// carries a small nonzero `water_withdrawal_m3s` (no committed deck or other
-/// in-code study sets one), reaching AC2's withdrawal-RHS mutation.
+/// in-code study sets one), so the withdrawal term in the chronological
+/// water-row RHS is no longer multiplied by zero here.
 ///
 /// Each build's builder is called twice — see [`keyed_setups`]'s doc comment
 /// for why.

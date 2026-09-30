@@ -1666,18 +1666,21 @@ mod dcs_simulation {
     /// coupling row `storage_out - storage_in = 0`, doubling as the water-balance
     /// row `run_one_sim_stage`'s geometry addresses, minimise `theta`.
     /// `storage_in` is pinned to `x_hat`; cuts constrain `theta` against
-    /// `storage_out` (col 0). Cols 4-5 (turbine, spillage) are decoupled
+    /// `storage_out` (col 0). Cols 4-11 (turbine, spillage, withdrawal-slack,
+    /// and the four operational-violation slack families) are decoupled
     /// padding — zero cost, zero NZ — so per-block hydro extraction addresses
     /// real columns without perturbing the solved LP.
     fn sim_core_template() -> StageTemplate {
         StageTemplate {
-            num_cols: 6,
+            num_cols: 12,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0_i32, 1, 2, 3, 3, 3, 3],
+            col_starts: vec![0_i32, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
             row_indices: vec![1_i32, 0, 1],
             values: vec![1.0, 1.0, -1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0],
+            col_lower: vec![
+                0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
             col_upper: vec![
                 f64::INFINITY,
                 f64::INFINITY,
@@ -1685,8 +1688,14 @@ mod dcs_simulation {
                 1.0e6,
                 f64::INFINITY,
                 f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
             ],
-            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0],
             row_upper: vec![0.0, 0.0],
             n_state: 1,
@@ -1698,17 +1707,18 @@ mod dcs_simulation {
     /// All-cuts frozen template: cut-free base + the three pool cuts frozen as
     /// structural rows 2..5 (slot order), with the z-inflow definition row
     /// shifted to row 0 like every other fixture here. `num_rows = 5`. Cols
-    /// 4-5 are the same decoupled turbine/spillage padding as
-    /// `sim_core_template`.
+    /// 4-11 are the same decoupled padding as `sim_core_template`.
     fn sim_all_cuts_frozen() -> StageTemplate {
         StageTemplate {
-            num_cols: 6,
+            num_cols: 12,
             num_rows: 5,
             num_nz: 7,
-            col_starts: vec![0_i32, 2, 3, 4, 7, 7, 7],
+            col_starts: vec![0_i32, 2, 3, 4, 7, 7, 7, 7, 7, 7, 7, 7, 7],
             row_indices: vec![1_i32, 3, 0, 1, 2, 3, 4],
             values: vec![1.0, -2.0, 1.0, -1.0, 1.0, 1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0],
+            col_lower: vec![
+                0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
             col_upper: vec![
                 f64::INFINITY,
                 f64::INFINITY,
@@ -1716,8 +1726,14 @@ mod dcs_simulation {
                 1.0e6,
                 f64::INFINITY,
                 f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
             ],
-            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0, 1.0, 0.0, 3.0],
             row_upper: vec![0.0, 0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY],
             n_state: 1,
@@ -1729,17 +1745,18 @@ mod dcs_simulation {
     /// Frozen template carrying a single DOMINATING spurious cut
     /// (`-5*col0 + theta >= 0`, floor 10 at `x_hat = 2`, NOT in the pool), plus
     /// the same leading z-inflow definition row as the other fixtures. Cols
-    /// 4-5 are the same decoupled turbine/spillage padding as
-    /// `sim_core_template`.
+    /// 4-11 are the same decoupled padding as `sim_core_template`.
     fn sim_frozen_dominating_cut() -> StageTemplate {
         StageTemplate {
-            num_cols: 6,
+            num_cols: 12,
             num_rows: 3,
             num_nz: 5,
-            col_starts: vec![0_i32, 2, 3, 4, 5, 5, 5],
+            col_starts: vec![0_i32, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5],
             row_indices: vec![1_i32, 2, 0, 1, 2],
             values: vec![1.0, -5.0, 1.0, -1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0],
+            col_lower: vec![
+                0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
             col_upper: vec![
                 f64::INFINITY,
                 f64::INFINITY,
@@ -1747,8 +1764,14 @@ mod dcs_simulation {
                 1.0e6,
                 f64::INFINITY,
                 f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
             ],
-            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0, 0.0],
             row_upper: vec![0.0, 0.0, f64::INFINITY],
             n_state: 1,
@@ -1846,12 +1869,19 @@ mod dcs_simulation {
     ) -> (f64, SimulationStageResult) {
         let state = test_support::state_layout(1, 0);
         let core = sim_core_template();
-        // turbine/spillage address the two decoupled padding cols the templates
-        // above append; water_balance reuses the coupling row every fixture
-        // already carries at row 1 (see `sim_core_template`).
+        // turbine/spillage/withdrawal-slack/the four operational-violation
+        // families address the decoupled padding cols the templates above
+        // append; water_balance reuses the coupling row every fixture already
+        // carries at row 1 (see `sim_core_template`).
         let geometry_per_stage = vec![StageGeometry {
             turbine: 4..5,
             spillage: 5..6,
+            withdrawal_slack_neg: 6..7,
+            withdrawal_slack_pos: 7..8,
+            outflow_below_slack: 8..9,
+            outflow_above_slack: 9..10,
+            turbine_below_slack: 10..11,
+            generation_below_slack: 11..12,
             water_balance: BlockRowFamily::one_per_entity(1..2),
             ..test_support::equipment_free_geometry(&[1])[0].clone()
         }];

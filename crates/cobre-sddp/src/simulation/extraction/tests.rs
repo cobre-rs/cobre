@@ -507,10 +507,21 @@ fn geometry_row_capacity(geom: &StageGeometry) -> usize {
 fn extract_costs_has_one_entry_matching_stage_id() {
     // Acceptance criterion: costs contains exactly one entry whose stage_id
     // matches the input stage and whose future_cost == primal[state.theta].
-    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
-    let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    let ws_start = state.control_region_start();
+    let indexer = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    primal.resize(indexer.withdrawal_slack_pos.end, 0.0);
+    // theta's coefficient must stay 1.0 (the `objective_coeffs.get(theta)`
+    // default an empty slice used to give) for `future_cost` below to still
+    // equal `primal[theta] * cost_scale_factor`.
+    let mut objective_coeffs = vec![0.0; primal.len()];
+    objective_coeffs[state.theta] = 1.0;
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
 
@@ -520,7 +531,7 @@ fn extract_costs_has_one_entry_matching_stage_id() {
             primal: &primal,
             dual: &dual,
             objective: 1500.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -561,12 +572,23 @@ fn extract_costs_has_one_entry_matching_stage_id() {
 #[test]
 fn extract_cost_splits_objective_correctly() {
     // objective = immediate_cost + future_cost
-    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
+    let ws_start = state.control_region_start();
+    let indexer = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
     let theta_val = 300.0;
     let objective = 800.0;
-    let primal = make_primal_2_1([0.0; 2], [0.0; 2], [0.0; 2], theta_val);
+    let mut primal = make_primal_2_1([0.0; 2], [0.0; 2], [0.0; 2], theta_val);
+    primal.resize(indexer.withdrawal_slack_pos.end, 0.0);
+    // theta's coefficient must stay 1.0 (the `objective_coeffs.get(theta)`
+    // default an empty slice used to give) so objective still splits into
+    // immediate_cost + future_cost as asserted below.
+    let mut objective_coeffs = vec![0.0; primal.len()];
+    objective_coeffs[state.theta] = 1.0;
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
 
@@ -576,7 +598,7 @@ fn extract_cost_splits_objective_correctly() {
             primal: &primal,
             dual: &dual,
             objective,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -693,10 +715,17 @@ fn extract_hydro_storage_values_from_primal() {
 #[test]
 fn extract_inflow_lag_values_from_primal() {
     // inflow_lags[2]=50.0 for hydro 0 lag 0, [3]=60.0 for hydro 1 lag 0
-    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
-    let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    let ws_start = state.control_region_start();
+    let indexer = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    primal.resize(indexer.withdrawal_slack_pos.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
 
@@ -706,7 +735,7 @@ fn extract_inflow_lag_values_from_primal() {
             primal: &primal,
             dual: &dual,
             objective: 1500.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -828,10 +857,17 @@ fn extract_no_lags_when_max_par_order_zero() {
 
 #[test]
 fn extract_stage_id_propagates_to_all_results() {
-    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
-    let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 10.0);
+    let ws_start = state.control_region_start();
+    let indexer = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 10.0);
+    primal.resize(indexer.withdrawal_slack_pos.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
     let dual = vec![0.0; 4];
     let stage_id = 7_u32;
     let ec = zero_energy_conversion(2, 1);
@@ -842,7 +878,7 @@ fn extract_stage_id_propagates_to_all_results() {
             primal: &primal,
             dual: &dual,
             objective: 110.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -2741,10 +2777,17 @@ fn extract_stage_result_prebuilt_lookup_matches_standard_path() {
 
 #[test]
 fn extract_optional_entity_types_are_empty_when_absent() {
-    let indexer = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(1, 0);
-    let primal = vec![50.0, 0.0, 40.0, 200.0]; // storage, z_inflow, storage_in, theta
+    let ws_start = state.control_region_start();
+    let indexer = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 1,
+        withdrawal_slack_pos: ws_start + 1..ws_start + 2,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = vec![50.0, 0.0, 40.0, 200.0]; // storage, z_inflow, storage_in, theta
+    primal.resize(indexer.withdrawal_slack_pos.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
     let dual = vec![];
     let counts = EntityCounts {
         hydro_ids: vec![1],
@@ -2763,7 +2806,7 @@ fn extract_optional_entity_types_are_empty_when_absent() {
             primal: &primal,
             dual: &dual,
             objective: 250.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -4521,7 +4564,7 @@ fn stored_energy_rides_integrated_grid_distinct_from_reference_point() {
     let k = 1_usize;
     let geom = single_hydro_block_geometry(BlockMode::Parallel, k);
     let pb_state = test_support::state_layout(1, 0);
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut pb_primal = vec![0.0_f64; n_cols];
     pb_primal[0] = 120.0; // Sᴷ (outgoing)
     pb_primal[2] = 110.0; // S⁰ (incoming)
@@ -4678,7 +4721,7 @@ fn stored_energy_mw_divides_by_stage_total_hours() {
     let k = 3_usize;
     let geom = single_hydro_block_geometry(BlockMode::Parallel, k);
     let pb_state = test_support::state_layout(1, 0);
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut pb_primal = vec![0.0_f64; n_cols];
     pb_primal[0] = storage_final; // Sᴷ (outgoing)
     pb_primal[2] = storage_initial; // S⁰ (incoming)
@@ -5558,8 +5601,9 @@ fn entity_counts_1_hydro() -> EntityCounts {
 /// Control-region layout for `state_layout(1, 0)` (`control_region_start == 4`):
 /// interior storage `S¹ … Sᴷ⁻¹` at `[4, 4 + (K−1))`, then turbine `[t0, t0 + K)`,
 /// spillage `[t0 + K, t0 + 2K)`, then `evaporation_slot_count(block_mode, k)`
-/// evaporation triples. In parallel mode the interior family is empty and turbine
-/// begins at 4.
+/// evaporation triples, then one withdrawal-slack column pair, then the four
+/// `K`-wide operational-violation slack families. In parallel mode the
+/// interior family is empty and turbine begins at 4.
 fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry {
     use crate::lp::indexer::EvaporationIndices;
     let n_interior = match block_mode {
@@ -5588,6 +5632,8 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
         BlockMode::Chronological => BlockRowFamily::per_block(0..k),
         BlockMode::Parallel => BlockRowFamily::one_per_entity(0..1),
     };
+    let evap_end = evap_start + n_evap_slots * 3;
+    let ws_end = evap_end + 2;
     StageGeometry {
         turbine: turbine_start..spillage_start,
         spillage: spillage_start..evap_start,
@@ -5597,6 +5643,12 @@ fn single_hydro_block_geometry(block_mode: BlockMode, k: usize) -> StageGeometry
         evap_indices,
         evap_hydro_indices: vec![HydroSys::new(0)],
         water_balance,
+        withdrawal_slack_neg: evap_end..evap_end + 1,
+        withdrawal_slack_pos: evap_end + 1..ws_end,
+        outflow_below_slack: ws_end..ws_end + k,
+        outflow_above_slack: ws_end + k..ws_end + 2 * k,
+        turbine_below_slack: ws_end + 2 * k..ws_end + 3 * k,
+        generation_below_slack: ws_end + 3 * k..ws_end + 4 * k,
         ..test_support::equipment_free_geometry(&[k]).remove(0)
     }
 }
@@ -5613,7 +5665,7 @@ fn extract_chronological_per_block_storage() {
 
     // Boundary values: S⁰=10 (storage_in col 2), S¹=20 (col 4), S²=30 (col 5),
     // S³=Sᴷ=40 (storage col 0). Turbine cols [6,9), evap triples at [12, ...).
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut primal = vec![0.0_f64; n_cols];
     primal[0] = 40.0; // Sᴷ (outgoing state)
     primal[2] = 10.0; // S⁰ (incoming state)
@@ -5694,7 +5746,7 @@ fn extract_parallel_per_block_storage_byte_identical() {
     let state = test_support::state_layout(1, 0);
     let ec = zero_energy_conversion(1, 1);
 
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut primal = vec![0.0_f64; n_cols];
     primal[0] = 40.0; // Sᴷ (outgoing state)
     primal[2] = 10.0; // S⁰ (incoming state)
@@ -5757,7 +5809,7 @@ fn extract_chronological_water_value_reads_each_block_row() {
     let state = test_support::state_layout(1, 0);
     let ec = zero_energy_conversion(1, 1);
 
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let primal = vec![0.0_f64; n_cols];
     let dual = vec![0.0_f64, 10.0, 20.0, 30.0];
 
@@ -5819,7 +5871,7 @@ fn extract_parallel_water_value_repeats_the_stage_row() {
     let state = test_support::state_layout(1, 0);
     let ec = zero_energy_conversion(1, 1);
 
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let primal = vec![0.0_f64; n_cols];
     let dual = vec![0.0_f64, 10.0, 20.0, 30.0];
 
@@ -5891,7 +5943,7 @@ fn extract_chronological_per_block_stored_energy() {
         1,
     );
 
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut primal = vec![0.0_f64; n_cols];
     primal[0] = 40.0; // Sᴷ
     primal[2] = 10.0; // S⁰
@@ -5955,7 +6007,7 @@ fn extract_chronological_per_block_evaporation() {
     let state = test_support::state_layout(1, 0);
     let ec = zero_energy_conversion(1, 1);
 
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut primal = vec![0.0_f64; n_cols];
     primal[0] = 40.0;
     primal[2] = 10.0;
@@ -6035,7 +6087,7 @@ fn extract_parallel_per_block_evaporation_byte_identical() {
         1,
         "a parallel stage reserves exactly one evaporation slot"
     );
-    let n_cols = geom.spillage.end + k * 3;
+    let n_cols = geom.generation_below_slack.end;
     let mut primal = vec![0.0_f64; n_cols];
     primal[0] = 40.0;
     primal[2] = 10.0;
@@ -6126,11 +6178,18 @@ fn make_transit_bucket_primal(transit_buckets_out: &[f64], transit_buckets_in: &
 /// only at `lag == 1`.
 #[test]
 fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
-    let geometry = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state =
         test_support::state_layout_with_transit_buckets(2, 1, 2, vec![(0, 1), (0, 2)], 0, vec![]);
-    let primal = make_transit_bucket_primal(&[11.0, 22.0], &[7.0, 8.0]);
+    let ws_start = state.control_region_start();
+    let geometry = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = make_transit_bucket_primal(&[11.0, 22.0], &[7.0, 8.0]);
+    primal.resize(geometry.withdrawal_slack_pos.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
@@ -6140,7 +6199,7 @@ fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -6192,10 +6251,17 @@ fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
 /// the whole table off for a non-travel-time study.
 #[test]
 fn extract_transit_buckets_absent_when_n_buckets_zero() {
-    let geometry = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     let state = test_support::state_layout(2, 1);
-    let primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    let ws_start = state.control_region_start();
+    let geometry = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    primal.resize(geometry.withdrawal_slack_pos.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
 
@@ -6205,7 +6271,7 @@ fn extract_transit_buckets_absent_when_n_buckets_zero() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -6247,7 +6313,6 @@ fn extract_transit_buckets_absent_when_n_buckets_zero() {
 /// hydro input ordering.
 #[test]
 fn extract_transit_buckets_rows_follow_canonical_column_order() {
-    let geometry = test_support::equipment_free_geometry(&[0]).remove(0);
     let study_dims = test_support::study_dims();
     // Plant 0 (hydro_id 10) depth 2, plant 1 (hydro_id 20) depth 1.
     let state = test_support::state_layout_with_transit_buckets(
@@ -6258,7 +6323,15 @@ fn extract_transit_buckets_rows_follow_canonical_column_order() {
         0,
         vec![],
     );
-    let primal = make_transit_bucket_primal(&[11.0, 22.0, 33.0], &[7.0, 8.0, 9.0]);
+    let ws_start = state.control_region_start();
+    let geometry = StageGeometry {
+        withdrawal_slack_neg: ws_start..ws_start + 2,
+        withdrawal_slack_pos: ws_start + 2..ws_start + 4,
+        ..test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let mut primal = make_transit_bucket_primal(&[11.0, 22.0, 33.0], &[7.0, 8.0, 9.0]);
+    primal.resize(geometry.withdrawal_slack_pos.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
     let dual = vec![0.0; 4];
     let ec = zero_energy_conversion(2, 1);
     let inflow_m3s_per_hydro = test_support::inflow_m3s_per_hydro_from_primal(&state, &primal, 2);
@@ -6268,7 +6341,7 @@ fn extract_transit_buckets_rows_follow_canonical_column_order() {
             primal: &primal,
             dual: &dual,
             objective: 0.0,
-            objective_coeffs: &[],
+            objective_coeffs: &objective_coeffs,
             row_lower: &[],
         },
         &StageExtractionSpec {
@@ -6361,6 +6434,12 @@ fn split_plant_multi_bus_extraction_fixture() -> (StateSpace, StageGeometry, Hyd
         fpha_hydro_indices: vec![HydroSys::new(1)],
         n_blks: 2,
         water_balance: BlockRowFamily::one_per_entity(0..2),
+        withdrawal_slack_neg: 21..23,
+        withdrawal_slack_pos: 23..25,
+        outflow_below_slack: 25..29,
+        outflow_above_slack: 29..33,
+        turbine_below_slack: 33..39,
+        generation_below_slack: 39..45,
         ..test_support::equipment_free_geometry(&[2]).remove(0)
     };
     (state, geometry, hydro_cell_index)
@@ -6389,6 +6468,9 @@ fn extract_hydro_turbined_and_generation_sum_over_a_split_plants_cells() {
         50.0, 51.0, // generation[fpha-cell-local 0 = cell 1], blk 0/1
         3.0, 4.0, // generation[fpha-cell-local 1 = cell 2], blk 0/1
     ]);
+    // Pads withdrawal-slack and the four operational-violation slack families
+    // (this test asserts none of them) with always-zero columns.
+    primal.resize(geometry.generation_below_slack.end, 0.0);
     let dual = vec![0.0; 2];
     let objective_coeffs = vec![0.0; primal.len()];
 
@@ -6526,10 +6608,16 @@ fn split_middle_plant_fixture() -> (StateSpace, StageGeometry, HydroCellIndex, V
         spillage: 18..24,
         n_blks: 2,
         water_balance: BlockRowFamily::one_per_entity(0..3),
+        withdrawal_slack_neg: 24..27,
+        withdrawal_slack_pos: 27..30,
+        outflow_below_slack: 30..36,
+        outflow_above_slack: 36..42,
+        turbine_below_slack: 42..50,
+        generation_below_slack: 50..58,
         ..test_support::equipment_free_geometry(&[2]).remove(0)
     };
     // theta = 3*(3+0) = 9, equipment starts at 10 (state_layout(3, 0)).
-    let mut primal = vec![0.0_f64; 24];
+    let mut primal = vec![0.0_f64; 58];
     let turbine_values: [(usize, f64, f64); 4] = [
         (0, 10.0, 11.0),
         (1, 100.0, 101.0),
@@ -6784,10 +6872,16 @@ fn order_sensitive_split_plant_fixture() -> (StateSpace, StageGeometry, HydroCel
         spillage: 11..13,
         n_blks: 1,
         water_balance: BlockRowFamily::one_per_entity(0..2),
+        withdrawal_slack_neg: 13..15,
+        withdrawal_slack_pos: 15..17,
+        outflow_below_slack: 17..19,
+        outflow_above_slack: 19..21,
+        turbine_below_slack: 21..25,
+        generation_below_slack: 25..29,
         ..test_support::equipment_free_geometry(&[1]).remove(0)
     };
     // theta = 2*(3+0) = 6, equipment starts at 7 (state_layout(2, 0)).
-    let mut primal = vec![0.0_f64; 13];
+    let mut primal = vec![0.0_f64; 29];
     primal[7] = 42.0; // cell 0 (plant 0)
     primal[8] = 1.0e16; // cell 1 (plant 1, bus 5)
     primal[9] = 1.0; // cell 2 (plant 1, bus 6)
@@ -6894,6 +6988,9 @@ fn extract_hydro_bus_generation_maps_fpha_cells_by_plant_relative_offset() {
         50.0, 51.0, // generation[fpha-cell-local 0 = cell 1], blk 0/1
         3.0, 4.0, // generation[fpha-cell-local 1 = cell 2], blk 0/1
     ]);
+    // Pads withdrawal-slack and the four operational-violation slack families
+    // (this test asserts none of them) with always-zero columns.
+    primal.resize(geometry.generation_below_slack.end, 0.0);
     let dual = vec![0.0; 2];
     let objective_coeffs = vec![0.0; primal.len()];
 

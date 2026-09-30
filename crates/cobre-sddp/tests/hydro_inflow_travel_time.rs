@@ -2,7 +2,9 @@
 //! release is weighted by the share the downstream balance row credits to
 //! this block, and the maturing transit bucket enters as a rate. Checked
 //! without travel time (every share is `1.0`), with travel time on a
-//! parallel stage, and with travel time on a chronological stage.
+//! parallel stage, and with travel time on a chronological stage. It also
+//! covers the water an upstream plant that is not yet built passes straight
+//! through.
 
 #![allow(
     clippy::unwrap_used,
@@ -22,11 +24,11 @@ use cobre_core::temporal::{
 };
 use cobre_core::{
     BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ConstraintExpression, ContractBlockBounds,
-    DeficitSegment, EntityId, GenericConstraint, HydroBlockBounds, HydroPenalties,
-    HydroStageBounds, HydroStorage, InitialConditions, LineBlockBounds, LineStagePenalties,
-    LinearTerm, NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds,
-    ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedPenalties, SlackConfig, System,
-    SystemBuilder, ThermalBlockBounds, ThermalStageBounds, VariableRef,
+    DeficitSegment, DiversionChannel, EntityId, GenericConstraint, HydroBlockBounds,
+    HydroPenalties, HydroStageBounds, HydroStorage, InitialConditions, LineBlockBounds,
+    LineStagePenalties, LinearTerm, NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults,
+    PumpingBlockBounds, ResolvedBounds, ResolvedGenericConstraintBounds, ResolvedPenalties,
+    SlackConfig, System, SystemBuilder, ThermalBlockBounds, ThermalStageBounds, VariableRef,
 };
 use cobre_io::config::{
     Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, InflowNonNegativityMethod,
@@ -34,7 +36,7 @@ use cobre_io::config::{
     SimulationSelection, StoppingMode, StoppingRuleConfig, TrainingConfig, TrainingSelection,
     TrainingSolverConfig, UpperBoundEvaluationConfig,
 };
-use cobre_sddp::indexer::{BlockGrid, BlockIdx, HydroSys};
+use cobre_sddp::indexer::{BlockGrid, BlockIdx, HydroSys, StateSpace};
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::{StageTemplates, StudySetup};
 use cobre_solver::StageTemplate;
@@ -55,6 +57,15 @@ const BLOCK_HOURS: [f64; 2] = [300.0, 444.0];
 const TRAVEL_TIME_HOURS: f64 = 372.0;
 const FORCED_RELEASE_M3S: f64 = 100.0;
 const NON_BINDING_BOUND: f64 = 1.0e6;
+const PREFILLING_UPSTREAM_A_ID: i32 = 3;
+const PREFILLING_UPSTREAM_A_POS: usize = 2;
+const PREFILLING_UPSTREAM_B_ID: i32 = 4;
+const PREFILLING_UPSTREAM_B_POS: usize = 3;
+const DIVERSION_SOURCE_ID: i32 = 5;
+const DIVERSION_SOURCE_MAX_FLOW_M3S: f64 = 50.0;
+const DIVERSION_SOURCE_POS_NO_CHAIN: usize = 3;
+const DIVERSION_SOURCE_POS_CHAIN: usize = 4;
+const PREFILLING_ENTRY_STAGE_ID: i32 = 2;
 
 fn stages(block_mode: BlockMode) -> Vec<Stage> {
     let base = NaiveDate::from_ymd_opt(2024, 1, 1).expect("2024-01-01 is a valid date");
@@ -116,10 +127,10 @@ fn zero_hydro_penalties() -> HydroPenalties {
     }
 }
 
-fn resolved_bounds(n_stages: usize) -> ResolvedBounds {
+fn resolved_bounds(n_stages: usize, n_hydros: usize) -> ResolvedBounds {
     ResolvedBounds::new(
         &BoundsCountsSpec {
-            n_hydros: 2,
+            n_hydros,
             n_thermals: 0,
             n_lines: 0,
             n_pumping: 0,
@@ -163,10 +174,10 @@ fn resolved_bounds(n_stages: usize) -> ResolvedBounds {
     )
 }
 
-fn resolved_penalties(n_stages: usize) -> ResolvedPenalties {
+fn resolved_penalties(n_stages: usize, n_hydros: usize) -> ResolvedPenalties {
     ResolvedPenalties::new(
         &PenaltiesCountsSpec {
-            n_hydros: 2,
+            n_hydros,
             n_buses: 1,
             n_lines: 0,
             n_ncs: 0,
@@ -286,8 +297,8 @@ fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System
         .hydros(vec![downstream, upstream])
         .stages(stages)
         .inflow_models(inflow_models)
-        .bounds(resolved_bounds(n_stages))
-        .penalties(resolved_penalties(n_stages))
+        .bounds(resolved_bounds(n_stages, 2))
+        .penalties(resolved_penalties(n_stages, 2))
         .generic_constraints(vec![generic_constraint])
         .resolved_generic_bounds(resolved_generic_bounds)
         .initial_conditions(InitialConditions {
@@ -315,6 +326,170 @@ fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System
         system.hydros()[DOWNSTREAM_POS].id,
         EntityId(DOWNSTREAM_ID),
         "the downstream plant must occupy canonical position {DOWNSTREAM_POS}"
+    );
+    system
+}
+
+fn prefilling_hydro_defaults() -> HydroSpec {
+    HydroSpec {
+        bus_id: EntityId(BUS_ID),
+        min_storage_hm3: 0.0,
+        max_storage_hm3: 10_000.0,
+        max_turbined_m3s: 500.0,
+        max_generation_mw: 1_000.0,
+        generation_model: HydroGenerationModel::ConstantProductivity,
+        ..HydroSpec::default()
+    }
+}
+
+/// A source `W` -> `H` cascade routed through one `PreFilling` plant `U_a`
+/// (`chain: false`, `W -> U_a -> H`) or two (`chain: true`,
+/// `W -> U_a -> U_b -> H`), plus a diversion source `S` feeding `U_a`. Every
+/// `U` has `entry_stage_id: Some(PREFILLING_ENTRY_STAGE_ID)`, so it is
+/// `PreFilling` at both study stages. `travel_time_hours` sits on the one arc
+/// into `H` (`U_a`'s without `chain`, `U_b`'s with it); every other arc is
+/// lag-free, because `cobre-io` travel-time rule 12 rejects a lagged arc into
+/// a plant that is not yet operating.
+fn build_prefilling_system(
+    chain: bool,
+    travel_time_hours: Option<f64>,
+    block_mode: BlockMode,
+) -> System {
+    let bus = make_bus(
+        EntityId(BUS_ID),
+        BusSpec {
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+            ..BusSpec::default()
+        },
+    );
+
+    let w = make_hydro(
+        EntityId(UPSTREAM_ID),
+        HydroSpec {
+            downstream_id: Some(EntityId(PREFILLING_UPSTREAM_A_ID)),
+            ..prefilling_hydro_defaults()
+        },
+    );
+    let h = make_hydro(EntityId(DOWNSTREAM_ID), prefilling_hydro_defaults());
+    let upstream_a = make_hydro(
+        EntityId(PREFILLING_UPSTREAM_A_ID),
+        HydroSpec {
+            downstream_id: Some(if chain {
+                EntityId(PREFILLING_UPSTREAM_B_ID)
+            } else {
+                EntityId(DOWNSTREAM_ID)
+            }),
+            travel_time_hours: if chain { None } else { travel_time_hours },
+            entry_stage_id: Some(PREFILLING_ENTRY_STAGE_ID),
+            ..prefilling_hydro_defaults()
+        },
+    );
+    let diversion_source = make_hydro(
+        EntityId(DIVERSION_SOURCE_ID),
+        HydroSpec {
+            diversion: Some(DiversionChannel {
+                downstream_id: EntityId(PREFILLING_UPSTREAM_A_ID),
+                max_flow_m3s: DIVERSION_SOURCE_MAX_FLOW_M3S,
+            }),
+            ..prefilling_hydro_defaults()
+        },
+    );
+
+    let mut hydros = vec![w, h, upstream_a];
+    if chain {
+        hydros.push(make_hydro(
+            EntityId(PREFILLING_UPSTREAM_B_ID),
+            HydroSpec {
+                downstream_id: Some(EntityId(DOWNSTREAM_ID)),
+                travel_time_hours,
+                entry_stage_id: Some(PREFILLING_ENTRY_STAGE_ID),
+                ..prefilling_hydro_defaults()
+            },
+        ));
+    }
+    hydros.push(diversion_source);
+    let n_hydros = hydros.len();
+
+    let stages = stages(block_mode);
+    let n_stages = stages.len();
+
+    let mut inflow_models = Vec::new();
+    for hydro_id in [UPSTREAM_ID, PREFILLING_UPSTREAM_A_ID] {
+        for i in 0..n_stages {
+            inflow_models.push(InflowModel {
+                hydro_id: EntityId(hydro_id),
+                stage_id: i32::try_from(i).unwrap_or(0),
+                mean_m3s: FORCED_RELEASE_M3S,
+                std_m3s: 0.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            });
+        }
+    }
+
+    let (generic_constraint, resolved_generic_bounds) = downstream_inflow_constraint();
+    let storage = hydros
+        .iter()
+        .map(|h| HydroStorage {
+            hydro_id: h.id,
+            value_hm3: 0.0,
+        })
+        .collect();
+
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(hydros)
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .bounds(resolved_bounds(n_stages, n_hydros))
+        .penalties(resolved_penalties(n_stages, n_hydros))
+        .generic_constraints(vec![generic_constraint])
+        .resolved_generic_bounds(resolved_generic_bounds)
+        .initial_conditions(InitialConditions {
+            storage,
+            ..InitialConditions::default()
+        })
+        .build()
+        .expect("hydro_inflow_travel_time: valid pre-filling cascade");
+
+    assert_eq!(
+        system.hydros()[UPSTREAM_POS].id,
+        EntityId(UPSTREAM_ID),
+        "the source plant must occupy canonical position {UPSTREAM_POS}"
+    );
+    assert_eq!(
+        system.hydros()[DOWNSTREAM_POS].id,
+        EntityId(DOWNSTREAM_ID),
+        "the downstream plant must occupy canonical position {DOWNSTREAM_POS}"
+    );
+    assert_eq!(
+        system.hydros()[PREFILLING_UPSTREAM_A_POS].id,
+        EntityId(PREFILLING_UPSTREAM_A_ID),
+        "the first pre-filling upstream plant must occupy canonical position \
+         {PREFILLING_UPSTREAM_A_POS}"
+    );
+    if chain {
+        assert_eq!(
+            system.hydros()[PREFILLING_UPSTREAM_B_POS].id,
+            EntityId(PREFILLING_UPSTREAM_B_ID),
+            "the second pre-filling upstream plant must occupy canonical position \
+             {PREFILLING_UPSTREAM_B_POS}"
+        );
+    }
+    let diversion_pos = if chain {
+        DIVERSION_SOURCE_POS_CHAIN
+    } else {
+        DIVERSION_SOURCE_POS_NO_CHAIN
+    };
+    assert_eq!(
+        system.hydros()[diversion_pos].id,
+        EntityId(DIVERSION_SOURCE_ID),
+        "the diversion source must occupy canonical position {diversion_pos}"
     );
     system
 }
@@ -388,6 +563,30 @@ fn spillage_col(geom: &StageGeometry, hydro_pos: usize, block: usize) -> usize {
     BlockGrid::new(geom.n_blks, 0).flat(geom.spillage.start, hydro_pos, BlockIdx::new(block))
 }
 
+fn diversion_col(geom: &StageGeometry, hydro_pos: usize, block: usize) -> usize {
+    BlockGrid::new(geom.n_blks, 0).flat(geom.diversion.start, hydro_pos, BlockIdx::new(block))
+}
+
+fn inflow_columns(
+    geom: &StageGeometry,
+    state: &StateSpace,
+    z_plants: &[usize],
+    release_plants: &[usize],
+    diversion_plants: &[usize],
+) -> Vec<usize> {
+    let mut columns: Vec<usize> = z_plants.iter().map(|&p| state.z_inflow.start + p).collect();
+    for b in 0..geom.n_blks {
+        for &p in release_plants {
+            columns.push(turbine_col(geom, p, b));
+            columns.push(spillage_col(geom, p, b));
+        }
+        for &p in diversion_plants {
+            columns.push(diversion_col(geom, p, b));
+        }
+    }
+    columns
+}
+
 /// Every nonzero column of generic constraint row `row` must be one of
 /// `allowed` — a stray pair breaks the closed-column-set contract this test
 /// pins.
@@ -403,11 +602,14 @@ fn assert_generic_row_columns_are_closed(tpl: &StageTemplate, row: usize, allowe
 
 /// For downstream hydro 2 at `stage`, checks that the per-block `k`-weighted
 /// `hydro_inflow` rate matches the water-balance row's own inflow-side volume,
-/// for every column the balance row's inflow side reads: hydro 2's own
-/// `z_inflow`, hydro 1's turbine/spillage columns in every block, and every
-/// `transit_buckets_in` column the balance row actually reads. Every other
-/// column of each generic row must be zero (the closed-set contract).
-fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
+/// for every column in `inflow_columns` and every `transit_buckets_in` column
+/// the balance row actually reads. Every other column of each generic row
+/// must be zero (the closed-set contract).
+fn assert_hydro_inflow_matches_water_balance(
+    setup: &StudySetup,
+    stage: usize,
+    inflow_columns: &[usize],
+) {
     let templates = &setup.inputs.stage_data.stage_templates;
     let tpl = &templates.templates[stage];
     let geom = &templates.geometry_per_stage[stage];
@@ -422,11 +624,7 @@ fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
         .map(|b| matrix_entry(tpl, w_row, turbine_col(geom, DOWNSTREAM_POS, b)))
         .collect();
 
-    let mut columns: Vec<usize> = vec![state_space.z_inflow.start + DOWNSTREAM_POS];
-    for b in 0..n_blks {
-        columns.push(turbine_col(geom, UPSTREAM_POS, b));
-        columns.push(spillage_col(geom, UPSTREAM_POS, b));
-    }
+    let mut columns: Vec<usize> = inflow_columns.to_vec();
     let bucket_columns: Vec<usize> = state_space
         .transit_buckets_in
         .clone()
@@ -456,11 +654,12 @@ fn assert_hydro_inflow_matches_water_balance(setup: &StudySetup, stage: usize) {
 
 /// For downstream hydro 2 at `stage`, checks each block's own chronological
 /// water-balance row against `hydro_inflow`'s per-block generic row: for
-/// every inflow-side column `c`, `τ_b · g[b, c] == -w_b[c]`. Every other
+/// every column in `inflow_columns`, `τ_b · g[b, c] == -w_b[c]`. Every other
 /// column of each generic row must be zero (the closed-set contract).
 fn assert_hydro_inflow_matches_each_chronological_water_balance_row(
     setup: &StudySetup,
     stage: usize,
+    inflow_columns: &[usize],
 ) {
     let templates = &setup.inputs.stage_data.stage_templates;
     let tpl = &templates.templates[stage];
@@ -472,11 +671,7 @@ fn assert_hydro_inflow_matches_each_chronological_water_balance_row(
     let g_row = |b: usize| g_row_start + b;
     let w_row = |b: usize| geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(b));
 
-    let mut columns: Vec<usize> = vec![state_space.z_inflow.start + DOWNSTREAM_POS];
-    for b in 0..n_blks {
-        columns.push(turbine_col(geom, UPSTREAM_POS, b));
-        columns.push(spillage_col(geom, UPSTREAM_POS, b));
-    }
+    let mut columns: Vec<usize> = inflow_columns.to_vec();
     let bucket_columns: Vec<usize> = state_space
         .transit_buckets_in
         .clone()
@@ -509,7 +704,15 @@ fn assert_hydro_inflow_matches_each_chronological_water_balance_row(
 #[test]
 fn hydro_inflow_rows_match_the_water_balance_inflow_side_without_travel_time() {
     let setup = build_setup_in_code(build_system(None, BlockMode::Parallel), &config());
-    assert_hydro_inflow_matches_water_balance(&setup, 1);
+    let geom = &setup.inputs.stage_data.stage_templates.geometry_per_stage[1];
+    let columns = inflow_columns(
+        geom,
+        setup.stage_state(),
+        &[DOWNSTREAM_POS],
+        &[UPSTREAM_POS],
+        &[],
+    );
+    assert_hydro_inflow_matches_water_balance(&setup, 1, &columns);
 }
 
 #[test]
@@ -542,7 +745,8 @@ fn hydro_inflow_rows_match_the_water_balance_inflow_side_with_travel_time() {
          (0, 1), got {same_stage_share}"
     );
 
-    assert_hydro_inflow_matches_water_balance(&setup, 1);
+    let columns = inflow_columns(geom, state, &[DOWNSTREAM_POS], &[UPSTREAM_POS], &[]);
+    assert_hydro_inflow_matches_water_balance(&setup, 1, &columns);
 }
 
 /// A release in block 0 (0-300h) arrives at 372-672h, all of it within the
@@ -581,5 +785,122 @@ fn hydro_inflow_rows_match_each_chronological_water_balance_row_with_travel_time
          downstream balance row"
     );
 
-    assert_hydro_inflow_matches_each_chronological_water_balance_row(&setup, 1);
+    let columns = inflow_columns(geom, state, &[DOWNSTREAM_POS], &[UPSTREAM_POS], &[]);
+    assert_hydro_inflow_matches_each_chronological_water_balance_row(&setup, 1, &columns);
+}
+
+#[test]
+#[ignore = "hydro_inflow omits the water an upstream plant that is not yet built passes \
+            straight through to this plant"]
+fn hydro_inflow_rows_count_a_prefilling_upstream_plants_water_on_a_parallel_stage() {
+    let setup = build_setup_in_code(
+        build_prefilling_system(false, Some(TRAVEL_TIME_HOURS), BlockMode::Parallel),
+        &config(),
+    );
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let tpl = &templates.templates[1];
+    let geom = &templates.geometry_per_stage[1];
+    let state = setup.stage_state();
+    let w_row = geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(0));
+
+    assert!(
+        matrix_entry(tpl, w_row, state.z_inflow.start + PREFILLING_UPSTREAM_A_POS) != 0.0,
+        "power guard: the pre-filling upstream plant's short-circuit route to hydro 2 \
+         must be live"
+    );
+    let tau_0 = matrix_entry(tpl, w_row, turbine_col(geom, DOWNSTREAM_POS, 0));
+    assert!(
+        (matrix_entry(tpl, w_row, turbine_col(geom, UPSTREAM_POS, 0)) + tau_0).abs() < 1e-9,
+        "power guard: the source plant's block-0 release must reach hydro 2 whole, in its \
+         own block"
+    );
+
+    let columns = inflow_columns(
+        geom,
+        state,
+        &[DOWNSTREAM_POS, PREFILLING_UPSTREAM_A_POS],
+        &[PREFILLING_UPSTREAM_A_POS, UPSTREAM_POS],
+        &[DIVERSION_SOURCE_POS_NO_CHAIN],
+    );
+    assert_hydro_inflow_matches_water_balance(&setup, 1, &columns);
+}
+
+#[test]
+#[ignore = "hydro_inflow omits the water an upstream plant that is not yet built passes \
+            straight through to this plant"]
+fn hydro_inflow_rows_count_a_prefilling_upstream_plants_water_on_each_chronological_block() {
+    let setup = build_setup_in_code(
+        build_prefilling_system(false, Some(TRAVEL_TIME_HOURS), BlockMode::Chronological),
+        &config(),
+    );
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let tpl = &templates.templates[1];
+    let geom = &templates.geometry_per_stage[1];
+    let state = setup.stage_state();
+    let w_row = geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(0));
+
+    assert!(
+        matrix_entry(tpl, w_row, state.z_inflow.start + PREFILLING_UPSTREAM_A_POS) != 0.0,
+        "power guard: the pre-filling upstream plant's short-circuit route to hydro 2 \
+         must be live"
+    );
+    let tau_0 = matrix_entry(tpl, w_row, turbine_col(geom, DOWNSTREAM_POS, 0));
+    assert!(
+        (matrix_entry(tpl, w_row, turbine_col(geom, UPSTREAM_POS, 0)) + tau_0).abs() < 1e-9,
+        "power guard: the source plant's block-0 release must reach hydro 2 whole, in its \
+         own block"
+    );
+
+    let columns = inflow_columns(
+        geom,
+        state,
+        &[DOWNSTREAM_POS, PREFILLING_UPSTREAM_A_POS],
+        &[PREFILLING_UPSTREAM_A_POS, UPSTREAM_POS],
+        &[DIVERSION_SOURCE_POS_NO_CHAIN],
+    );
+    assert_hydro_inflow_matches_each_chronological_water_balance_row(&setup, 1, &columns);
+}
+
+#[test]
+#[ignore = "hydro_inflow omits the water an upstream plant that is not yet built passes \
+            straight through to this plant"]
+fn hydro_inflow_rows_count_a_two_plant_prefilling_chain_on_a_parallel_stage() {
+    let setup = build_setup_in_code(
+        build_prefilling_system(true, None, BlockMode::Parallel),
+        &config(),
+    );
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let tpl = &templates.templates[1];
+    let geom = &templates.geometry_per_stage[1];
+    let state = setup.stage_state();
+    let w_row = geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(0));
+
+    assert!(
+        matrix_entry(tpl, w_row, state.z_inflow.start + PREFILLING_UPSTREAM_A_POS) != 0.0,
+        "power guard: the pre-filling upstream plant's short-circuit route to hydro 2 \
+         must be live"
+    );
+    let tau_0 = matrix_entry(tpl, w_row, turbine_col(geom, DOWNSTREAM_POS, 0));
+    assert!(
+        (matrix_entry(tpl, w_row, turbine_col(geom, UPSTREAM_POS, 0)) + tau_0).abs() < 1e-9,
+        "power guard: the source plant's block-0 release must reach hydro 2 whole, in its \
+         own block"
+    );
+
+    let columns = inflow_columns(
+        geom,
+        state,
+        &[
+            DOWNSTREAM_POS,
+            PREFILLING_UPSTREAM_A_POS,
+            PREFILLING_UPSTREAM_B_POS,
+        ],
+        &[
+            PREFILLING_UPSTREAM_B_POS,
+            PREFILLING_UPSTREAM_A_POS,
+            UPSTREAM_POS,
+        ],
+        &[DIVERSION_SOURCE_POS_CHAIN],
+    );
+    assert_hydro_inflow_matches_water_balance(&setup, 1, &columns);
 }

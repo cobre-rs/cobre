@@ -3812,24 +3812,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //   B=1 bus, n_blks=2, block_hours=360h
 //   n_stages=4, no FPHA, no evaporation, no generic constraints
 //
-// Column layout derivation (K >= 1 anticipated; for the K=0 non-anticipated
-// baseline the formula differs — see the K=0 baseline test below):
-//   n_ant_state = 1 * K = K
-//   n_state = N*(1+L) + n_ant_state = 1 + K
-//   col_anticipated_state_start = N*(1+L) = 1
-//   col_anticipated_state_out_start = 1+K  (state region: = commit_in.end, 1 per plant)
-//   z_inflow = [2+K, 2+K+N) = [2+K, 3+K)
-//   storage_in = [3+K, 3+K+N) = [3+K, 4+K)
-//   theta = 4+K
-//   decision_start = 5+K
-//   col_thermal_start = 5+K + 3*N*n_blks = 5+K+6 = 11+K
-//   col_anticipated_decision_start = 11+K + 1*2 = 13+K
-//   line_fwd/rev: 0 (no lines)
-//   deficit: B*1*n_blks = 2 columns → cols 14+K..15+K
-//   excess:  B*n_blks = 2 columns  → cols 16+K..17+K
-//   withdrawal_neg/pos: N each = 2 → cols 18+K..19+K
-//   op_slacks (4*N*n_blks): 8 → cols 20+K..27+K
-//   num_cols = 28+K  (valid for K >= 1)
+// Columns are addressed through `rt_col_thermal_start` and its siblings below.
 //
 // Row layout derivation (K arbitrary, stage t; state is pinned via column
 // bounds, so the row layout carries no K-dependent state row block): the
@@ -4339,9 +4322,10 @@ fn rt_col_ant_dec_start(k: usize) -> usize {
     12 + 2 * k
 }
 
-/// `row_anticipated_fishing_start` for the roundtrip geometry. With no state-fixing
-/// rows, = min_generation_start + n_op_rows = 11 + 1 = 12 (K-independent: row
-/// layout does not depend on the anticipated ring's column width).
+/// `row_anticipated_fishing_start` for the roundtrip geometry. Incoming state
+/// is pinned by column bounds, so no row pins it: = min_generation_start +
+/// n_op_rows = 11 + 1 = 12 (K-independent: row layout does not depend on the
+/// anticipated ring's column width).
 fn rt_row_ant_fishing_start(_k: usize) -> usize {
     12
 }
@@ -4357,14 +4341,15 @@ fn rt_expected_num_cols(k: usize) -> usize {
 }
 
 /// Expected `num_rows` for the roundtrip geometry with anticipation K=k and stage
-/// `stage_idx` (`n_stages=4`, single anticipated plant). No state-fixing rows.
+/// `stage_idx` (`n_stages=4`, single anticipated plant). Incoming state is
+/// pinned by column bounds; no row pins it.
 /// Fishing row always-active (one per anticipated plant); the newest-slot
 /// `anticipated_state_out_def` row is active iff `stage_idx + k < 4` (strict
 /// gate); each of the `k - 1` interior ring slots gets its own ring-shift
 /// definition row iff it is within the horizon-reachable cap
 /// `slot < n_stages - stage_idx - 1`.
 fn rt_expected_num_rows(k: usize, stage_idx: usize) -> usize {
-    // base = 12 (no state-fixing rows)
+    // base = 12 (incoming state is pinned by column bounds; no row pins it)
     let fishing = 1_usize; // always-active: 1 fishing row per anticipated plant
     let state_out_def = usize::from(stage_idx + k < 4);
     let horizon_cap = 4_usize.saturating_sub(stage_idx + 1);

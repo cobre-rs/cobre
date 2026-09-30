@@ -107,7 +107,11 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
 fn study_dims_for(has_inflow_penalty: bool) -> StudyDimensions {
     StudyDimensions {
         max_deficit_segments: 1,
-        has_inflow_penalty,
+        inflow_method: if has_inflow_penalty {
+            InflowNonNegativityMethod::Penalty
+        } else {
+            InflowNonNegativityMethod::None
+        },
         anticipated_plants: AnticipatedPlants::default(),
         downstream_par_order: 0,
     }

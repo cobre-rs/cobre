@@ -101,7 +101,7 @@ pub(crate) struct TemplateBuildCtx<'a> {
         expect(dead_code, reason = "read only by tests and fixtures so far")
     )]
     pub(crate) state: &'a StateSpace,
-    /// Study-invariant, non-state LP shape (`has_inflow_penalty`,
+    /// Study-invariant, non-state LP shape (`inflow_method`,
     /// `max_deficit_segments`, `anticipated_plants`), threaded from setup's
     /// single owner (`build_study_dimensions`).
     pub(crate) study_dims: &'a StudyDimensions,
@@ -1183,8 +1183,8 @@ impl<'a> StageLayout<'a> {
         let deficit = col.alloc(ctx.buses.len() * max_deficit_segments * n_blks);
         let excess = col.alloc(ctx.buses.len() * n_blks);
 
-        let has_inflow_penalty = ctx.study_dims.has_inflow_penalty;
-        let inflow_slack = col.alloc(if has_inflow_penalty { n_h } else { 0 });
+        let has_inflow_slack_columns = ctx.study_dims.inflow_method.has_slack_columns();
+        let inflow_slack = col.alloc(if has_inflow_slack_columns { n_h } else { 0 });
 
         // `generation_col_start` is the empty-block cursor `col_generation_start`
         // reads; `col.pos()` already carries the correct value whether or not the

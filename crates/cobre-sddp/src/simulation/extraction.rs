@@ -813,15 +813,14 @@ impl HydroStageContext {
         lookup: &HydroReverseLookup,
         h: usize,
     ) -> Self {
-        let study_dims = spec.study_dims;
         let state = spec.state;
         let storage_final = view.primal[state.storage_outgoing_col(HydroSys::new(h)).get()];
         let storage_initial = view.primal[state.storage_incoming_col(HydroSys::new(h)).get()];
         let incremental_inflow = spec.inflow_m3s_per_hydro[h];
-        let inflow_slack = if study_dims.has_inflow_penalty {
-            view.primal[spec.geometry.inflow_slack_col(HydroSys::new(h))]
-        } else {
+        let inflow_slack = if spec.geometry.inflow_slack.is_empty() {
             0.0
+        } else {
+            view.primal[spec.geometry.inflow_slack_col(HydroSys::new(h))]
         };
         let withdrawal_neg = view.primal[spec.geometry.withdrawal_slack_neg_col(HydroSys::new(h))];
         let withdrawal_pos = view.primal[spec.geometry.withdrawal_slack_pos_col(HydroSys::new(h))];

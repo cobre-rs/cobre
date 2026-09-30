@@ -258,7 +258,6 @@ pub fn build_stage_templates_resolving_layout(
     let study_dims = super::build_study_dimensions(
         system,
         inflow_method,
-        layout.state.hydro_count,
         layout.anticipated_plants.clone(),
         downstream_par_order,
     );

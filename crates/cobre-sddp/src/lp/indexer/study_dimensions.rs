@@ -1,9 +1,11 @@
 //! The [`StudyDimensions`] single owner of the study-invariant, non-state LP
-//! shape: the scalar entity counts, presence flags, and anticipated-plant set
-//! constant across every stage and block of a study and not part of the state
-//! vector. No other long-lived type holds these facts.
+//! shape: the maximum deficit-segment count, the inflow non-negativity
+//! method, the anticipated-plant set, and the downstream PAR order —
+//! constant across every stage and block of a study and not part of the
+//! state vector. No other long-lived type holds these facts.
 
 use super::AnticipatedPlants;
+use crate::inflow_method::InflowNonNegativityMethod;
 
 /// Study-invariant, non-state LP shape for an SDDP study.
 ///
@@ -21,16 +23,27 @@ use super::AnticipatedPlants;
 /// `anticipated_plants` is study-invariant, so it is owned here; the
 /// per-stage FPHA / evaporation identity lists vary by stage and are owned by
 /// the per-stage geometry.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StudyDimensions {
     /// Maximum number of deficit segments across all buses (S).
     pub max_deficit_segments: usize,
-    /// Whether inflow non-negativity penalty slack columns are present.
-    pub has_inflow_penalty: bool,
+    /// Inflow non-negativity enforcement method.
+    pub inflow_method: InflowNonNegativityMethod,
     /// The study's anticipated-plant set.
     pub anticipated_plants: AnticipatedPlants,
     /// PAR order of the downstream (coarser) resolution model. Non-zero only when
     /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
     /// transition); zero for uniform-resolution studies.
     pub downstream_par_order: usize,
+}
+
+impl Default for StudyDimensions {
+    fn default() -> Self {
+        Self {
+            max_deficit_segments: 0,
+            inflow_method: InflowNonNegativityMethod::None,
+            anticipated_plants: AnticipatedPlants::default(),
+            downstream_par_order: 0,
+        }
+    }
 }

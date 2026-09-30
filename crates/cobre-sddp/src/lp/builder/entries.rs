@@ -320,7 +320,7 @@ fn fill_parallel_water_entries(
             continue;
         }
         let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
-        if ctx.study_dims.has_inflow_penalty {
+        if !layout.slack.inflow_slack.is_empty() {
             col_entries[layout.inflow_slack_col(HydroSys::new(h_idx))].push((row, -zeta));
         }
         col_entries[layout.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -zeta));
@@ -614,7 +614,7 @@ fn fill_chronological_water_entries(
                 }
             }
 
-            if ctx.study_dims.has_inflow_penalty {
+            if !layout.slack.inflow_slack.is_empty() {
                 col_entries[layout.inflow_slack_col(HydroSys::new(h_idx))].push((row, -tau_k));
             }
             col_entries[layout.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -tau_k));

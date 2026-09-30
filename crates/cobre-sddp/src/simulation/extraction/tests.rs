@@ -3038,10 +3038,6 @@ fn test_slack_extraction_with_penalty_active() {
     let state = test_support::state_layout_full(2, 1, 0, vec![]);
 
     assert!(
-        study_dims.has_inflow_penalty,
-        "has_inflow_penalty must be true"
-    );
-    assert!(
         !indexer.inflow_slack.is_empty(),
         "inflow_slack must be non-empty"
     );
@@ -3154,8 +3150,8 @@ fn test_slack_extraction_without_penalty_is_zero() {
     let study_dims = test_support::study_dims_for(&eq_counts);
     let state = test_support::state_layout_full(2, 1, 0, vec![]);
     assert!(
-        !study_dims.has_inflow_penalty,
-        "has_inflow_penalty must be false"
+        indexer.inflow_slack.is_empty(),
+        "inflow_slack must be empty"
     );
 
     let n_cols = indexer.generation_below_slack.end; // includes withdrawal_slack columns

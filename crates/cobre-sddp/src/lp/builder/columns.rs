@@ -754,7 +754,7 @@ fn fill_inflow_slack_columns(
     total_stage_hours: f64,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    if ctx.study_dims.has_inflow_penalty {
+    if !layout.slack.inflow_slack.is_empty() {
         for h_idx in 0..layout.state.hydro_count {
             let col = layout.inflow_slack_col(HydroSys::new(h_idx));
             let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);

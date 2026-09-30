@@ -442,7 +442,6 @@ impl StudySetup {
                 ncs,
                 study_stage_ids,
                 horizon,
-                inflow_method: config.inflow_method,
                 cut_management: CutManagementConfig {
                     cut_selection: config.cut_selection,
                     budget: config.budget,
@@ -884,8 +883,8 @@ pub(crate) struct ResolvedStateLayout {
 /// exist, since none of the state dimensions depend on the built LP.
 ///
 /// The returned `anticipated_plants` is the exact value the layout was built
-/// from; [`build_study_dimensions`] takes it (and `state.hydro_count`) as
-/// parameters instead of re-deriving them from the built templates.
+/// from; [`build_study_dimensions`] takes it as a parameter instead of
+/// re-deriving it from the built templates.
 ///
 /// # Errors
 ///
@@ -1104,18 +1103,14 @@ fn build_transit_seed_arcs(
 /// Build the study-invariant, non-state [`StudyDimensions`] from the system
 /// alone, before the stage templates exist.
 ///
-/// `hydro_count` and `anticipated_plants` are threaded from
-/// [`resolve_state_layout`] — the same values its [`StateSpace`] was built
-/// from.
+/// `anticipated_plants` is threaded from [`resolve_state_layout`] — the same
+/// value its [`StateSpace`] was built from.
 pub(crate) fn build_study_dimensions(
     system: &System,
     inflow_method: crate::InflowNonNegativityMethod,
-    hydro_count: usize,
     anticipated_plants: AnticipatedPlants,
     downstream_par_order: usize,
 ) -> StudyDimensions {
-    let has_inflow_penalty = inflow_method.has_slack_columns() && hydro_count > 0;
-
     let max_deficit_segments = system
         .buses()
         .iter()
@@ -1128,7 +1123,7 @@ pub(crate) fn build_study_dimensions(
     // study-global.
     StudyDimensions {
         max_deficit_segments,
-        has_inflow_penalty,
+        inflow_method,
         anticipated_plants,
         downstream_par_order,
     }
@@ -1703,7 +1698,6 @@ fn resolve_stage_data(
     let study_dims = build_study_dimensions(
         system,
         config.inflow_method,
-        layout.state.hydro_count,
         layout.anticipated_plants.clone(),
         downstream_par_order,
     );

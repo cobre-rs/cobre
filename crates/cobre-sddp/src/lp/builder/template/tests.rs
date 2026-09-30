@@ -478,7 +478,6 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -538,7 +537,6 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -617,7 +615,6 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -869,7 +866,6 @@ fn geometry_ncs_family_matches_the_stage_layout() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -1157,7 +1153,6 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -1231,7 +1226,6 @@ fn stage_layout_geometry_populates_contract_ranges() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -1289,7 +1283,6 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -1437,7 +1430,6 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -1517,7 +1509,6 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -1604,7 +1595,6 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -2016,7 +2006,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let study_dims_a = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -2113,7 +2102,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let study_dims_b = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        ctx_b_state.hydro_count,
         ctx_b_anticipated_plants.clone(),
         0,
     );
@@ -2398,7 +2386,6 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        layout.state.hydro_count,
         layout.anticipated_plants.clone(),
         0,
     );
@@ -2489,7 +2476,6 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -2537,7 +2523,6 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -2593,7 +2578,6 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -2644,7 +2628,6 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -2864,7 +2847,6 @@ fn build_post_study_resolved_for(
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -3287,7 +3269,6 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
     let study_dims = Box::leak(Box::new(crate::test_support::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     )));
@@ -3806,7 +3787,6 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -3922,7 +3902,6 @@ fn block_layout_and_template(
     let study_dims = Box::leak(Box::new(crate::test_support::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     )));
@@ -4586,7 +4565,6 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -5032,7 +5010,6 @@ fn filling_block_layout_and_template(
     let study_dims = Box::leak(Box::new(crate::test_support::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     )));
@@ -5357,7 +5334,6 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -5445,7 +5421,6 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        resolved.state.hydro_count,
         resolved.anticipated_plants.clone(),
         0,
     );
@@ -5572,7 +5547,6 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
     let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
-        layout.state.hydro_count,
         layout.anticipated_plants.clone(),
         0,
     );

@@ -4701,7 +4701,7 @@ mod tests {
             state: &setup.inputs.stage_data.state,
             cut_state_layouts: &setup.inputs.cut_state_layouts,
             study_dims: &setup.inputs.stage_data.study_dims,
-            inflow_method: &setup.inputs.inflow_method,
+            inflow_method: &setup.inputs.stage_data.study_dims.inflow_method,
             stochastic: &setup.inputs.stochastic,
             initial_state: &setup.inputs.initial.state,
             inflow_scheme: tr.inflow_scheme,

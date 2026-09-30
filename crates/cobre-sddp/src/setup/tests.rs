@@ -758,7 +758,10 @@ fn inflow_method_reflects_config() {
     .expect("setup");
 
     assert!(
-        !matches!(setup.inputs.inflow_method, InflowNonNegativityMethod::None),
+        !matches!(
+            setup.inputs.stage_data.study_dims.inflow_method,
+            InflowNonNegativityMethod::None
+        ),
         "expected penalty or truncation method"
     );
 }
@@ -8147,7 +8150,7 @@ fn stage_data_geometry_role_b_matches_reference_build() {
         n_lines: system.lines().len(),
         n_buses: system.buses().len(),
         n_blks: geometry.n_blks,
-        has_inflow_penalty: study_dims.has_inflow_penalty,
+        has_inflow_penalty: study_dims.inflow_method.has_slack_columns(),
         max_deficit_segments: study_dims.max_deficit_segments,
         n_anticipated: study_dims.anticipated_plants.len(),
         lead_stages: 0,

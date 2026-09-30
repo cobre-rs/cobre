@@ -167,7 +167,11 @@ impl CtxFixture {
                 .map(|b| b.deficit_segments.len())
                 .max()
                 .unwrap_or(0),
-            has_inflow_penalty: self.has_penalty,
+            inflow_method: if self.has_penalty {
+                crate::InflowNonNegativityMethod::Penalty
+            } else {
+                crate::InflowNonNegativityMethod::None
+            },
             anticipated_plants: self.anticipated_plants.clone(),
             ..StudyDimensions::default()
         };

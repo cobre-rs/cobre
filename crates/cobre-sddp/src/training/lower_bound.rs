@@ -970,7 +970,6 @@ mod tests {
         study_dims: StudyDimensions,
         horizon: HorizonMode,
         stochastic: StochasticContext,
-        inflow_method: InflowNonNegativityMethod,
         initial_state: Vec<f64>,
         node_graph: NodeGraph,
     }
@@ -992,10 +991,12 @@ mod tests {
                 templates: vec![template],
                 geometry_per_stage: equipment_free_geometry(&[1]),
                 cut_state_layouts,
-                study_dims: test_support::study_dims(),
+                study_dims: StudyDimensions {
+                    inflow_method,
+                    ..test_support::study_dims()
+                },
                 horizon: HorizonMode::Finite { num_stages: 2 },
                 stochastic,
-                inflow_method,
                 initial_state,
                 state,
                 node_graph,
@@ -1012,7 +1013,7 @@ mod tests {
                 state: &self.state,
                 cut_state_layouts: &self.cut_state_layouts,
                 study_dims: &self.study_dims,
-                inflow_method: &self.inflow_method,
+                inflow_method: &self.study_dims.inflow_method,
                 stochastic: &self.stochastic,
                 initial_state: &self.initial_state,
                 inflow_scheme: SamplingScheme::InSample,

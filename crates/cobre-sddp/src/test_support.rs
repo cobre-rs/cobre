@@ -1034,7 +1034,6 @@ pub struct TrainingContextFixture {
     study_dims: StudyDimensions,
     cut_state_layouts: Vec<CutStateProjection>,
     horizon: HorizonMode,
-    inflow_method: crate::InflowNonNegativityMethod,
     initial_state: Vec<f64>,
 }
 
@@ -1052,7 +1051,6 @@ impl TrainingContextFixture {
             study_dims: study_dims(),
             cut_state_layouts,
             horizon: HorizonMode::Finite { num_stages: 1 },
-            inflow_method: crate::InflowNonNegativityMethod::None,
             initial_state: Vec::new(),
             state,
         }
@@ -1080,7 +1078,7 @@ impl TrainingContextFixture {
             state: &self.state,
             cut_state_layouts: &self.cut_state_layouts,
             study_dims: &self.study_dims,
-            inflow_method: &self.inflow_method,
+            inflow_method: &self.study_dims.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
             inflow_scheme: SamplingScheme::InSample,
@@ -1263,7 +1261,11 @@ pub fn study_dims() -> StudyDimensions {
 pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {
         max_deficit_segments: dims.max_deficit_segments,
-        has_inflow_penalty: dims.has_inflow_penalty,
+        inflow_method: if dims.has_inflow_penalty {
+            crate::InflowNonNegativityMethod::Penalty
+        } else {
+            crate::InflowNonNegativityMethod::None
+        },
         anticipated_plants: dims.anticipated_plants.clone(),
         downstream_par_order: 0,
     }

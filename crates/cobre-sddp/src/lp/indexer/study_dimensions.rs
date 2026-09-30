@@ -27,10 +27,6 @@ pub struct StudyDimensions {
     pub max_deficit_segments: usize,
     /// Whether inflow non-negativity penalty slack columns are present.
     pub has_inflow_penalty: bool,
-    /// Whether withdrawal slack columns are present (`hydro_count > 0`).
-    pub has_withdrawal: bool,
-    /// Whether operational violation slack columns are present.
-    pub has_operational_violations: bool,
     /// The study's anticipated-plant set.
     pub anticipated_plants: AnticipatedPlants,
     /// PAR order of the downstream (coarser) resolution model. Non-zero only when

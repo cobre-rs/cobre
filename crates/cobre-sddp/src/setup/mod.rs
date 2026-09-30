@@ -1129,8 +1129,6 @@ pub(crate) fn build_study_dimensions(
     StudyDimensions {
         max_deficit_segments,
         has_inflow_penalty,
-        has_withdrawal: hydro_count > 0,
-        has_operational_violations: hydro_count != 0,
         anticipated_plants,
         downstream_par_order,
     }

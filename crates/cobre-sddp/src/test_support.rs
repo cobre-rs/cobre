@@ -1264,8 +1264,6 @@ pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {
         max_deficit_segments: dims.max_deficit_segments,
         has_inflow_penalty: dims.has_inflow_penalty,
-        has_withdrawal: dims.hydro_count > 0,
-        has_operational_violations: dims.hydro_count != 0,
         anticipated_plants: dims.anticipated_plants.clone(),
         downstream_par_order: 0,
     }

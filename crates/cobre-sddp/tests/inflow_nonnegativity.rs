@@ -83,12 +83,10 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
 }
 
 /// External test crate cannot see `test-support`; sets fields directly.
-fn study_dims_for(hydro_count: usize, has_inflow_penalty: bool) -> StudyDimensions {
+fn study_dims_for(has_inflow_penalty: bool) -> StudyDimensions {
     StudyDimensions {
         max_deficit_segments: 1,
         has_inflow_penalty,
-        has_withdrawal: hydro_count > 0,
-        has_operational_violations: hydro_count != 0,
         anticipated_plants: AnticipatedPlants::default(),
         downstream_par_order: 0,
     }
@@ -411,7 +409,7 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
     let n_h = system.hydros().len();
     let max_par_order = par_lp.max_order();
     let has_inflow_penalty = inflow_method.has_slack_columns() && n_h > 0;
-    let study_dims = study_dims_for(n_h, has_inflow_penalty);
+    let study_dims = study_dims_for(has_inflow_penalty);
     let geometry = stage_templates
         .geometry_per_stage
         .first()

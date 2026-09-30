@@ -748,7 +748,6 @@ fn sum_cell_slack(
 
 /// The four operational-violation slack values for plant `h` at block `b`:
 /// `(turbined_slack, outflow_slack_below, outflow_slack_above, generation_slack)`.
-/// All zero when the study carries no operational-violation penalty.
 /// `turbine_below_slack`/`generation_below_slack` are CELL-keyed, so those two
 /// sum `h`'s own cells via [`sum_cell_slack`]; the two outflow families stay
 /// hydro-keyed.
@@ -758,9 +757,6 @@ fn hydro_operational_slacks(
     h: usize,
     b: usize,
 ) -> (f64, f64, f64, f64) {
-    if !spec.study_dims.has_operational_violations {
-        return (0.0, 0.0, 0.0, 0.0);
-    }
     let blk = BlockIdx::new(b);
     (
         sum_cell_slack(view, spec, StageGeometry::turbine_below_col, h, b),
@@ -827,16 +823,8 @@ impl HydroStageContext {
         } else {
             0.0
         };
-        let withdrawal_neg = if study_dims.has_withdrawal {
-            view.primal[spec.geometry.withdrawal_slack_neg_col(HydroSys::new(h))]
-        } else {
-            0.0
-        };
-        let withdrawal_pos = if study_dims.has_withdrawal {
-            view.primal[spec.geometry.withdrawal_slack_pos_col(HydroSys::new(h))]
-        } else {
-            0.0
-        };
+        let withdrawal_neg = view.primal[spec.geometry.withdrawal_slack_neg_col(HydroSys::new(h))];
+        let withdrawal_pos = view.primal[spec.geometry.withdrawal_slack_pos_col(HydroSys::new(h))];
         let fpha_local = lookup.fpha[h];
         let evap_local = lookup.evap[h];
         let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
@@ -1362,7 +1350,6 @@ pub(crate) fn extract_stage_result_with_lookups(
     let (non_controllables, ncs_curtailment_cost) = extract_non_controllables(view, spec, stage_id);
     let costs = vec![compute_cost_result(
         view,
-        spec.study_dims,
         spec.geometry,
         spec.state,
         spec.col_scale,
@@ -1420,7 +1407,6 @@ impl HydroViolationCosts {
 
 /// Compute the 6 per-constraint hydro violation costs from a solution view.
 fn compute_hydro_violation_costs(
-    study_dims: &StudyDimensions,
     equipment: &StageGeometry,
     col_cost: impl Fn(usize) -> f64,
     range_sum: impl Fn(Range<usize>) -> f64,
@@ -1442,15 +1428,15 @@ fn compute_hydro_violation_costs(
     };
 
     let (outflow_below, outflow_above, turbined, generation) =
-        if study_dims.has_operational_violations {
+        if equipment.outflow_below_slack.is_empty() {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
             (
                 range_sum(equipment.outflow_below_slack.clone()) * cost_scale_factor,
                 range_sum(equipment.outflow_above_slack.clone()) * cost_scale_factor,
                 range_sum(equipment.turbine_below_slack.clone()) * cost_scale_factor,
                 range_sum(equipment.generation_below_slack.clone()) * cost_scale_factor,
             )
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
         };
 
     HydroViolationCosts {
@@ -1475,7 +1461,6 @@ fn compute_hydro_violation_costs(
 #[allow(clippy::too_many_arguments)]
 fn compute_cost_result(
     view: &SolutionView<'_>,
-    study_dims: &StudyDimensions,
     equipment: &StageGeometry,
     state: &StateSpace,
     col_scale: &[f64],
@@ -1546,13 +1531,7 @@ fn compute_cost_result(
     let inflow_penalty_cost = family_cost(&equipment.inflow_slack);
     let diversion_cost = family_cost(&equipment.diversion);
 
-    let hv = compute_hydro_violation_costs(
-        study_dims,
-        equipment,
-        col_cost,
-        range_sum,
-        cost_scale_factor,
-    );
+    let hv = compute_hydro_violation_costs(equipment, col_cost, range_sum, cost_scale_factor);
 
     SimulationCostResult {
         stage_id,

@@ -4119,7 +4119,6 @@ fn hydro_violation_cost_decomposition() {
     assert_eq!(indexer.outflow_above_slack, 20..22);
     assert_eq!(indexer.turbine_below_slack, 22..24);
     assert_eq!(indexer.generation_below_slack, 24..26);
-    assert!(study_dims.has_operational_violations);
 
     let n_cols = indexer.generation_below_slack.end;
     let mut primal = vec![0.0_f64; n_cols];

@@ -643,7 +643,7 @@ fn simulate_fixture(
             n_pumping: 0,
             pumping_consumption_mw_per_m3s: &[],
             contract_prices_per_stage: &vec![Vec::new(); N_STAGES],
-            contract_is_import: &[],
+            contract_slots: &[],
             ncs_entity_ids_per_stage: &vec![Vec::new(); N_STAGES],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &fx.stage_templates.hydro_productivities_per_stage,

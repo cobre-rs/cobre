@@ -217,7 +217,7 @@ impl StudySetup {
             hydro_cell_index: &self.inputs.stage_data.hydro_cell_index,
             pumping_consumption_mw_per_m3s: &self.inputs.stage_data.pumping_consumption_mw_per_m3s,
             contract_prices_per_stage: &self.inputs.stage_data.contract_prices_per_stage,
-            contract_is_import: &self.inputs.stage_data.contract_is_import,
+            contract_slots: &self.inputs.stage_data.contract_slots,
             ncs_entity_ids_per_stage: &self.inputs.ncs.entity_ids_per_stage,
             diversion_upstream: &self.inputs.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &self

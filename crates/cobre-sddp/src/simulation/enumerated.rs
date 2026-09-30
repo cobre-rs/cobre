@@ -572,7 +572,7 @@ mod tests {
             hydro_cell_index: &setup.inputs.stage_data.hydro_cell_index,
             pumping_consumption_mw_per_m3s: &setup.inputs.stage_data.pumping_consumption_mw_per_m3s,
             contract_prices_per_stage: &setup.inputs.stage_data.contract_prices_per_stage,
-            contract_is_import: &setup.inputs.stage_data.contract_is_import,
+            contract_slots: &setup.inputs.stage_data.contract_slots,
             ncs_entity_ids_per_stage: &setup.inputs.ncs.entity_ids_per_stage,
             diversion_upstream: &setup.inputs.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &setup

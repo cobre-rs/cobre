@@ -10,7 +10,7 @@ use std::sync::mpsc::{Sender, SyncSender};
 use chrono::NaiveDate;
 use cobre_comm::Communicator;
 use cobre_core::commissioning::commissioning_active;
-use cobre_core::{EntityId, HydroPastDefluence, TrainingEvent};
+use cobre_core::{ContractType, EntityId, HydroPastDefluence, TrainingEvent};
 use cobre_solver::ActiveProfile;
 use cobre_solver::{SolverInterface, StageTemplate};
 use cobre_stochastic::{ClassSampleRequest, ForwardNoiseTables, ForwardSampler, SampleRequest};
@@ -125,9 +125,9 @@ pub struct SimulationOutputSpec<'a> {
     /// — never the `col_scale`-scaled LP objective.
     pub contract_prices_per_stage: &'a [Vec<f64>],
 
-    /// Direction per contract, ID-sorted parallel to `entity_counts.contract_ids`
-    /// (`true` = import). Stage-invariant.
-    pub contract_is_import: &'a [bool],
+    /// Per-contract `(ContractType, per-family slot)`, ID-sorted parallel to
+    /// `entity_counts.contract_ids`. Stage-invariant.
+    pub contract_slots: &'a [(ContractType, usize)],
 
     /// Per-stage NCS entity IDs, in ID-sorted system order (dense — all NCS).
     pub ncs_entity_ids_per_stage: &'a [Vec<i32>],
@@ -693,7 +693,7 @@ pub(crate) fn extract_sim_stage_result(
         n_pumping,
         pumping_consumption_mw_per_m3s: output.pumping_consumption_mw_per_m3s,
         contract_prices: &output.contract_prices_per_stage[t.0],
-        contract_is_import: output.contract_is_import,
+        contract_slots: output.contract_slots,
         diversion_upstream: output.diversion_upstream,
         hydro_productivities: &output.hydro_productivities_per_stage[t.0],
         col_scale: &ctx.template(t).col_scale,

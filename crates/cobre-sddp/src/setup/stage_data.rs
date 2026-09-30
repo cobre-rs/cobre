@@ -1,6 +1,6 @@
 //! Stage-indexed data sub-struct of [`super::SolveInputs`].
 
-use cobre_core::{Stage, temporal::StageLagTransition};
+use cobre_core::{ContractType, Stage, temporal::StageLagTransition};
 
 use crate::{
     lp::builder::StageTemplates,
@@ -56,9 +56,9 @@ pub struct StageData {
     /// resolved, possibly block-overridden `contract_bounds_at_block(c, t, blk).price_per_mwh`.
     pub(crate) contract_prices_per_stage: Vec<Vec<f64>>,
 
-    /// Direction per contract, ID-sorted to match `entity_counts.contract_ids`
-    /// (`true` = import). Stage-invariant.
-    pub(crate) contract_is_import: Vec<bool>,
+    /// Per-contract `(ContractType, per-family slot)`, ID-sorted to match
+    /// `entity_counts.contract_ids`. Stage-invariant.
+    pub(crate) contract_slots: Vec<(ContractType, usize)>,
 
     /// Precomputed lag accumulation weights and period-finalization flags,
     /// one entry per study stage.

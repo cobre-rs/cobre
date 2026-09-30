@@ -1451,7 +1451,7 @@ mod determinism {
                         n_pumping: 0,
                         pumping_consumption_mw_per_m3s: &[],
                         contract_prices_per_stage: &vec![Vec::new(); fx.n_stages],
-                        contract_is_import: &[],
+                        contract_slots: &[],
                         ncs_entity_ids_per_stage: &vec![Vec::new(); fx.n_stages],
                         diversion_upstream: &HashMap::new(),
                         hydro_productivities_per_stage: &vec![vec![1.0, 1.0, 1.0]; fx.n_stages],

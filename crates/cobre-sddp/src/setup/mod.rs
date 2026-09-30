@@ -29,7 +29,7 @@
 #![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
 
 use chrono::NaiveDate;
-use cobre_core::ContractType::Import;
+use cobre_core::ContractType;
 use cobre_core::temporal::SeasonCycleType::Monthly;
 use cobre_core::temporal::SeasonMap;
 use cobre_core::temporal::StageLagTransition;
@@ -49,6 +49,7 @@ use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 use crate::StageTemplates;
 use crate::bucket_topology;
 use crate::config::LoopParams;
+use crate::generic_constraints::contract_family_slot;
 use crate::resolved_parameters::{ResolvedParameters, build_resolved_parameters};
 use crate::scaling_report::ScalingReport;
 use crate::simulation::SimulationConfig;
@@ -1765,7 +1766,7 @@ fn resolve_stage_data(
             system,
             &stage_templates.geometry_per_stage,
         ),
-        contract_is_import: build_contract_is_import(system),
+        contract_slots: build_contract_slots(system),
         stage_templates,
         time_value,
         state: layout.state,
@@ -2468,16 +2469,14 @@ fn build_contract_prices_per_stage(
         .collect()
 }
 
-/// Build the per-contract direction flags (`true` = import).
-///
-/// ID-sorted parallel to `system.contracts()` — the same order
-/// `EntityCounts::contract_ids` is built in — so extraction's running per-direction
-/// slot count reproduces the LP builder's `fill_contract_columns` slot assignment.
-fn build_contract_is_import(system: &System) -> Vec<bool> {
-    system
-        .contracts()
-        .iter()
-        .map(|c| c.contract_type == Import)
+/// Build the per-contract `(ContractType, per-family slot)`, ID-sorted
+/// parallel to `system.contracts()` — the same order `EntityCounts::contract_ids`
+/// is built in — from [`contract_family_slot`], the LP builder's own slot
+/// derivation.
+fn build_contract_slots(system: &System) -> Vec<(ContractType, usize)> {
+    let contracts = system.contracts();
+    (0..contracts.len())
+        .map(|c| contract_family_slot(contracts, c))
         .collect()
 }
 

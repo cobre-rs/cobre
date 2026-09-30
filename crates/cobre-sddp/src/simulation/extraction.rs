@@ -677,11 +677,9 @@ pub struct StageExtractionSpec<'a> {
     /// must equal `entity_counts.contract_ids.len() * n_blks` (debug-asserted by the
     /// contract extractor).
     pub contract_prices: &'a [f64],
-    /// Direction per contract, ID-sorted parallel to `entity_counts.contract_ids`:
-    /// `true` = import (base `geometry.contract_import.start`), `false` = export
-    /// (base `geometry.contract_export.start`). The running same-direction count
-    /// gives the per-family slot — `c_sys` is the wrong grid stride.
-    pub contract_is_import: &'a [bool],
+    /// Per-contract `(ContractType, per-family slot)`, ID-sorted parallel to
+    /// `entity_counts.contract_ids`, from [`contract_family_slot`](crate::generic_constraints::contract_family_slot).
+    pub contract_slots: &'a [(ContractType, usize)],
     /// Map from target hydro ID to source hydro indices that divert to it.
     pub diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
     /// Per-hydro productivity at this stage. `0.0` for FPHA hydros (generation is
@@ -1773,12 +1771,9 @@ fn extract_pumping_stations(
 /// Extract one [`SimulationContractResult`] per (contract, block) from the solved
 /// dispatch primals — dense, one row per system contract at every stage.
 ///
-/// The family base is `geometry.contract_import.start` (import) or
-/// `geometry.contract_export.start` (export); the per-family slot is the running
-/// count of same-direction contracts preceding `c` in ID-sorted order — `c` itself
-/// is the wrong grid stride (imports and exports share one ID-sorted list but
-/// occupy separate column blocks). `power_mw` is read directly from `view.primal`
-/// (already unscaled). `price` is read PER BLOCK from `spec.contract_prices[c *
+/// `spec.contract_slots[c]` gives the `(ContractType, family_slot)`
+/// [`StageGeometry::contract_col`] addresses. `power_mw` is read directly from
+/// `view.primal` (already unscaled). `price` is read PER BLOCK from `spec.contract_prices[c *
 /// n_blks + blk]`, inside the `for blk` loop — hoisting it to `spec.contract_prices[c]`
 /// above the loop compiles but silently misaligns every cell against the flat
 /// per-block table. `total_cost = price * power_mw * block_hours` uses the
@@ -1809,20 +1804,9 @@ fn extract_contracts(
         spec.contract_prices.len()
     );
 
-    let mut import_slot = 0_usize;
-    let mut export_slot = 0_usize;
     let mut results = Vec::with_capacity(n_contracts * n_blks);
     for (c, &contract_id) in spec.entity_counts.contract_ids.iter().enumerate() {
-        let is_import = spec.contract_is_import[c];
-        let (contract_type, family_slot) = if is_import {
-            let slot = import_slot;
-            import_slot += 1;
-            (ContractType::Import, slot)
-        } else {
-            let slot = export_slot;
-            export_slot += 1;
-            (ContractType::Export, slot)
-        };
+        let (contract_type, family_slot) = spec.contract_slots[c];
         for blk in 0..n_blks {
             let col = spec
                 .geometry

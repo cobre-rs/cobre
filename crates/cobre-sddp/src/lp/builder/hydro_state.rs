@@ -225,3 +225,97 @@ pub(super) fn cell_min_generation(
         .map(|&pos| lookup.min_generation(pos, &groups[pos]))
         .sum()
 }
+
+#[cfg(test)]
+mod tests {
+    use cobre_core::{CascadeTopology, EntityId, Hydro, HydroGenerationModel, HydroPenalties};
+
+    use crate::indexer::EntityPositions;
+
+    use super::resolve_shortcircuit_target;
+
+    const STAGE_ID: i32 = 0;
+    const FUTURE_ENTRY: i32 = 1;
+
+    /// A cascade hydro with a caller-chosen `downstream_id` and `entry_stage_id`,
+    /// no `FillingConfig` (a `PreFilling`/`Operating` chain needs none).
+    fn chain_hydro(id: i32, downstream: Option<i32>, entry_stage_id: Option<i32>) -> Hydro {
+        Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            downstream_id: downstream.map(EntityId),
+            travel_time_hours: None,
+            entry_stage_id,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 50.0,
+            specific_productivity_mw_per_m3s_per_m: None,
+            min_generation_mw: 0.0,
+            max_generation_mw: 45.0,
+            unit_groups: Vec::new(),
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties::uniform(0.0),
+        }
+    }
+
+    fn positions_of(hydros: &[Hydro]) -> EntityPositions {
+        EntityPositions::from_slices(hydros.iter().map(|h| h.id), [], [], [], [], [])
+    }
+
+    #[test]
+    fn resolve_shortcircuit_target_walks_prefilling_chains_and_skips_other_phases() {
+        // A(0) -> B(1) -> C(2): A and B PreFilling (entry lies past STAGE_ID), C
+        // Operating (no entry window at all).
+        let hydros = vec![
+            chain_hydro(1, Some(2), Some(FUTURE_ENTRY)),
+            chain_hydro(2, Some(3), Some(FUTURE_ENTRY)),
+            chain_hydro(3, None, None),
+        ];
+        let cascade = CascadeTopology::build(&hydros);
+        let positions = positions_of(&hydros);
+
+        assert_eq!(
+            resolve_shortcircuit_target(&hydros, &cascade, &positions, STAGE_ID, 0),
+            Some(2),
+            "A's chain walk skips PreFilling B and lands on Operating C"
+        );
+        assert_eq!(
+            resolve_shortcircuit_target(&hydros, &cascade, &positions, STAGE_ID, 1),
+            Some(2),
+            "B routes directly onto Operating C"
+        );
+        assert_eq!(
+            resolve_shortcircuit_target(&hydros, &cascade, &positions, STAGE_ID, 2),
+            None,
+            "C is not PreFilling: the entry guard returns None before any walk"
+        );
+
+        // Same chain, but C is PreFilling too and has no downstream: the walk
+        // reaches the terminal without ever finding a non-PreFilling target.
+        let sink_hydros = vec![
+            chain_hydro(1, Some(2), Some(FUTURE_ENTRY)),
+            chain_hydro(2, Some(3), Some(FUTURE_ENTRY)),
+            chain_hydro(3, None, Some(FUTURE_ENTRY)),
+        ];
+        let sink_cascade = CascadeTopology::build(&sink_hydros);
+        let sink_positions = positions_of(&sink_hydros);
+
+        assert_eq!(
+            resolve_shortcircuit_target(&sink_hydros, &sink_cascade, &sink_positions, STAGE_ID, 0),
+            None,
+            "C is a PreFilling sink: the chain never reaches a non-PreFilling target"
+        );
+    }
+}

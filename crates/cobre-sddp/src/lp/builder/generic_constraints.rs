@@ -23,7 +23,7 @@
 
 use cobre_core::{ContractType, EntityId, PumpingStation, VariableRef};
 
-use super::entries::{maturing_bucket_in_col, resolve_bucket_arrival_density};
+use super::delivery_ring::{maturing_bucket_in_col, resolve_bucket_arrival_density};
 use super::hydro_state::resolve_shortcircuit_target;
 use super::layout::{StageLayout, TemplateBuildCtx, contract_family_slot, evaporation_slot};
 use crate::hydro_models::ResolvedProductionModel;

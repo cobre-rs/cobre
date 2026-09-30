@@ -18,9 +18,12 @@
 
 use std::ops::Range;
 
-use crate::indexer::{HydroSys, StateSpace};
+use cobre_core::EntityId;
 
-use super::layout::position_table_row;
+use crate::block_clock::BlockClock;
+use crate::indexer::{BlockIdx, HydroSys, StateSpace};
+
+use super::layout::{TemplateBuildCtx, position_table_row};
 
 /// Mutable column-bound and objective buffers shared by all fill helpers.
 pub(super) struct ColumnBufs<'a> {
@@ -354,6 +357,77 @@ impl DeliveryRing {
         );
         slot * self.n_lanes + lane
     }
+}
+
+/// The maturing-now bucket's incoming column (`in_col(0, 0)`) for downstream
+/// `plant`, or `None` when it declares no incoming arc. The single owner of
+/// [`DeliveryRing::transit_bucket`]'s `in_col(0, 0)` read both water-balance
+/// fills, and the generic-constraint `hydro_inflow` resolver, share.
+pub(super) fn maturing_bucket_in_col(state: &StateSpace, plant: HydroSys) -> Option<usize> {
+    DeliveryRing::transit_bucket(state, plant).map(|bucket| bucket.ring.in_col(0, 0))
+}
+
+/// Resolve this stage's incoming maturing bucket `arrival_density` (fixed-delivery-density
+/// contract): a lookup of the setup-precomputed per-`(arc, arrival stage)` blend
+/// ([`build_arc_arrival_density`](crate::bucket_topology::build_arc_arrival_density)),
+/// already resolved in this arrival stage's own frame. Falls back to duration-weighted
+/// uniform only where the table holds no blend (the study's first stage) or the plant has
+/// no travel-time upstream.
+///
+/// A non-travel-time upstream is EXCLUDED, never folded in via `uniform`: it would
+/// disagree with the sole travel-time arc's non-uniform density — a false
+/// heterogeneous-confluence panic in debug, a silent uniform split in release.
+///
+/// A heterogeneous-density confluence has no resolved policy;
+/// `check_chronological_confluence_heterogeneous_travel_time` (`cobre-io`) rejects it at
+/// config time, so the `debug_assert!` below is a defensive backstop, not the enforcement
+/// point.
+pub(super) fn resolve_bucket_arrival_density(
+    ctx: &TemplateBuildCtx<'_>,
+    clock: BlockClock<'_>,
+    stage_idx: usize,
+    downstream_id: EntityId,
+    n_blks: usize,
+) -> Vec<f64> {
+    let uniform = || {
+        (0..n_blks)
+            .map(|b| clock.hours(BlockIdx::new(b)) / clock.total_hours())
+            .collect::<Vec<f64>>()
+    };
+
+    let mut chosen: Option<Vec<f64>> = None;
+    for &up_id in ctx.cascade.upstream(downstream_id) {
+        let Some(u_idx) = ctx.positions.hydro(up_id) else {
+            continue;
+        };
+        let Some(by_stage) = ctx.topology.arc_arrival_density.get(&u_idx) else {
+            continue;
+        };
+        let candidate = by_stage[stage_idx].clone().map_or_else(uniform, |density| {
+            debug_assert_eq!(
+                density.len(),
+                n_blks,
+                "arc {u_idx} stage {stage_idx}: arrival_density length must equal n_blks"
+            );
+            density
+        });
+        match &chosen {
+            None => chosen = Some(candidate),
+            Some(existing) => {
+                debug_assert!(
+                    existing.len() == candidate.len()
+                        && existing
+                            .iter()
+                            .zip(&candidate)
+                            .all(|(&a, &b)| (a - b).abs() < 1e-9),
+                    "confluence with heterogeneous chronological delivery densities into \
+                     one downstream plant is not yet supported (arc {u_idx} disagrees at \
+                     stage {stage_idx})"
+                );
+            }
+        }
+    }
+    chosen.unwrap_or_else(uniform)
 }
 
 #[cfg(test)]

@@ -1775,7 +1775,8 @@ Read: `lead_time/mod.rs` (`resolve_spread`'s
 `block_deposits`/`within_stage_routing`/`arrival_density` fields,
 `resolve_block_factors`'s `BlockFactors`, `resolve_arrival_density_at`),
 `bucket_topology.rs` (`build_arc_arrival_density`), `lp/builder/entries.rs`
-(`fill_chronological_water_entries`, `resolve_bucket_arrival_density`). Pinned
+(`fill_chronological_water_entries`),
+`lp/builder/delivery_ring.rs` (`resolve_bucket_arrival_density`). Pinned
 by the shared-density-consistency regression exercising the aggregation
 debug_assert directly, the chronological block-table regression matching the
 worked kappa/chi numbers, and the `K = 1` chronological-vs-parallel

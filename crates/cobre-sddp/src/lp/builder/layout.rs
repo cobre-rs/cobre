@@ -24,13 +24,13 @@ use crate::indexer::{
 };
 use crate::time_value::TimeValue;
 
+use super::generic_constraints::expression_is_block_independent;
 use super::hydro_state::hydro_phase;
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET,
     GenericConstraintRowEntry,
 };
 use crate::block_clock::BlockClock;
-use crate::generic_constraints::expression_is_block_independent;
 use crate::resolved_parameters::ResolvedParameters;
 
 /// Pre-resolved bound, penalty, and factor tables shared across all stages.

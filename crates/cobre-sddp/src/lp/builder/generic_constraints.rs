@@ -23,14 +23,13 @@
 
 use cobre_core::{ConstraintExpression, ContractType, EntityId, PumpingStation, VariableRef};
 
+use super::entries::{maturing_bucket_in_col, resolve_bucket_arrival_density};
+use super::hydro_state::resolve_shortcircuit_target;
+use super::layout::{StageLayout, TemplateBuildCtx, contract_family_slot, evaporation_slot};
 use crate::hydro_models::ResolvedProductionModel;
 use crate::indexer::{
     BlockIdx, Boundary, BusSys, EvapLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, PumpingSys,
     ThermalSys,
-};
-use crate::lp::builder::{
-    StageLayout, TemplateBuildCtx, contract_family_slot, evaporation_slot, maturing_bucket_in_col,
-    resolve_bucket_arrival_density, resolve_shortcircuit_target,
 };
 
 /// Map a [`VariableRef`] and block index to LP column indices with multipliers.
@@ -47,7 +46,7 @@ use crate::lp::builder::{
 /// a stub entity with no LP columns (contracts, non-controllable sources,
 /// withdrawal).
 #[must_use]
-pub(crate) fn resolve_variable_ref(
+pub(super) fn resolve_variable_ref(
     var_ref: &VariableRef,
     block_idx: usize,
     stage_idx: usize,
@@ -229,7 +228,7 @@ fn variable_ref_is_block_independent(var_ref: &VariableRef) -> bool {
 /// collapse its per-block replication into one stage-level row. Any block-level term
 /// forces `false`. An empty expression is vacuously true.
 #[must_use]
-pub(crate) fn expression_is_block_independent(expression: &ConstraintExpression) -> bool {
+pub(super) fn expression_is_block_independent(expression: &ConstraintExpression) -> bool {
     expression
         .terms
         .iter()

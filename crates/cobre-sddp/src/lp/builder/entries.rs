@@ -1,8 +1,8 @@
 use cobre_core::commissioning::Phase;
 use cobre_core::{BlockMode, CoefficientRef, ContractType, EntityId, Stage};
 
+use super::generic_constraints::resolve_variable_ref;
 use crate::block_clock::BlockClock;
-use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
     AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
@@ -419,7 +419,7 @@ fn fill_arc_release_block_entries(
 /// `plant`, or `None` when it declares no incoming arc. The single owner of
 /// [`DeliveryRing::transit_bucket`]'s `in_col(0, 0)` read both water-balance
 /// fills, and the generic-constraint `hydro_inflow` resolver, share.
-pub(crate) fn maturing_bucket_in_col(state: &StateSpace, plant: HydroSys) -> Option<usize> {
+pub(super) fn maturing_bucket_in_col(state: &StateSpace, plant: HydroSys) -> Option<usize> {
     DeliveryRing::transit_bucket(state, plant).map(|bucket| bucket.ring.in_col(0, 0))
 }
 
@@ -674,7 +674,7 @@ fn fill_arc_release_chrono_block_entries(
 /// `check_chronological_confluence_heterogeneous_travel_time` (`cobre-io`) rejects it at
 /// config time, so the `debug_assert!` below is a defensive backstop, not the enforcement
 /// point.
-pub(crate) fn resolve_bucket_arrival_density(
+pub(super) fn resolve_bucket_arrival_density(
     ctx: &TemplateBuildCtx<'_>,
     clock: BlockClock<'_>,
     stage_idx: usize,

@@ -524,7 +524,7 @@ mod b6a_hydro_inflow_parity {
     //! `z_inflow` appears — is a crate-internal property of `resolve_variable_ref`,
     //! which is `pub(crate)` to `cobre-sddp` and therefore unreachable from an
     //! integration test under `tests/`. That assertion lives in the crate-internal
-    //! unit tests in `lp::generic_constraints` (e.g.
+    //! unit tests in `lp::builder::generic_constraints` (e.g.
     //! `hydro_inflow_two_upstream_canonical_order`,
     //! `hydro_inflow_diversion_into_appends_diversion_column`,
     //! `hydro_inflow_headwater_resolves_to_z_inflow_only`,
@@ -576,7 +576,7 @@ mod b6a_hydro_inflow_parity {
     /// is H0 — so the resolved row references the total-inflow column set (z_inflow
     /// plus H0's turbine+spillage), not the headwater z_inflow-only case. The
     /// exhaustive `(col, +1.0)` resolver-level check is the crate-internal
-    /// responsibility of `lp::generic_constraints`'s unit tests (see this file's
+    /// responsibility of `lp::builder::generic_constraints`'s unit tests (see this file's
     /// module docs); this assertion only guards that the fixture references the
     /// cascade target so the end-to-end solve genuinely exercises B6a.
     fn assert_cascade_inflow_constraint(system: &cobre_core::System) {

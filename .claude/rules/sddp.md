@@ -2354,7 +2354,7 @@ Read: `lp/builder/columns.rs` (`fill_anticipated_columns`),
 `lp/builder/state_box.rs` (`fill_commitment_hold_box`, the box reader of the same
 delivery-anchored base),
 `lp/indexer/anticipated_gate.rs` (`is_anticipated_decision_active_for_delivery`),
-`lp/generic_constraints.rs` (`resolve_anticipated_decision`),
+`lp/builder/generic_constraints.rs` (`resolve_anticipated_decision`),
 `cobre-io` `validation/semantic/thermal.rs`
 (`warn_thermal_generation_on_anticipated_thermal`), `cobre-io`
 `validation/semantic/block_bounds.rs`

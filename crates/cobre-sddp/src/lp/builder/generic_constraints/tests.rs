@@ -2153,7 +2153,7 @@ fn chronological_default_fixture() -> ResolverFixture {
 ///
 /// Seam B of the geometry cross-check guard — pairs with
 /// `stage_geometry_block_storage_col_matches_layout` (Seam A, in
-/// `super::super::builder::template::tests`), each independently anchored
+/// `super::super::template::tests`), each independently anchored
 /// against its own hand-computed oracle rather than compared to each other.
 #[test]
 fn hydro_storage_boundary_resolves_each_boundary() {

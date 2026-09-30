@@ -44,6 +44,7 @@ mod columns;
 pub(crate) mod delivery_ring;
 mod entries;
 mod fpha_cursor;
+mod generic_constraints;
 mod hydro_state;
 mod layout;
 mod patch;
@@ -65,10 +66,9 @@ pub use template::{StageTemplates, build_stage_templates};
 
 // --- Crate-internal re-exports ---
 pub(crate) use build_inputs::LpBuildInputs;
-pub(crate) use entries::{maturing_bucket_in_col, resolve_bucket_arrival_density};
-pub(crate) use hydro_state::resolve_shortcircuit_target;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use layout::ResolvedTables;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use layout::{StageLayout, TemplateBuildCtx};
 pub(crate) use layout::{contract_family_slot, evaporation_slot, evaporation_slot_count};
 pub(crate) use scaling::{

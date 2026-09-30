@@ -53,7 +53,6 @@ pub use convergence::{risk_measure, stopping_rule};
 
 pub use cut::{basis_reconstruct, cut_selection, cut_sync, dcs};
 
-pub(crate) use lp::generic_constraints;
 pub use lp::indexer;
 
 pub use policy::{policy_export, resolved_parameters, scaling_report};

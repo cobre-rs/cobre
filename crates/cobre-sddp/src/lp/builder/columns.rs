@@ -1488,6 +1488,16 @@ mod interior_storage_bound_tests {
             let hydros = vec![operating_hydro()];
             let cascade = CascadeTopology::build(&hydros);
             let hydro_cell_index = HydroCellIndex::build(&hydros);
+            let production_models = ProductionModelSet::new(
+                vec![vec![
+                    ResolvedProductionModel::ConstantProductivity {
+                        productivity: 1.0
+                    };
+                    N_STAGES
+                ]],
+                &hydros,
+                N_STAGES,
+            );
             Self {
                 base: CtxFixture {
                     hydros,
@@ -1495,16 +1505,7 @@ mod interior_storage_bound_tests {
                     cascade,
                     bounds: bounds_one_hydro(),
                     penalties: penalties_one_hydro(),
-                    production_models: ProductionModelSet::new(
-                        vec![vec![
-                            ResolvedProductionModel::ConstantProductivity {
-                                productivity: 1.0
-                            };
-                            N_STAGES
-                        ]],
-                        1,
-                        N_STAGES,
-                    ),
+                    production_models,
                     evaporation_models: EvaporationModelSet::new(vec![EvaporationModel::None]),
                     ..CtxFixture::default()
                 },
@@ -1889,6 +1890,16 @@ mod diversion_bound_tests {
             let hydros = vec![diverting_hydro()];
             let cascade = CascadeTopology::build(&hydros);
             let hydro_cell_index = HydroCellIndex::build(&hydros);
+            let production_models = ProductionModelSet::new(
+                vec![vec![
+                    ResolvedProductionModel::ConstantProductivity {
+                        productivity: 1.0
+                    };
+                    N_STAGES
+                ]],
+                &hydros,
+                N_STAGES,
+            );
             Self {
                 base: CtxFixture {
                     hydros,
@@ -1896,16 +1907,7 @@ mod diversion_bound_tests {
                     cascade,
                     bounds: bounds_one_hydro(),
                     penalties: penalties_one_hydro(),
-                    production_models: ProductionModelSet::new(
-                        vec![vec![
-                            ResolvedProductionModel::ConstantProductivity {
-                                productivity: 1.0
-                            };
-                            N_STAGES
-                        ]],
-                        1,
-                        N_STAGES,
-                    ),
+                    production_models,
                     evaporation_models: EvaporationModelSet::new(vec![EvaporationModel::None]),
                     ..CtxFixture::default()
                 },
@@ -2249,6 +2251,8 @@ mod filling_phase_gating_tests {
             } else {
                 ResolvedProductionModel::ConstantProductivity { productivity: 1.0 }
             };
+            let production_models =
+                ProductionModelSet::new(vec![vec![model; N_STAGES]], &hydros, N_STAGES);
             Self {
                 base: CtxFixture {
                     hydros,
@@ -2256,11 +2260,7 @@ mod filling_phase_gating_tests {
                     cascade,
                     bounds: bounds_one_hydro(),
                     penalties: penalties_one_hydro(),
-                    production_models: ProductionModelSet::new(
-                        vec![vec![model; N_STAGES]],
-                        1,
-                        N_STAGES,
-                    ),
+                    production_models,
                     evaporation_models: EvaporationModelSet::new(vec![EvaporationModel::None]),
                     ..CtxFixture::default()
                 },
@@ -4107,6 +4107,17 @@ mod block_family_slack_tests {
             let cascade = CascadeTopology::build(&hydros);
             let hydro_cell_index = HydroCellIndex::build(&hydros);
             let (bounds, penalties) = resolved_tables(specs);
+            let production_models = ProductionModelSet::new(
+                vec![
+                    vec![
+                        ResolvedProductionModel::ConstantProductivity { productivity: 1.0 };
+                        N_STAGES
+                    ];
+                    N_HYDROS
+                ],
+                &hydros,
+                N_STAGES,
+            );
             Self {
                 base: CtxFixture {
                     hydros,
@@ -4114,17 +4125,7 @@ mod block_family_slack_tests {
                     cascade,
                     bounds,
                     penalties,
-                    production_models: ProductionModelSet::new(
-                        vec![
-                            vec![
-                                ResolvedProductionModel::ConstantProductivity { productivity: 1.0 };
-                                N_STAGES
-                            ];
-                            N_HYDROS
-                        ],
-                        N_HYDROS,
-                        N_STAGES,
-                    ),
+                    production_models,
                     evaporation_models: EvaporationModelSet::new(vec![
                         EvaporationModel::None;
                         N_HYDROS
@@ -4480,6 +4481,16 @@ mod evaporation_slack_objective_tests {
                 ],
                 reference_volumes_hm3: vec![50.0; N_STAGES],
             }]);
+            let production_models = ProductionModelSet::new(
+                vec![vec![
+                    ResolvedProductionModel::ConstantProductivity {
+                        productivity: 1.0
+                    };
+                    N_STAGES
+                ]],
+                &hydros,
+                N_STAGES,
+            );
             Self {
                 base: CtxFixture {
                     hydros,
@@ -4487,16 +4498,7 @@ mod evaporation_slack_objective_tests {
                     cascade,
                     bounds: bounds_one_hydro(),
                     penalties: penalties_one_hydro(),
-                    production_models: ProductionModelSet::new(
-                        vec![vec![
-                            ResolvedProductionModel::ConstantProductivity {
-                                productivity: 1.0
-                            };
-                            N_STAGES
-                        ]],
-                        1,
-                        N_STAGES,
-                    ),
+                    production_models,
                     evaporation_models,
                     ..CtxFixture::default()
                 },
@@ -5988,6 +5990,19 @@ mod hydro_block_bound_tests {
             );
             let cascade = CascadeTopology::build(&hydros);
             let hydro_cell_index = HydroCellIndex::build(&hydros);
+            let production_models = ProductionModelSet::new(
+                productivities
+                    .iter()
+                    .map(|&productivity| {
+                        vec![
+                            ResolvedProductionModel::ConstantProductivity { productivity };
+                            N_STAGES
+                        ]
+                    })
+                    .collect(),
+                &hydros,
+                N_STAGES,
+            );
             Self {
                 base: CtxFixture {
                     hydros,
@@ -5995,19 +6010,7 @@ mod hydro_block_bound_tests {
                     cascade,
                     bounds: bounds_with_hydros(n_hydros),
                     penalties: penalties_with_hydros(n_hydros),
-                    production_models: ProductionModelSet::new(
-                        productivities
-                            .iter()
-                            .map(|&productivity| {
-                                vec![
-                                    ResolvedProductionModel::ConstantProductivity { productivity };
-                                    N_STAGES
-                                ]
-                            })
-                            .collect(),
-                        n_hydros,
-                        N_STAGES,
-                    ),
+                    production_models,
                     evaporation_models: EvaporationModelSet::new(vec![
                         EvaporationModel::None;
                         n_hydros
@@ -6722,7 +6725,7 @@ mod hydro_block_bound_tests {
                 };
                 N_STAGES
             ]],
-            1,
+            &fixtures.base.hydros,
             N_STAGES,
         );
         fixtures.set_hydro_bounds(
@@ -7046,6 +7049,11 @@ mod cell_column_bound_tests {
             );
             let cascade = CascadeTopology::build(&hydros);
             let hydro_cell_index = HydroCellIndex::build(&hydros);
+            let production_models = ProductionModelSet::new(
+                models.into_iter().map(|m| vec![m; n_stages]).collect(),
+                &hydros,
+                n_stages,
+            );
             Self {
                 base: CtxFixture {
                     hydros,
@@ -7053,11 +7061,7 @@ mod cell_column_bound_tests {
                     cascade,
                     bounds: empty_bounds(n_hydros, n_stages),
                     penalties: zero_penalties(n_hydros, n_stages),
-                    production_models: ProductionModelSet::new(
-                        models.into_iter().map(|m| vec![m; n_stages]).collect(),
-                        n_hydros,
-                        n_stages,
-                    ),
+                    production_models,
                     evaporation_models: EvaporationModelSet::new(vec![
                         EvaporationModel::None;
                         n_hydros

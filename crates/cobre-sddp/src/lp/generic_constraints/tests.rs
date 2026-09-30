@@ -20,6 +20,7 @@ use crate::lp::indexer::{
 use crate::test_support::ctx_fixture::CtxFixture;
 use crate::test_support::{
     constant_lead_resolution, geometry_hydro, geometry_hydro_with_groups, make_unit_group,
+    minimal_hydros,
 };
 use crate::time_value::{PostStudyResolved, TimeValue};
 use cobre_core::entities::{HydroGenerationModel, HydroPenalties};
@@ -246,7 +247,7 @@ fn make_bus(id: i32, max_deficit_segments: usize) -> Bus {
 fn constant_productivity_models(n_hydros: usize, productivity: f64) -> ProductionModelSet {
     ProductionModelSet::new(
         vec![vec![ResolvedProductionModel::ConstantProductivity { productivity }]; n_hydros],
-        n_hydros,
+        &minimal_hydros(n_hydros),
         1,
     )
 }
@@ -348,7 +349,7 @@ fn anticipated_fixture() -> ResolverFixture {
         vec![],
         vec![make_bus(100, 1)],
         2,
-        ProductionModelSet::new(vec![], 0, 1),
+        ProductionModelSet::new(vec![], &[], 1),
         EvaporationModelSet::new(vec![]),
         vec![2],
         vec![],
@@ -431,7 +432,7 @@ fn make_production_models() -> ProductionModelSet {
             ResolvedProductionModel::ConstantProductivity { productivity: 1.0 },
         ],
     ];
-    ProductionModelSet::new(models, 4, 2)
+    ProductionModelSet::new(models, &minimal_hydros(4), 2)
 }
 
 /// Resolve `var_ref` at `block_idx` (stage 0) against `ctx`/`layout` — the same
@@ -791,7 +792,7 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
             vec![ResolvedProductionModel::ConstantProductivity { productivity: 1.0 }],
             vec![ResolvedProductionModel::ConstantProductivity { productivity }],
         ],
-        ctx.hydros.len(),
+        ctx.hydros,
         1,
     );
     ctx.production_models = &prod;
@@ -843,7 +844,7 @@ fn fpha_bus_selector_production_models() -> ProductionModelSet {
                 }],
             }],
         ],
-        2,
+        &minimal_hydros(2),
         1,
     )
 }

@@ -213,7 +213,7 @@ pub fn resolve_production_models_from_artifacts(
         }
     }
 
-    let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
+    let set = ProductionModelSet::new(all_models, system.hydros(), n_stages);
     Ok((
         set,
         override_table,

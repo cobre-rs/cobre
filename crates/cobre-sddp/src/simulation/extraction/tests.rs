@@ -458,7 +458,7 @@ fn zero_energy_conversion(n_hydros: usize, n_stages: usize) -> EnergyConversionS
     EnergyConversionSet::new(
         vec![vec![zero_ec; n_stages]; n_hydros],
         vec![vec![0.0_f64; n_stages]; n_hydros],
-        n_hydros,
+        &test_support::minimal_hydros(n_hydros),
         n_stages,
     )
 }
@@ -4266,7 +4266,12 @@ fn one_hydro_energy_set(rho_eq: f64, rho_acum: f64) -> EnergyConversionSet {
         reference_volume_hm3: 0.0,
         reference_outflow_m3s: 0.0,
     };
-    EnergyConversionSet::new(vec![vec![cell; 1]; 1], vec![vec![rho_acum; 1]; 1], 1, 1)
+    EnergyConversionSet::new(
+        vec![vec![cell; 1]; 1],
+        vec![vec![rho_acum; 1]; 1],
+        &test_support::minimal_hydros(1),
+        1,
+    )
 }
 
 fn make_entity_counts_1_hydro() -> EntityCounts {
@@ -5928,7 +5933,7 @@ fn extract_chronological_per_block_stored_energy() {
             reference_outflow_m3s: 0.0,
         }]],
         vec![vec![rho_acum_integrated]],
-        1,
+        &test_support::minimal_hydros(1),
         1,
     );
 
@@ -7289,7 +7294,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
 
     let mut fixture = CtxFixture {
         hydro_cell_index: test_support::identity_hydro_cell_index(0),
-        production_models: ProductionModelSet::new(Vec::new(), 0, 1),
+        production_models: ProductionModelSet::new(Vec::new(), &[], 1),
         evaporation_models: EvaporationModelSet::new(Vec::new()),
         generic_constraints: vec![constraint],
         resolved_generic_bounds,

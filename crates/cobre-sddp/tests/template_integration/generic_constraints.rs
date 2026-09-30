@@ -1781,7 +1781,7 @@ fn resolved_params_single_stage(
     use cobre_sddp::energy_conversion::{EnergyConversionSet, HydroEnergyProductivityOverride};
 
     let n_stages = 1_usize;
-    let ec = EnergyConversionSet::new(vec![], vec![], 0, n_stages);
+    let ec = EnergyConversionSet::new(vec![], vec![], &[], n_stages);
     let overrides = HydroEnergyProductivityOverride::default();
     let hydros: Vec<cobre_core::Hydro> = Vec::new();
     build_resolved_parameters(

@@ -106,7 +106,7 @@ impl Default for CtxFixture {
             resolved_ncs_factors: ResolvedNcsFactors::empty(),
             resolved_parameters: ResolvedParameters::default(),
             par_lp: PrecomputedPar::default(),
-            production_models: ProductionModelSet::new(Vec::new(), 0, 0),
+            production_models: ProductionModelSet::new(Vec::new(), &[], 0),
             evaporation_models: EvaporationModelSet::new(Vec::new()),
             generic_constraints: Vec::new(),
             non_controllable_sources: Vec::new(),

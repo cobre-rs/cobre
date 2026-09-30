@@ -1379,7 +1379,7 @@ mod determinism {
         let ec = EnergyConversionSet::new(
             vec![vec![zero_ec; fx.n_stages]; 3],
             vec![vec![0.0_f64; fx.n_stages]; 3],
-            3,
+            &cobre_sddp::test_support::minimal_hydros(3),
             fx.n_stages,
         );
 

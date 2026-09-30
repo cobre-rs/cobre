@@ -2192,7 +2192,7 @@ fn energy_conversion_accessor_returns_built_set() {
                 };
                 n_study_stages
             ]],
-            1,
+            system.hydros(),
             n_study_stages,
         );
         result

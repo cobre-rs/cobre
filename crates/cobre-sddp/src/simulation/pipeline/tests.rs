@@ -446,7 +446,7 @@ fn zero_energy_conversion(n_hydros: usize, n_stages: usize) -> EnergyConversionS
     EnergyConversionSet::new(
         vec![vec![zero_ec; n_stages]; n_hydros],
         vec![vec![0.0_f64; n_stages]; n_hydros],
-        n_hydros,
+        &crate::test_support::minimal_hydros(n_hydros),
         n_stages,
     )
 }
@@ -1896,7 +1896,12 @@ mod dcs_simulation {
             reference_volume_hm3: 0.0,
             reference_outflow_m3s: 0.0,
         };
-        let ec = EnergyConversionSet::new(vec![vec![zero_ec; 1]], vec![vec![0.0_f64; 1]], 1, 1);
+        let ec = EnergyConversionSet::new(
+            vec![vec![zero_ec; 1]],
+            vec![vec![0.0_f64; 1]],
+            &test_support::minimal_hydros(1),
+            1,
+        );
 
         let mut ws = sim_active_workspace();
         ws.current_state.clear();
@@ -2354,7 +2359,7 @@ mod anticipated_ring_matches_forward_propagation {
             non_controllable_ids: Vec::new(),
         };
         let hprod: Vec<Vec<f64>> = vec![Vec::new(); N_STAGES];
-        let ec = EnergyConversionSet::new(Vec::new(), Vec::new(), 0, N_STAGES);
+        let ec = EnergyConversionSet::new(Vec::new(), Vec::new(), &[], N_STAGES);
         let diversion: HashMap<cobre_core::EntityId, Vec<usize>> = HashMap::new();
         let (tx, _rx) = mpsc::sync_channel(N_STAGES.max(1));
         let output = SimulationOutputSpec {

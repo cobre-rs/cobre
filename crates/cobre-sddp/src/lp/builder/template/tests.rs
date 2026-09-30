@@ -224,7 +224,7 @@ fn system_with_thermals(thermals: Vec<Thermal>) -> cobre_core::System {
 #[test]
 fn resolve_lp_build_inputs_load_bus_indices_honors_threaded_scheme() {
     let system = system_with_thermals(vec![]);
-    let production_models = ProductionModelSet::new(Vec::new(), 0, 0);
+    let production_models = ProductionModelSet::new(Vec::new(), &[], 0);
     let study_dims = StudyDimensions::default();
     let time_value = build_time_value_for(&system);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
@@ -3250,7 +3250,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         vec![vec![ResolvedProductionModel::ConstantProductivity {
             productivity: 0.5,
         }]],
-        1,
+        system.hydros(),
         1,
     )));
     let hydro_models = Box::leak(Box::new(PrepareHydroModelsResult::default_from_system(
@@ -3772,7 +3772,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
                 gamma_s: 0.05,
             }],
         }]],
-        1,
+        system.hydros(),
         1,
     );
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3882,7 +3882,7 @@ fn block_layout_and_template(
                 gamma_s: 0.05,
             }],
         }]],
-        1,
+        system.hydros(),
         1,
     )));
     let hydro_models = Box::leak(Box::new(PrepareHydroModelsResult::default_from_system(
@@ -4990,7 +4990,7 @@ fn filling_block_layout_and_template(
             ];
             2
         ],
-        2,
+        system.hydros(),
         FILL_N_STAGES,
     )));
     let hydro_models = Box::leak(Box::new(PrepareHydroModelsResult::default_from_system(

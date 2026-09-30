@@ -2,7 +2,7 @@
 //! [`EnergyConversion`], the indexed grid [`EnergyConversionSet`], and the
 //! [`EnergyConversionError`] enum raised by the builder.
 
-use cobre_core::EntityId;
+use cobre_core::{EntityId, Hydro};
 use thiserror::Error;
 
 /// Per-`(hydro, stage)` scalars used for inflow-energy / stored-energy accounting.
@@ -29,7 +29,6 @@ pub struct EnergyConversionSet {
     accumulated: Vec<Vec<f64>>,
     integrated_equivalent: Vec<Vec<f64>>,
     integrated_accumulated: Vec<Vec<f64>>,
-    n_hydros: usize,
     n_stages: usize,
 }
 
@@ -38,30 +37,30 @@ impl EnergyConversionSet {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if the outer dimensions do not match
-    /// `n_hydros` or any inner row has length `!= n_stages`.
+    /// Panics if the outer dimensions do not match `hydros.len()` or any
+    /// inner row has length `!= n_stages`.
     #[must_use]
     pub fn new(
         per_hydro_stage: Vec<Vec<EnergyConversion>>,
         accumulated: Vec<Vec<f64>>,
-        n_hydros: usize,
+        hydros: &[Hydro],
         n_stages: usize,
     ) -> Self {
-        debug_assert_eq!(
+        assert_eq!(
             per_hydro_stage.len(),
-            n_hydros,
-            "per_hydro_stage outer length must equal n_hydros"
+            hydros.len(),
+            "per_hydro_stage outer length must equal hydros.len()"
         );
-        debug_assert_eq!(
+        assert_eq!(
             accumulated.len(),
-            n_hydros,
-            "accumulated outer length must equal n_hydros"
+            hydros.len(),
+            "accumulated outer length must equal hydros.len()"
         );
-        debug_assert!(
+        assert!(
             per_hydro_stage.iter().all(|row| row.len() == n_stages),
             "each per_hydro_stage row must have length n_stages"
         );
-        debug_assert!(
+        assert!(
             accumulated.iter().all(|row| row.len() == n_stages),
             "each accumulated row must have length n_stages"
         );
@@ -79,7 +78,6 @@ impl EnergyConversionSet {
             accumulated,
             integrated_equivalent,
             integrated_accumulated,
-            n_hydros,
             n_stages,
         }
     }
@@ -99,7 +97,7 @@ impl EnergyConversionSet {
     ) -> Self {
         debug_assert_eq!(
             integrated_equivalent.len(),
-            self.n_hydros,
+            self.per_hydro_stage.len(),
             "integrated_equivalent outer length must equal n_hydros"
         );
         debug_assert!(
@@ -110,7 +108,7 @@ impl EnergyConversionSet {
         );
         debug_assert_eq!(
             integrated_accumulated.len(),
-            self.n_hydros,
+            self.per_hydro_stage.len(),
             "integrated_accumulated outer length must equal n_hydros"
         );
         debug_assert!(
@@ -132,9 +130,9 @@ impl EnergyConversionSet {
     #[must_use]
     pub fn conversion(&self, hydro: usize, stage: usize) -> &EnergyConversion {
         debug_assert!(
-            hydro < self.n_hydros,
+            hydro < self.per_hydro_stage.len(),
             "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.n_hydros
+            self.per_hydro_stage.len()
         );
         debug_assert!(
             stage < self.n_stages,
@@ -152,9 +150,9 @@ impl EnergyConversionSet {
     #[must_use]
     pub fn accumulated_productivity(&self, hydro: usize, stage: usize) -> f64 {
         debug_assert!(
-            hydro < self.n_hydros,
+            hydro < self.per_hydro_stage.len(),
             "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.n_hydros
+            self.per_hydro_stage.len()
         );
         debug_assert!(
             stage < self.n_stages,
@@ -172,9 +170,9 @@ impl EnergyConversionSet {
     #[must_use]
     pub fn integrated_equivalent_productivity(&self, hydro: usize, stage: usize) -> f64 {
         debug_assert!(
-            hydro < self.n_hydros,
+            hydro < self.per_hydro_stage.len(),
             "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.n_hydros
+            self.per_hydro_stage.len()
         );
         debug_assert!(
             stage < self.n_stages,
@@ -192,9 +190,9 @@ impl EnergyConversionSet {
     #[must_use]
     pub fn integrated_accumulated_productivity(&self, hydro: usize, stage: usize) -> f64 {
         debug_assert!(
-            hydro < self.n_hydros,
+            hydro < self.per_hydro_stage.len(),
             "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.n_hydros
+            self.per_hydro_stage.len()
         );
         debug_assert!(
             stage < self.n_stages,
@@ -207,7 +205,7 @@ impl EnergyConversionSet {
     /// Number of hydro plants (outer grid dimension).
     #[must_use]
     pub fn n_hydros(&self) -> usize {
-        self.n_hydros
+        self.per_hydro_stage.len()
     }
 
     /// Number of stages (inner grid dimension).
@@ -316,6 +314,7 @@ pub enum EnergyConversionError {
 )]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn new_round_trips_grid_dimensions() {
@@ -356,7 +355,12 @@ mod tests {
             ],
         ];
         let acc = vec![vec![10.0, 11.0, 12.0], vec![20.0, 21.0, 22.0]];
-        let set = EnergyConversionSet::new(grid.clone(), acc.clone(), 2, 3);
+        let set = EnergyConversionSet::new(
+            grid.clone(),
+            acc.clone(),
+            &test_support::minimal_hydros(2),
+            3,
+        );
 
         assert_eq!(set.n_hydros(), 2);
         assert_eq!(set.n_stages(), 3);
@@ -382,7 +386,7 @@ mod tests {
             }],
         ];
         let acc = vec![vec![3.5_f64], vec![2.5_f64]];
-        let set = EnergyConversionSet::new(grid, acc, 2, 1);
+        let set = EnergyConversionSet::new(grid, acc, &test_support::minimal_hydros(2), 1);
 
         assert_eq!(set.conversion(0, 0).equivalent_productivity_mw_per_m3s, 0.5);
         assert_eq!(set.conversion(1, 0).reference_outflow_m3s, 70.0);
@@ -405,7 +409,7 @@ mod tests {
             }],
         ];
         let acc = vec![vec![3.5_f64], vec![2.5_f64]];
-        let set = EnergyConversionSet::new(grid, acc, 2, 1);
+        let set = EnergyConversionSet::new(grid, acc, &test_support::minimal_hydros(2), 1);
 
         for h in 0..2 {
             assert_eq!(

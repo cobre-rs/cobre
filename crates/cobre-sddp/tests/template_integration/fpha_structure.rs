@@ -363,7 +363,7 @@ fn fpha_solve_incoming_storage_reduced_cost_differs_from_constant() {
         vec![vec![ResolvedProductionModel::Fpha {
             planes: tight_planes,
         }]],
-        1,
+        system.hydros(),
         1,
     );
 

@@ -1856,7 +1856,7 @@ mod parameter_resolution_tests {
     fn empty_resolved_params(n_stages: usize) -> ResolvedParameters {
         let stage_to_season: Vec<i32> = vec![0; n_stages];
         let stage_ids = stage_ids_0_based(n_stages);
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, n_stages);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], n_stages);
         let override_table =
             build_hydro_energy_productivity_override(&[]).expect("empty override table");
         build_resolved_parameters(
@@ -1880,7 +1880,7 @@ mod parameter_resolution_tests {
     ) -> ResolvedParameters {
         let stage_to_season: Vec<i32> = vec![0; n_stages];
         let stage_ids = stage_ids_0_based(n_stages);
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, n_stages);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], n_stages);
         let override_table =
             build_hydro_energy_productivity_override(&[]).expect("empty override table");
         let params = vec![ScalarParameter {
@@ -1906,7 +1906,7 @@ mod parameter_resolution_tests {
         let n_stages = values.len();
         let stage_to_season: Vec<i32> = vec![0; n_stages];
         let stage_ids = stage_ids_0_based(n_stages);
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, n_stages);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], n_stages);
         let override_table =
             build_hydro_energy_productivity_override(&[]).expect("empty override table");
         let params = vec![ScalarParameter {
@@ -3753,7 +3753,7 @@ mod pumping_water_tests {
                     ];
                     hydros.len()
                 ],
-                hydros.len(),
+                &hydros,
                 N_STAGES,
             );
             let evaporation_models =
@@ -5902,7 +5902,7 @@ mod pumping_water_tests {
                     N_STAGES
                 ],
             ],
-            2,
+            &crate::test_support::minimal_hydros(2),
             N_STAGES,
         )
     }
@@ -6017,7 +6017,7 @@ mod pumping_water_tests {
                 vec![ResolvedProductionModel::ConstantProductivity { productivity: 1.0 }; N_STAGES],
                 vec![ResolvedProductionModel::ConstantProductivity { productivity: 0.4 }; N_STAGES],
             ],
-            2,
+            &crate::test_support::minimal_hydros(2),
             N_STAGES,
         );
         let mut fixture = split_bus_fixture(production_models);
@@ -6211,7 +6211,7 @@ mod pumping_water_tests {
                 };
                 N_STAGES
             ]],
-            1,
+            std::slice::from_ref(&hydro),
             N_STAGES,
         );
         let mut fixtures = PumpFixtures::new_with_buses(vec![hydro], Vec::new(), buses)
@@ -9466,7 +9466,7 @@ mod pumping_water_tests {
                     gamma_s: 0.05,
                 }],
             }]],
-            1,
+            &fixtures.base.hydros,
             N_STAGES,
         );
         fixtures.base.evaporation_models =
@@ -9743,7 +9743,7 @@ mod pumping_water_tests {
                 };
                 N_STAGES
             ]],
-            1,
+            std::slice::from_ref(&dormant),
             N_STAGES,
         );
         PumpFixtures::new(vec![dormant], Vec::new()).with_production_models(production_models)

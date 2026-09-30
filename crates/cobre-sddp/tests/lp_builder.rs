@@ -1130,7 +1130,7 @@ mod cell_partition_gates {
                     planes: vec![GENERIC_PLANE, ORIGIN_PLANE],
                 }],
             ],
-            2,
+            &cobre_sddp::test_support::minimal_hydros(2),
             1,
         )
     }
@@ -1390,7 +1390,7 @@ mod cell_partition_gates {
             vec![vec![ResolvedProductionModel::ConstantProductivity {
                 productivity: 1.0,
             }]],
-            1,
+            system.hydros(),
             1,
         );
         let evaporation = PrepareHydroModelsResult::default_from_system(&system).evaporation;

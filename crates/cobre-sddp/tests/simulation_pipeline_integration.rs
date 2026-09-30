@@ -430,7 +430,7 @@ fn zero_energy_conversion(n_hydros: usize, n_stages: usize) -> EnergyConversionS
     EnergyConversionSet::new(
         vec![vec![zero_ec; n_stages]; n_hydros],
         vec![vec![0.0_f64; n_stages]; n_hydros],
-        n_hydros,
+        &cobre_sddp::test_support::minimal_hydros(n_hydros),
         n_stages,
     )
 }

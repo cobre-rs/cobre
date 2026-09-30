@@ -70,7 +70,11 @@ fn production_set(productivities: &[f64], n_stages: usize) -> ProductionModelSet
         .iter()
         .map(|&p| vec![ResolvedProductionModel::ConstantProductivity { productivity: p }; n_stages])
         .collect();
-    ProductionModelSet::new(models, n_hydros, n_stages)
+    ProductionModelSet::new(
+        models,
+        &cobre_sddp::test_support::minimal_hydros(n_hydros),
+        n_stages,
+    )
 }
 
 fn no_penalty_config() -> InflowNonNegativityMethod {
@@ -664,7 +668,7 @@ fn fpha_system_with_turbined_cost(
     };
     let planes = vec![plane; n_planes];
     let models = vec![vec![ResolvedProductionModel::Fpha { planes }]];
-    let production = ProductionModelSet::new(models, 1, 1);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
 
     (system, production)
 }
@@ -1107,7 +1111,7 @@ fn one_fpha_hydro_system(n_planes: usize) -> (cobre_core::System, ProductionMode
     };
     let planes = vec![plane; n_planes];
     let models = vec![vec![ResolvedProductionModel::Fpha { planes }]];
-    let production = ProductionModelSet::new(models, 1, 1);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
 
     (system, production)
 }
@@ -1409,7 +1413,7 @@ fn four_hydro_mixed_system() -> (cobre_core::System, ProductionModelSet) {
             planes: fpha_planes,
         }],
     ];
-    let production = ProductionModelSet::new(models, 4, 1);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
 
     (system, production)
 }
@@ -1436,8 +1440,8 @@ fn fpha_solve_system() -> (cobre_core::System, ProductionModelSet) {
         3
     ];
     let models = vec![vec![ResolvedProductionModel::Fpha { planes }]];
-    let production = ProductionModelSet::new(models, 1, 1);
     let (system, _) = one_fpha_hydro_system(3);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
     (system, production)
 }
 

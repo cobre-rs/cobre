@@ -65,7 +65,7 @@ fn scalar_parameters_resolution_is_declaration_order_invariant() {
     let stage_ids = [StageId(0), StageId(1), StageId(2), StageId(3)];
     let stage_block_counts: [usize; 4] = [2, 2, 2, 2];
     let n_stages = 4;
-    let ec = EnergyConversionSet::new(vec![], vec![], 0, n_stages);
+    let ec = EnergyConversionSet::new(vec![], vec![], &[], n_stages);
     let overrides = HydroEnergyProductivityOverride::default();
     let hydros: Vec<cobre_core::Hydro> = Vec::new();
 

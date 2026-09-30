@@ -603,7 +603,7 @@ fn simulate_fixture(
     let ec = EnergyConversionSet::new(
         vec![vec![zero_ec; N_STAGES]; N_HYDROS],
         vec![vec![0.0_f64; N_STAGES]; N_HYDROS],
-        N_HYDROS,
+        &cobre_sddp::test_support::minimal_hydros(N_HYDROS),
         N_STAGES,
     );
 

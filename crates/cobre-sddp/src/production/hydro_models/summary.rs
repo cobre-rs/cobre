@@ -137,6 +137,7 @@ mod tests {
     // module rather than only `summary`'s own narrow `use` block.
     use crate::HydroEnergyProductivityOverride;
     use crate::production::hydro_models::*;
+    use crate::test_support::minimal_hydros;
 
     // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -252,7 +253,7 @@ mod tests {
                     .collect()
             })
             .collect();
-        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(models, &minimal_hydros(n_hydros), n_stages);
         let production_sources = hydro_ids
             .iter()
             .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))
@@ -324,7 +325,7 @@ mod tests {
                     .collect()
             })
             .collect();
-        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(models, &minimal_hydros(n_hydros), n_stages);
         let production_sources: Vec<(EntityId, ProductionModelSource)> = all_ids
             .iter()
             .map(|(id, is_fpha)| {
@@ -378,7 +379,7 @@ mod tests {
                     .collect()
             })
             .collect();
-        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(models, &minimal_hydros(n_hydros), n_stages);
         let production_sources = hydro_ids
             .iter()
             .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))
@@ -451,7 +452,7 @@ mod tests {
         let models: Vec<Vec<ResolvedProductionModel>> = (0..n_hydros)
             .map(|_| vec![ResolvedProductionModel::ConstantProductivity { productivity: 0.95 }])
             .collect();
-        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(models, system.hydros(), n_stages);
         let production_sources = hydro_ids
             .iter()
             .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))
@@ -613,7 +614,6 @@ mod tests {
             .chain(fpha_ids.iter().map(|&id| (id, true)))
             .collect();
         sorted.sort_by_key(|(id, _)| *id);
-        let n_hydros = sorted.len();
 
         let models: Vec<Vec<ResolvedProductionModel>> = sorted
             .iter()
@@ -631,7 +631,7 @@ mod tests {
                     .collect()
             })
             .collect();
-        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(models, system.hydros(), n_stages);
         let production_sources: Vec<(EntityId, ProductionModelSource)> = sorted
             .iter()
             .map(|(id, is_fpha)| {
@@ -749,7 +749,7 @@ mod tests {
             vec![vec![ResolvedProductionModel::Fpha {
                 planes: vec![fpha_plane; n_planes],
             }]],
-            1,
+            system.hydros(),
             1,
         );
 

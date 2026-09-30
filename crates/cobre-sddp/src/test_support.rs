@@ -462,6 +462,14 @@ pub fn geometry_hydro_with_groups(
     hydro
 }
 
+/// `n` hydros for a model-set constructor test that exercises pure grid or
+/// accessor semantics and needs nothing beyond a hydro slice's shape — ids
+/// `0..n`, [`geometry_hydro`]'s defaults otherwise.
+#[must_use]
+pub fn minimal_hydros(n: usize) -> Vec<Hydro> {
+    (0..n).map(geometry_hydro).collect()
+}
+
 /// Identity [`HydroCellIndex`] for `n_hydros` single-bus hydros
 /// (`cells_of(h) == h..h+1` for every `h`) — the single shared builder for every
 /// fixture in the crate that needs a `HydroCellIndex` but is not itself testing
@@ -562,7 +570,7 @@ fn geometry_production_models(
             )]
         })
         .collect();
-    ProductionModelSet::new(models, hydro_count, 1)
+    ProductionModelSet::new(models, &minimal_hydros(hydro_count), 1)
 }
 
 /// Single-hydro [`EvaporationModelSet`]: `Linearized` (membership only — no field
@@ -3827,7 +3835,7 @@ fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: boo
             };
             2
         ]],
-        1,
+        system.hydros(),
         2,
     );
     StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
@@ -4444,7 +4452,7 @@ pub fn dual_folding_setup(fold: LagFold, forward_passes: u32, max_iterations: u3
             };
             3
         ]],
-        1,
+        system.hydros(),
         3,
     );
     StudySetup::new_with_boundary_requirements(
@@ -4611,7 +4619,7 @@ fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixtur
             };
             n_stages
         ]],
-        1,
+        system.hydros(),
         n_stages,
     );
     let setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())

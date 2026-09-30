@@ -581,7 +581,7 @@ mod cut_subgradient_parity {
         let models = vec![vec![ResolvedProductionModel::Fpha {
             planes: vec![plane],
         }]];
-        ProductionModelSet::new(models, 1, 1)
+        ProductionModelSet::new(models, &cobre_sddp::test_support::minimal_hydros(1), 1)
     }
 
     fn fpha_evap_evaporation() -> EvaporationModelSet {

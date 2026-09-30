@@ -197,7 +197,7 @@ pub fn build_energy_conversion_set<S: BuildHasher>(
         accumulate_cascade_grids(cascade, hydros, &per_hydro_stage, &mean_own_grid, n_stages)?;
 
     Ok(
-        EnergyConversionSet::new(per_hydro_stage, grids.accumulated, n_hydros, n_stages)
+        EnergyConversionSet::new(per_hydro_stage, grids.accumulated, hydros, n_stages)
             .with_integrated(grids.integrated_equivalent, grids.integrated_accumulated),
     )
 }
@@ -388,6 +388,7 @@ mod tests {
     use super::super::types::EnergyConversionError;
     use super::*;
     use crate::hydro_models::{ProductionModelSet, ResolvedProductionModel};
+    use crate::test_support;
 
     fn penalties_zero() -> HydroPenalties {
         HydroPenalties {
@@ -550,7 +551,7 @@ mod tests {
                 vec![ResolvedProductionModel::ConstantProductivity { productivity: p }; n_stages]
             })
             .collect();
-        ProductionModelSet::new(models, n_hydros, n_stages)
+        ProductionModelSet::new(models, &test_support::minimal_hydros(n_hydros), n_stages)
     }
 
     #[test]

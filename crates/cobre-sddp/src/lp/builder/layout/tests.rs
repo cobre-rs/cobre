@@ -549,7 +549,7 @@ impl UsefulVolumeFixtures {
         let hydro_cell_index = HydroCellIndex::build(&hydros);
         let constant = ResolvedProductionModel::ConstantProductivity { productivity: 0.0 };
         let production_models =
-            ProductionModelSet::new(vec![vec![constant; n_stages]; n_hydros], n_hydros, n_stages);
+            ProductionModelSet::new(vec![vec![constant; n_stages]; n_hydros], &hydros, n_stages);
         let evaporation_models = EvaporationModelSet::new(vec![EvaporationModel::None; n_hydros]);
         Self {
             base: CtxFixture {
@@ -957,12 +957,13 @@ impl TwoHydroFixtures {
         ];
         let cascade = CascadeTopology::build(&hydros);
         let hydro_cell_index = HydroCellIndex::build(&hydros);
+        let production_models = ProductionModelSet::new(models, &hydros, 1);
         Self {
             base: CtxFixture {
                 hydros,
                 hydro_cell_index,
                 cascade,
-                production_models: ProductionModelSet::new(models, 2, 1),
+                production_models,
                 evaporation_models: EvaporationModelSet::new(vec![
                     EvaporationModel::None,
                     EvaporationModel::None,
@@ -1311,12 +1312,13 @@ impl AllFamiliesFixtures {
             };
             2
         ];
+        let production_models = ProductionModelSet::new(vec![vec![fpha]], &hydros, 1);
         Self {
             base: CtxFixture {
                 hydros,
                 hydro_cell_index,
                 cascade,
-                production_models: ProductionModelSet::new(vec![vec![fpha]], 1, 1),
+                production_models,
                 evaporation_models: EvaporationModelSet::new(vec![EvaporationModel::None]),
                 thermals: vec![dormant_thermal(0)],
                 lines: vec![dormant_line(0)],
@@ -1505,12 +1507,13 @@ impl FphaMixFixtures {
         ];
         let cascade = CascadeTopology::build(&hydros);
         let hydro_cell_index = HydroCellIndex::build(&hydros);
+        let production_models = ProductionModelSet::new(models, &hydros, 1);
         Self {
             base: CtxFixture {
                 hydros,
                 hydro_cell_index,
                 cascade,
-                production_models: ProductionModelSet::new(models, 3, 1),
+                production_models,
                 evaporation_models: EvaporationModelSet::new(vec![
                     EvaporationModel::None,
                     EvaporationModel::None,
@@ -1609,12 +1612,13 @@ impl FillingMembershipFixtures {
             },
         ]);
 
+        let production_models = ProductionModelSet::new(models, &hydros, 1);
         Self {
             base: CtxFixture {
                 hydros,
-                hydro_cell_index,
                 cascade,
-                production_models: ProductionModelSet::new(models, 2, 1),
+                hydro_cell_index,
+                production_models,
                 evaporation_models,
                 ..CtxFixture::default()
             },
@@ -3702,12 +3706,13 @@ impl TwoHydroMultiBusFixtures {
 
         let constant = ResolvedProductionModel::ConstantProductivity { productivity: 0.0 };
         let models = vec![vec![constant.clone()], vec![constant]];
+        let production_models = ProductionModelSet::new(models, &hydros, 1);
         Self {
             base: CtxFixture {
                 hydros,
                 hydro_cell_index,
                 cascade,
-                production_models: ProductionModelSet::new(models, 2, 1),
+                production_models,
                 evaporation_models: EvaporationModelSet::new(vec![
                     EvaporationModel::None,
                     EvaporationModel::None,
@@ -3869,13 +3874,14 @@ impl FphaMultiBusFixtures {
         let hydros = vec![plant0, plant1, plant2];
         let cascade = CascadeTopology::build(&hydros);
         let hydro_cell_index = HydroCellIndex::build(&hydros);
+        let production_models = ProductionModelSet::new(models, &hydros, 1);
 
         Self {
             base: CtxFixture {
                 hydros,
                 hydro_cell_index,
                 cascade,
-                production_models: ProductionModelSet::new(models, 3, 1),
+                production_models,
                 evaporation_models: EvaporationModelSet::new(vec![
                     EvaporationModel::None,
                     EvaporationModel::None,

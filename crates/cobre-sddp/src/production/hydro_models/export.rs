@@ -162,6 +162,7 @@ mod tests {
 
     use crate::HydroEnergyProductivityOverride;
     use crate::production::hydro_models::*;
+    use crate::test_support::minimal_hydros;
 
     fn zero_penalties() -> HydroPenalties {
         HydroPenalties {
@@ -278,7 +279,7 @@ mod tests {
                     .collect()
             })
             .collect();
-        let production = ProductionModelSet::new(models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(models, &minimal_hydros(n_hydros), n_stages);
         let production_sources = hydro_ids
             .iter()
             .map(|&id| (EntityId(id), ProductionModelSource::DefaultConstant))

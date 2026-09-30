@@ -21,9 +21,7 @@
 //! with no LP columns (contracts, non-controllable sources, withdrawal) return an
 //! empty vec.
 
-use cobre_core::{
-    ConstraintExpression, ContractType, EnergyContract, EntityId, PumpingStation, VariableRef,
-};
+use cobre_core::{ConstraintExpression, ContractType, EntityId, PumpingStation, VariableRef};
 
 use crate::hydro_models::ResolvedProductionModel;
 use crate::indexer::{
@@ -31,7 +29,7 @@ use crate::indexer::{
     ThermalSys,
 };
 use crate::lp::builder::{
-    StageLayout, TemplateBuildCtx, evaporation_slot, maturing_bucket_in_col,
+    StageLayout, TemplateBuildCtx, contract_family_slot, evaporation_slot, maturing_bucket_in_col,
     resolve_bucket_arrival_density, resolve_shortcircuit_target,
 };
 
@@ -701,25 +699,6 @@ fn resolve_pumping_column(
     };
     let col = layout.pumping_flow_col(PumpingSys::new(p_idx), blk);
     vec![(col, coeff_fn(station))]
-}
-
-/// A contract's [`ContractType`] and its PER-FAMILY slot — the count of
-/// same-direction contracts that precede `c_sys` in the id-sorted `contracts` slice.
-///
-/// The dense column layout addresses each family by this per-family slot (the running
-/// position within its own direction), NOT the combined slot, so both the LP-column
-/// fill and the resolver must agree on it; sharing this one derivation keeps them
-/// consistent.
-pub(crate) fn contract_family_slot(
-    contracts: &[EnergyContract],
-    c_sys: usize,
-) -> (ContractType, usize) {
-    let contract_type = contracts[c_sys].contract_type;
-    let family_slot = contracts[..c_sys]
-        .iter()
-        .filter(|c| c.contract_type == contract_type)
-        .count();
-    (contract_type, family_slot)
 }
 
 /// Resolve `ContractImport`/`ContractExport` to the block-major contract column via

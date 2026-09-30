@@ -13,8 +13,7 @@ use crate::indexer::{
 use super::delivery_ring::DeliveryRing;
 use super::fpha_cursor::for_each_fpha_plane;
 use super::hydro_state::{hydro_phase, resolve_shortcircuit_target};
-use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
-use crate::generic_constraints::contract_family_slot;
+use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx, contract_family_slot};
 
 /// Fishing (consumption) coupling: for every anticipated plant whose
 /// delivery matures THIS stage

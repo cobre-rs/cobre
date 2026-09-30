@@ -672,7 +672,7 @@ pub struct StageExtractionSpec<'a> {
     /// contract extractor).
     pub contract_prices: &'a [f64],
     /// Per-contract `(ContractType, per-family slot)`, ID-sorted parallel to
-    /// `entity_counts.contract_ids`, from [`contract_family_slot`](crate::generic_constraints::contract_family_slot).
+    /// `entity_counts.contract_ids`, from [`contract_family_slot`](crate::lp::builder::contract_family_slot).
     pub contract_slots: &'a [(ContractType, usize)],
     /// Map from target hydro ID to source hydro indices that divert to it.
     pub diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,

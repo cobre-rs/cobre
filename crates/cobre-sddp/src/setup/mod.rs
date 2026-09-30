@@ -49,7 +49,6 @@ use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 use crate::StageTemplates;
 use crate::bucket_topology;
 use crate::config::LoopParams;
-use crate::generic_constraints::contract_family_slot;
 use crate::resolved_parameters::{ResolvedParameters, build_resolved_parameters};
 use crate::scaling_report::ScalingReport;
 use crate::simulation::SimulationConfig;
@@ -110,7 +109,9 @@ use crate::{
     horizon_mode::HorizonMode,
     hydro_models::PrepareHydroModelsResult,
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution},
-    lp::builder::{LpBuildInputs, StageGeometry, StateBox, build_stage_templates},
+    lp::builder::{
+        LpBuildInputs, StageGeometry, StateBox, build_stage_templates, contract_family_slot,
+    },
     lp::indexer::{
         AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
         StateSpace, StudyDimensions, ThermalSys,

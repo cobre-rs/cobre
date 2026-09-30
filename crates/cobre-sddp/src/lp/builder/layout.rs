@@ -1675,10 +1675,30 @@ impl StageLayout<'_> {
     pub(crate) fn pumping_flow_col(&self, pumping_sys: PumpingSys, blk: BlockIdx) -> usize {
         self.block_flat(self.equipment.col_pumping_start, pumping_sys.get(), blk)
     }
+}
 
+/// A contract's [`ContractType`] and its PER-FAMILY slot — the count of
+/// same-direction contracts that precede `c_sys` in the id-sorted `contracts` slice.
+///
+/// The dense column layout addresses each family by this per-family slot (the running
+/// position within its own direction), NOT the combined slot, so both the LP-column
+/// fill and the resolver must agree on it; sharing this one derivation keeps them
+/// consistent.
+pub(crate) fn contract_family_slot(
+    contracts: &[EnergyContract],
+    c_sys: usize,
+) -> (ContractType, usize) {
+    let contract_type = contracts[c_sys].contract_type;
+    let family_slot = contracts[..c_sys]
+        .iter()
+        .filter(|c| c.contract_type == contract_type)
+        .count();
+    (contract_type, family_slot)
+}
+
+impl StageLayout<'_> {
     /// `contract_type`'s contract column at per-direction slot `family_slot`
-    /// (from [`contract_family_slot`](crate::generic_constraints::contract_family_slot))
-    /// for block `blk`.
+    /// (from [`contract_family_slot`]) for block `blk`.
     #[inline]
     pub(crate) fn contract_col(
         &self,
@@ -2232,8 +2252,7 @@ impl StageGeometry {
     }
 
     /// `contract_type`'s contract column at per-direction slot `family_slot`
-    /// (from [`contract_family_slot`](crate::generic_constraints::contract_family_slot))
-    /// for block `blk`.
+    /// (from [`contract_family_slot`]) for block `blk`.
     #[inline]
     #[must_use]
     pub fn contract_col(

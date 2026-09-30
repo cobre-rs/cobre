@@ -70,7 +70,7 @@ pub(crate) use hydro_state::resolve_shortcircuit_target;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use layout::ResolvedTables;
 pub(crate) use layout::{StageLayout, TemplateBuildCtx};
-pub(crate) use layout::{evaporation_slot, evaporation_slot_count};
+pub(crate) use layout::{contract_family_slot, evaporation_slot, evaporation_slot_count};
 pub(crate) use scaling::{
     apply_col_scale, apply_commitment_hold_col_scale_unscale, apply_row_scale, compute_col_scale,
     compute_row_scale,

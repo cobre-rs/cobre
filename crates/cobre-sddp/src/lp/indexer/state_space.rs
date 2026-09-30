@@ -1486,7 +1486,7 @@ mod tests {
         };
         let resolution = AnticipatedResolution {
             per_plant: vec![point],
-            k_max: 3,
+            k_max: 2,
             max_fanout: 0,
         };
         let idx =
@@ -2026,7 +2026,7 @@ mod tests {
             0,
             Vec::new(),
             vec![2],
-            single_plant_resolution(12, 2),
+            single_plant_resolution(12, 0),
         );
         assert_eq!(idx.delivery_stage_count(6), 12);
     }
@@ -2040,7 +2040,7 @@ mod tests {
             0,
             Vec::new(),
             vec![2],
-            single_plant_resolution(4, 2),
+            single_plant_resolution(4, 0),
         );
         assert_eq!(idx.delivery_stage_count(4), 4);
     }

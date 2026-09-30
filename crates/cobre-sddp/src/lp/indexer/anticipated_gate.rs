@@ -420,7 +420,7 @@ mod tests {
                 depth: vec![0; n_stages],
                 occupancy: vec![0; n_stages],
             }],
-            k_max: 2,
+            k_max: 4,
             max_fanout: 0,
         };
         let idx = StateSpace::new(0, 0, Vec::new(), vec![2], resolution, &[]);

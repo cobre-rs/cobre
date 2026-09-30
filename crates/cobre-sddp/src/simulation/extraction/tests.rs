@@ -1340,8 +1340,8 @@ fn extract_anticipated_lanes_reads_ring_decision_and_slot_for_post_study_decisio
             depth: vec![0, 0],
             occupancy: vec![0, 0],
         }],
-        k_max: 2,
-        max_fanout: 0,
+        k_max: 1,
+        max_fanout: 1,
     };
     let state = test_support::state_layout_with_transit_buckets_and_resolution(
         0,
@@ -1990,7 +1990,7 @@ fn extract_thermals_decision_uses_attached_resolution_delivery_stage() {
             depth: vec![1, 0, 0],
             occupancy: vec![2, 1, 0],
         }],
-        k_max: 3,
+        k_max: 2,
         max_fanout: 1,
     };
     let state = test_support::state_layout_with_transit_buckets_and_resolution(

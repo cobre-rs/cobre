@@ -2553,7 +2553,7 @@ fn two_plant_excised_window_fixture() -> StateSpace {
     let resolution = AnticipatedResolution {
         per_plant: vec![plant0, plant1],
         k_max: 4,
-        max_fanout: 1,
+        max_fanout: 0,
     };
     state_with_attached_resolution(4, resolution)
 }
@@ -2650,8 +2650,8 @@ fn anticipated_slot_row_pos_masks_per_plant_at_the_extended_axis_bound() {
     };
     let resolution = AnticipatedResolution {
         per_plant: vec![plant_a, plant_b],
-        k_max: 3,
-        max_fanout: 1,
+        k_max: 2,
+        max_fanout: 0,
     };
     let state = state_with_attached_resolution(3, resolution);
 

@@ -1096,11 +1096,14 @@ fn resolve_sizes_k_max_from_the_deepest_plant_ring_depth() {
 
 #[test]
 fn ring_size_widens_resolution_depth_to_the_deepest_lead_stage() {
-    let resolution = AnticipatedResolution {
-        per_plant: Vec::new(),
-        k_max: 3,
-        max_fanout: 0,
-    };
+    let resolution = AnticipatedResolution::resolve(
+        &[LeadTime::Stages(3)],
+        DeliveryAxis {
+            stage_lengths_hours: &[],
+            n_decision: 3,
+            n_delivery: 3,
+        },
+    );
 
     assert_eq!(
         resolution.ring_size(&[1, 2]),

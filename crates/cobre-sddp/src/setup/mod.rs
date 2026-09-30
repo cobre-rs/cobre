@@ -100,6 +100,7 @@ use cobre_stochastic::{
 };
 
 use crate::{
+    InflowNonNegativityMethod,
     block_clock::M3S_TO_HM3,
     config::{CutManagementConfig, EventParams},
     cut::FutureCostFunction,
@@ -1107,7 +1108,7 @@ fn build_transit_seed_arcs(
 /// value its [`StateSpace`] was built from.
 pub(crate) fn build_study_dimensions(
     system: &System,
-    inflow_method: crate::InflowNonNegativityMethod,
+    inflow_method: InflowNonNegativityMethod,
     anticipated_plants: AnticipatedPlants,
     downstream_par_order: usize,
 ) -> StudyDimensions {

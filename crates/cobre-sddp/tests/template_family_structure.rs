@@ -551,20 +551,47 @@ fn z_row_ok(h: HydroSys, owner: ColOwner) -> bool {
     }
 }
 
-/// `false` when a chronological-stage block match cannot apply: a
-/// cross-hydro water-row entry (turbine, spillage or diversion reached
-/// through the downstream chain, not `d`'s own equipment) spreads its
-/// release across the chain's own arrival blocks (`resolve_spread`'s
-/// chronological dispatch), so the column's own block legitimately differs
-/// from the row's. A pumping station's flow column always shares one block
-/// index with both its source and destination rows (`fill_pumping_water_entries`),
-/// so it keeps the check.
-fn block_check_applies(d: HydroSys, owner: ColOwner) -> bool {
-    match owner {
-        ColOwner::Turbine { hydro, .. }
-        | ColOwner::Spillage { hydro, .. }
-        | ColOwner::Diversion { hydro, .. } => hydro == d,
-        _ => true,
+/// Plant `u`'s direct downstream position, if declared.
+fn direct_downstream(
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    u: HydroSys,
+) -> Option<usize> {
+    system.hydros()[u.get()]
+        .downstream_id
+        .and_then(|id| positions.get(&id).copied())
+}
+
+/// `true` when a chronological-stage water-row entry's column block (`cb`)
+/// and row block (`rb`) satisfy the block relationship the entry owes: exact
+/// equality for every entry, EXCEPT a turbine or spillage entry of plant `u`
+/// found on `u`'s own DIRECT downstream's row where `u` declares
+/// `travel_time_hours > 0` — within-stage routing there only delays water,
+/// never advances it, so the row's block need only be at or after the
+/// column's. Every other cross-hydro route (a diversion, or a turbine/
+/// spillage entry reached past the direct downstream through a pre-filling
+/// short-circuit, which moves its whole release with no lag) keeps equality.
+fn water_block_ok(
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    d: HydroSys,
+    owner: ColOwner,
+    rb: BlockIdx,
+    cb: BlockIdx,
+) -> bool {
+    let delayed = match owner {
+        ColOwner::Turbine { hydro, .. } | ColOwner::Spillage { hydro, .. } => {
+            direct_downstream(system, positions, hydro) == Some(d.get())
+                && system.hydros()[hydro.get()]
+                    .travel_time_hours
+                    .is_some_and(|t| t > 0.0)
+        }
+        _ => false,
+    };
+    if delayed {
+        rb.get() >= cb.get()
+    } else {
+        rb == cb
     }
 }
 
@@ -622,11 +649,10 @@ fn every_study_places_each_column_only_on_its_entitys_block_rows() {
                     match row_owner {
                         RowOwner::Water { hydro: d, blk } => {
                             if geom.block_mode == BlockMode::Chronological
-                                && block_check_applies(d, owner)
                                 && let Some(cb) = column_block(owner)
                             {
-                                assert_eq!(
-                                    cb, blk,
+                                assert!(
+                                    water_block_ok(system, &positions, d, owner, blk, cb),
                                     "{key} stage {s}: water row {r} (hydro {d:?}, block \
                                      {blk:?}) carries column {c} ({owner:?}) from block \
                                      {cb:?}"

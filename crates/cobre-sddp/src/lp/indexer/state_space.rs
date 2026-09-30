@@ -105,8 +105,8 @@ pub struct StateSpace {
     /// uniform lag stride.
     pub max_par_order: usize,
 
-    /// Global travel-time bucket count `B` (`Σ_j per_plant_depth[j]`), `0` when
-    /// no arc is declared.
+    /// Global travel-time bucket count `B`, the sum of every plant's own run
+    /// in [`Self::transit_bucket_plants`], `0` when no arc is declared.
     pub n_buckets: usize,
 
     /// Number of anticipated thermals — [`super::AnticipatedPlants::len`].

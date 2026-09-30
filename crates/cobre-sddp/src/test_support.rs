@@ -341,6 +341,26 @@ pub fn resolved_layout_for(
     (topology, layout)
 }
 
+/// A [`StateSpace`] over `system`'s hydros and `topology`'s bucket order, with
+/// no PAR lags and no anticipated plants — the seed tests' fixture for
+/// [`crate::setup::build_initial_transit_bucket_state`], built the way
+/// [`crate::test_support::ctx_fixture::CtxFixture::build_state`]'s
+/// `max_par_order == 0` branch is.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn bucket_seed_state(system: &System, topology: &TransitBucketTopology) -> StateSpace {
+    let hydros = system.hydros();
+    let effective_lag_counts = vec![0; hydros.len()];
+    StateSpace::build(
+        hydros,
+        0,
+        &effective_lag_counts,
+        topology,
+        Vec::new(),
+        AnticipatedResolution::default(),
+    )
+}
+
 /// Setup steps a builder-module test needs without a direct
 /// `lp::builder` → `setup` import edge.
 #[cfg(test)]

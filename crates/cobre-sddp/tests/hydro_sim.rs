@@ -1833,12 +1833,13 @@ mod transit_seed_round_trip {
     const PINNED_STORAGE_HM3: f64 = 1_000.0;
     const TOL: f64 = 1e-9;
     /// The receiving study's own stage count for the round-trip reconstruction:
-    /// must be `>= per_plant_depth` or `build_initial_transit_bucket_state`'s
+    /// must be `>=` every plant's own run length in
+    /// `StateSpace::transit_bucket_plants`, or `build_initial_transit_bucket_state`'s
     /// `StageCalendar` (built from the receiving study's own, un-padded
     /// stages) truncates `hour_window_shares`'s returned weight vector before
     /// it reaches the deepest lags — losing an in-study-release contribution
     /// that has nothing to do with the leftover-seed stitch. `8` comfortably
-    /// exceeds every `per_plant_depth` this module's fixtures produce, so it
+    /// exceeds every such run length this module's fixtures produce, so it
     /// isolates the stitch-specific behavior from this unrelated,
     /// receiver-sizing precondition.
     const SEED_RECEIVER_STAGES: usize = 8;
@@ -2214,8 +2215,9 @@ mod transit_seed_round_trip {
     /// `StageCalendar` from the CURRENT study's own (un-padded)
     /// stage list, so `hour_window_shares` can never populate a lag deeper
     /// than that study's own stage count — for ANY declared arc whose
-    /// `t_v > H` (by definition, `per_plant_depth > n_stages` whenever stage
-    /// widths are uniform), a wide pre-study window's seed is silently
+    /// `t_v > H` (by definition, that plant's `transit_bucket_plants` run
+    /// is longer than `n_stages` whenever stage widths are uniform), a wide
+    /// pre-study window's seed is silently
     /// truncated at both ends of the rolling seam: study 1 itself can only
     /// ever seed the window's first `n_stages` lags (delivering, not
     /// carrying, the remainder before the terminal), while re-emitting that

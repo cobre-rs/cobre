@@ -10962,9 +10962,17 @@ fn test_single_arc_unroll_matches_ac1() {
 
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
-    assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
+    let state = crate::test_support::bucket_seed_state(&system, &topology);
+    assert_eq!(
+        state
+            .transit_bucket_plants()
+            .map(|(_, r)| r.len())
+            .collect::<Vec<_>>(),
+        vec![2],
+        "sanity: 2-bucket depth"
+    );
 
-    let seed = super::build_initial_transit_bucket_state(&system, &topology);
+    let seed = super::build_initial_transit_bucket_state(&system, &topology, &state);
     assert_eq!(seed.len(), topology.n_buckets());
 
     let volume = 24.0 * M3S_TO_HM3 * 100.0;
@@ -10995,9 +11003,17 @@ fn test_mid_horizon_entrant_zero_history_zero_seeds_stage_0_transit_buckets() {
 
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
-    assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
+    let state = crate::test_support::bucket_seed_state(&system, &topology);
+    assert_eq!(
+        state
+            .transit_bucket_plants()
+            .map(|(_, r)| r.len())
+            .collect::<Vec<_>>(),
+        vec![2],
+        "sanity: 2-bucket depth"
+    );
 
-    let seed = super::build_initial_transit_bucket_state(&system, &topology);
+    let seed = super::build_initial_transit_bucket_state(&system, &topology, &state);
 
     assert!(
         seed.iter().all(|&v| v.abs() < 1e-9),
@@ -11024,9 +11040,17 @@ fn test_confluence_aggregates_two_upstreams_into_shared_transit_buckets() {
 
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
-    assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
+    let state = crate::test_support::bucket_seed_state(&system, &topology);
+    assert_eq!(
+        state
+            .transit_bucket_plants()
+            .map(|(_, r)| r.len())
+            .collect::<Vec<_>>(),
+        vec![2],
+        "sanity: 2-bucket depth"
+    );
 
-    let seed = super::build_initial_transit_bucket_state(&system, &topology);
+    let seed = super::build_initial_transit_bucket_state(&system, &topology, &state);
 
     let vol_a = 24.0 * M3S_TO_HM3 * 100.0;
     let vol_b = 24.0 * M3S_TO_HM3 * 50.0;
@@ -11075,8 +11099,10 @@ fn test_seed_is_declaration_order_invariant() {
         crate::bucket_topology::build_transit_bucket_topology(&system_a, &calendar_a, false);
     let topology_b =
         crate::bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
-    let seed_a = super::build_initial_transit_bucket_state(&system_a, &topology_a);
-    let seed_b = super::build_initial_transit_bucket_state(&system_b, &topology_b);
+    let state_a = crate::test_support::bucket_seed_state(&system_a, &topology_a);
+    let state_b = crate::test_support::bucket_seed_state(&system_b, &topology_b);
+    let seed_a = super::build_initial_transit_bucket_state(&system_a, &topology_a, &state_a);
+    let seed_b = super::build_initial_transit_bucket_state(&system_b, &topology_b, &state_b);
 
     assert_eq!(
         seed_a, seed_b,
@@ -11097,7 +11123,8 @@ fn test_seed_len_matches_n_buckets() {
     );
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
-    let seed = super::build_initial_transit_bucket_state(&system, &topology);
+    let state = crate::test_support::bucket_seed_state(&system, &topology);
+    let seed = super::build_initial_transit_bucket_state(&system, &topology, &state);
     assert_eq!(seed.len(), topology.n_buckets());
 
     let no_arc_downstream = bucket_seed_hydro(1, None, None);
@@ -11113,7 +11140,9 @@ fn test_seed_len_matches_n_buckets() {
         false,
     );
     assert_eq!(no_arc_topology.n_buckets(), 0);
-    let no_arc_seed = super::build_initial_transit_bucket_state(&no_arc_system, &no_arc_topology);
+    let no_arc_state = crate::test_support::bucket_seed_state(&no_arc_system, &no_arc_topology);
+    let no_arc_seed =
+        super::build_initial_transit_bucket_state(&no_arc_system, &no_arc_topology, &no_arc_state);
     assert_eq!(no_arc_seed.len(), 0);
 }
 
@@ -11142,7 +11171,8 @@ fn test_gapped_windows_contribute_additively() {
     let delivery_calendar = DeliveryCalendar::from_system(&system);
     let topology =
         crate::bucket_topology::build_transit_bucket_topology(&system, &delivery_calendar, false);
-    let seed = super::build_initial_transit_bucket_state(&system, &topology);
+    let state = crate::test_support::bucket_seed_state(&system, &topology);
+    let seed = super::build_initial_transit_bucket_state(&system, &topology, &state);
 
     let vol_recent = 24.0 * M3S_TO_HM3 * 100.0;
     let vol_older = 24.0 * M3S_TO_HM3 * 40.0;

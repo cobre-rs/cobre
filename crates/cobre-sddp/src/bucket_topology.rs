@@ -31,16 +31,13 @@ pub(crate) struct TravelTimeArc {
 /// [`Self::n_buckets`] returns `0` exactly when [`Self::arcs`] is empty.
 #[derive(Debug, Clone)]
 pub(crate) struct TransitBucketTopology {
-    /// Aggregated depth `L_j` per downstream plant, in [`Self::column_order`]'s
-    /// plant order.
-    pub(crate) per_plant_depth: Vec<usize>,
     /// `(plant, lag)` pairs, `lag = 1..=L_j`, plants sorted by canonical
     /// `(operational_start_date, id)` index (plant's position in
     /// [`System::hydros`]).
     pub(crate) column_order: Vec<(HydroSys, usize)>,
     /// `per_stage_mask[t]` holds the max reachable lag per declared
-    /// downstream plant, in the same order as [`Self::per_plant_depth`], at
-    /// study stage `t` (`0` when no lag is reachable at that stage).
+    /// downstream plant, in [`Self::column_order`]'s plant order, at study
+    /// stage `t` (`0` when no lag is reachable at that stage).
     pub(crate) per_stage_mask: Vec<Vec<usize>>,
     /// Per-declared-arc PARALLEL-mode stage-clock weights; see
     /// [`build_arc_stage_weights`].
@@ -61,7 +58,7 @@ impl TransitBucketTopology {
         &self.arcs
     }
 
-    /// Global bucket count, `Σ_j per_plant_depth[j]`.
+    /// Global bucket count, the sum of every declared plant's depth.
     pub(crate) fn n_buckets(&self) -> usize {
         self.column_order.len()
     }
@@ -75,7 +72,6 @@ impl TransitBucketTopology {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn empty() -> Self {
         Self {
-            per_plant_depth: Vec::new(),
             column_order: Vec::new(),
             per_stage_mask: Vec::new(),
             arc_stage_weights: HashMap::new(),
@@ -158,9 +154,8 @@ fn ic_only_depth(t_v: f64, study_durations: &[f64]) -> usize {
 
 /// Caps a stage's active lag at `n_stages − stage − 1`, the deepest lag whose
 /// target stage lands inside `[0, n_stages)`. Never caps
-/// [`TransitBucketTopology::per_plant_depth`] or
-/// [`TransitBucketTopology::column_order`], which size from the global max over
-/// every stage anchor and must retain what the earliest stages need.
+/// [`TransitBucketTopology::column_order`], which sizes from the global max
+/// over every stage anchor and must retain what the earliest stages need.
 fn horizon_cap_active(active: usize, stage: usize, n_stages: usize) -> usize {
     active.min(n_stages - 1 - stage)
 }
@@ -183,7 +178,6 @@ pub(crate) fn build_transit_bucket_topology(
     let n_stages = calendar.n_study();
     let arcs = resolve_travel_time_arcs(system.hydros());
 
-    let mut per_plant_depth = Vec::new();
     let mut column_order = Vec::new();
     let mut per_stage_mask: Vec<Vec<usize>> = vec![Vec::new(); n_stages];
 
@@ -214,7 +208,6 @@ pub(crate) fn build_transit_bucket_topology(
             continue;
         }
 
-        per_plant_depth.push(depth);
         for lag in 1..=depth {
             column_order.push((downstream, lag));
         }
@@ -243,7 +236,6 @@ pub(crate) fn build_transit_bucket_topology(
         build_arc_arrival_density(system, &arcs, calendar, &arc_stage_weights);
 
     let topology = TransitBucketTopology {
-        per_plant_depth,
         column_order,
         per_stage_mask,
         arc_stage_weights,
@@ -619,7 +611,6 @@ mod tests {
 
         assert_eq!(topology.n_buckets(), 0);
         assert!(topology.column_order.is_empty());
-        assert!(topology.per_plant_depth.is_empty());
     }
 
     /// The first arc has the longer travel time, so a sort by travel time
@@ -683,7 +674,6 @@ mod tests {
         let calendar = DeliveryCalendar::from_system(&system);
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
-        assert_eq!(topology.per_plant_depth, vec![5]);
         assert_eq!(topology.n_buckets(), 5);
         assert_eq!(
             topology.column_order,
@@ -722,7 +712,6 @@ mod tests {
         let calendar = DeliveryCalendar::from_system(&system);
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
-        assert_eq!(topology.per_plant_depth, vec![2]);
         assert_eq!(topology.n_buckets(), 2);
 
         // The stage-0 mask reaches the IC-residual slot 2 (decaying reachability,
@@ -755,7 +744,7 @@ mod tests {
         let calendar = DeliveryCalendar::from_system(&system);
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
-        assert_eq!(topology.per_plant_depth, vec![in_study_max]);
+        assert_eq!(topology.n_buckets(), in_study_max);
     }
 
     #[test]
@@ -784,11 +773,10 @@ mod tests {
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(
-            topology.per_plant_depth,
-            vec![3],
+            topology.n_buckets(),
+            3,
             "global depth sizing is unaffected by the per-stage horizon cap"
         );
-        assert_eq!(topology.n_buckets(), 3);
         assert_eq!(
             topology.column_order,
             vec![
@@ -818,8 +806,8 @@ mod tests {
 
     /// `boundary_present = true` un-caps every stage's mask to the raw
     /// `uncapped_active_by_stage` value (including the terminal stage), while
-    /// sizing (`per_plant_depth`/`column_order`/`n_buckets`) stays identical to
-    /// the gated-off build — the keep-live contract touches only the mask.
+    /// sizing (`column_order`/`n_buckets`) stays identical to the gated-off
+    /// build — the keep-live contract touches only the mask.
     #[test]
     fn test_boundary_present_uncaps_terminal_deep_lag_mask() {
         let downstream = hydro(1, None, None);
@@ -834,10 +822,6 @@ mod tests {
         let topology_off = build_transit_bucket_topology(&system, &calendar, false);
         let topology_on = build_transit_bucket_topology(&system, &calendar, true);
 
-        assert_eq!(
-            topology_on.per_plant_depth, topology_off.per_plant_depth,
-            "un-capping the mask must not grow the global depth sizing"
-        );
         assert_eq!(
             topology_on.column_order, topology_off.column_order,
             "un-capping the mask must not change the canonical column order"
@@ -948,7 +932,6 @@ mod tests {
         let topology_b = build_transit_bucket_topology(&system_b, &calendar_b, false);
 
         assert_eq!(topology_a.column_order, topology_b.column_order);
-        assert_eq!(topology_a.per_plant_depth, topology_b.per_plant_depth);
         assert_eq!(topology_a.n_buckets(), topology_b.n_buckets());
     }
 
@@ -990,7 +973,8 @@ mod tests {
         }
         let max_depth = k_by_stage.iter().map(|k| k.len() - 1).max().unwrap_or(0);
         assert_eq!(
-            max_depth, topology.per_plant_depth[0],
+            max_depth,
+            topology.n_buckets(),
             "the deepest in-study k vector must match the topology's per-plant depth"
         );
     }
@@ -1248,8 +1232,8 @@ mod tests {
             build_transit_bucket_topology(&system_pad_only, &calendar_pad_only, true);
 
         assert_eq!(
-            topology.per_plant_depth,
-            vec![6],
+            topology.n_buckets(),
+            6,
             "depth must reach the hand-derived 12-hour-stage value"
         );
         assert_eq!(
@@ -1258,7 +1242,8 @@ mod tests {
             "the terminal-stage mask must reach the hand-derived 12-hour-stage value"
         );
         assert_ne!(
-            topology.per_plant_depth, topology_pad_only.per_plant_depth,
+            topology.n_buckets(),
+            topology_pad_only.n_buckets(),
             "the real post-study calendar must size differently than the replicated pad"
         );
         assert_ne!(
@@ -1319,7 +1304,6 @@ mod tests {
         let topology_b = build_transit_bucket_topology(&system_b, &calendar_b, false);
 
         assert_eq!(topology_a.column_order, topology_b.column_order);
-        assert_eq!(topology_a.per_plant_depth, topology_b.per_plant_depth);
         assert_eq!(topology_a.n_buckets(), topology_b.n_buckets());
     }
 
@@ -1358,10 +1342,6 @@ mod tests {
         assert_eq!(
             topology_with_calendar.n_buckets(),
             topology_no_calendar.n_buckets()
-        );
-        assert_eq!(
-            topology_with_calendar.per_plant_depth,
-            topology_no_calendar.per_plant_depth
         );
         assert_eq!(
             topology_with_calendar.column_order,
@@ -1418,9 +1398,9 @@ mod tests {
         );
         assert!(
             topology_with_calendar.per_stage_mask != topology_no_calendar.per_stage_mask
-                || topology_with_calendar.per_plant_depth != topology_no_calendar.per_plant_depth,
+                || topology_with_calendar.column_order != topology_no_calendar.column_order,
             "a post-study calendar differing from the pad must change per_stage_mask or \
-             per_plant_depth, or the neutral test above has no power"
+             column_order, or the neutral test above has no power"
         );
     }
 }

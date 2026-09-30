@@ -2636,9 +2636,10 @@ fn build_initial_state(
 fn build_initial_transit_bucket_state(
     system: &System,
     topology: &bucket_topology::TransitBucketTopology,
+    state: &StateSpace,
 ) -> Vec<f64> {
-    let mut seed = vec![0.0_f64; topology.n_buckets()];
-    if topology.n_buckets() == 0 {
+    let mut seed = vec![0.0_f64; state.n_buckets];
+    if state.n_buckets == 0 {
         return seed;
     }
 
@@ -2654,9 +2655,8 @@ fn build_initial_transit_bucket_state(
     let ic = system.initial_conditions();
     let hydros = system.hydros();
 
-    let mut start = 0_usize;
-    for &depth in &topology.per_plant_depth {
-        let plant = topology.column_order[start].0;
+    for (plant, local) in state.transit_bucket_plants() {
+        let depth = local.len();
 
         for arc in topology.arcs().iter().filter(|arc| arc.downstream == plant) {
             let upstream = &hydros[arc.upstream.get()];
@@ -2679,13 +2679,11 @@ fn build_initial_transit_bucket_state(
                 let k = calendar.hour_window_shares(t_v, e_off, width);
                 for (transit_bucket_offset, &k_val) in k.iter().enumerate().take(depth) {
                     if k_val != 0.0 {
-                        seed[start + transit_bucket_offset] += k_val * volume;
+                        seed[local.start + transit_bucket_offset] += k_val * volume;
                     }
                 }
             }
         }
-
-        start += depth;
     }
 
     debug_assert_eq!(seed.len(), topology.n_buckets());
@@ -2724,8 +2722,7 @@ fn splice_transit_bucket_seed(
     system: &System,
     topology: &bucket_topology::TransitBucketTopology,
 ) {
-    let seed = build_initial_transit_bucket_state(system, topology);
-    debug_assert_eq!(seed.len(), layout.n_buckets);
+    let seed = build_initial_transit_bucket_state(system, topology, layout);
     state[layout.transit_buckets_out.clone()].copy_from_slice(&seed);
 }
 
@@ -3007,7 +3004,9 @@ mod transit_seed_round_trip_tests {
         let calendar_b = DeliveryCalendar::from_system(&system_b);
         let topology_b =
             bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
-        let seed_from_emission = build_initial_transit_bucket_state(&system_b, &topology_b);
+        let state_b = crate::test_support::bucket_seed_state(&system_b, &topology_b);
+        let seed_from_emission =
+            build_initial_transit_bucket_state(&system_b, &topology_b, &state_b);
 
         let system_reference = build_system(
             hydros(),
@@ -3034,8 +3033,13 @@ mod transit_seed_round_trip_tests {
             &calendar_reference,
             false,
         );
-        let seed_reference =
-            build_initial_transit_bucket_state(&system_reference, &topology_reference);
+        let state_reference =
+            crate::test_support::bucket_seed_state(&system_reference, &topology_reference);
+        let seed_reference = build_initial_transit_bucket_state(
+            &system_reference,
+            &topology_reference,
+            &state_reference,
+        );
 
         assert_eq!(seed_from_emission.len(), seed_reference.len());
         for (a, b) in seed_from_emission.iter().zip(&seed_reference) {

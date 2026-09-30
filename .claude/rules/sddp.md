@@ -1578,8 +1578,8 @@ declaration-order-invariance hard rule.
 Read: `bucket_topology.rs` (`build_transit_bucket_topology`,
 `TransitBucketTopology::column_order`). Pinned by the bucket column-order
 declaration-invariance regression: two systems differing only in the
-declaration order of their hydros produce identical `column_order`,
-`per_plant_depth`, and `n_buckets`.
+declaration order of their hydros produce identical `column_order` and
+`n_buckets`.
 
 ### Stage-0 seed: windowed IC anchor
 
@@ -1719,9 +1719,9 @@ convention above handles, keeping the terminal bucket state live and pricing it
 through the shared cut-state projection, gated on `config.policy.boundary`
 presence so this drop stays byte-for-byte for a zero-terminal-value study. This
 under-values end-of-horizon upstream release; it is a documented target-stage
-imprecision, not a bug to patch by capping
-`TransitBucketTopology::per_plant_depth`/`column_order` too — those size from the
-global max over every anchor and must retain what the earliest stages need. Both
+imprecision, not a bug to patch by capping `TransitBucketTopology::column_order`
+too — it sizes from the global max over every anchor and must retain what the
+earliest stages need. Both
 drop sites (`fill_arc_release_block_entries`, `fill_arc_release_chrono_block_entries`)
 now assert the confinement directly: a debug-only check at the `None` row-lookup
 arm requires the dropped lag `d` at stage `t` to satisfy `t + d >= n_stages`,

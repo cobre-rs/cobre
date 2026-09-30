@@ -18,7 +18,7 @@
 
 use std::ops::Range;
 
-use crate::indexer::StateSpace;
+use crate::indexer::{HydroSys, StateSpace};
 
 use super::layout::position_table_row;
 
@@ -46,6 +46,16 @@ pub struct DeliveryRing {
     depth: usize,
 }
 
+/// One downstream plant's water-bucket ring, its local sub-range (relative to
+/// [`StateSpace::transit_buckets_out`]/[`StateSpace::transit_buckets_in`]'s
+/// own start), and the plant it belongs to — [`DeliveryRing::transit_buckets`]'s
+/// and [`DeliveryRing::transit_bucket`]'s item type.
+pub(crate) struct PlantBucketRing {
+    pub(crate) plant: HydroSys,
+    pub(crate) local: Range<usize>,
+    pub(crate) ring: DeliveryRing,
+}
+
 impl DeliveryRing {
     /// Constructs a ring over the borrowed out/in state blocks.
     ///
@@ -54,12 +64,7 @@ impl DeliveryRing {
     /// Panics if `out_block.len()` or `in_block.len()` differs from
     /// `n_lanes * depth`.
     #[must_use]
-    pub(super) fn new(
-        out_block: Range<usize>,
-        in_block: Range<usize>,
-        n_lanes: usize,
-        depth: usize,
-    ) -> Self {
+    fn new(out_block: Range<usize>, in_block: Range<usize>, n_lanes: usize, depth: usize) -> Self {
         let dense_len = n_lanes * depth;
         debug_assert_eq!(
             out_block.len(),
@@ -94,6 +99,33 @@ impl DeliveryRing {
             state.n_anticipated,
             state.k_max,
         )
+    }
+
+    /// Every downstream plant's own water-bucket ring (`n_lanes = 1`), over
+    /// its contiguous local sub-range in [`StateSpace::transit_bucket_plants`]
+    /// order — the single owner of the ragged-to-dense addressing every
+    /// bucket call site shares.
+    pub(crate) fn transit_buckets(
+        state: &StateSpace,
+    ) -> impl Iterator<Item = PlantBucketRing> + '_ {
+        state
+            .transit_bucket_plants()
+            .map(|(plant, local)| PlantBucketRing {
+                plant,
+                ring: Self::new(
+                    state.bucket_outgoing_block(local.clone()),
+                    state.bucket_incoming_block(local.clone()),
+                    1,
+                    local.len(),
+                ),
+                local,
+            })
+    }
+
+    /// `plant`'s own [`PlantBucketRing`], or `None` when it declares no
+    /// incoming arc.
+    pub(crate) fn transit_bucket(state: &StateSpace, plant: HydroSys) -> Option<PlantBucketRing> {
+        Self::transit_buckets(state).find(|bucket| bucket.plant == plant)
     }
 
     /// Outgoing-block column for ring position `(slot, lane)` — the single
@@ -326,7 +358,8 @@ impl DeliveryRing {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnBufs, DeliveryRing};
+    use super::{ColumnBufs, DeliveryRing, PlantBucketRing};
+    use crate::indexer::HydroSys;
 
     /// One ring instance per lane (`n_lanes = 1`), mirroring the water ring's
     /// per-plant contiguous addressing: lane A is 3 slots deep (every
@@ -612,5 +645,38 @@ mod tests {
                 "column {col} lies outside the depth-1 {{latch, fish}} column set"
             );
         }
+    }
+
+    /// A two-plant state (H1 depth 2, H3 depth 3) yields one `PlantBucketRing`
+    /// per plant, each addressed at its own local offset, and `transit_bucket`
+    /// looks up a declared plant while missing an undeclared one.
+    #[test]
+    fn transit_buckets_builds_each_plant_ring_over_its_bucket_run() {
+        let h1 = HydroSys::new(1);
+        let h3 = HydroSys::new(3);
+        let state = crate::test_support::state_layout_with_transit_buckets(
+            4,
+            0,
+            vec![(h1, 1), (h1, 2), (h3, 1), (h3, 2), (h3, 3)],
+            vec![],
+        );
+
+        let buckets: Vec<PlantBucketRing> = DeliveryRing::transit_buckets(&state).collect();
+        assert_eq!(buckets.len(), 2);
+        for bucket in &buckets {
+            let out_block = state.bucket_outgoing_block(bucket.local.clone());
+            let in_block = state.bucket_incoming_block(bucket.local.clone());
+            for s in 0..bucket.local.len() {
+                assert_eq!(bucket.ring.out_col(s, 0), out_block.start + s);
+                assert_eq!(bucket.ring.in_col(s, 0), in_block.start + s);
+            }
+        }
+
+        let h3_bucket =
+            DeliveryRing::transit_bucket(&state, h3).expect("H3 must have a declared bucket");
+        assert_eq!(h3_bucket.plant, buckets[1].plant);
+        assert_eq!(h3_bucket.local, buckets[1].local);
+
+        assert!(DeliveryRing::transit_bucket(&state, HydroSys::new(0)).is_none());
     }
 }

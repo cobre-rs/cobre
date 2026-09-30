@@ -254,8 +254,9 @@ re-derived). Per stage, `build_transit_bucket_row_pos` turns the mask into compa
 row positions (`None` = masked). Then:
 
 - **One `DeliveryRing` per downstream plant**, `n_lanes = 1`, over that plant's
-  contiguous sub-range (`transit_bucket_ring`, `crates/cobre-sddp/src/lp/builder/entries.rs`).
-  Ring slot `k` ↔ lag `k+1`.
+  contiguous sub-range (`DeliveryRing::transit_buckets`,
+  `crates/cobre-sddp/src/lp/builder/delivery_ring.rs`). Ring slot `k` ↔ lag
+  `k+1`.
 - **The shift** (`fill_transit_bucket_definition_entries` → `emit_shift_rows`):
   `b_d^out = b_{d+1}^in + (deposits)` — each stage the mass advances one slot
   toward maturity. Emitted mode-independently, outside the block-mode match.

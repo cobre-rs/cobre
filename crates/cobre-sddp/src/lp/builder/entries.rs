@@ -15,8 +15,6 @@ use super::fpha_cursor::for_each_fpha_plane;
 use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
 use crate::generic_constraints::contract_family_slot;
 
-use std::ops::Range;
-
 /// Fishing (consumption) coupling: for every anticipated plant whose
 /// delivery matures THIS stage
 /// (`layout.anticipated.anticipated_fishing_row_pos`, `None` at a `K = 0`
@@ -333,35 +331,6 @@ fn fill_parallel_water_entries(
     }
 }
 
-/// Each downstream plant's contiguous bucket sub-range (relative to
-/// `transit_buckets_out`/`transit_buckets_in`'s own start), in
-/// `transit_bucket_column_order`'s plant-major order.
-pub(super) fn transit_bucket_plant_ranges(state: &StateSpace) -> Vec<Range<usize>> {
-    let mut ranges = Vec::new();
-    let mut start = 0;
-    for chunk in state
-        .transit_bucket_column_order
-        .chunk_by(|a, b| a.0 == b.0)
-    {
-        ranges.push(start..start + chunk.len());
-        start += chunk.len();
-    }
-    ranges
-}
-
-/// One plant's [`DeliveryRing`] (`n_lanes = 1`) over its LOCAL bucket sub-`range`
-/// (relative to `transit_buckets_out`/`transit_buckets_in`'s own start) — the single
-/// owner of the ragged-to-dense addressing every bucket call site shares.
-pub(super) fn transit_bucket_ring(state: &StateSpace, range: Range<usize>) -> DeliveryRing {
-    let depth = range.len();
-    DeliveryRing::new(
-        state.bucket_outgoing_block(range.clone()),
-        state.bucket_incoming_block(range),
-        1,
-        depth,
-    )
-}
-
 /// Fill the travel-time bucket-definition ring-shift rows via
 /// [`DeliveryRing::emit_shift_rows`], once per downstream plant. A masked-out bucket
 /// gets no row — its outgoing column is frozen `[0, 0]` by `fill_transit_bucket_columns`
@@ -372,12 +341,10 @@ fn fill_transit_bucket_definition_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let state = layout.state;
     let row_start = layout.rows.transit_bucket_definition.start;
-    for range in transit_bucket_plant_ranges(state) {
-        let ring = transit_bucket_ring(state, range.clone());
-        ring.emit_shift_rows(
-            &layout.rows.transit_bucket_row_pos[range],
+    for bucket in DeliveryRing::transit_buckets(layout.state) {
+        bucket.ring.emit_shift_rows(
+            &layout.rows.transit_bucket_row_pos[bucket.local],
             row_start,
             col_entries,
         );
@@ -455,18 +422,19 @@ fn fill_arc_release_block_entries(
     if depth == 0 {
         return;
     }
-    let range = plant_transit_bucket_range(layout.state, h_idx).unwrap_or_else(|| {
-        unreachable!(
-            "hydro {h_idx} receives a depth-{depth} deposit at stage {stage_idx} but has no \
+    let bucket =
+        DeliveryRing::transit_bucket(layout.state, HydroSys::new(h_idx)).unwrap_or_else(|| {
+            unreachable!(
+                "hydro {h_idx} receives a depth-{depth} deposit at stage {stage_idx} but has no \
              bucket range (TransitBucketTopology/arc_stage_weights disagreement)"
-        )
-    });
-    let ring = transit_bucket_ring(layout.state, range.clone());
+            )
+        });
     for (d, &stage_weight) in stage_weights.iter().enumerate().skip(1) {
         if stage_weight == 0.0 {
             continue;
         }
-        let Some(row_def) = layout.transit_bucket_definition_row(&range, ring.slot_target(0, d))
+        let Some(row_def) =
+            layout.transit_bucket_definition_row(&bucket.local, bucket.ring.slot_target(0, d))
         else {
             // A dropped lag targets only a stage past the horizon, unreachable once
             // `boundary_present` un-caps the mask (sddp.md "Terminal credit deferred").
@@ -492,26 +460,12 @@ fn fill_arc_release_block_entries(
     }
 }
 
-/// The bucket sub-range `[start, end)` (relative to `transit_buckets_out`/
-/// `transit_buckets_in`'s own start) for downstream plant `plant_idx`, or `None` when
-/// it declares no incoming arc.
-fn plant_transit_bucket_range(state: &StateSpace, plant_idx: usize) -> Option<Range<usize>> {
-    let order = &state.transit_bucket_column_order;
-    let start = order.iter().position(|&(p, _)| p.get() == plant_idx)?;
-    let end = order[start..]
-        .iter()
-        .position(|&(p, _)| p.get() != plant_idx)
-        .map_or(order.len(), |offset| start + offset);
-    Some(start..end)
-}
-
 /// The maturing-now bucket's incoming column (`in_col(0, 0)`) for downstream
-/// `plant`, or `None` when it declares no incoming arc. The single owner of the
-/// `plant_transit_bucket_range` + `transit_bucket_ring(...).in_col(0, 0)` pair both
-/// water-balance fills, and the generic-constraint `hydro_inflow` resolver, read.
+/// `plant`, or `None` when it declares no incoming arc. The single owner of
+/// [`DeliveryRing::transit_bucket`]'s `in_col(0, 0)` read both water-balance
+/// fills, and the generic-constraint `hydro_inflow` resolver, share.
 pub(crate) fn maturing_bucket_in_col(state: &StateSpace, plant: HydroSys) -> Option<usize> {
-    plant_transit_bucket_range(state, plant.get())
-        .map(|range| transit_bucket_ring(state, range).in_col(0, 0))
+    DeliveryRing::transit_bucket(state, plant).map(|bucket| bucket.ring.in_col(0, 0))
 }
 
 /// Chronological per-block water-balance fill: each Operating/Filling hydro emits `K`
@@ -712,18 +666,19 @@ fn fill_arc_release_chrono_block_entries(
     if depth == 0 {
         return;
     }
-    let range = plant_transit_bucket_range(layout.state, h_idx).unwrap_or_else(|| {
-        unreachable!(
-            "hydro {h_idx} receives a depth-{depth} deposit at stage {stage_idx} but has no \
+    let bucket =
+        DeliveryRing::transit_bucket(layout.state, HydroSys::new(h_idx)).unwrap_or_else(|| {
+            unreachable!(
+                "hydro {h_idx} receives a depth-{depth} deposit at stage {stage_idx} but has no \
              bucket range (TransitBucketTopology/arc_spread_chrono disagreement)"
-        )
-    });
-    let ring = transit_bucket_ring(layout.state, range.clone());
+            )
+        });
     for (d, &deposit_d) in block_deposit.iter().enumerate().skip(1) {
         if deposit_d == 0.0 {
             continue;
         }
-        let Some(row_def) = layout.transit_bucket_definition_row(&range, ring.slot_target(0, d))
+        let Some(row_def) =
+            layout.transit_bucket_definition_row(&bucket.local, bucket.ring.slot_target(0, d))
         else {
             // A dropped block deposit targets only a lag past the horizon, unreachable
             // once `boundary_present` un-caps the mask (sddp.md "Terminal credit deferred").

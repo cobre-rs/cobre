@@ -1485,14 +1485,14 @@ a frozen `[0, 0]` outgoing column (`freeze_masked_columns`, the column-freeze
 side) in the SAME pass — wiring only one side leaves either a dangling row
 referencing a frozen column or a free column with no defining constraint, both
 wrong-but-compiling. Water instantiates one ring per downstream plant
-(`transit_bucket_ring`, `n_lanes = 1`, over that plant's ragged contiguous
-sub-range); anticipated instantiates ONE dense ring spanning every plant
-(`DeliveryRing::anticipated`, `n_lanes = n_anticipated`, slot-major/plant-minor)
-— both addressing schemes resolve through the same `out_col`/`in_col` formula
-(`block.start + slot * n_lanes + lane`).
+(`DeliveryRing::transit_buckets`, `n_lanes = 1`, over that plant's ragged
+contiguous sub-range); anticipated instantiates ONE dense ring spanning every
+plant (`DeliveryRing::anticipated`, `n_lanes = n_anticipated`,
+slot-major/plant-minor) — both addressing schemes resolve through the same
+`out_col`/`in_col` formula (`block.start + slot * n_lanes + lane`).
 Read: `lp/builder/delivery_ring.rs` (`DeliveryRing::emit_shift_rows`,
 `freeze_masked_columns`, `emit_deposit`, `out_col`/`in_col`, `slot_target`,
-`DeliveryRing::anticipated`), `lp/builder/entries.rs` (`transit_bucket_ring`).
+`DeliveryRing::anticipated`, `DeliveryRing::transit_buckets`).
 
 ### In-transit bucket dynamics & sign
 
@@ -1518,7 +1518,8 @@ wrong direction — a wrong bound that still compiles. A fold implementation
 cost as the correct one, so total cost alone cannot discriminate — only the
 dual's sign/magnitude and the per-stage delivery split do.
 Read: `lp/builder/entries.rs` (`fill_transit_bucket_definition_entries`,
-`fill_arc_release_block_entries`, `transit_bucket_ring`), `lp/indexer/state_space.rs`
+`fill_arc_release_block_entries`), `lp/builder/delivery_ring.rs`
+(`DeliveryRing::transit_buckets`), `lp/indexer/state_space.rs`
 (`StateSpace::state_to_lp_incoming_column`, `StateSpace::lp_column_for_state`),
 `training/backward/duals_extraction.rs` (`extract_duals_from_view`), `cut/row.rs`
 (`push_scaled_coefficient`, `push_cut_row`). Pinned by the bucket-arm

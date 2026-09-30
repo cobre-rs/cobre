@@ -34,9 +34,7 @@ use crate::test_support::{
 use crate::time_value::{PostStudyResolved, TimeValue};
 
 use super::super::DeliveryRing;
-use super::super::entries::{
-    build_stage_matrix_entries, transit_bucket_plant_ranges, transit_bucket_ring,
-};
+use super::super::entries::build_stage_matrix_entries;
 use super::super::test_support::zero_hydro_penalties;
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET, RangeCursor,
@@ -3743,9 +3741,10 @@ fn build_bucket_row_pos_gates_fewer_rows_as_horizon_cap_shrinks() {
         (HydroSys::new(0), 2),
         (HydroSys::new(0), 3),
     ];
+    let state = state_layout_with_transit_buckets(1, 0, column_order, vec![]);
     let per_stage_mask = vec![vec![2], vec![1], vec![0]];
 
-    let (pos_stage0, n_stage0) = build_transit_bucket_row_pos(&column_order, &per_stage_mask, 0);
+    let (pos_stage0, n_stage0) = build_transit_bucket_row_pos(&state, &per_stage_mask, 0);
     assert_eq!(
         pos_stage0,
         vec![Some(0), Some(1), None],
@@ -3753,7 +3752,7 @@ fn build_bucket_row_pos_gates_fewer_rows_as_horizon_cap_shrinks() {
     );
     assert_eq!(n_stage0, 2);
 
-    let (pos_stage1, n_stage1) = build_transit_bucket_row_pos(&column_order, &per_stage_mask, 1);
+    let (pos_stage1, n_stage1) = build_transit_bucket_row_pos(&state, &per_stage_mask, 1);
     assert_eq!(
         pos_stage1,
         vec![Some(0), None, None],
@@ -3761,7 +3760,7 @@ fn build_bucket_row_pos_gates_fewer_rows_as_horizon_cap_shrinks() {
     );
     assert_eq!(n_stage1, 1);
 
-    let (pos_stage2, n_stage2) = build_transit_bucket_row_pos(&column_order, &per_stage_mask, 2);
+    let (pos_stage2, n_stage2) = build_transit_bucket_row_pos(&state, &per_stage_mask, 2);
     assert_eq!(
         pos_stage2,
         vec![None, None, None],
@@ -3778,7 +3777,8 @@ fn build_bucket_row_pos_gates_fewer_rows_as_horizon_cap_shrinks() {
 /// safe — the B==0 byte-identity anchor at the `build_transit_bucket_row_pos` level.
 #[test]
 fn build_bucket_row_pos_b_zero_short_circuits_without_indexing_mask() {
-    let (pos, n) = build_transit_bucket_row_pos(&[], &[], 0);
+    let state = state_layout_with_transit_buckets(0, 0, vec![], vec![]);
+    let (pos, n) = build_transit_bucket_row_pos(&state, &[], 0);
     assert!(pos.is_empty());
     assert_eq!(n, 0);
 }
@@ -4260,7 +4260,7 @@ fn column_address_pins_cover_every_family() {
 /// built at its own local offset, and that offset must equal the family's own
 /// outgoing/incoming column. This test's left side never changes.
 #[test]
-fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
+fn transit_bucket_addressing_matches_state_space_bucket_accessors() {
     let state = StateSpace::new(
         0,
         0,
@@ -4274,18 +4274,19 @@ fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
         &[],
     );
     let mut compared = 0usize;
-    for range in transit_bucket_plant_ranges(&state) {
-        let ring = transit_bucket_ring(&state, range.clone());
-        for slot in 0..range.len() {
+    for bucket in DeliveryRing::transit_buckets(&state) {
+        for slot in 0..bucket.local.len() {
             assert_eq!(
-                ring.out_col(slot, 0),
-                state.bucket_outgoing_col(range.start + slot).get(),
-                "out_col mismatch at slot={slot} range={range:?}"
+                bucket.ring.out_col(slot, 0),
+                state.bucket_outgoing_col(bucket.local.start + slot).get(),
+                "out_col mismatch at slot={slot} local={:?}",
+                bucket.local
             );
             assert_eq!(
-                ring.in_col(slot, 0),
-                state.bucket_incoming_col(range.start + slot).get(),
-                "in_col mismatch at slot={slot} range={range:?}"
+                bucket.ring.in_col(slot, 0),
+                state.bucket_incoming_col(bucket.local.start + slot).get(),
+                "in_col mismatch at slot={slot} local={:?}",
+                bucket.local
             );
             compared += 1;
         }
@@ -4400,18 +4401,19 @@ fn assert_row_addresses(layout: &StageLayout, block_mode: BlockMode) -> [usize; 
     counts[2] = slot_definition_rows.len();
 
     let mut transit_rows = Vec::new();
-    for range in transit_bucket_plant_ranges(layout.state) {
-        let row_pos = &layout.rows.transit_bucket_row_pos[range.clone()];
-        for slot in 0..range.len() {
+    for bucket in DeliveryRing::transit_buckets(layout.state) {
+        let row_pos = &layout.rows.transit_bucket_row_pos[bucket.local.clone()];
+        for slot in 0..bucket.local.len() {
             let expected = row_pos
                 .get(slot)
                 .copied()
                 .flatten()
                 .map(|pos| layout.rows.transit_bucket_definition.start + pos);
-            let actual = layout.transit_bucket_definition_row(&range, slot);
+            let actual = layout.transit_bucket_definition_row(&bucket.local, slot);
             assert_eq!(
                 actual, expected,
-                "transit definition row disagreement at range={range:?} slot={slot}"
+                "transit definition row disagreement at local={:?} slot={slot}",
+                bucket.local
             );
             if let Some(row) = actual {
                 transit_rows.push(row);

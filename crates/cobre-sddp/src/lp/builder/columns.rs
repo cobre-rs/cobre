@@ -125,11 +125,9 @@ fn fill_storage_columns(
 /// two-sided masking contract; leaving it free would be a free column with no defining
 /// constraint. Incoming buckets stay open, pinned every solve by `fill_col_state_patches`.
 fn fill_transit_bucket_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
-    let state = layout.state;
-    for range in super::entries::transit_bucket_plant_ranges(state) {
-        let ring = super::entries::transit_bucket_ring(state, range.clone());
-        ring.freeze_masked_columns(
-            &layout.rows.transit_bucket_row_pos[range],
+    for bucket in DeliveryRing::transit_buckets(layout.state) {
+        bucket.ring.freeze_masked_columns(
+            &layout.rows.transit_bucket_row_pos[bucket.local],
             (0.0, f64::INFINITY),
             bufs,
         );

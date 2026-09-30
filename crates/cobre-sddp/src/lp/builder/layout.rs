@@ -490,39 +490,32 @@ struct GenericConstraintLayout {
 /// this stage's compact position within [`StageLayout::transit_bucket_definition_row`]'s
 /// row family, or
 /// `None` when `lag` exceeds `per_stage_mask[stage_idx]`'s max reachable lag
-/// for that plant. `column_order` groups contiguously by plant in the SAME
-/// discovery order `per_stage_mask` indexes
-/// ([`crate::bucket_topology::build_transit_bucket_topology`]), so a plant
-/// transition in the scan advances the mask index. Returns the mapping and the
-/// reachable count (`transit_bucket_definition`'s row length).
+/// for that plant. Plant groups come from [`StateSpace::transit_bucket_plants`],
+/// in the SAME discovery order `per_stage_mask` indexes
+/// ([`crate::bucket_topology::build_transit_bucket_topology`]). Returns the
+/// mapping and the reachable count (`transit_bucket_definition`'s row length).
 fn build_transit_bucket_row_pos(
-    column_order: &[(HydroSys, usize)],
+    state: &StateSpace,
     per_stage_mask: &[Vec<usize>],
     stage_idx: usize,
 ) -> (Vec<Option<usize>>, usize) {
-    if column_order.is_empty() {
+    if state.transit_bucket_column_order.is_empty() {
         // B==0 byte-identity anchor: no declared bucket, so no per-stage mask
         // entry is required (`per_stage_mask` may be empty in fixtures that
         // never build one).
         return (Vec::new(), 0);
     }
     let stage_mask = &per_stage_mask[stage_idx];
-    let mut transit_bucket_row_pos = Vec::with_capacity(column_order.len());
-    let mut plant_group = 0_usize;
-    let mut prev_plant: Option<HydroSys> = None;
+    let mut transit_bucket_row_pos = Vec::with_capacity(state.transit_bucket_column_order.len());
     let mut n_reachable = 0_usize;
-    for &(plant_idx, lag) in column_order {
-        if prev_plant != Some(plant_idx) {
-            if prev_plant.is_some() {
-                plant_group += 1;
+    for (plant_group, (_, local)) in state.transit_bucket_plants().enumerate() {
+        for &(_, lag) in &state.transit_bucket_column_order[local] {
+            if lag <= stage_mask[plant_group] {
+                transit_bucket_row_pos.push(Some(n_reachable));
+                n_reachable += 1;
+            } else {
+                transit_bucket_row_pos.push(None);
             }
-            prev_plant = Some(plant_idx);
-        }
-        if lag <= stage_mask[plant_group] {
-            transit_bucket_row_pos.push(Some(n_reachable));
-            n_reachable += 1;
-        } else {
-            transit_bucket_row_pos.push(None);
         }
     }
     (transit_bucket_row_pos, n_reachable)
@@ -1212,11 +1205,8 @@ impl<'a> StageLayout<'a> {
         // `ctx.topology.per_stage_mask[stage_idx]`'s per-plant cap out of the row
         // range entirely — the cap itself is `build_transit_bucket_topology`'s,
         // gated on `boundary_present`.
-        let (transit_bucket_row_pos, n_transit_bucket_rows) = build_transit_bucket_row_pos(
-            &state.transit_bucket_column_order,
-            &ctx.topology.per_stage_mask,
-            stage_idx,
-        );
+        let (transit_bucket_row_pos, n_transit_bucket_rows) =
+            build_transit_bucket_row_pos(state, &ctx.topology.per_stage_mask, stage_idx);
         let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
         let load_balance = BlockRowFamily::per_block(row.alloc(ctx.buses.len() * n_blks));
 

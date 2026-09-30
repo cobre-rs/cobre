@@ -672,6 +672,23 @@ impl StateSpace {
         self.transit_buckets_in.start + local.start..self.transit_buckets_in.start + local.end
     }
 
+    /// Each plant's contiguous run within [`Self::transit_bucket_column_order`],
+    /// as a local sub-range relative to [`Self::transit_buckets_out`]/
+    /// [`Self::transit_buckets_in`]'s own start. The run's length is that
+    /// plant's own bucket depth.
+    pub(crate) fn transit_bucket_plants(
+        &self,
+    ) -> impl Iterator<Item = (HydroSys, Range<usize>)> + '_ {
+        let mut start = 0;
+        self.transit_bucket_column_order
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(move |run| {
+                let local = start..start + run.len();
+                start = local.end;
+                (run[0].0, local)
+            })
+    }
+
     fn commitment_hold_state_dim(&self, plant: usize, m: usize) -> StateDim {
         StateDim::new(
             self.state_dim_commitment_hold_range().start
@@ -820,6 +837,8 @@ impl StateSpace {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use super::{
         AnticipatedResolution, HydroSys, InCol, OutCol, StateDim, StateSpace,
         for_each_live_commitment_slot,
@@ -1684,6 +1703,27 @@ mod tests {
                 "A==0 collapse must not disturb the storage/lag/bucket resolvers"
             );
         }
+    }
+
+    /// `transit_bucket_plants` groups a two-plant `column_order` into each
+    /// plant's own contiguous local sub-range, and an empty order yields
+    /// nothing.
+    #[test]
+    fn transit_bucket_plants_groups_the_bucket_order_by_plant() {
+        let h1 = HydroSys::new(1);
+        let h3 = HydroSys::new(3);
+        let idx = finalized_with_transit_buckets(
+            4,
+            0,
+            vec![(h1, 1), (h1, 2), (h3, 1), (h3, 2), (h3, 3)],
+            vec![],
+        );
+
+        let groups: Vec<(HydroSys, Range<usize>)> = idx.transit_bucket_plants().collect();
+        assert_eq!(groups, vec![(h1, 0..2), (h3, 2..5)]);
+
+        let empty = finalized(4, 0, vec![]);
+        assert_eq!(empty.transit_bucket_plants().count(), 0);
     }
 
     // ── In-LP anticipated ring: masking + collapse ─────────────

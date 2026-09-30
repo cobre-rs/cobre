@@ -1480,6 +1480,43 @@ pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::
     (build_chronological_noise_system(spec), build_config())
 }
 
+/// [`chronological_noise_study`] with its pumping station enabled, built
+/// once with every stage [`BlockMode::Chronological`] and once
+/// [`BlockMode::Parallel`] through the spec's own per-stage `block_modes`:
+/// the chronological-vs-parallel sum identity's pumping non-vacuity case, no
+/// committed deck combining a pumping station with a multi-block stage.
+///
+/// Each build's builder is called twice — see [`keyed_setups`]'s doc comment
+/// for why.
+#[must_use]
+pub fn chronological_pumping_pair() -> (
+    (cobre_core::System, StudySetup),
+    (cobre_core::System, StudySetup),
+) {
+    let chrono_spec = ChronologicalNoiseSpec {
+        pumping_station: true,
+        ..Default::default()
+    };
+    let parallel_spec = ChronologicalNoiseSpec {
+        block_modes: [BlockMode::Parallel; 2],
+        pumping_station: true,
+        ..Default::default()
+    };
+
+    let (chrono_system, chrono_config) = chronological_noise_study(&chrono_spec);
+    let (chrono_system_for_setup, _) = chronological_noise_study(&chrono_spec);
+    let chrono_setup = super::build_setup_in_code(chrono_system_for_setup, &chrono_config);
+
+    let (parallel_system, parallel_config) = chronological_noise_study(&parallel_spec);
+    let (parallel_system_for_setup, _) = chronological_noise_study(&parallel_spec);
+    let parallel_setup = super::build_setup_in_code(parallel_system_for_setup, &parallel_config);
+
+    (
+        (chrono_system, chrono_setup),
+        (parallel_system, parallel_setup),
+    )
+}
+
 /// The manifest's in-code study set, keyed exactly as
 /// `tests/template_snapshot.rs`'s former `in_code_decks()`: each isolates a
 /// stage-LP builder axis no committed deck combines.

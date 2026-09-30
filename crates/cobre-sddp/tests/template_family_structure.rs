@@ -14,15 +14,18 @@
 
 mod common;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cobre_core::{BlockMode, EntityId, System};
+use cobre_sddp::StudySetup;
 use cobre_sddp::indexer::{BlockIdx, Boundary, BusSys, FphaCellLocal, HydroCellIndex, HydroSys};
+use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::test_support::template_structure::{
-    ColOwner, RingLane, RingLaneKind, RowOwner, UnscaledMatrix, column_owners,
-    generation_column_owners, hours_to_hm3, ring_lanes, row_owners, storage_column_owners,
-    water_row_owners,
+    ColKey, ColOwner, RingLane, RingLaneKind, RowOwner, UnscaledMatrix, column_owners,
+    generation_column_owners, hours_to_hm3, ring_lanes, row_by_owner, row_owners,
+    storage_column_owners, water_row_owners,
 };
+use cobre_solver::StageTemplate;
 
 const TOL: f64 = 1e-12;
 
@@ -562,15 +565,32 @@ fn direct_downstream(
         .and_then(|id| positions.get(&id).copied())
 }
 
+/// `true` when a turbine or spillage release from `source` is chronologically
+/// delayed onto `d`'s water row: `d` is `source`'s own DIRECT downstream and
+/// `source` declares `travel_time_hours > 0` — the one condition shared by
+/// [`water_block_ok`]'s block-relationship check and the sum identity's
+/// source-block collapse.
+fn is_travel_time_delayed(
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    d: HydroSys,
+    source: HydroSys,
+) -> bool {
+    direct_downstream(system, positions, source) == Some(d.get())
+        && system.hydros()[source.get()]
+            .travel_time_hours
+            .is_some_and(|t| t > 0.0)
+}
+
 /// `true` when a chronological-stage water-row entry's column block (`cb`)
 /// and row block (`rb`) satisfy the block relationship the entry owes: exact
-/// equality for every entry, EXCEPT a turbine or spillage entry of plant `u`
-/// found on `u`'s own DIRECT downstream's row where `u` declares
-/// `travel_time_hours > 0` — within-stage routing there only delays water,
-/// never advances it, so the row's block need only be at or after the
-/// column's. Every other cross-hydro route (a diversion, or a turbine/
-/// spillage entry reached past the direct downstream through a pre-filling
-/// short-circuit, which moves its whole release with no lag) keeps equality.
+/// equality for every entry, EXCEPT a turbine or spillage entry
+/// [`is_travel_time_delayed`] onto `d` — within-stage routing there only
+/// delays water, never advances it, so the row's block need only be at or
+/// after the column's. Every other cross-hydro route (a diversion, or a
+/// turbine/spillage entry reached past the direct downstream through a
+/// pre-filling short-circuit, which moves its whole release with no lag)
+/// keeps equality.
 fn water_block_ok(
     system: &System,
     positions: &HashMap<EntityId, usize>,
@@ -581,10 +601,7 @@ fn water_block_ok(
 ) -> bool {
     let delayed = match owner {
         ColOwner::Turbine { hydro, .. } | ColOwner::Spillage { hydro, .. } => {
-            direct_downstream(system, positions, hydro) == Some(d.get())
-                && system.hydros()[hydro.get()]
-                    .travel_time_hours
-                    .is_some_and(|t| t > 0.0)
+            is_travel_time_delayed(system, positions, d, hydro)
         }
         _ => false,
     };
@@ -722,5 +739,490 @@ fn every_study_places_each_column_only_on_its_entitys_block_rows() {
     assert!(
         saw_diversion_on_water,
         "no diversion-on-water entry was checked"
+    );
+}
+
+const SUM_TOL: f64 = 1e-9;
+
+/// `a == b` within `SUM_TOL * max(1, |a|, |b|)`, or both infinite with the
+/// same sign.
+fn sum_approx_eq(a: f64, b: f64) -> bool {
+    if a.is_infinite() || b.is_infinite() {
+        return a == b;
+    }
+    (a - b).abs() <= SUM_TOL * a.abs().max(b.abs()).max(1.0)
+}
+
+/// `t`'s row `r` bound (`lower` selects `row_lower`, else `row_upper`),
+/// unscaled by `row_scale[r]` the way [`UnscaledMatrix::of`] unscales values.
+fn unscaled_row_bound(t: &StageTemplate, r: usize, lower: bool) -> f64 {
+    let scale = t.row_scale.get(r).copied().unwrap_or(1.0);
+    let raw = if lower {
+        t.row_lower[r]
+    } else {
+        t.row_upper[r]
+    };
+    raw / scale
+}
+
+/// Asserts `chrono` and `parallel` agree key by key (a key absent from
+/// either side counts as `0.0`), skipping every [`ColKey::Storage`] key when
+/// `exclude_storage`.
+fn assert_keyed_rows_equal(
+    label: &str,
+    chrono: &BTreeMap<ColKey, f64>,
+    parallel: &BTreeMap<ColKey, f64>,
+    exclude_storage: bool,
+) {
+    let mut keys: Vec<ColKey> = chrono.keys().chain(parallel.keys()).copied().collect();
+    keys.sort();
+    keys.dedup();
+    for key in keys {
+        if exclude_storage && matches!(key, ColKey::Storage { .. }) {
+            continue;
+        }
+        let c = chrono.get(&key).copied().unwrap_or(0.0);
+        let p = parallel.get(&key).copied().unwrap_or(0.0);
+        assert!(
+            sum_approx_eq(c, p),
+            "{label}: key {key:?} chrono {c} != parallel {p}"
+        );
+    }
+}
+
+/// Non-vacuity counters [`every_multi_block_deck_sums_its_chronological_rows_to_its_parallel_row`]
+/// accumulates across every compared deck.
+#[derive(Default)]
+struct SumIdentityCoverage {
+    decks_compared: usize,
+    saw_bucket_on_water: bool,
+    saw_pumping_on_water: bool,
+}
+
+/// The water-balance identity for hydro `h` at stage `s`: `Σ_k
+/// row_by_owner(chrono, water_balance_row(h, k))` equals
+/// `row_by_owner(parallel, water_balance_row(h, 0))` key by key, with
+/// `Storage { h, Interior(_) }` keys telescoping to `0` in the chronological
+/// sum and absent from the parallel row, and with the row bounds summing the
+/// same way. Marks `coverage`'s `Bucket`/`Pumping` water flags when either
+/// key is compared.
+///
+/// A `Turbine`/`Spillage` key [`is_travel_time_delayed`] onto `d` drops its
+/// source `blk` first: the chronological per-block split and the parallel
+/// stage-level average (`arc_stage_weights[0]`) agree only once both sides
+/// are also summed over the source's own blocks — the same τ-weighted
+/// aggregation `fill_arc_release_chrono_block_entries` already asserts.
+fn collapse_water_key(
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    d: HydroSys,
+    key: ColKey,
+) -> ColKey {
+    match key {
+        ColKey::Turbine { hydro, cell, .. }
+            if is_travel_time_delayed(system, positions, d, hydro) =>
+        {
+            ColKey::Turbine {
+                hydro,
+                cell,
+                blk: BlockIdx::new(0),
+            }
+        }
+        ColKey::Spillage { hydro, .. } if is_travel_time_delayed(system, positions, d, hydro) => {
+            ColKey::Spillage {
+                hydro,
+                blk: BlockIdx::new(0),
+            }
+        }
+        other => other,
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one per-build (geom, template, matrix, cols) quadruple, times two builds, plus the shared identity/label context"
+)]
+fn assert_water_row_sum_identity(
+    key: &str,
+    s: usize,
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    h: HydroSys,
+    chrono_geom: &StageGeometry,
+    chrono_template: &StageTemplate,
+    chrono_matrix: &UnscaledMatrix,
+    chrono_cols: &HashMap<usize, ColOwner>,
+    parallel_geom: &StageGeometry,
+    parallel_template: &StageTemplate,
+    parallel_matrix: &UnscaledMatrix,
+    parallel_cols: &HashMap<usize, ColOwner>,
+    coverage: &mut SumIdentityCoverage,
+) {
+    let mut chrono_sum: BTreeMap<ColKey, f64> = BTreeMap::new();
+    let mut chrono_lower_sum = 0.0;
+    let mut chrono_upper_sum = 0.0;
+    for k in 0..chrono_geom.n_blks {
+        let row = chrono_geom.water_balance_row(h, BlockIdx::new(k));
+        for (key_, value) in row_by_owner(chrono_matrix, chrono_cols, row) {
+            let key_ = collapse_water_key(system, positions, h, key_);
+            *chrono_sum.entry(key_).or_insert(0.0) += value;
+        }
+        chrono_lower_sum += unscaled_row_bound(chrono_template, row, true);
+        chrono_upper_sum += unscaled_row_bound(chrono_template, row, false);
+    }
+
+    let parallel_row_idx = parallel_geom.water_balance_row(h, BlockIdx::new(0));
+    let mut parallel_row: BTreeMap<ColKey, f64> = BTreeMap::new();
+    for (key_, value) in row_by_owner(parallel_matrix, parallel_cols, parallel_row_idx) {
+        let key_ = collapse_water_key(system, positions, h, key_);
+        *parallel_row.entry(key_).or_insert(0.0) += value;
+    }
+    let parallel_lower = unscaled_row_bound(parallel_template, parallel_row_idx, true);
+    let parallel_upper = unscaled_row_bound(parallel_template, parallel_row_idx, false);
+
+    let mut keys: Vec<ColKey> = chrono_sum
+        .keys()
+        .chain(parallel_row.keys())
+        .copied()
+        .collect();
+    keys.sort();
+    keys.dedup();
+    for key_ in keys {
+        if matches!(
+            key_,
+            ColKey::Storage {
+                boundary: Boundary::Interior(_),
+                ..
+            }
+        ) {
+            let c = chrono_sum.get(&key_).copied().unwrap_or(0.0);
+            assert!(
+                sum_approx_eq(c, 0.0),
+                "{key} stage {s}: water row hydro {h:?} interior storage key {key_:?} chrono sum {c} != 0"
+            );
+            assert!(
+                !parallel_row.contains_key(&key_),
+                "{key} stage {s}: water row hydro {h:?} interior storage key {key_:?} present in the parallel row"
+            );
+            continue;
+        }
+        let c = chrono_sum.get(&key_).copied().unwrap_or(0.0);
+        let p = parallel_row.get(&key_).copied().unwrap_or(0.0);
+        assert!(
+            sum_approx_eq(c, p),
+            "{key} stage {s}: water row hydro {h:?} key {key_:?} chrono sum {c} != parallel {p}"
+        );
+        if matches!(key_, ColKey::Bucket { .. }) {
+            coverage.saw_bucket_on_water = true;
+        }
+        if matches!(key_, ColKey::Pumping { .. }) {
+            coverage.saw_pumping_on_water = true;
+        }
+    }
+
+    assert!(
+        sum_approx_eq(chrono_lower_sum, parallel_lower),
+        "{key} stage {s}: water row hydro {h:?} lower bound sum {chrono_lower_sum} != parallel {parallel_lower}"
+    );
+    assert!(
+        sum_approx_eq(chrono_upper_sum, parallel_upper),
+        "{key} stage {s}: water row hydro {h:?} upper bound sum {chrono_upper_sum} != parallel {parallel_upper}"
+    );
+}
+
+/// The load-balance identity for bus `bus`, block `k`: `row_by_owner` on each
+/// build's own block-`k` row agree key by key, and the row bounds are equal.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one per-build (geom, template, matrix, cols) quadruple, times two builds, plus the shared identity/label context"
+)]
+fn assert_load_row_identity(
+    key: &str,
+    s: usize,
+    bus: BusSys,
+    k: usize,
+    chrono_geom: &StageGeometry,
+    chrono_template: &StageTemplate,
+    chrono_matrix: &UnscaledMatrix,
+    chrono_cols: &HashMap<usize, ColOwner>,
+    parallel_geom: &StageGeometry,
+    parallel_template: &StageTemplate,
+    parallel_matrix: &UnscaledMatrix,
+    parallel_cols: &HashMap<usize, ColOwner>,
+) {
+    let chrono_row_idx = chrono_geom.load_balance_row(bus, BlockIdx::new(k));
+    let parallel_row_idx = parallel_geom.load_balance_row(bus, BlockIdx::new(k));
+    let chrono_row = row_by_owner(chrono_matrix, chrono_cols, chrono_row_idx);
+    let parallel_row = row_by_owner(parallel_matrix, parallel_cols, parallel_row_idx);
+    assert_keyed_rows_equal(
+        &format!("{key} stage {s}: load row bus {bus:?} block {k}"),
+        &chrono_row,
+        &parallel_row,
+        false,
+    );
+    assert!(
+        sum_approx_eq(
+            unscaled_row_bound(chrono_template, chrono_row_idx, true),
+            unscaled_row_bound(parallel_template, parallel_row_idx, true)
+        ),
+        "{key} stage {s}: load row bus {bus:?} block {k} lower bound differs"
+    );
+    assert!(
+        sum_approx_eq(
+            unscaled_row_bound(chrono_template, chrono_row_idx, false),
+            unscaled_row_bound(parallel_template, parallel_row_idx, false)
+        ),
+        "{key} stage {s}: load row bus {bus:?} block {k} upper bound differs"
+    );
+}
+
+/// Groups `fpha_rows` by the `(cell, blk)` of each row's own generation
+/// column (via `cols`), in ascending row order within each group.
+fn fpha_row_groups(
+    matrix: &UnscaledMatrix,
+    cols: &HashMap<usize, ColOwner>,
+    fpha_rows: std::ops::Range<usize>,
+) -> BTreeMap<(usize, usize), Vec<usize>> {
+    let mut groups: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    for r in fpha_rows {
+        let generation = matrix.row(r).iter().find_map(|&(c, _)| match cols.get(&c) {
+            Some(&ColOwner::Generation { cell, blk }) => Some((cell.get(), blk.get())),
+            _ => None,
+        });
+        let key =
+            generation.unwrap_or_else(|| panic!("fpha row {r} has no decoded generation column"));
+        groups.entry(key).or_default().push(r);
+    }
+    groups
+}
+
+/// The FPHA identity at stage `s`: grouping each build's `geom.fpha` rows by
+/// `(cell, blk)`, the `i`-th rows of each matching group agree key by key,
+/// excluding every [`ColKey::Storage`] key (the average-storage terms differ
+/// by mode on purpose).
+fn assert_fpha_row_identity(
+    key: &str,
+    s: usize,
+    chrono_geom: &StageGeometry,
+    chrono_matrix: &UnscaledMatrix,
+    chrono_cols: &HashMap<usize, ColOwner>,
+    parallel_geom: &StageGeometry,
+    parallel_matrix: &UnscaledMatrix,
+    parallel_cols: &HashMap<usize, ColOwner>,
+) {
+    let chrono_groups = fpha_row_groups(chrono_matrix, chrono_cols, chrono_geom.fpha.clone());
+    let parallel_groups =
+        fpha_row_groups(parallel_matrix, parallel_cols, parallel_geom.fpha.clone());
+
+    let mut group_keys: Vec<(usize, usize)> = chrono_groups
+        .keys()
+        .chain(parallel_groups.keys())
+        .copied()
+        .collect();
+    group_keys.sort_unstable();
+    group_keys.dedup();
+
+    for gk in group_keys {
+        let empty = Vec::new();
+        let chrono_rows = chrono_groups.get(&gk).unwrap_or(&empty);
+        let parallel_rows = parallel_groups.get(&gk).unwrap_or(&empty);
+        assert_eq!(
+            chrono_rows.len(),
+            parallel_rows.len(),
+            "{key} stage {s}: fpha group {gk:?} row count differs"
+        );
+        for (i, (&cr, &pr)) in chrono_rows.iter().zip(parallel_rows.iter()).enumerate() {
+            let chrono_row = row_by_owner(chrono_matrix, chrono_cols, cr);
+            let parallel_row = row_by_owner(parallel_matrix, parallel_cols, pr);
+            assert_keyed_rows_equal(
+                &format!("{key} stage {s}: fpha group {gk:?} row {i}"),
+                &chrono_row,
+                &parallel_row,
+                true,
+            );
+        }
+    }
+}
+
+/// The z-inflow identity for hydro `h`: the z row agrees key by key in both
+/// modes, and so do its bounds.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one per-build (template, matrix, cols, row index) quadruple, times two builds, plus the shared identity/label context"
+)]
+fn assert_z_row_identity(
+    key: &str,
+    s: usize,
+    h: HydroSys,
+    chrono_row_idx: usize,
+    chrono_template: &StageTemplate,
+    chrono_matrix: &UnscaledMatrix,
+    chrono_cols: &HashMap<usize, ColOwner>,
+    parallel_row_idx: usize,
+    parallel_template: &StageTemplate,
+    parallel_matrix: &UnscaledMatrix,
+    parallel_cols: &HashMap<usize, ColOwner>,
+) {
+    let chrono_row = row_by_owner(chrono_matrix, chrono_cols, chrono_row_idx);
+    let parallel_row = row_by_owner(parallel_matrix, parallel_cols, parallel_row_idx);
+    assert_keyed_rows_equal(
+        &format!("{key} stage {s}: z row hydro {h:?}"),
+        &chrono_row,
+        &parallel_row,
+        false,
+    );
+    assert!(
+        sum_approx_eq(
+            unscaled_row_bound(chrono_template, chrono_row_idx, true),
+            unscaled_row_bound(parallel_template, parallel_row_idx, true)
+        ),
+        "{key} stage {s}: z row hydro {h:?} lower bound differs"
+    );
+    assert!(
+        sum_approx_eq(
+            unscaled_row_bound(chrono_template, chrono_row_idx, false),
+            unscaled_row_bound(parallel_template, parallel_row_idx, false)
+        ),
+        "{key} stage {s}: z row hydro {h:?} upper bound differs"
+    );
+}
+
+/// Compares `chrono` and `parallel`'s builds of the same deck (`key`): for
+/// every stage with `n_blks > 1`, runs the water, load, z and FPHA
+/// identities and updates `coverage`.
+fn compare_block_mode_pair(
+    key: &str,
+    chrono: (&System, &StudySetup),
+    parallel: (&System, &StudySetup),
+    coverage: &mut SumIdentityCoverage,
+) {
+    let (chrono_system, chrono_setup) = chrono;
+    let (parallel_system, parallel_setup) = parallel;
+    let chrono_state = chrono_setup.stage_state();
+    let parallel_state = parallel_setup.stage_state();
+    let chrono_templates = &chrono_setup.inputs.stage_data.stage_templates;
+    let parallel_templates = &parallel_setup.inputs.stage_data.stage_templates;
+    let positions: HashMap<EntityId, usize> = chrono_system
+        .hydros()
+        .iter()
+        .enumerate()
+        .map(|(i, hy)| (hy.id, i))
+        .collect();
+
+    let mut any_stage = false;
+    for s in 0..chrono_templates.templates.len() {
+        let chrono_geom = &chrono_templates.geometry_per_stage[s];
+        if chrono_geom.n_blks <= 1 {
+            continue;
+        }
+        any_stage = true;
+
+        let parallel_geom = &parallel_templates.geometry_per_stage[s];
+        let chrono_template = &chrono_templates.templates[s];
+        let parallel_template = &parallel_templates.templates[s];
+        let chrono_matrix = UnscaledMatrix::of(chrono_template);
+        let parallel_matrix = UnscaledMatrix::of(parallel_template);
+        let chrono_cols = column_owners(chrono_system, chrono_geom, chrono_state);
+        let parallel_cols = column_owners(parallel_system, parallel_geom, parallel_state);
+
+        for h in 0..chrono_state.hydro_count {
+            let hydro = HydroSys::new(h);
+            assert_water_row_sum_identity(
+                key,
+                s,
+                chrono_system,
+                &positions,
+                hydro,
+                chrono_geom,
+                chrono_template,
+                &chrono_matrix,
+                &chrono_cols,
+                parallel_geom,
+                parallel_template,
+                &parallel_matrix,
+                &parallel_cols,
+                coverage,
+            );
+        }
+
+        for b in 0..chrono_system.buses().len() {
+            let bus = BusSys::new(b);
+            for k in 0..chrono_geom.n_blks {
+                assert_load_row_identity(
+                    key,
+                    s,
+                    bus,
+                    k,
+                    chrono_geom,
+                    chrono_template,
+                    &chrono_matrix,
+                    &chrono_cols,
+                    parallel_geom,
+                    parallel_template,
+                    &parallel_matrix,
+                    &parallel_cols,
+                );
+            }
+        }
+
+        for h in 0..chrono_state.hydro_count {
+            let hydro = HydroSys::new(h);
+            assert_z_row_identity(
+                key,
+                s,
+                hydro,
+                chrono_state.z_inflow_row(hydro),
+                chrono_template,
+                &chrono_matrix,
+                &chrono_cols,
+                parallel_state.z_inflow_row(hydro),
+                parallel_template,
+                &parallel_matrix,
+                &parallel_cols,
+            );
+        }
+
+        assert_fpha_row_identity(
+            key,
+            s,
+            chrono_geom,
+            &chrono_matrix,
+            &chrono_cols,
+            parallel_geom,
+            &parallel_matrix,
+            &parallel_cols,
+        );
+    }
+
+    if any_stage {
+        coverage.decks_compared += 1;
+    }
+}
+
+#[test]
+fn every_multi_block_deck_sums_its_chronological_rows_to_its_parallel_row() {
+    let mut coverage = SumIdentityCoverage::default();
+
+    common::for_each_deck_in_both_block_modes(|key, chrono, parallel| {
+        compare_block_mode_pair(key, chrono, parallel, &mut coverage);
+    });
+
+    let ((chrono_system, chrono_setup), (parallel_system, parallel_setup)) =
+        common::in_code_studies::chronological_pumping_pair();
+    compare_block_mode_pair(
+        "in-code/chronological-pumping",
+        (&chrono_system, &chrono_setup),
+        (&parallel_system, &parallel_setup),
+        &mut coverage,
+    );
+
+    assert!(coverage.decks_compared > 0, "no deck was compared");
+    assert!(
+        coverage.saw_bucket_on_water,
+        "no travel-time (Bucket key) water row was compared"
+    );
+    assert!(
+        coverage.saw_pumping_on_water,
+        "no pumping water row was compared"
     );
 }

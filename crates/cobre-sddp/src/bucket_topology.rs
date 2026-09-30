@@ -28,11 +28,9 @@ pub(crate) struct TravelTimeArc {
 /// Canonical bucket ordering, global bucket count, and per-stage reachability
 /// mask.
 ///
-/// `n_buckets == 0` exactly when [`Self::arcs`] is empty.
+/// [`Self::n_buckets`] returns `0` exactly when [`Self::arcs`] is empty.
 #[derive(Debug, Clone)]
 pub(crate) struct TransitBucketTopology {
-    /// Global bucket count, `Σ_j per_plant_depth[j]`.
-    pub(crate) n_buckets: usize,
     /// Aggregated depth `L_j` per downstream plant, in [`Self::column_order`]'s
     /// plant order.
     pub(crate) per_plant_depth: Vec<usize>,
@@ -63,7 +61,12 @@ impl TransitBucketTopology {
         &self.arcs
     }
 
-    /// A no-arc topology (`n_buckets == 0`, every table empty), for a
+    /// Global bucket count, `Σ_j per_plant_depth[j]`.
+    pub(crate) fn n_buckets(&self) -> usize {
+        self.column_order.len()
+    }
+
+    /// A no-arc topology (`n_buckets() == 0`, every table empty), for a
     /// hand-built [`TemplateBuildCtx`](crate::lp::builder::TemplateBuildCtx)
     /// fixture with no backing [`System`] to run [`build_transit_bucket_topology`]
     /// against. The private `arcs` field makes this the only way to construct
@@ -72,7 +75,6 @@ impl TransitBucketTopology {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn empty() -> Self {
         Self {
-            n_buckets: 0,
             per_plant_depth: Vec::new(),
             column_order: Vec::new(),
             per_stage_mask: Vec::new(),
@@ -235,19 +237,12 @@ pub(crate) fn build_transit_bucket_topology(
         }
     }
 
-    let n_buckets = column_order.len();
-    debug_assert!(
-        arcs.is_empty() == (n_buckets == 0),
-        "n_buckets must be zero exactly when no arc is declared"
-    );
-
     let arc_stage_weights = build_arc_stage_weights(&arcs, calendar);
     let arc_spread_chrono = build_arc_spread_chrono(system, &arcs, calendar);
     let arc_arrival_density =
         build_arc_arrival_density(system, &arcs, calendar, &arc_stage_weights);
 
-    TransitBucketTopology {
-        n_buckets,
+    let topology = TransitBucketTopology {
         per_plant_depth,
         column_order,
         per_stage_mask,
@@ -255,7 +250,12 @@ pub(crate) fn build_transit_bucket_topology(
         arc_spread_chrono,
         arc_arrival_density,
         arcs,
-    }
+    };
+    debug_assert!(
+        topology.arcs.is_empty() == (topology.n_buckets() == 0),
+        "n_buckets must be zero exactly when no arc is declared"
+    );
+    topology
 }
 
 /// Per-declared-arc PARALLEL-mode stage-clock weights, keyed by the arc's
@@ -617,7 +617,7 @@ mod tests {
         let calendar = DeliveryCalendar::from_system(&system);
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
-        assert_eq!(topology.n_buckets, 0);
+        assert_eq!(topology.n_buckets(), 0);
         assert!(topology.column_order.is_empty());
         assert!(topology.per_plant_depth.is_empty());
     }
@@ -667,7 +667,7 @@ mod tests {
         let calendar = DeliveryCalendar::from_system(&system);
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
-        assert_eq!(topology.n_buckets, 0);
+        assert_eq!(topology.n_buckets(), 0);
     }
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.per_plant_depth, vec![5]);
-        assert_eq!(topology.n_buckets, 5);
+        assert_eq!(topology.n_buckets(), 5);
         assert_eq!(
             topology.column_order,
             vec![(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]
@@ -717,7 +717,7 @@ mod tests {
         let topology = build_transit_bucket_topology(&system, &calendar, false);
 
         assert_eq!(topology.per_plant_depth, vec![2]);
-        assert_eq!(topology.n_buckets, 2);
+        assert_eq!(topology.n_buckets(), 2);
 
         // The stage-0 mask reaches the IC-residual slot 2 (decaying reachability,
         // not a zero-deposit filter); it narrows to the own-release depth once the
@@ -782,7 +782,7 @@ mod tests {
             vec![3],
             "global depth sizing is unaffected by the per-stage horizon cap"
         );
-        assert_eq!(topology.n_buckets, 3);
+        assert_eq!(topology.n_buckets(), 3);
         assert_eq!(topology.column_order, vec![(0, 1), (0, 2), (0, 3)]);
 
         assert_eq!(topology.per_stage_mask[0], vec![2], "cap = 3 - 1 - 0 = 2");
@@ -830,7 +830,8 @@ mod tests {
             "un-capping the mask must not change the canonical column order"
         );
         assert_eq!(
-            topology_on.n_buckets, topology_off.n_buckets,
+            topology_on.n_buckets(),
+            topology_off.n_buckets(),
             "un-capping the mask must not change the global bucket count"
         );
 
@@ -935,7 +936,7 @@ mod tests {
 
         assert_eq!(topology_a.column_order, topology_b.column_order);
         assert_eq!(topology_a.per_plant_depth, topology_b.per_plant_depth);
-        assert_eq!(topology_a.n_buckets, topology_b.n_buckets);
+        assert_eq!(topology_a.n_buckets(), topology_b.n_buckets());
     }
 
     #[test]
@@ -1306,7 +1307,7 @@ mod tests {
 
         assert_eq!(topology_a.column_order, topology_b.column_order);
         assert_eq!(topology_a.per_plant_depth, topology_b.per_plant_depth);
-        assert_eq!(topology_a.n_buckets, topology_b.n_buckets);
+        assert_eq!(topology_a.n_buckets(), topology_b.n_buckets());
     }
 
     /// A declared post-study calendar whose stage durations exactly match the
@@ -1338,12 +1339,12 @@ mod tests {
             build_transit_bucket_topology(&system_no_calendar, &calendar_no_calendar, false);
 
         assert!(
-            topology_no_calendar.n_buckets > 0,
+            topology_no_calendar.n_buckets() > 0,
             "fixture has no power unless it declares at least one travel-time bucket"
         );
         assert_eq!(
-            topology_with_calendar.n_buckets,
-            topology_no_calendar.n_buckets
+            topology_with_calendar.n_buckets(),
+            topology_no_calendar.n_buckets()
         );
         assert_eq!(
             topology_with_calendar.per_plant_depth,
@@ -1399,7 +1400,7 @@ mod tests {
             build_transit_bucket_topology(&system_no_calendar, &calendar_no_calendar, false);
 
         assert!(
-            topology_no_calendar.n_buckets > 0,
+            topology_no_calendar.n_buckets() > 0,
             "fixture has no power unless it declares at least one travel-time bucket"
         );
         assert!(

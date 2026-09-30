@@ -973,7 +973,7 @@ pub(crate) fn resolve_state_layout(
     let state = StateSpace::new(
         hydro_count,
         max_par_order,
-        transit_bucket_topology.n_buckets,
+        transit_bucket_topology.n_buckets(),
         transit_bucket_topology.column_order.clone(),
         anticipated_lead_stages,
         anticipated_resolution,
@@ -2648,8 +2648,8 @@ fn build_initial_transit_bucket_state(
     system: &System,
     topology: &bucket_topology::TransitBucketTopology,
 ) -> Vec<f64> {
-    let mut seed = vec![0.0_f64; topology.n_buckets];
-    if topology.n_buckets == 0 {
+    let mut seed = vec![0.0_f64; topology.n_buckets()];
+    if topology.n_buckets() == 0 {
         return seed;
     }
 
@@ -2699,7 +2699,7 @@ fn build_initial_transit_bucket_state(
         start += depth;
     }
 
-    debug_assert_eq!(seed.len(), topology.n_buckets);
+    debug_assert_eq!(seed.len(), topology.n_buckets());
     seed
 }
 

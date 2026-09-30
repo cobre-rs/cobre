@@ -7833,7 +7833,7 @@ fn stage_id_resolver_agrees_with_study_stage_ids() {
 }
 
 /// 2-hydro cascade: hydro 2 (upstream) declares a travel-time arc into hydro 1
-/// (downstream), so `bucket_topology.n_buckets > 0`.
+/// (downstream), so `bucket_topology.n_buckets() > 0`.
 #[expect(
     clippy::too_many_lines,
     clippy::items_after_statements,
@@ -10888,7 +10888,7 @@ fn test_single_arc_unroll_matches_ac1() {
     assert_eq!(topology.per_plant_depth, vec![2], "sanity: 2-bucket depth");
 
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
-    assert_eq!(seed.len(), topology.n_buckets);
+    assert_eq!(seed.len(), topology.n_buckets());
 
     let volume = 24.0 * M3S_TO_HM3 * 100.0;
     assert!(
@@ -11021,7 +11021,7 @@ fn test_seed_len_matches_n_buckets() {
     let calendar = DeliveryCalendar::from_system(&system);
     let topology = crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
     let seed = super::build_initial_transit_bucket_state(&system, &topology);
-    assert_eq!(seed.len(), topology.n_buckets);
+    assert_eq!(seed.len(), topology.n_buckets());
 
     let no_arc_downstream = bucket_seed_hydro(1, None, None);
     let no_arc_system = bucket_seed_build_system(
@@ -11035,7 +11035,7 @@ fn test_seed_len_matches_n_buckets() {
         &no_arc_calendar,
         false,
     );
-    assert_eq!(no_arc_topology.n_buckets, 0);
+    assert_eq!(no_arc_topology.n_buckets(), 0);
     let no_arc_seed = super::build_initial_transit_bucket_state(&no_arc_system, &no_arc_topology);
     assert_eq!(no_arc_seed.len(), 0);
 }
@@ -11079,7 +11079,7 @@ fn test_gapped_windows_contribute_additively() {
     let k_recent = calendar.hour_window_shares(72.0, 0.0, 24.0);
     let k_older = calendar.hour_window_shares(72.0, 48.0, 24.0);
 
-    let mut expected = vec![0.0_f64; topology.n_buckets];
+    let mut expected = vec![0.0_f64; topology.n_buckets()];
     for (d, &k_val) in k_recent.iter().enumerate() {
         expected[d] += k_val * vol_recent;
     }

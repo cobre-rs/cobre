@@ -2093,7 +2093,7 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let ctx_b_state = StateSpace::new(
         resolved.state.hydro_count,
         max_par_order,
-        topology.n_buckets,
+        topology.n_buckets(),
         topology.column_order.clone(),
         ctx_b_lead_stages,
         ctx_b_resolution,

@@ -235,7 +235,7 @@ impl CtxFixture {
         StateSpace::new(
             self.hydros.len(),
             max_par_order,
-            self.topology.n_buckets,
+            self.topology.n_buckets(),
             self.topology.column_order.clone(),
             self.anticipated_lead_stages.clone(),
             resolution,

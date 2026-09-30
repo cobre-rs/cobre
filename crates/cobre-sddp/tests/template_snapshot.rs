@@ -40,25 +40,6 @@ fn build_deck_or_panic(deck: &Deck) -> StudySetup {
     })
 }
 
-/// In-code fixtures, keyed by their manifest key: each isolates a stage-LP
-/// builder axis no committed deck combines. Included in both the compare and
-/// the regen tests, never slow-gated.
-fn in_code_decks() -> Vec<(String, StudySetup)> {
-    let (system, config) = common::in_code_studies::discounted_anticipated_study();
-    let (evap_system, evap_config, evap_hydro_models) =
-        common::in_code_studies::parallel_multiblock_evaporation_study();
-    vec![
-        (
-            "in-code/discounted-anticipated".to_string(),
-            common::build_setup_in_code(system, &config),
-        ),
-        (
-            "in-code/parallel-multiblock-evaporation".to_string(),
-            common::build_setup_in_code_with_models(evap_system, &evap_config, evap_hydro_models),
-        ),
-    ]
-}
-
 /// One sorted line per `(key, group)`: `<key>\t<group>\t<sha256-hex>`.
 fn fact_lines(key: &str, setup: &StudySetup) -> Vec<String> {
     template_fact_groups(setup)
@@ -240,7 +221,7 @@ fn manifest_lines(decks: &[Deck]) -> Vec<String> {
         .iter()
         .flat_map(|deck| fact_lines(&deck.key, &build_deck_or_panic(deck)))
         .chain(
-            in_code_decks()
+            common::in_code_studies::keyed_setups()
                 .into_iter()
                 .flat_map(|(key, setup)| fact_lines(&key, &setup)),
         )

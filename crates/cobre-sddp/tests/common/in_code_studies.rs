@@ -39,6 +39,7 @@ use cobre_io::config::{
     SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig, TrainingSelection,
     TrainingSolverConfig, UpperBoundEvaluationConfig,
 };
+use cobre_sddp::StudySetup;
 use cobre_sddp::hydro_models::{
     EvaporationModel, EvaporationModelSet, LinearizedEvaporation, PrepareHydroModelsResult,
 };
@@ -1461,4 +1462,23 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
 #[must_use]
 pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::System, Config) {
     (build_chronological_noise_system(spec), build_config())
+}
+
+/// The manifest's in-code study set, keyed exactly as
+/// `tests/template_snapshot.rs`'s former `in_code_decks()`: each isolates a
+/// stage-LP builder axis no committed deck combines.
+#[must_use]
+pub fn keyed_setups() -> Vec<(String, StudySetup)> {
+    let (system, config) = discounted_anticipated_study();
+    let (evap_system, evap_config, evap_hydro_models) = parallel_multiblock_evaporation_study();
+    vec![
+        (
+            "in-code/discounted-anticipated".to_string(),
+            super::build_setup_in_code(system, &config),
+        ),
+        (
+            "in-code/parallel-multiblock-evaporation".to_string(),
+            super::build_setup_in_code_with_models(evap_system, &evap_config, evap_hydro_models),
+        ),
+    ]
 }

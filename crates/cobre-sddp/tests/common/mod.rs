@@ -16,6 +16,7 @@ use cobre_sddp::{
     BoundaryStateRequirements, SimulationScenarioResult, StudySetup,
     hydro_models::{PrepareHydroModelsResult, prepare_hydro_models},
     setup::{StudyParams, prepare_stochastic},
+    test_support::decks::{SLOW_DECKS, committed_decks},
 };
 use cobre_solver::ActiveSolver;
 use cobre_stochastic::{
@@ -221,6 +222,27 @@ pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> St
         prepare_hydro_models(&system, case_dir, false).expect("prepare_hydro_models must succeed");
 
     build_setup_for_case(case_dir, &config, &system, stochastic, hydro_models)
+}
+
+/// Visits every committed deck (skipping [`SLOW_DECKS`] unless `slow-tests` is
+/// enabled) then every [`in_code_studies::keyed_setups`] entry, building one
+/// [`StudySetup`] at a time; returns the total visit count.
+pub fn for_each_study(mut visit: impl FnMut(&str, &StudySetup)) -> usize {
+    let slow_tests_enabled = cfg!(feature = "slow-tests");
+    let mut count = 0;
+    for deck in committed_decks() {
+        if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
+            continue;
+        }
+        let setup = fresh_setup_with(&deck.dir, |_| {});
+        visit(&deck.key, &setup);
+        count += 1;
+    }
+    for (key, setup) in in_code_studies::keyed_setups() {
+        visit(&key, &setup);
+        count += 1;
+    }
+    count
 }
 
 /// Build a [`StochasticContext`] for an in-code `System`, hermetic (no external

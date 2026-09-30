@@ -92,85 +92,17 @@ impl PatchBuffer {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use cobre_sddp::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
-    /// use cobre_sddp::lp::builder::PatchBuffer;
-    /// use cobre_sddp::lp::indexer::StateSpace;
-    ///
-    /// // 3-hydro AR(2) system, no stochastic load, no buckets, no anticipated thermals
-    /// // Row capacity = M*B + N = 0 + 3 = 3
-    /// // Col capacity = N*(1+L) + n_buckets + A*K = 3*(1+2) + 0 + 0 = 9
-    /// let state = StateSpace::new(
-    ///     3,
-    ///     2,
-    ///     0,
-    ///     Vec::new(),
-    ///     Vec::new(),
-    ///     AnticipatedResolution::default(),
-    ///     &[2, 2, 2],
-    /// );
-    /// let buf = PatchBuffer::new(&state, &[], &[]);
-    /// assert_eq!(buf.indices.len(), 3);
-    /// assert_eq!(buf.col_indices.len(), 9);
-    ///
-    /// // Production scale: N = 160, L = 12, no stochastic load
-    /// // Row capacity = M*B + N = 0 + 160 = 160
-    /// let big_state = StateSpace::new(
-    ///     160,
-    ///     12,
-    ///     0,
-    ///     Vec::new(),
-    ///     Vec::new(),
-    ///     AnticipatedResolution::default(),
-    ///     &vec![12; 160],
-    /// );
-    /// let big = PatchBuffer::new(&big_state, &[], &[]);
-    /// assert_eq!(big.indices.len(), 160);
-    ///
-    /// // Edge case: no lags (L = 0)
-    /// // Row capacity = M*B + N = 0 + 5 = 5
-    /// let no_lag_state = StateSpace::new(
-    ///     5,
-    ///     0,
-    ///     0,
-    ///     Vec::new(),
-    ///     Vec::new(),
-    ///     AnticipatedResolution::default(),
-    ///     &vec![0; 5],
-    /// );
-    /// let no_lag = PatchBuffer::new(&no_lag_state, &[], &[]);
-    /// assert_eq!(no_lag.indices.len(), 5);
-    ///
-    /// // Anticipated thermals: 1 plant, K=2 — row capacity unchanged (A*K is col-only)
-    /// // Row capacity = M*B + N = 0 + 3 = 3
-    /// let resolution = AnticipatedResolution::resolve(
-    ///     &[LeadTime::Stages(2)],
-    ///     DeliveryAxis {
-    ///         stage_lengths_hours: &[],
-    ///         n_decision: 3,
-    ///         n_delivery: 3,
-    ///     },
-    /// );
-    /// let ant_state = StateSpace::new(3, 2, 0, Vec::new(), vec![2], resolution, &[2, 2, 2]);
-    /// let ant = PatchBuffer::new(&ant_state, &[], &[]);
-    /// assert_eq!(ant.indices.len(), 3);
-    ///
-    /// // Travel-time buckets: n_buckets=4 — row capacity unchanged (bucket state is col-only)
-    /// // Col capacity = N*(1+L) + n_buckets + A*K = 3*3 + 4 + 0 = 13
-    /// let bucket_order = vec![(0, 0), (1, 0), (0, 1), (1, 1)];
-    /// let bucket_state = StateSpace::new(
-    ///     3,
-    ///     2,
-    ///     4,
-    ///     bucket_order,
-    ///     Vec::new(),
-    ///     AnticipatedResolution::default(),
-    ///     &[2, 2, 2],
-    /// );
-    /// let transit_buckets = PatchBuffer::new(&bucket_state, &[], &[]);
-    /// assert_eq!(transit_buckets.col_indices.len(), 13);
-    /// assert_eq!(transit_buckets.indices.len(), 3);
-    /// ```
+    /// A 3-hydro AR(2) system with no stochastic load, no buckets, and no
+    /// anticipated thermals has row capacity `M*B + N = 0 + 3 = 3` and column
+    /// capacity `N*(1+L) + n_buckets + A*K = 3*(1+2) + 0 + 0 = 9`. At
+    /// production scale (`N = 160`, `L = 12`) row capacity is `160`; with no
+    /// lags (`L = 0`) row capacity still tracks `N` alone. Anticipated
+    /// thermals (`A*K`) widen only the column region — one plant at `K = 2`
+    /// leaves row capacity at `N`. Travel-time buckets (`n_buckets`) are
+    /// likewise column-only: with `n_buckets = 4` the column capacity is
+    /// `N*(1+L) + n_buckets + A*K = 3*3 + 4 + 0 = 13` while row capacity
+    /// stays `N`. `patch_buffer_new_sizes_from_its_owners` (this module's
+    /// `tests`) is the runnable form of every case above.
     ///
     /// [`fill_load_patches`]: PatchBuffer::fill_load_patches
     /// [`fill_z_inflow_patches`]: PatchBuffer::fill_z_inflow_patches
@@ -434,7 +366,8 @@ impl PatchBuffer {
     reason = "test docs name LP symbols that are not code identifiers"
 )]
 mod tests {
-    use super::{PatchBuffer, StateBox};
+    use super::{PatchBuffer, StateBox, StateSpace};
+    use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
     use crate::lp::indexer::{BlockGrid, BlockRowFamily};
     use crate::test_support::{
         equipment_free_geometry, state_layout, state_layout_full, state_layout_with_transit_buckets,
@@ -510,6 +443,87 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The runnable form of [`PatchBuffer::new`]'s rustdoc examples: built
+    /// directly through [`StateSpace::new`] (rather than the
+    /// `state_layout_with_transit_buckets` helper above) at zero /
+    /// production / no-lag / anticipated / bucket scales.
+    #[test]
+    fn patch_buffer_new_sizes_from_its_owners() {
+        // 3-hydro AR(2) system, no stochastic load, no buckets, no anticipated thermals
+        // Row capacity = M*B + N = 0 + 3 = 3
+        // Col capacity = N*(1+L) + n_buckets + A*K = 3*(1+2) + 0 + 0 = 9
+        let state = StateSpace::new(
+            3,
+            2,
+            0,
+            Vec::new(),
+            Vec::new(),
+            AnticipatedResolution::default(),
+            &[2, 2, 2],
+        );
+        let buf = PatchBuffer::new(&state, &[], &[]);
+        assert_eq!(buf.indices.len(), 3);
+        assert_eq!(buf.col_indices.len(), 9);
+
+        // Production scale: N = 160, L = 12, no stochastic load
+        // Row capacity = M*B + N = 0 + 160 = 160
+        let big_state = StateSpace::new(
+            160,
+            12,
+            0,
+            Vec::new(),
+            Vec::new(),
+            AnticipatedResolution::default(),
+            &[12; 160],
+        );
+        let big = PatchBuffer::new(&big_state, &[], &[]);
+        assert_eq!(big.indices.len(), 160);
+
+        // Edge case: no lags (L = 0)
+        // Row capacity = M*B + N = 0 + 5 = 5
+        let no_lag_state = StateSpace::new(
+            5,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            AnticipatedResolution::default(),
+            &[0; 5],
+        );
+        let no_lag = PatchBuffer::new(&no_lag_state, &[], &[]);
+        assert_eq!(no_lag.indices.len(), 5);
+
+        // Anticipated thermals: 1 plant, K=2 — row capacity unchanged (A*K is col-only)
+        // Row capacity = M*B + N = 0 + 3 = 3
+        let resolution = AnticipatedResolution::resolve(
+            &[LeadTime::Stages(2)],
+            DeliveryAxis {
+                stage_lengths_hours: &[],
+                n_decision: 3,
+                n_delivery: 3,
+            },
+        );
+        let ant_state = StateSpace::new(3, 2, 0, Vec::new(), vec![2], resolution, &[2, 2, 2]);
+        let ant = PatchBuffer::new(&ant_state, &[], &[]);
+        assert_eq!(ant.indices.len(), 3);
+
+        // Travel-time buckets: n_buckets=4 — row capacity unchanged (bucket state is col-only)
+        // Col capacity = N*(1+L) + n_buckets + A*K = 3*3 + 4 + 0 = 13
+        let bucket_column_order = vec![(0, 0), (1, 0), (0, 1), (1, 1)];
+        let bucket_state = StateSpace::new(
+            3,
+            2,
+            4,
+            bucket_column_order,
+            Vec::new(),
+            AnticipatedResolution::default(),
+            &[2, 2, 2],
+        );
+        let transit_buckets = PatchBuffer::new(&bucket_state, &[], &[]);
+        assert_eq!(transit_buckets.col_indices.len(), 13);
+        assert_eq!(transit_buckets.indices.len(), 3);
     }
 
     /// `state_col_patch_count` returns N*(1+L) + n_buckets + A*K.

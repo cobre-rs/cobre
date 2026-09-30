@@ -549,4 +549,61 @@ mod tests {
         assert_eq!(ring.slot_target(1, 1), 1);
         assert_eq!(ring.slot_target(2, 3), 8);
     }
+
+    /// At `depth == 1`, `emit_shift_rows`'s `slot + 1 < depth` guard is always
+    /// false, so every reachable lane writes only its outgoing column and no
+    /// incoming-column entry — the multi-lane (`n_lanes = 2`) extension of
+    /// `emit_shift_rows_drops_the_shift_term_past_a_lanes_own_depth`'s
+    /// single-lane depth-1 case.
+    #[test]
+    fn depth_one_emit_shift_rows_never_writes_an_in_col_entry() {
+        let ring = DeliveryRing::new(100..102, 200..202, 2, 1);
+        let row_pos = vec![Some(0), Some(1)];
+        let mut entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 210];
+
+        let n = ring.emit_shift_rows(&row_pos, 0, &mut entries);
+
+        assert_eq!(n, 2, "both lanes are reachable at depth 1");
+        assert_eq!(entries[ring.out_col(0, 0)], vec![(0, 1.0)]);
+        assert_eq!(entries[ring.out_col(0, 1)], vec![(1, 1.0)]);
+        assert!(
+            entries[ring.in_col(0, 0)].is_empty() && entries[ring.in_col(0, 1)].is_empty(),
+            "the slot+1<depth guard is unconditionally false at depth 1"
+        );
+    }
+
+    /// At `depth == 1` every column either `emit_shift_rows` or
+    /// `emit_carry_rows` touches lies in `{out_col(0, lane), in_col(0, lane)}`
+    /// for some lane — the latch/fish column pair every anticipated-ring
+    /// caller already addresses at that depth, so switching between the two
+    /// interior-transition primitives cannot introduce a third column.
+    #[test]
+    fn depth_one_column_footprint_coincides_between_shift_and_carry() {
+        let ring = DeliveryRing::new(100..102, 200..202, 2, 1);
+        let row_pos = vec![Some(0), Some(1)];
+
+        let mut shift_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 210];
+        ring.emit_shift_rows(&row_pos, 0, &mut shift_entries);
+
+        let mut carry_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 210];
+        let n_carry = ring.emit_carry_rows(&row_pos, 0, &mut carry_entries);
+        assert_eq!(
+            n_carry, 2,
+            "unlike emit_shift_rows, emit_carry_rows fires at depth 1 over a reachable row_pos"
+        );
+
+        let latch_fish_columns = [
+            ring.out_col(0, 0),
+            ring.out_col(0, 1),
+            ring.in_col(0, 0),
+            ring.in_col(0, 1),
+        ];
+        for (col, (shift, carry)) in shift_entries.iter().zip(carry_entries.iter()).enumerate() {
+            let touched = !shift.is_empty() || !carry.is_empty();
+            assert!(
+                !touched || latch_fish_columns.contains(&col),
+                "column {col} lies outside the depth-1 {{latch, fish}} column set"
+            );
+        }
+    }
 }

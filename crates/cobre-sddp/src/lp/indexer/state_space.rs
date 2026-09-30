@@ -418,18 +418,10 @@ impl StateSpace {
     ///
     /// ```compile_fail
     /// use cobre_sddp::indexer::StateSpace;
-    /// use cobre_sddp::lead_time::AnticipatedResolution;
     ///
-    /// let state = StateSpace::new(
-    ///     1,
-    ///     0,
-    ///     0,
-    ///     Vec::new(),
-    ///     Vec::new(),
-    ///     AnticipatedResolution::default(),
-    ///     &[0],
-    /// );
-    /// let _col = state.state_to_lp_column(0); // bare usize handed where StateDim is required
+    /// fn misuse(state: &StateSpace) {
+    ///     let _col = state.state_to_lp_column(0); // bare usize handed where StateDim is required
+    /// }
     /// ```
     ///
     /// Nor can an already-resolved [`OutCol`] re-enter as the unresolved
@@ -437,19 +429,11 @@ impl StateSpace {
     ///
     /// ```compile_fail
     /// use cobre_sddp::indexer::{StateDim, StateSpace};
-    /// use cobre_sddp::lead_time::AnticipatedResolution;
     ///
-    /// let state = StateSpace::new(
-    ///     1,
-    ///     0,
-    ///     0,
-    ///     Vec::new(),
-    ///     Vec::new(),
-    ///     AnticipatedResolution::default(),
-    ///     &[0],
-    /// );
-    /// let col = state.state_to_lp_column(StateDim::new(0));
-    /// let _reentered = state.state_to_lp_column(col); // OutCol handed where StateDim is required
+    /// fn misuse(state: &StateSpace) {
+    ///     let col = state.state_to_lp_column(StateDim::new(0));
+    ///     let _reentered = state.state_to_lp_column(col); // OutCol handed where StateDim is required
+    /// }
     /// ```
     #[inline]
     #[must_use]

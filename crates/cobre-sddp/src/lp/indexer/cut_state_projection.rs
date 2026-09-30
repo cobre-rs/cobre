@@ -71,10 +71,11 @@ impl CutStateProjection {
     /// ```compile_fail
     /// use cobre_sddp::indexer::{InCol, StateDim, StateSpace};
     ///
-    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let outgoing = global.lp_column_for_state(StateDim::new(0));
-    /// let mut incoming_columns: Vec<InCol> = Vec::new();
-    /// incoming_columns.push(outgoing); // fan-in swap: outgoing pushed onto the incoming-column vec
+    /// fn misuse(global: &StateSpace) {
+    ///     let outgoing = global.lp_column_for_state(StateDim::new(0));
+    ///     let mut incoming_columns: Vec<InCol> = Vec::new();
+    ///     incoming_columns.push(outgoing); // fan-in swap: outgoing pushed onto the incoming-column vec
+    /// }
     /// ```
     #[must_use]
     pub fn new(global: &StateSpace, state_config: StageStateConfig) -> Self {
@@ -200,24 +201,26 @@ impl CutStateProjection {
     /// use cobre_core::temporal::StageStateConfig;
     /// use cobre_sddp::indexer::{CutStateProjection, StateDim, StateSpace};
     ///
-    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let cut = CutStateProjection::new(
-    ///     &global,
-    ///     StageStateConfig { storage: true, inflow_lags: true },
-    /// );
-    /// let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot
+    /// fn misuse(global: &StateSpace) {
+    ///     let cut = CutStateProjection::new(
+    ///         global,
+    ///         StageStateConfig { storage: true, inflow_lags: true },
+    ///     );
+    ///     let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot
+    /// }
     /// ```
     ///
     /// ```compile_fail
     /// use cobre_core::temporal::StageStateConfig;
     /// use cobre_sddp::indexer::{CutStateProjection, OutCol, StateSpace};
     ///
-    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let cut = CutStateProjection::new(
-    ///     &global,
-    ///     StageStateConfig { storage: true, inflow_lags: true },
-    /// );
-    /// let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot
+    /// fn misuse(global: &StateSpace) {
+    ///     let cut = CutStateProjection::new(
+    ///         global,
+    ///         StageStateConfig { storage: true, inflow_lags: true },
+    ///     );
+    ///     let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot
+    /// }
     /// ```
     ///
     /// # Panics (debug builds only)

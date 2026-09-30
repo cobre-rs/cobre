@@ -1783,9 +1783,9 @@ pub fn two_hydro_evaporation_study() -> (cobre_core::System, Config, PrepareHydr
 /// the manifest's [`keyed_setups`]: [`mixed_lead_anticipated_study`]'s
 /// two anticipated lanes, [`two_hydro_evaporation_study`]'s
 /// nonzero-position evaporating hydro, and [`parallel_inflow_slack_study`]'s
-/// multi-block parallel inflow slack (D-044b-reach: the smallest in-code
-/// study that reaches the M-WB mutation check, unreachable on every
-/// committed deck and every other in-code study). None joins
+/// multi-block parallel inflow slack: the smallest in-code study that
+/// reaches the inflow-slack-per-block mutation check, unreachable on
+/// every committed deck and every other in-code study. None joins
 /// `keyed_setups()` — doing so would move the template-snapshot manifest,
 /// which stays byte-identical.
 ///

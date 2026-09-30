@@ -197,6 +197,56 @@ pub(crate) struct AnticipatedLayout {
     pub(crate) anticipated_slot_row_pos: Vec<Option<usize>>,
 }
 
+impl AnticipatedLayout {
+    /// Allocate the commitment-maturity rows, then the deposit-row family,
+    /// then the future-window carry rows, in that order: reordering these
+    /// three `row.alloc` calls would shift every family after them.
+    /// `decision_start` is the anticipated-decision column block's start
+    /// (`col_anticipated_decision_start`), already allocated by the caller.
+    fn new(
+        row: &mut RangeCursor,
+        decision_start: usize,
+        state: &StateSpace,
+        ctx: &TemplateBuildCtx<'_>,
+        stage_idx: usize,
+    ) -> Self {
+        // A `K = 0` self-delivery excludes a plant's row this stage, so the
+        // maturity-row family is sparse like the deposit-row family below, not
+        // the dense `state.n_anticipated` count.
+        let n_stages = ctx.resolved.bounds.n_stages();
+        let (anticipated_fishing_row_pos, n_anticipated_fishing_rows) =
+            build_anticipated_fishing_row_pos(state, n_stages, stage_idx);
+        let row_anticipated_fishing_start = row.alloc(n_anticipated_fishing_rows).start;
+
+        let (anticipated_decision_row_pos, n_anticipated_state_out_def_rows) =
+            build_anticipated_decision_row_pos(
+                state,
+                stage_idx,
+                ctx.study_dims.anticipated_plants.windows(),
+                ctx.time_value.delivery_stage_ids(),
+            );
+        let row_anticipated_state_out_def_start = row.alloc(n_anticipated_state_out_def_rows).start;
+
+        let (anticipated_slot_row_pos, n_anticipated_slot_definition_rows) =
+            build_anticipated_slot_row_pos(state, stage_idx);
+        let row_anticipated_slot_definition_start =
+            row.alloc(n_anticipated_slot_definition_rows).start;
+
+        Self {
+            col_anticipated_decision_start: decision_start,
+            row_anticipated_state_out_def_start,
+            n_anticipated_state_out_def_rows,
+            anticipated_decision_row_pos,
+            row_anticipated_fishing_start,
+            n_anticipated_fishing_rows,
+            anticipated_fishing_row_pos,
+            row_anticipated_slot_definition_start,
+            n_anticipated_slot_definition_rows,
+            anticipated_slot_row_pos,
+        }
+    }
+}
+
 /// Equipment column ranges and their block-start cursors: every dispatchable
 /// piece of equipment (storage/turbine/spillage/diversion/thermal/lines/
 /// deficit/excess/generation/evaporation/NCS/pumping/contracts), anchored at
@@ -342,6 +392,32 @@ pub(crate) struct SlackColumns {
     pub(crate) oper_violation: OperViolationRanges,
 }
 
+impl SlackColumns {
+    /// Allocate the withdrawal slacks, then the four operational-violation
+    /// families (via [`OperViolationRanges::new`]); `inflow_slack` is already
+    /// allocated by the caller, ahead of the FPHA/evaporation column families.
+    fn new(
+        col: &mut RangeCursor,
+        row: &mut RangeCursor,
+        inflow_slack: Range<usize>,
+        n_h: usize,
+        n_cells: usize,
+        n_blks: usize,
+    ) -> Self {
+        let withdrawal_slack_neg = col.alloc(n_h);
+        let withdrawal_slack_pos = col.alloc(n_h);
+        let n_op_hydro = n_h * n_blks;
+        let n_op_cell = n_cells * n_blks;
+        let oper_violation = OperViolationRanges::new(col, row, n_op_hydro, n_op_cell);
+        Self {
+            inflow_slack,
+            withdrawal_slack_neg,
+            withdrawal_slack_pos,
+            oper_violation,
+        }
+    }
+}
+
 /// Constraint row ranges shared by every stage's LP: z-inflow, water balance,
 /// travel-time buckets, load balance, the FPHA/evaporation row cursor, and the
 /// structural row-count scalars.
@@ -385,6 +461,32 @@ pub(crate) struct ConstraintRows {
     pub(crate) n_generic_rows: usize,
 }
 
+impl ConstraintRows {
+    /// Pure assembly: every row family is already allocated by the caller.
+    /// `generic_rows` is still last in the row chain, so its `.start`/`.len()`
+    /// are `row_generic_start`/`n_generic_rows`.
+    fn new(
+        water_balance: BlockRowFamily,
+        transit: (Vec<Option<usize>>, Range<usize>),
+        load_balance: BlockRowFamily,
+        fpha_rows: Range<usize>,
+        generic_rows: Range<usize>,
+        num_rows: usize,
+    ) -> Self {
+        let (transit_bucket_row_pos, transit_bucket_definition) = transit;
+        Self {
+            water_balance,
+            transit_bucket_definition,
+            transit_bucket_row_pos,
+            load_balance,
+            fpha_rows_end: fpha_rows.end,
+            row_generic_start: generic_rows.start,
+            num_rows,
+            n_generic_rows: generic_rows.len(),
+        }
+    }
+}
+
 /// Per-stage filling-phase row/column families: the `σ_fill` target (Filling
 /// phase) and the soft `σ^{v-}` operating floor (Operating phase), each with
 /// its paired hydro-index satellite vector.
@@ -419,6 +521,30 @@ pub(crate) struct FillingLayout {
     /// from `filling_target_hydro_indices` (`σ_fill`, Filling phase); the two
     /// never overlap (Operating vs Filling).
     pub(crate) filled_min_storage_floor_hydro_indices: Vec<HydroSys>,
+}
+
+impl FillingLayout {
+    /// Allocate the `σ_fill` slack column, then the `σ^{v-}` slack column —
+    /// the last two per-stage column families, in that order; `target_rows`/
+    /// `floor_rows` are already allocated by the caller.
+    fn new(
+        col: &mut RangeCursor,
+        target_rows: Range<usize>,
+        floor_rows: Range<usize>,
+        target_hydros: Vec<HydroSys>,
+        floor_hydros: Vec<HydroSys>,
+    ) -> Self {
+        let col_filling_target_start = col.alloc(target_hydros.len()).start;
+        let col_filled_min_storage_floor_start = col.alloc(floor_hydros.len()).start;
+        Self {
+            row_filling_target_start: target_rows.start,
+            col_filling_target_start,
+            filling_target_hydro_indices: target_hydros,
+            row_filled_min_storage_floor_start: floor_rows.start,
+            col_filled_min_storage_floor_start,
+            filled_min_storage_floor_hydro_indices: floor_hydros,
+        }
+    }
 }
 
 /// Pre-computed column and row layout offsets for a single stage LP.
@@ -1258,20 +1384,38 @@ fn allocate_fpha(
 fn allocate_evaporation(
     col: &mut RangeCursor,
     row: &mut RangeCursor,
-    n_evap_hydros: usize,
+    ctx: &TemplateBuildCtx<'_>,
+    stage_id: i32,
     n_evap_slots: usize,
-) -> (usize, Vec<EvaporationIndices>) {
+) -> (Vec<HydroSys>, usize, Vec<EvaporationIndices>) {
+    let evap_hydro_indices = identify_evap_hydros(ctx, stage_id);
+    let n_evap_hydros = evap_hydro_indices.len();
     let cols = col.alloc(n_evap_hydros * n_evap_slots * EVAP_COLS_PER_HYDRO);
     let rows = row.alloc(n_evap_hydros * n_evap_slots);
     let evap_indices = build_evap_indices(n_evap_hydros, n_evap_slots, cols.start, rows.start);
-    (cols.start, evap_indices)
+    (evap_hydro_indices, cols.start, evap_indices)
+}
+
+/// Read the slack-column start, enumerate the active generic-constraint rows
+/// and their slack columns, then allocate the generic slack columns and the
+/// generic rows — still last in each of their respective cursor chains.
+fn allocate_generic_constraints(
+    col: &mut RangeCursor,
+    row: &mut RangeCursor,
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    n_blks: usize,
+) -> (GenericConstraintLayout, Range<usize>) {
+    let col_generic_slack_start = col.pos();
+    let generic =
+        enumerate_generic_constraint_rows(ctx, stage, stage_idx, n_blks, col_generic_slack_start);
+    col.alloc(generic.n_generic_slack_cols);
+    let generic_rows = row.alloc(generic.n_generic_rows);
+    (generic, generic_rows)
 }
 
 impl<'a> StageLayout<'a> {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "each range starts at the previous range's end, so the offset chain stays one linear read"
-    )]
     pub(crate) fn new(
         ctx: &TemplateBuildCtx<'_>,
         state_layout: &'a StateSpace,
@@ -1285,7 +1429,6 @@ impl<'a> StageLayout<'a> {
 
         let (fpha_hydro_indices, fpha_planes_per_hydro) =
             identify_fpha_hydros(ctx, stage_idx, stage.id);
-        let evap_hydro_indices = identify_evap_hydros(ctx, stage.id);
         let filling_target_hydro_indices = identify_filling_target_hydros(ctx, stage.id);
         let filled_min_storage_floor_hydro_indices =
             identify_filled_min_storage_floor_hydros(ctx, stage.id);
@@ -1343,28 +1486,17 @@ impl<'a> StageLayout<'a> {
         // rows across cells.
         let (generation, fpha_rows) =
             allocate_fpha(&mut col, &mut row, n_fpha_cells, total_fpha_rows, n_blks);
-        let fpha_rows_end = fpha_rows.end;
 
         // One `EVAP_COLS_PER_HYDRO` triple and one row per `(evap hydro, slot)`,
         // strided by `n_evap_slots` (`evaporation_slot_count`).
-        let n_evap_hydros = evap_hydro_indices.len();
-        let (evap_col_start, evap_indices) =
-            allocate_evaporation(&mut col, &mut row, n_evap_hydros, n_evap_slots);
+        let (evap_hydro_indices, evap_col_start, evap_indices) =
+            allocate_evaporation(&mut col, &mut row, ctx, stage.id, n_evap_slots);
 
-        // Withdrawal slacks + the four operational-violation slack families (after
-        // the evaporation columns) and their matching rows (after the evaporation
-        // rows). `n_op_hydro`/`n_op_cell` are `0` when `n_h`/`n_cells == 0`, so
-        // `alloc(0)` collapses every family onto the post-equipment cursor with no
-        // branch.
-        let withdrawal_slack_neg = col.alloc(n_h);
-        let withdrawal_slack_pos = col.alloc(n_h);
-        let n_op_hydro = n_h * n_blks;
-        let n_op_cell = n_cells * n_blks;
-        let oper_violation = OperViolationRanges::new(&mut col, &mut row, n_op_hydro, n_op_cell);
+        // `n_op_hydro`/`n_op_cell` are `0` when `n_h`/`n_cells == 0`, so
+        // `alloc(0)` collapses every family onto the post-equipment cursor with
+        // no branch.
+        let slack = SlackColumns::new(&mut col, &mut row, inflow_slack, n_h, n_cells, n_blks);
 
-        // NCS follows the last operational-violation slack family; `col.pos()`
-        // already equals the post-equipment cursor when `n_h == 0`, so no fallback
-        // branch is needed.
         let n_ncs = ctx.non_controllable_sources.len();
         let col_ncs_start = col.alloc(n_ncs * n_blks).start;
 
@@ -1372,45 +1504,16 @@ impl<'a> StageLayout<'a> {
         // operational-violation rows. Both MUST stay strictly below `num_rows`: a
         // row at index `>= num_rows` aliases the append-only cut rows (slot-identity
         // warm-start matches cut rows from `num_rows`) and corrupts every cut.
-        let n_filling_target_rows = filling_target_hydro_indices.len();
-        let row_filling_target_start = row.alloc(n_filling_target_rows).start;
-        let n_filled_min_storage_floor_rows = filled_min_storage_floor_hydro_indices.len();
-        let row_filled_min_storage_floor_start = row.alloc(n_filled_min_storage_floor_rows).start;
+        let filling_target_rows = row.alloc(filling_target_hydro_indices.len());
+        let filled_min_storage_floor_rows = row.alloc(filled_min_storage_floor_hydro_indices.len());
 
-        // Commitment-MATURITY rows: one per GENUINELY anticipated plant whose
-        // delivery matures this stage (`build_anticipated_fishing_row_pos`) —
-        // a `K = 0` self-delivery excludes a plant's row this stage, so the
-        // row family is sparse like the deposit family below, not the dense
-        // `state_layout.n_anticipated` count.
-        let n_stages = ctx.resolved.bounds.n_stages();
-        let (anticipated_fishing_row_pos, n_anticipated_fishing_rows) =
-            build_anticipated_fishing_row_pos(state_layout, n_stages, stage_idx);
-        let row_anticipated_fishing_start = row.alloc(n_anticipated_fishing_rows).start;
-
-        // Anticipated-state-out (latch/deposit) definition rows
-        // (`build_anticipated_decision_row_pos`).
-        let (anticipated_decision_row_pos, n_anticipated_state_out_def_rows) =
-            build_anticipated_decision_row_pos(
-                state_layout,
-                stage_idx,
-                ctx.study_dims.anticipated_plants.windows(),
-                ctx.time_value.delivery_stage_ids(),
-            );
-        let row_anticipated_state_out_def_start = row.alloc(n_anticipated_state_out_def_rows).start;
-
-        // Future-window commitment-carry rows, modular-addressed
-        // (`build_anticipated_slot_row_pos`) — strictly future, not-yet-due
-        // deliveries only; the commitment maturing this stage is fished by
-        // the maturity row above instead.
-        let (anticipated_slot_row_pos, n_anticipated_slot_definition_rows) =
-            build_anticipated_slot_row_pos(state_layout, stage_idx);
-        let row_anticipated_slot_definition_start =
-            row.alloc(n_anticipated_slot_definition_rows).start;
-
-        // Peeked before `generic` below is computed: the generic row block's
-        // length depends on `col_generic_slack_start` (the column axis), but its
-        // own start does not depend on that length.
-        let row_generic_start = row.pos();
+        let anticipated = AnticipatedLayout::new(
+            &mut row,
+            anticipated_decision.start,
+            state_layout,
+            ctx,
+            stage_idx,
+        );
 
         let n_pumping = ctx.pumping_stations.len();
         let col_pumping_start = col.alloc(n_pumping * n_blks).start;
@@ -1421,38 +1524,30 @@ impl<'a> StageLayout<'a> {
         let contract_import = col.alloc(n_contract_import * n_blks);
         let contract_export = col.alloc(n_contract_export * n_blks);
 
-        let col_generic_slack_start = col.pos();
-        let generic = enumerate_generic_constraint_rows(
-            ctx,
-            stage,
-            stage_idx,
-            n_blks,
-            col_generic_slack_start,
-        );
-        col.alloc(generic.n_generic_slack_cols);
+        let (generic, generic_rows) =
+            allocate_generic_constraints(&mut col, &mut row, ctx, stage, stage_idx, n_blks);
 
         // σ_fill then σ^{v-} are the last two per-stage column families; σ^{v-}
         // last so its presence cannot shift any other family's start.
-        let col_filling_target_start = col.alloc(filling_target_hydro_indices.len()).start;
-        let col_filled_min_storage_floor_start = col
-            .alloc(filled_min_storage_floor_hydro_indices.len())
-            .start;
+        let filling = FillingLayout::new(
+            &mut col,
+            filling_target_rows,
+            filled_min_storage_floor_rows,
+            filling_target_hydro_indices,
+            filled_min_storage_floor_hydro_indices,
+        );
+
         let num_cols = col.pos();
-        row.alloc(generic.n_generic_rows);
         let num_rows = row.pos();
 
-        let anticipated = AnticipatedLayout {
-            col_anticipated_decision_start: anticipated_decision.start,
-            row_anticipated_state_out_def_start,
-            n_anticipated_state_out_def_rows,
-            anticipated_decision_row_pos,
-            row_anticipated_fishing_start,
-            n_anticipated_fishing_rows,
-            anticipated_fishing_row_pos,
-            row_anticipated_slot_definition_start,
-            n_anticipated_slot_definition_rows,
-            anticipated_slot_row_pos,
-        };
+        let rows = ConstraintRows::new(
+            water_balance,
+            (transit_bucket_row_pos, transit_bucket_definition),
+            load_balance,
+            fpha_rows,
+            generic_rows,
+            num_rows,
+        );
 
         let equipment = EquipmentColumns {
             storage_internal_start,
@@ -1476,30 +1571,6 @@ impl<'a> StageLayout<'a> {
             n_contract_export,
             contract_import,
             contract_export,
-        };
-        let slack = SlackColumns {
-            inflow_slack,
-            withdrawal_slack_neg,
-            withdrawal_slack_pos,
-            oper_violation,
-        };
-        let rows = ConstraintRows {
-            water_balance,
-            transit_bucket_definition,
-            transit_bucket_row_pos,
-            load_balance,
-            fpha_rows_end,
-            row_generic_start,
-            num_rows,
-            n_generic_rows: generic.n_generic_rows,
-        };
-        let filling = FillingLayout {
-            row_filling_target_start,
-            col_filling_target_start,
-            filling_target_hydro_indices,
-            row_filled_min_storage_floor_start,
-            col_filled_min_storage_floor_start,
-            filled_min_storage_floor_hydro_indices,
         };
 
         Self {

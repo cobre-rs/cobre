@@ -2406,7 +2406,11 @@ fn build_anticipated_slot_row_pos_study_only_byte_identity() {
             n_delivery: 3,
         },
     );
-    assert_eq!(resolution.k_max, k_max, "fixture must realize k_max == 2");
+    assert_eq!(
+        resolution.anchored_depth(),
+        k_max,
+        "fixture must realize k_max == 2"
+    );
     let state = state_with_attached_resolution(k_max, resolution);
 
     let (row_pos, n_reachable) = build_anticipated_slot_row_pos(&state, 3, 1);
@@ -2437,7 +2441,11 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
             n_delivery: 8,
         },
     );
-    assert_eq!(resolution.k_max, k_max, "fixture must realize k_max == 4");
+    assert_eq!(
+        resolution.anchored_depth(),
+        k_max,
+        "fixture must realize k_max == 4"
+    );
     let state = state_with_attached_resolution(k_max, resolution);
 
     let (row_pos, _n_reachable) = build_anticipated_slot_row_pos(&state, 4, 2);
@@ -2552,8 +2560,6 @@ fn two_plant_excised_window_fixture() -> StateSpace {
     };
     let resolution = AnticipatedResolution {
         per_plant: vec![plant0, plant1],
-        k_max: 4,
-        max_fanout: 0,
     };
     state_with_attached_resolution(4, resolution)
 }
@@ -2650,8 +2656,6 @@ fn anticipated_slot_row_pos_masks_per_plant_at_the_extended_axis_bound() {
     };
     let resolution = AnticipatedResolution {
         per_plant: vec![plant_a, plant_b],
-        k_max: 2,
-        max_fanout: 0,
     };
     let state = state_with_attached_resolution(3, resolution);
 

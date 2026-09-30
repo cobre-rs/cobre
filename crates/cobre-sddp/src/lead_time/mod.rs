@@ -568,22 +568,40 @@ pub struct AnticipatedResolution {
     /// One [`PointResolution`] per anticipated plant, in
     /// [`crate::indexer::AnticipatedPlants`] order.
     pub per_plant: Vec<PointResolution>,
-    /// Delivery-anchored ring depth `max_i ring_depth_i` over every plant (see
-    /// [`PointResolution::ring_depth`], the single owner of the depth formula);
-    /// `0` with no anticipated plants.
-    pub k_max: usize,
-    /// Fan-out width `max_i max_t |genuine C_i(t)|` (bounded by [`Self::k_max`]
-    /// — a decision set's genuine members are a subset of the plant's in-flight
-    /// count at `t`): the decision-column geometry's per-plant stride,
-    /// `col_anticipated_decision_start + j * n_anticipated + local_idx` for
-    /// `j in 0..max_fanout`. `1` for a single-decider study (`|C(t)| <= 1`
-    /// everywhere), `0` with no anticipated plants.
-    pub max_fanout: usize,
 }
 
 impl AnticipatedResolution {
-    /// Resolve every plant's point-commitment lag against the delivery axis and
-    /// derive the ring depth and fan-out width.
+    /// Delivery-anchored ring depth `max_i ring_depth_i` over every plant (see
+    /// [`PointResolution::ring_depth`], the single owner of the depth formula);
+    /// `0` with no anticipated plants.
+    #[must_use]
+    pub fn anchored_depth(&self) -> usize {
+        self.per_plant
+            .iter()
+            .map(PointResolution::ring_depth)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Fan-out width `max_i max_t |genuine C_i(t)|` (bounded by
+    /// [`Self::anchored_depth`] — a decision set's genuine members are a
+    /// subset of the plant's in-flight count at `t`): the decision-column
+    /// geometry's per-plant stride,
+    /// `col_anticipated_decision_start + j * n_anticipated + local_idx` for
+    /// `j in 0..max_fanout`. `1` for a single-decider study (`|C(t)| <= 1`
+    /// everywhere), `0` with no anticipated plants.
+    #[must_use]
+    pub fn max_fanout(&self) -> usize {
+        self.per_plant
+            .iter()
+            .flat_map(|point| {
+                (0..point.decision_sets.len()).map(|t| point.genuine_decisions_at(t).count())
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Resolve every plant's point-commitment lag against the delivery axis.
     ///
     /// `leads` is in anticipated-local order; `axis` carries the delivery
     /// calendar and the decision/delivery stage counts ([`LeadTime::Stages`]
@@ -596,27 +614,13 @@ impl AnticipatedResolution {
             .iter()
             .map(|&lead| resolve_point(lead, axis))
             .collect();
-        let k_max = per_plant
-            .iter()
-            .map(PointResolution::ring_depth)
-            .max()
-            .unwrap_or(0);
-        let max_fanout = per_plant
-            .iter()
-            .flat_map(|point| (0..axis.n_decision).map(|t| point.genuine_decisions_at(t).count()))
-            .max()
-            .unwrap_or(0);
-        Self {
-            per_plant,
-            k_max,
-            max_fanout,
-        }
+        Self { per_plant }
     }
 
-    /// Widens [`Self::k_max`] to cover the deepest of `lead_stages`.
+    /// Widens [`Self::anchored_depth`] to cover the deepest of `lead_stages`.
     #[must_use]
     pub(crate) fn ring_size(&self, lead_stages: &[usize]) -> usize {
-        self.k_max
+        self.anchored_depth()
             .max(lead_stages.iter().copied().max().unwrap_or(0))
     }
 }

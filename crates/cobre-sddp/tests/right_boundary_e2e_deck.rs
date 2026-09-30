@@ -48,7 +48,8 @@ mod deck_independent_fanout {
         );
 
         assert_eq!(
-            resolution.max_fanout, 1,
+            resolution.max_fanout(),
+            1,
             "a uniform weekly calendar with a two-stage lead must resolve to the \
              independent-slot fan-out width"
         );
@@ -70,10 +71,10 @@ mod deck_independent_fanout {
         );
 
         assert!(
-            resolution.max_fanout > 1,
+            resolution.max_fanout() > 1,
             "a coarse-then-fine calendar must fan out beyond the independent-slot width; \
              got {}",
-            resolution.max_fanout
+            resolution.max_fanout()
         );
     }
 }

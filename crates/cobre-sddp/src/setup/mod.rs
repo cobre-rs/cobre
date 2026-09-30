@@ -911,7 +911,7 @@ pub(crate) fn resolve_state_layout(
 
     // TODO(anticipated-fanout-output): the coupled output extractor is
     // compute_anticipated_decision_mw
-    if anticipated_resolution.max_fanout > 1 {
+    if anticipated_resolution.max_fanout() > 1 {
         let plant_id = first_fanned_plant_id(system, &anticipated_plants, &anticipated_resolution);
         debug_assert!(
             plant_id.is_some(),
@@ -1133,7 +1133,7 @@ pub(crate) fn build_study_dimensions(
 /// fans out — `|genuine C(t)| > 1` at some decision stage `t` — or `None` if
 /// none does. Shares the exact per-plant/per-stage predicate
 /// [`AnticipatedResolution::max_fanout`] maxes over, so `Some(_)` iff
-/// `resolution.max_fanout > 1`; `anticipated_plants` and
+/// `resolution.max_fanout() > 1`; `anticipated_plants` and
 /// `resolution.per_plant` are both in canonical (anticipated-local) order, so
 /// the first match is declaration-order-invariant.
 fn first_fanned_plant_id(

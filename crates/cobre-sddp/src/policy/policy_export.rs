@@ -2644,7 +2644,8 @@ mod tests {
             },
         );
         assert_eq!(
-            resolution.k_max, 4,
+            resolution.anchored_depth(),
+            4,
             "a lead-7 plant over 4 study stages must derive ring depth k_max=4"
         );
         let point = &resolution.per_plant[0];
@@ -2671,7 +2672,7 @@ mod tests {
         assert_eq!(point.physical_target(5), 8);
         assert_eq!(point.physical_target(6), 9);
 
-        let k_max = resolution.k_max;
+        let k_max = resolution.anchored_depth();
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,

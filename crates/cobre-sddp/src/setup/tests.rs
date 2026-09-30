@@ -4645,7 +4645,7 @@ fn bug_doc_reproduction_past_commits() -> Vec<cobre_core::AnticipatedCommitmentH
 /// Bug doc's reproduction shape: a `LeadTime(1160.0)` thermal whose lead
 /// resolves all four study deliveries pre-study, plus one post-study month —
 /// [`resolve_anticipated_commitments_widens_lead_time_plant_lead_to_the_ring_depth`]
-/// pins `resolution.k_max == 4` and `lead_stages == [4]` for this exact shape.
+/// pins `resolution.anchored_depth() == 4` and `lead_stages == [4]` for this exact shape.
 fn bug_doc_reproduction_system() -> cobre_core::System {
     let post_study = PostStudyStages {
         stages: vec![PostStudyStage {
@@ -7337,7 +7337,11 @@ fn setup_leadstages_resolution_preserves_k_max_and_state_dimension() {
     assert_eq!(point.decision_sets[0], vec![2], "C(0) == {{2}}");
     assert_eq!(point.decision_sets[1], vec![3], "C(1) == {{3}}");
     assert_eq!(point.decision_sets[2], vec![4], "C(2) == {{4}}");
-    assert_eq!(resolution.k_max, 2, "delivery-anchored ring depth == 2");
+    assert_eq!(
+        resolution.anchored_depth(),
+        2,
+        "delivery-anchored ring depth == 2"
+    );
 
     let config = minimal_config(1, 10);
     let stochastic = build_stochastic_context(
@@ -7412,7 +7416,7 @@ fn test_anticipated_resolve_point_pmo_calendar() {
     assert_eq!(point.decision_sets[4], vec![5]);
     assert_eq!(point.depth, vec![0, 0, 0, 1, 1, 0]);
     assert_eq!(point.occupancy, vec![3, 2, 1, 1, 1, 0]);
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
 }
 
 /// Anchor: a `LeadTime(350.0)` plant on the uniform `[100.0; 4]` calendar
@@ -7437,7 +7441,7 @@ fn lead_time_three_stage_lead_resolves_a_pre_study_prefix() {
 /// Ring-undersizing reproduction: the same four-stage `LeadTime` shape's true
 /// stage-0 in-flight set is `{1, 2, 3}` (delivery 1 and 2 are pre-study,
 /// `None`-decided; delivery 3 is decided at stage 0) — three items, so the
-/// ring must be at least `k_max == 3` deep to hold them. `AnticipatedResolution::k_max`
+/// ring must be at least `k_max == 3` deep to hold them. `AnticipatedResolution::anchored_depth`
 /// derives from `PointResolution::depth`, which structurally excludes
 /// pre-study (`None`-decider) occupancy from its running count, so it
 /// resolves a ring too narrow to hold the true in-flight set.
@@ -7451,7 +7455,7 @@ fn ring_depth_counts_pre_study_occupancy() {
         &AnticipatedPlants::build(system.thermals()),
     );
 
-    assert_eq!(resolution.k_max, 3);
+    assert_eq!(resolution.anchored_depth(), 3);
 }
 
 /// `LeadStages` at `ℓ == n_stages` with no post-study calendar: every delivery
@@ -7471,7 +7475,7 @@ fn leadstages_ring_depth_covers_full_lead_when_lead_equals_horizon() {
         &AnticipatedPlants::build(system.thermals()),
     );
 
-    assert_eq!(resolution.k_max, n_stages);
+    assert_eq!(resolution.anchored_depth(), n_stages);
     assert_eq!(lead_stages, vec![n_stages]);
 }
 
@@ -7497,14 +7501,14 @@ fn test_anticipated_resolve_point_fanout_calendar() {
     assert_eq!(point.decision_sets[0], vec![1, 2, 3, 4]);
     assert_eq!(point.decision_sets[0].len(), 4);
     assert_eq!(point.depth, vec![4, 4, 3, 2, 1, 0]);
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
 }
 
 /// The bug doc's reproduction shape as a `System`: a `LeadTime(1160)` thermal
 /// whose lead resolves all four study deliveries pre-study, plus one post-study
 /// month. `resolve_anticipated_commitments_core` widens the per-plant lead to
 /// the ring depth `4` — every simultaneous pre-study seed — matching
-/// `resolution.k_max`, not the occupancy max `3` the pre-fix sizing reported.
+/// `resolution.anchored_depth()`, not the occupancy max `3` the pre-fix sizing reported.
 #[test]
 fn resolve_anticipated_commitments_widens_lead_time_plant_lead_to_the_ring_depth() {
     let post_study = PostStudyStages {
@@ -7531,7 +7535,7 @@ fn resolve_anticipated_commitments_widens_lead_time_plant_lead_to_the_ring_depth
         Some(3),
         "occupancy max stays 3; ring_depth restores the fourth simultaneous seed"
     );
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
     assert_eq!(
         lead_stages,
         vec![4],
@@ -8864,7 +8868,7 @@ impl tracing::Subscriber for WarnRecorder {
 /// calendar `[744, 744, 744, 744]` h resolves `c(m) = m` at every delivery
 /// stage (the 720h lead is shorter than each 744h stage, so `end_m - 720`
 /// always lands inside stage `m`'s own window) — the `K = 0` sub-stage-lead
-/// degeneracy, `depth == [0, 0, 0, 0]` and `resolution.k_max == 0` (never an
+/// degeneracy, `depth == [0, 0, 0, 0]` and `resolution.anchored_depth() == 0` (never an
 /// underflow).
 #[test]
 fn test_anticipated_resolve_point_k0_uniform_calendar() {
@@ -8887,8 +8891,8 @@ fn test_anticipated_resolve_point_k0_uniform_calendar() {
         "every delivery stage self-delivers (K=0)"
     );
     assert_eq!(point.depth, vec![0, 0, 0, 0]);
-    assert_eq!(resolution.k_max, 0, "ring depth collapses to 0");
-    assert_eq!(resolution.max_fanout, 0, "no genuine fan-out either");
+    assert_eq!(resolution.anchored_depth(), 0, "ring depth collapses to 0");
+    assert_eq!(resolution.max_fanout(), 0, "no genuine fan-out either");
     assert_eq!(
         point.self_delivered_stages().collect::<Vec<_>>(),
         vec![0, 1, 2, 3],
@@ -9365,7 +9369,8 @@ fn lead_time_fanout_rejected_at_setup() {
         &AnticipatedPlants::build(system.thermals()),
     );
     assert_eq!(
-        resolution.max_fanout, 2,
+        resolution.max_fanout(),
+        2,
         "fixture must fan out with width 2 at decision stage 0"
     );
 

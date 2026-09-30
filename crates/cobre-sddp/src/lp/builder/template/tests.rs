@@ -2073,8 +2073,6 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             ctx_a.state.anticipated_resolution.per_plant[1].clone(),
             ctx_a.state.anticipated_resolution.per_plant[0].clone(),
         ],
-        k_max: ctx_a.state.anticipated_resolution.k_max,
-        max_fanout: ctx_a.state.anticipated_resolution.max_fanout,
     };
     let max_par_order = par_lp.max_order();
     let effective_lag_counts: Vec<usize> = if max_par_order > 0 {
@@ -5390,7 +5388,7 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
         "setup vs template anticipated_lead_stages"
     );
     assert_eq!(
-        setup_resolution.k_max,
+        setup_resolution.anchored_depth(),
         ctx.state
             .anticipated_resolution
             .ring_size(&ctx.state.anticipated_lead_stages),

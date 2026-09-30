@@ -504,7 +504,7 @@ fn test_anticipated_resolution_k_max_is_global_depth_max() {
     assert_eq!(resolution.per_plant.len(), 2);
     assert_eq!(resolution.per_plant[0].depth.iter().copied().max(), Some(2));
     assert_eq!(resolution.per_plant[1].depth.iter().copied().max(), Some(4));
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
 }
 
 #[test]
@@ -518,7 +518,7 @@ fn test_anticipated_resolution_empty_is_zero_depth() {
         },
     );
     assert!(resolution.per_plant.is_empty());
-    assert_eq!(resolution.k_max, 0);
+    assert_eq!(resolution.anchored_depth(), 0);
 }
 
 // Fan-out `[720,168,168,168,168,168]` h `LeadTime(720)` — the exact calendar
@@ -544,7 +544,7 @@ fn test_genuine_decisions_at_matches_fanout_hand_derivation() {
         vec![1, 2, 3, 4],
         "no self-delivery here, so genuine == decision_sets exactly"
     );
-    assert_eq!(resolution.max_fanout, 4);
+    assert_eq!(resolution.max_fanout(), 4);
     assert!(point.self_delivered_stages().next().is_none());
 }
 
@@ -567,8 +567,8 @@ fn test_k0_uniform_calendar_self_delivers_every_stage() {
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.depth, vec![0, 0, 0, 0]);
-    assert_eq!(resolution.k_max, 0);
-    assert_eq!(resolution.max_fanout, 0);
+    assert_eq!(resolution.anchored_depth(), 0);
+    assert_eq!(resolution.max_fanout(), 0);
     assert_eq!(
         point.self_delivered_stages().collect::<Vec<_>>(),
         vec![0, 1, 2, 3]
@@ -755,12 +755,14 @@ fn test_in_study_path_byte_identity_regression() {
         },
     );
     assert_eq!(
-        anticipated.k_max, 4,
+        anticipated.anchored_depth(),
+        4,
         "k_max derives from ring_depth: plant 0's leading None-run (4) exceeds its \
          occupancy max (3), so the ring grows to hold every simultaneous seed"
     );
     assert_eq!(
-        anticipated.max_fanout, 1,
+        anticipated.max_fanout(),
+        1,
         "max_fanout must stay byte-identical"
     );
     assert_eq!(
@@ -899,7 +901,7 @@ fn test_occupancy_full_in_flight_pre_study_prefix() {
 
     assert_eq!(point.occupancy, vec![3, 2, 1, 0]);
     assert_eq!(point.depth, vec![1, 1, 1, 0]);
-    assert_eq!(resolution.k_max, 3);
+    assert_eq!(resolution.anchored_depth(), 3);
 }
 
 // The DECOMP shape — `LeadStages(6)` over an empty calendar with a delivery
@@ -918,8 +920,8 @@ fn test_occupancy_decomp_shape_full_ring_every_stage() {
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.occupancy, vec![6, 6, 6, 6, 6, 6]);
-    assert_eq!(resolution.k_max, 6);
-    assert_eq!(resolution.max_fanout, 1);
+    assert_eq!(resolution.anchored_depth(), 6);
+    assert_eq!(resolution.max_fanout(), 1);
 }
 
 // Byte-identity floor: on a well-behaved uniform calendar whose leading None-run
@@ -1091,7 +1093,7 @@ fn resolve_sizes_k_max_from_the_deepest_plant_ring_depth() {
 
     assert_eq!(resolution.per_plant[0].ring_depth(), 4);
     assert_eq!(resolution.per_plant[1].ring_depth(), 2);
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
 }
 
 #[test]
@@ -1214,8 +1216,8 @@ fn decomp_mirror_shape_resolves_full_depth_ring() {
         },
     );
 
-    assert_eq!(anticipated.k_max, 6);
-    assert_eq!(anticipated.max_fanout, 1);
+    assert_eq!(anticipated.anchored_depth(), 6);
+    assert_eq!(anticipated.max_fanout(), 1);
 
     let point = &anticipated.per_plant[0];
     assert_eq!(point.occupancy, vec![6; 6]);
@@ -1228,7 +1230,7 @@ fn decomp_mirror_shape_resolves_full_depth_ring() {
         );
     }
     assert_eq!(
-        ring_window_carried(point, 0, anticipated.k_max, 12),
+        ring_window_carried(point, 0, anticipated.anchored_depth(), 12),
         vec![1, 2, 3, 4, 5, 6],
         "the full-depth ring at t=0 carries the contiguous run 1..=6"
     );
@@ -1252,7 +1254,7 @@ proptest! {
                 n_delivery,
             },
         );
-        let k_max = anticipated.k_max;
+        let k_max = anticipated.anchored_depth();
         if k_max == 0 {
             return Ok(());
         }
@@ -1289,7 +1291,7 @@ proptest! {
                 n_delivery,
             },
         );
-        let k_max = anticipated.k_max;
+        let k_max = anticipated.anchored_depth();
         if k_max == 0 {
             return Ok(());
         }

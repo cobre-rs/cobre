@@ -3130,8 +3130,6 @@ mod zero_cost_tests {
         };
         AnticipatedResolution {
             per_plant: vec![point],
-            k_max: 4,
-            max_fanout: 1,
         }
     }
 

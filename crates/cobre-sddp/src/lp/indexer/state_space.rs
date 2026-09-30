@@ -1486,8 +1486,6 @@ mod tests {
         };
         let resolution = AnticipatedResolution {
             per_plant: vec![point],
-            k_max: 2,
-            max_fanout: 0,
         };
         let idx =
             finalized_with_transit_buckets_and_resolution(0, 0, Vec::new(), vec![3], resolution);
@@ -1729,7 +1727,6 @@ mod tests {
     fn two_plant_resolution_with_fixed_window(
         n_decision: usize,
         g: usize,
-        k_max: usize,
     ) -> AnticipatedResolution {
         let decider_len = n_decision + g + 1;
         let with_window = PointResolution {
@@ -1750,8 +1747,6 @@ mod tests {
         };
         AnticipatedResolution {
             per_plant: vec![with_window, without_window],
-            k_max,
-            max_fanout: 0,
         }
     }
 
@@ -1764,7 +1759,7 @@ mod tests {
             0,
             Vec::new(),
             vec![4, 4],
-            two_plant_resolution_with_fixed_window(4, 3, 4),
+            two_plant_resolution_with_fixed_window(4, 3),
         )
     }
 
@@ -1979,7 +1974,7 @@ mod tests {
             2,
             vec![(0, 1), (0, 2)],
             vec![1, 2],
-            two_plant_resolution_with_fixed_window(4, 3, 4),
+            two_plant_resolution_with_fixed_window(4, 3),
         );
         for plant in 0..idx.n_anticipated {
             for m in 0..idx.k_max {
@@ -2003,7 +1998,7 @@ mod tests {
     /// Build an [`AnticipatedResolution`] whose single plant's `decider` has
     /// `decider_len` entries — the only field the constructor reads to derive
     /// `n_delivery`.
-    fn single_plant_resolution(decider_len: usize, k_max: usize) -> AnticipatedResolution {
+    fn single_plant_resolution(decider_len: usize) -> AnticipatedResolution {
         AnticipatedResolution {
             per_plant: vec![PointResolution {
                 decider: vec![None; decider_len],
@@ -2011,8 +2006,6 @@ mod tests {
                 depth: Vec::new(),
                 occupancy: Vec::new(),
             }],
-            k_max,
-            max_fanout: 0,
         }
     }
 
@@ -2026,7 +2019,7 @@ mod tests {
             0,
             Vec::new(),
             vec![2],
-            single_plant_resolution(12, 0),
+            single_plant_resolution(12),
         );
         assert_eq!(idx.delivery_stage_count(6), 12);
     }
@@ -2040,7 +2033,7 @@ mod tests {
             0,
             Vec::new(),
             vec![2],
-            single_plant_resolution(4, 0),
+            single_plant_resolution(4),
         );
         assert_eq!(idx.delivery_stage_count(4), 4);
     }

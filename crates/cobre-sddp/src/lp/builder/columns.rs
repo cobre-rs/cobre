@@ -3641,7 +3641,7 @@ mod anticipated_objective_tests {
                     n_delivery: PSA_N_STAGES + n_post,
                 },
             );
-            let k_max = resolution.k_max;
+            let k_max = resolution.anchored_depth();
             let bounds = psa_bounds(k_max);
 
             let study_hours = [PSA_STUDY_HOURS; PSA_N_STAGES];

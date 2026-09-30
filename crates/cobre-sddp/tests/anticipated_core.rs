@@ -6379,7 +6379,8 @@ mod a1c_stage_count_mode_anchor {
             point.depth,
         );
         assert_eq!(
-            resolution.max_fanout, 1,
+            resolution.max_fanout(),
+            1,
             "a constant lead is single-decider (|C(t)| <= 1)",
         );
     }
@@ -6768,7 +6769,8 @@ mod a1c_stage_count_mode_anchor {
             "Time(1440.0) must resolve to the single-decider chain on the d37 calendar",
         );
         assert_eq!(
-            resolution.max_fanout, 1,
+            resolution.max_fanout(),
+            1,
             "Time(1440.0) must be single-decider (|C(t)| == 1) to clear the fan-out guard",
         );
 
@@ -7281,7 +7283,8 @@ mod anticipated_ring_axis_regressions {
              (g == 3), so decider[7..11] == [Some(0), Some(1), Some(2), Some(3)]",
         );
         assert_eq!(
-            resolution.k_max, 4,
+            resolution.anchored_depth(),
+            4,
             "ring depth must be the true occupancy (4), not the width-inclusive \
              span (7)",
         );
@@ -7410,7 +7413,8 @@ mod anticipated_ring_axis_regressions {
             "the fixture must sit in the under-sizing regime: occupancy peaks at 3",
         );
         assert_eq!(
-            resolution.k_max, 4,
+            resolution.anchored_depth(),
+            4,
             "k_max = max(occupancy_max 3, n_none_in_study 4) must widen to 4 so \
              every simultaneous pre-study seed gets its own slot",
         );

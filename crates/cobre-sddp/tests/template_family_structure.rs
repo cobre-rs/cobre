@@ -16,11 +16,12 @@ mod common;
 
 use std::collections::{HashMap, HashSet};
 
-use cobre_core::BlockMode;
-use cobre_sddp::indexer::{BlockIdx, Boundary, FphaCellLocal, HydroSys};
+use cobre_core::{BlockMode, EntityId, System};
+use cobre_sddp::indexer::{BlockIdx, Boundary, BusSys, FphaCellLocal, HydroCellIndex, HydroSys};
 use cobre_sddp::test_support::template_structure::{
-    RingLane, RingLaneKind, UnscaledMatrix, generation_column_owners, hours_to_hm3, ring_lanes,
-    storage_column_owners, water_row_owners,
+    ColOwner, RingLane, RingLaneKind, RowOwner, UnscaledMatrix, column_owners,
+    generation_column_owners, hours_to_hm3, ring_lanes, row_owners, storage_column_owners,
+    water_row_owners,
 };
 
 const TOL: f64 = 1e-12;
@@ -418,5 +419,282 @@ fn every_study_ring_slot_has_one_signed_definition_row_or_is_frozen() {
     assert!(
         saw_water_definition,
         "no water ring definition row was checked"
+    );
+}
+
+/// Every hydro downstream of, and including, `start`: follows
+/// `Hydro::downstream_id` through `positions` until it runs out or repeats
+/// (a cycle guard; the cascade never cycles in a valid system).
+fn downstream_chain(
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    start: HydroSys,
+) -> HashSet<usize> {
+    let mut chain = HashSet::new();
+    let mut cur = Some(start.get());
+    while let Some(pos) = cur {
+        if !chain.insert(pos) {
+            break;
+        }
+        cur = system.hydros()[pos]
+            .downstream_id
+            .and_then(|id| positions.get(&id).copied());
+    }
+    chain
+}
+
+/// `true` when `owner`'s column may legitimately enter hydro `d`'s
+/// water-balance row.
+fn water_row_ok(
+    system: &System,
+    positions: &HashMap<EntityId, usize>,
+    d: HydroSys,
+    owner: ColOwner,
+) -> bool {
+    match owner {
+        ColOwner::Turbine { hydro, .. } | ColOwner::Spillage { hydro, .. } => {
+            downstream_chain(system, positions, hydro).contains(&d.get())
+        }
+        ColOwner::Diversion { hydro, .. } => {
+            d == hydro
+                || system.hydros()[hydro.get()]
+                    .diversion
+                    .as_ref()
+                    .and_then(|channel| positions.get(&channel.downstream_id).copied())
+                    .is_some_and(|target| {
+                        downstream_chain(system, positions, HydroSys::new(target))
+                            .contains(&d.get())
+                    })
+        }
+        ColOwner::Pumping { station, .. } => {
+            let p = &system.pumping_stations()[station.get()];
+            let source = positions[&p.source_hydro_id];
+            let destination = positions[&p.destination_hydro_id];
+            d.get() == source || d.get() == destination
+        }
+        ColOwner::Evaporation { hydro, .. }
+        | ColOwner::InflowSlack { hydro }
+        | ColOwner::WithdrawalNeg { hydro }
+        | ColOwner::WithdrawalPos { hydro } => d == hydro,
+        ColOwner::Thermal { .. }
+        | ColOwner::Deficit { .. }
+        | ColOwner::Excess { .. }
+        | ColOwner::Ncs { .. }
+        | ColOwner::LineFwd { .. }
+        | ColOwner::LineRev { .. }
+        | ColOwner::Generation { .. }
+        | ColOwner::Contract { .. } => false,
+        ColOwner::Storage { .. }
+        | ColOwner::ZInflow { .. }
+        | ColOwner::InflowLag { .. }
+        | ColOwner::Bucket { .. }
+        | ColOwner::AnticipatedIn { .. } => true,
+    }
+}
+
+/// `true` when `owner`'s column may legitimately enter bus `beta`'s
+/// load-balance row.
+fn load_row_ok(
+    system: &System,
+    cell_index: &HydroCellIndex,
+    beta: BusSys,
+    owner: ColOwner,
+) -> bool {
+    let bus_id_of = |b: BusSys| system.buses()[b.get()].id;
+    let beta_id = bus_id_of(beta);
+    match owner {
+        ColOwner::Thermal { thermal, .. } => system.thermals()[thermal.get()].bus_id == beta_id,
+        ColOwner::Deficit { bus, .. } | ColOwner::Excess { bus, .. } => bus_id_of(bus) == beta_id,
+        ColOwner::Ncs { ncs, .. } => system.non_controllable_sources()[ncs.get()].bus_id == beta_id,
+        ColOwner::Pumping { station, .. } => {
+            system.pumping_stations()[station.get()].bus_id == beta_id
+        }
+        ColOwner::Contract {
+            contract_type,
+            family_slot,
+            ..
+        } => system
+            .contracts()
+            .iter()
+            .filter(|c| c.contract_type == contract_type)
+            .nth(family_slot)
+            .is_some_and(|c| c.bus_id == beta_id),
+        ColOwner::LineFwd { line, .. } | ColOwner::LineRev { line, .. } => {
+            let l = &system.lines()[line.get()];
+            l.source_bus_id == beta_id || l.target_bus_id == beta_id
+        }
+        ColOwner::Turbine { cell, .. } | ColOwner::Generation { cell, .. } => {
+            cell_index.bus_of(cell) == beta_id
+        }
+        ColOwner::Storage { .. }
+        | ColOwner::Spillage { .. }
+        | ColOwner::Diversion { .. }
+        | ColOwner::Evaporation { .. }
+        | ColOwner::ZInflow { .. }
+        | ColOwner::InflowLag { .. }
+        | ColOwner::Bucket { .. } => false,
+        ColOwner::InflowSlack { .. }
+        | ColOwner::WithdrawalNeg { .. }
+        | ColOwner::WithdrawalPos { .. }
+        | ColOwner::AnticipatedIn { .. } => true,
+    }
+}
+
+/// `true` when `owner`'s column may legitimately enter hydro `h`'s z-inflow
+/// row: only its own z-inflow, inflow-lag or inflow-slack column.
+fn z_row_ok(h: HydroSys, owner: ColOwner) -> bool {
+    match owner {
+        ColOwner::ZInflow { hydro }
+        | ColOwner::InflowLag { hydro }
+        | ColOwner::InflowSlack { hydro } => hydro == h,
+        _ => false,
+    }
+}
+
+/// `false` when a chronological-stage block match cannot apply: a
+/// cross-hydro water-row entry (turbine, spillage or diversion reached
+/// through the downstream chain, not `d`'s own equipment) spreads its
+/// release across the chain's own arrival blocks (`resolve_spread`'s
+/// chronological dispatch), so the column's own block legitimately differs
+/// from the row's. A pumping station's flow column always shares one block
+/// index with both its source and destination rows (`fill_pumping_water_entries`),
+/// so it keeps the check.
+fn block_check_applies(d: HydroSys, owner: ColOwner) -> bool {
+    match owner {
+        ColOwner::Turbine { hydro, .. }
+        | ColOwner::Spillage { hydro, .. }
+        | ColOwner::Diversion { hydro, .. } => hydro == d,
+        _ => true,
+    }
+}
+
+/// `owner`'s block, for the families that carry one.
+fn column_block(owner: ColOwner) -> Option<BlockIdx> {
+    match owner {
+        ColOwner::Turbine { blk, .. }
+        | ColOwner::Spillage { blk, .. }
+        | ColOwner::Diversion { blk, .. }
+        | ColOwner::Pumping { blk, .. }
+        | ColOwner::Thermal { blk, .. }
+        | ColOwner::Deficit { blk, .. }
+        | ColOwner::Excess { blk, .. }
+        | ColOwner::Ncs { blk, .. }
+        | ColOwner::LineFwd { blk, .. }
+        | ColOwner::LineRev { blk, .. }
+        | ColOwner::Generation { blk, .. }
+        | ColOwner::Contract { blk, .. } => Some(blk),
+        _ => None,
+    }
+}
+
+#[test]
+fn every_study_places_each_column_only_on_its_entitys_block_rows() {
+    let mut saw_pumping_on_water = false;
+    let mut saw_turbine_on_load_split_plant = false;
+    let mut saw_line_on_load = false;
+    let mut saw_diversion_on_water = false;
+
+    let count = common::for_each_study(|key, system, setup| {
+        let state = setup.stage_state();
+        let templates = &setup.inputs.stage_data.stage_templates;
+        let positions: HashMap<EntityId, usize> = system
+            .hydros()
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.id, i))
+            .collect();
+        let cell_index = HydroCellIndex::build(system.hydros());
+
+        for (s, t) in templates.templates.iter().enumerate() {
+            let geom = &templates.geometry_per_stage[s];
+            let row_own = row_owners(system, geom, state);
+            let col_own = column_owners(system, geom, state);
+            let matrix = UnscaledMatrix::of(t);
+
+            for (&r, &row_owner) in &row_own {
+                for &(c, _) in matrix.row(r) {
+                    let Some(&owner) = col_own.get(&c) else {
+                        panic!(
+                            "{key} stage {s}: row {r} ({row_owner:?}) has an undecoded column {c}"
+                        );
+                    };
+
+                    match row_owner {
+                        RowOwner::Water { hydro: d, blk } => {
+                            if geom.block_mode == BlockMode::Chronological
+                                && block_check_applies(d, owner)
+                                && let Some(cb) = column_block(owner)
+                            {
+                                assert_eq!(
+                                    cb, blk,
+                                    "{key} stage {s}: water row {r} (hydro {d:?}, block \
+                                     {blk:?}) carries column {c} ({owner:?}) from block \
+                                     {cb:?}"
+                                );
+                            }
+                            assert!(
+                                water_row_ok(system, &positions, d, owner),
+                                "{key} stage {s}: water row {r} (hydro {d:?}) carries column \
+                                 {c} ({owner:?}), which cannot reach hydro {d:?}'s water \
+                                 balance"
+                            );
+                            if matches!(owner, ColOwner::Pumping { .. }) {
+                                saw_pumping_on_water = true;
+                            }
+                            if matches!(owner, ColOwner::Diversion { .. }) {
+                                saw_diversion_on_water = true;
+                            }
+                        }
+                        RowOwner::Load { bus: beta, blk } => {
+                            if let Some(cb) = column_block(owner) {
+                                assert_eq!(
+                                    cb, blk,
+                                    "{key} stage {s}: load row {r} (bus {beta:?}, block \
+                                     {blk:?}) carries column {c} ({owner:?}) from block {cb:?}"
+                                );
+                            }
+                            assert!(
+                                load_row_ok(system, &cell_index, beta, owner),
+                                "{key} stage {s}: load row {r} (bus {beta:?}) carries column \
+                                 {c} ({owner:?}), which does not own bus {beta:?}"
+                            );
+                            if matches!(owner, ColOwner::LineFwd { .. } | ColOwner::LineRev { .. })
+                            {
+                                saw_line_on_load = true;
+                            }
+                            if matches!(
+                                owner,
+                                ColOwner::Turbine { .. } | ColOwner::Generation { .. }
+                            ) && key.contains("d51")
+                            {
+                                saw_turbine_on_load_split_plant = true;
+                            }
+                        }
+                        RowOwner::ZInflow { hydro: h } => {
+                            assert!(
+                                z_row_ok(h, owner),
+                                "{key} stage {s}: z row {r} (hydro {h:?}) carries column {c} \
+                                 ({owner:?}), which does not own the z-inflow row"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    assert_full_sweep_count(count);
+    assert!(
+        saw_pumping_on_water,
+        "no pumping-on-water entry was checked"
+    );
+    assert!(
+        saw_turbine_on_load_split_plant,
+        "no turbine-on-load entry was checked on a two-bus split plant"
+    );
+    assert!(saw_line_on_load, "no line-on-load entry was checked");
+    assert!(
+        saw_diversion_on_water,
+        "no diversion-on-water entry was checked"
     );
 }

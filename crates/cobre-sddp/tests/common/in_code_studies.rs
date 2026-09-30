@@ -345,6 +345,22 @@ pub fn discounted_anticipated_study() -> (cobre_core::System, Config) {
     (build_system(), build_config())
 }
 
+fn build_config_with_inflow_penalty() -> Config {
+    let mut config = build_config();
+    config.modeling.inflow_non_negativity.method = CfgInflowMethod::Penalty;
+    config
+}
+
+/// [`discounted_anticipated_study`]'s parallel, two-block-per-stage system
+/// with `InflowNonNegativityMethod::Penalty` active: the smallest in-code
+/// study whose inflow-slack column is live on a multi-block parallel
+/// stage — no committed deck combines a `Penalty`/`TruncationWithPenalty`
+/// inflow method with more than one parallel block.
+#[must_use]
+pub fn parallel_inflow_slack_study() -> (cobre_core::System, Config) {
+    (build_system(), build_config_with_inflow_penalty())
+}
+
 const MIXED_LEAD_N_STAGES: usize = 5;
 const MIXED_LEAD_BUS_ID: EntityId = EntityId(1);
 const MIXED_LEAD_HYDRO_ID: EntityId = EntityId(2);
@@ -1765,9 +1781,13 @@ pub fn two_hydro_evaporation_study() -> (cobre_core::System, Config, PrepareHydr
 
 /// The in-code studies the structural sweep (`for_each_study`) visits beyond
 /// the manifest's [`keyed_setups`]: [`mixed_lead_anticipated_study`]'s
-/// two anticipated lanes, and [`two_hydro_evaporation_study`]'s
-/// nonzero-position evaporating hydro. Neither joins `keyed_setups()` — doing
-/// so would move the template-snapshot manifest, which stays byte-identical.
+/// two anticipated lanes, [`two_hydro_evaporation_study`]'s
+/// nonzero-position evaporating hydro, and [`parallel_inflow_slack_study`]'s
+/// multi-block parallel inflow slack (D-044b-reach: the smallest in-code
+/// study that reaches the M-WB mutation check, unreachable on every
+/// committed deck and every other in-code study). None joins
+/// `keyed_setups()` — doing so would move the template-snapshot manifest,
+/// which stays byte-identical.
 ///
 /// Each study's builder is called twice — see [`keyed_setups`]'s doc comment
 /// for why.
@@ -1777,6 +1797,8 @@ pub fn structural_studies() -> Vec<(String, cobre_core::System, StudySetup)> {
     let (mixed_lead_system_for_setup, _) = mixed_lead_anticipated_study(false);
     let (evap_system, evap_config, _) = two_hydro_evaporation_study();
     let (evap_system_for_setup, _, evap_hydro_models_for_setup) = two_hydro_evaporation_study();
+    let (slack_system, slack_config) = parallel_inflow_slack_study();
+    let (slack_system_for_setup, _) = parallel_inflow_slack_study();
     vec![
         (
             "structural/mixed-lead-anticipated".to_string(),
@@ -1791,6 +1813,11 @@ pub fn structural_studies() -> Vec<(String, cobre_core::System, StudySetup)> {
                 &evap_config,
                 evap_hydro_models_for_setup,
             ),
+        ),
+        (
+            "structural/parallel-inflow-slack".to_string(),
+            slack_system,
+            super::build_setup_in_code(slack_system_for_setup, &slack_config),
         ),
     ]
 }

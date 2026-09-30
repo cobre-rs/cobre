@@ -1258,8 +1258,7 @@ pub fn study_dims() -> StudyDimensions {
 }
 
 /// Build the [`StudyDimensions`] matching the [`GeometryDims`] a test built its
-/// stage geometry from. `has_ncs` is always `false`: these fixtures declare no
-/// stage (production sets it from `system.stages().iter().any(|s| s.id >= 0)`).
+/// stage geometry from.
 #[must_use]
 pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {
@@ -1267,7 +1266,6 @@ pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
         n_lines: dims.n_lines,
         n_buses: dims.n_buses,
         max_deficit_segments: dims.max_deficit_segments,
-        has_ncs: false,
         has_inflow_penalty: dims.has_inflow_penalty,
         has_withdrawal: dims.hydro_count > 0,
         has_operational_violations: dims.hydro_count != 0,

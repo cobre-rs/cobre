@@ -1904,12 +1904,7 @@ mod tests {
         let ctx = fixture.ctx();
 
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        // `has_ncs = true`: the same production wiring gate
-        // (`!geometry_per_stage.is_empty()`) that makes `apply_ncs_col_bounds` fire.
-        let study_dims = StudyDimensions {
-            has_ncs: true,
-            ..StudyDimensions::default()
-        };
+        let study_dims = StudyDimensions::default();
         let stages = vec![stage];
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
         let initial_state: Vec<f64> = Vec::new();

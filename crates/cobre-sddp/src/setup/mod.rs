@@ -1106,8 +1106,7 @@ fn build_transit_seed_arcs(
 ///
 /// `hydro_count` and `anticipated_plants` are threaded from
 /// [`resolve_state_layout`] — the same values its [`StateSpace`] was built
-/// from. `has_ncs` reads `system` directly (D6): "the study has at least one
-/// stage", the same value the per-stage geometry's presence used to give.
+/// from.
 pub(crate) fn build_study_dimensions(
     system: &System,
     inflow_method: crate::InflowNonNegativityMethod,
@@ -1124,9 +1123,7 @@ pub(crate) fn build_study_dimensions(
         .max()
         .unwrap_or(0);
 
-    // Single owner of the study-invariant, non-state LP shape. `has_ncs` only flags
-    // presence; the per-(ncs, block) column base is read per stage through
-    // `StageGeometry::ncs_generation_col`, never a global handle. `n_blks` is
+    // Single owner of the study-invariant, non-state LP shape. `n_blks` is
     // deliberately absent — it is per-stage, owned by the per-stage geometry, never
     // study-global.
     StudyDimensions {
@@ -1134,7 +1131,6 @@ pub(crate) fn build_study_dimensions(
         n_lines: system.lines().len(),
         n_buses: system.buses().len(),
         max_deficit_segments,
-        has_ncs: system.stages().iter().any(|s| s.id >= 0),
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,

@@ -21,10 +21,6 @@ use super::AnticipatedPlants;
 /// `anticipated_plants` is study-invariant, so it is owned here; the
 /// per-stage FPHA / evaporation identity lists vary by stage and are owned by
 /// the per-stage geometry.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the flags mark independent optional column groups, not states of one machine"
-)]
 #[derive(Debug, Clone, Default)]
 pub struct StudyDimensions {
     /// Number of thermal units (T).
@@ -35,9 +31,6 @@ pub struct StudyDimensions {
     pub n_buses: usize,
     /// Maximum number of deficit segments across all buses (S).
     pub max_deficit_segments: usize,
-    /// Whether the study has NCS generation columns; only presence lives here,
-    /// the per-`(ncs, block)` column base is addressed per stage.
-    pub has_ncs: bool,
     /// Whether inflow non-negativity penalty slack columns are present.
     pub has_inflow_penalty: bool,
     /// Whether withdrawal slack columns are present (`hydro_count > 0`).

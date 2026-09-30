@@ -42,8 +42,8 @@ pub(crate) enum InflowNoise {
 /// among the four solve sites.
 ///
 /// The NCS availability patch is not a variation point: [`StageSolvePrep::run`]
-/// derives its own gate (`n_stochastic_ncs() > 0`, `has_ncs`) internally, the
-/// same gate every solve site applies.
+/// gates it on `n_stochastic_ncs() > 0` internally, the same gate every solve
+/// site applies.
 pub(crate) struct StageSolvePrepParams<'a> {
     /// Which slice this solve pins as incoming state.
     pub state_source: StateSource<'a>,
@@ -198,23 +198,21 @@ impl StageSolvePrep {
                 &mut scratch.ncs_col_lower_buf,
                 &mut scratch.ncs_col_upper_buf,
             );
-            if training_ctx.study_dims.has_ncs {
-                // Stage id is the dormancy key (NOT the index `stage`; filtered
-                // placeholder stages can shift the id off the index).
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                let stage_id = training_ctx
-                    .stages
-                    .get(stage.0)
-                    .map_or(stage.0 as i32, |s| s.id);
-                apply_ncs_col_bounds(
-                    solver,
-                    scratch,
-                    &ctx.geometry_per_stage[stage.0],
-                    ctx.ncs_stochastic_dense_col,
-                    ctx.ncs_stochastic_windows,
-                    stage_id,
-                );
-            }
+            // Stage id is the dormancy key (NOT the index `stage`; filtered
+            // placeholder stages can shift the id off the index).
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let stage_id = training_ctx
+                .stages
+                .get(stage.0)
+                .map_or(stage.0 as i32, |s| s.id);
+            apply_ncs_col_bounds(
+                solver,
+                scratch,
+                &ctx.geometry_per_stage[stage.0],
+                ctx.ncs_stochastic_dense_col,
+                ctx.ncs_stochastic_windows,
+                stage_id,
+            );
         }
     }
 }

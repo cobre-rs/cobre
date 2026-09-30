@@ -95,7 +95,6 @@ fn study_dims_for(
         n_lines,
         n_buses,
         max_deficit_segments: 1,
-        has_ncs: false,
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,

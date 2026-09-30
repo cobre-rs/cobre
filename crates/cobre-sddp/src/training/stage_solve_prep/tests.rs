@@ -544,10 +544,7 @@ fn run_wires_ncs_patch_matching_pre_collapse_inline_pattern() {
         .ncs_allow_curtailment(&ncs_allow_curtailment);
     let ctx = fixture.ctx();
     let horizon = HorizonMode::Finite { num_stages: 1 };
-    let study_dims = StudyDimensions {
-        has_ncs: true,
-        ..StudyDimensions::default()
-    };
+    let study_dims = StudyDimensions::default();
     let stages = vec![ncs_stage];
     let training_ctx = TrainingContext {
         node_graph: &crate::test_support::chain_node_graph(&stoch),

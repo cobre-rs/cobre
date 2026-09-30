@@ -103,7 +103,7 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
 
 /// Carries the non-state study shape directly: this external test crate cannot see
 /// the parent crate's `#[cfg(test)]`/`test-support` surface. `max_deficit_segments`
-/// is `1`; `n_pumping`/`has_ncs`/anticipated are empty for these fixtures.
+/// is `1`; `n_pumping`/anticipated are empty for these fixtures.
 fn study_dims_for(
     n_thermals: usize,
     n_lines: usize,
@@ -116,7 +116,6 @@ fn study_dims_for(
         n_lines,
         n_buses,
         max_deficit_segments: 1,
-        has_ncs: false,
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,

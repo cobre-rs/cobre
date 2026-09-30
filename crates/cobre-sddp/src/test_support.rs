@@ -93,6 +93,7 @@ use cobre_solver::{
 };
 
 pub mod decks;
+pub mod template_structure;
 
 pub(crate) mod ctx_fixture;
 use ctx_fixture::CtxFixture;

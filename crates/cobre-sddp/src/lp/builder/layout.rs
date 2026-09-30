@@ -24,7 +24,6 @@ use crate::indexer::{
 };
 use crate::time_value::TimeValue;
 
-use super::generic_constraints::expression_is_block_independent;
 use super::hydro_state::hydro_phase;
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET,
@@ -859,6 +858,71 @@ fn allocate_generic_slack_cols(
         None
     };
     (Some(plus_col), minus_col)
+}
+
+/// Whether a single [`VariableRef`] resolves to the *same* LP column(s) regardless
+/// of `block_idx` — **block-independent** ("stock"). Seven kinds qualify:
+/// [`VariableRef::HydroStorage`] (stage-final alias `Sᴷ`),
+/// [`VariableRef::AnticipatedDecision`], [`VariableRef::HydroEvaporation`] (a fixed
+/// single-block column or the all-block sum — both `block_idx`-independent), and the
+/// four storage/useful-volume-boundary variants [`VariableRef::HydroStorageInitial`] /
+/// [`VariableRef::HydroStorageFinal`] / [`VariableRef::HydroUsefulVolumeInitial`] /
+/// [`VariableRef::HydroUsefulVolumeFinal`], each resolving to a fixed boundary column
+/// (`Sᵏ` / `S⁰` / `Sᴷ`) that does not follow the materialized row's block.
+///
+/// [`VariableRef::HydroInflow`] is block-DEPENDENT: its upstream-release terms are
+/// per-block columns. Classifying it "stock" would collapse a multi-block expression
+/// to one mis-priced stage-level row reading upstream columns at a single arbitrary
+/// block, silently dropping the other blocks. [`VariableRef::PumpingFlow`] /
+/// [`VariableRef::PumpingPower`] are block-level for the same reason. The stub kinds
+/// (withdrawal, contracts, non-controllable) resolve to no columns and are
+/// conservatively block-level, so only *provably* stock variables enable the
+/// single-row collapse.
+///
+/// The match is exhaustive (no wildcard): a future variant forces a compile error
+/// here, defaulting nothing to "stock" by omission.
+#[must_use]
+pub(super) fn variable_ref_is_block_independent(var_ref: &VariableRef) -> bool {
+    match var_ref {
+        VariableRef::HydroStorage { .. }
+        | VariableRef::HydroStorageInitial { .. }
+        | VariableRef::HydroStorageFinal { .. }
+        | VariableRef::HydroUsefulVolumeInitial { .. }
+        | VariableRef::HydroUsefulVolumeFinal { .. }
+        | VariableRef::HydroEvaporation { .. }
+        | VariableRef::AnticipatedDecision { .. } => true,
+        VariableRef::HydroInflow { .. }
+        | VariableRef::HydroTurbined { .. }
+        | VariableRef::HydroSpillage { .. }
+        | VariableRef::HydroDiversion { .. }
+        | VariableRef::HydroOutflow { .. }
+        | VariableRef::HydroGeneration { .. }
+        | VariableRef::ThermalGeneration { .. }
+        | VariableRef::LineDirect { .. }
+        | VariableRef::LineReverse { .. }
+        | VariableRef::LineExchange { .. }
+        | VariableRef::BusDeficit { .. }
+        | VariableRef::BusExcess { .. }
+        | VariableRef::HydroWithdrawal { .. }
+        | VariableRef::PumpingFlow { .. }
+        | VariableRef::PumpingPower { .. }
+        | VariableRef::ContractImport { .. }
+        | VariableRef::ContractExport { .. }
+        | VariableRef::NonControllableGeneration { .. }
+        | VariableRef::NonControllableCurtailment { .. } => false,
+    }
+}
+
+/// Whether **every** term of a generic-constraint expression is block-independent
+/// (see [`variable_ref_is_block_independent`]), letting a `block_id = None` bound
+/// collapse its per-block replication into one stage-level row. Any block-level term
+/// forces `false`. An empty expression is vacuously true.
+#[must_use]
+fn expression_is_block_independent(expression: &ConstraintExpression) -> bool {
+    expression
+        .terms
+        .iter()
+        .all(|term| variable_ref_is_block_independent(&term.variable))
 }
 
 /// Whether a `block_id = None` bound over `expression` collapses to a single

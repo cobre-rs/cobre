@@ -9,7 +9,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use super::{contract_family_slot, resolve_variable_ref, variable_ref_is_block_independent};
+use super::super::layout::variable_ref_is_block_independent;
+use super::{contract_family_slot, resolve_variable_ref};
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, FphaPlane, ProductionModelSet, ResolvedProductionModel,
 };
@@ -1234,51 +1235,6 @@ fn pumping_no_stations_returns_empty() {
     }
 }
 
-/// `PumpingFlow` and `PumpingPower` are block-DEPENDENT — per-block columns,
-/// so the single-row collapse must NOT apply (they stay in the `false` arm).
-#[test]
-fn pumping_variants_are_block_dependent() {
-    assert!(!variable_ref_is_block_independent(
-        &VariableRef::PumpingFlow {
-            station_id: EntityId(10),
-            block_id: None,
-        }
-    ));
-    assert!(!variable_ref_is_block_independent(
-        &VariableRef::PumpingPower {
-            station_id: EntityId(10),
-            block_id: None,
-        }
-    ));
-}
-
-/// `HydroStorage`, `HydroEvaporation`, and `AnticipatedDecision` are
-/// block-INDEPENDENT — stage-level stock variables whose resolver ignores
-/// `block_idx`, so the single-row collapse is sound. This is the `true`-arm
-/// counterpart to `pumping_variants_are_block_dependent` /
-/// `hydro_inflow_is_block_dependent`: dropping any of these three from the
-/// `true` branch of `variable_ref_is_block_independent` would silently expand
-/// a per-stage stock variable into per-block rows.
-#[test]
-fn block_independent_kinds_classify_true() {
-    assert!(variable_ref_is_block_independent(
-        &VariableRef::HydroStorage {
-            hydro_id: EntityId(10),
-        }
-    ));
-    assert!(variable_ref_is_block_independent(
-        &VariableRef::HydroEvaporation {
-            hydro_id: EntityId(10),
-            block_id: None,
-        }
-    ));
-    assert!(variable_ref_is_block_independent(
-        &VariableRef::AnticipatedDecision {
-            thermal_id: EntityId(6),
-        }
-    ));
-}
-
 // ── Contract resolution tests ─────────────────────────────────────────────
 
 /// `contract_family_slot` counts only same-direction contracts before `c_sys`.
@@ -2115,18 +2071,6 @@ fn hydro_inflow_unknown_id_returns_empty() {
     );
 }
 
-/// `HydroInflow` is block-DEPENDENT — its upstream releases are per-block
-/// columns, so the single-row collapse must NOT apply.
-#[test]
-fn hydro_inflow_is_block_dependent() {
-    assert!(!variable_ref_is_block_independent(
-        &VariableRef::HydroInflow {
-            hydro_id: EntityId(0),
-            block_id: None,
-        }
-    ));
-}
-
 // ── Per-block storage boundary tests ──────────────────────────────────────
 //
 // A K=3 chronological build of `default_fixture`'s own hydro/thermal/line/bus
@@ -2332,32 +2276,6 @@ fn hydro_storage_boundary_unknown_id_returns_empty() {
         let result = call(var_ref, 0, &ctx, &layout);
         assert!(result.is_empty(), "unknown id must resolve to empty vec");
     }
-}
-
-/// Both storage boundary variants resolve to a fixed column (a stage endpoint or a
-/// named boundary), so they are block-INDEPENDENT (`true`) for `None` and `Some`
-/// alike, like the stage-final alias `HydroStorage`.
-#[test]
-fn storage_boundary_variants_are_block_independent() {
-    for block_id in [None, Some(1)] {
-        assert!(variable_ref_is_block_independent(
-            &VariableRef::HydroStorageInitial {
-                hydro_id: EntityId(10),
-                block_id,
-            }
-        ));
-        assert!(variable_ref_is_block_independent(
-            &VariableRef::HydroStorageFinal {
-                hydro_id: EntityId(10),
-                block_id,
-            }
-        ));
-    }
-    assert!(variable_ref_is_block_independent(
-        &VariableRef::HydroStorage {
-            hydro_id: EntityId(10),
-        }
-    ));
 }
 
 /// `HydroUsefulVolumeInitial`/`HydroUsefulVolumeFinal` resolve to the SAME

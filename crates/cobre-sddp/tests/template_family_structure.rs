@@ -41,7 +41,7 @@ fn every_study_couples_each_evaporating_hydro_through_its_mode_slot_count() {
     let mut checked_slots = 0usize;
     let mut saw_parallel_multiblock = false;
 
-    let count = common::for_each_study(|key, setup| {
+    let count = common::for_each_study(|key, _system, setup| {
         let state = setup.stage_state();
         let templates = &setup.inputs.stage_data.stage_templates;
         for (s, t) in templates.templates.iter().enumerate() {
@@ -194,7 +194,7 @@ fn every_study_fpha_plane_row_averages_its_own_plants_storage() {
     let mut checked_rows = 0usize;
     let mut cells_per_hydro: HashMap<usize, HashSet<usize>> = HashMap::new();
 
-    let count = common::for_each_study(|key, setup| {
+    let count = common::for_each_study(|key, _system, setup| {
         let state = setup.stage_state();
         let templates = &setup.inputs.stage_data.stage_templates;
         for (s, t) in templates.templates.iter().enumerate() {
@@ -319,7 +319,7 @@ fn every_study_ring_slot_has_one_signed_definition_row_or_is_frozen() {
     let mut saw_anticipated_definition = false;
     let mut saw_water_definition = false;
 
-    let count = common::for_each_study(|key, setup| {
+    let count = common::for_each_study(|key, _system, setup| {
         let state = setup.stage_state();
         let templates = &setup.inputs.stage_data.stage_templates;
         for (s, t) in templates.templates.iter().enumerate() {

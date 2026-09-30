@@ -1467,18 +1467,33 @@ pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::
 /// The manifest's in-code study set, keyed exactly as
 /// `tests/template_snapshot.rs`'s former `in_code_decks()`: each isolates a
 /// stage-LP builder axis no committed deck combines.
+///
+/// Each study's builder is called twice — once for the returned `System`,
+/// once for the `System` `build_setup_in_code*` consumes by value — since
+/// `cobre_core::System` has no `Clone` impl and every builder here is a pure,
+/// deterministic function of its literal inputs, so the two calls yield
+/// equal systems.
 #[must_use]
-pub fn keyed_setups() -> Vec<(String, StudySetup)> {
+pub fn keyed_setups() -> Vec<(String, cobre_core::System, StudySetup)> {
     let (system, config) = discounted_anticipated_study();
-    let (evap_system, evap_config, evap_hydro_models) = parallel_multiblock_evaporation_study();
+    let (system_for_setup, _) = discounted_anticipated_study();
+    let (evap_system, evap_config, _) = parallel_multiblock_evaporation_study();
+    let (evap_system_for_setup, _, evap_hydro_models_for_setup) =
+        parallel_multiblock_evaporation_study();
     vec![
         (
             "in-code/discounted-anticipated".to_string(),
-            super::build_setup_in_code(system, &config),
+            system,
+            super::build_setup_in_code(system_for_setup, &config),
         ),
         (
             "in-code/parallel-multiblock-evaporation".to_string(),
-            super::build_setup_in_code_with_models(evap_system, &evap_config, evap_hydro_models),
+            evap_system,
+            super::build_setup_in_code_with_models(
+                evap_system_for_setup,
+                &evap_config,
+                evap_hydro_models_for_setup,
+            ),
         ),
     ]
 }
@@ -1753,18 +1768,29 @@ pub fn two_hydro_evaporation_study() -> (cobre_core::System, Config, PrepareHydr
 /// two anticipated lanes, and [`two_hydro_evaporation_study`]'s
 /// nonzero-position evaporating hydro. Neither joins `keyed_setups()` — doing
 /// so would move the template-snapshot manifest, which stays byte-identical.
+///
+/// Each study's builder is called twice — see [`keyed_setups`]'s doc comment
+/// for why.
 #[must_use]
-pub fn structural_studies() -> Vec<(String, StudySetup)> {
+pub fn structural_studies() -> Vec<(String, cobre_core::System, StudySetup)> {
     let (mixed_lead_system, mixed_lead_config) = mixed_lead_anticipated_study(false);
-    let (evap_system, evap_config, evap_hydro_models) = two_hydro_evaporation_study();
+    let (mixed_lead_system_for_setup, _) = mixed_lead_anticipated_study(false);
+    let (evap_system, evap_config, _) = two_hydro_evaporation_study();
+    let (evap_system_for_setup, _, evap_hydro_models_for_setup) = two_hydro_evaporation_study();
     vec![
         (
             "structural/mixed-lead-anticipated".to_string(),
-            super::build_setup_in_code(mixed_lead_system, &mixed_lead_config),
+            mixed_lead_system,
+            super::build_setup_in_code(mixed_lead_system_for_setup, &mixed_lead_config),
         ),
         (
             "structural/two-hydro-evaporation".to_string(),
-            super::build_setup_in_code_with_models(evap_system, &evap_config, evap_hydro_models),
+            evap_system,
+            super::build_setup_in_code_with_models(
+                evap_system_for_setup,
+                &evap_config,
+                evap_hydro_models_for_setup,
+            ),
         ),
     ]
 }

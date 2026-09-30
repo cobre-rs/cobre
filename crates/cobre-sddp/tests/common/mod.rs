@@ -193,10 +193,15 @@ pub fn build_setup_for_case(
     .expect("StudySetup::from_broadcast_params must build")
 }
 
-/// Build a fresh [`StudySetup`] from `case_dir`'s config: applies `mutate`,
-/// then derives the training scenario source from the mutated config — the
-/// pipeline shared by every `mpi_wire.rs` determinism gate's `fresh_setup`.
-pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> StudySetup {
+/// Build a fresh [`System`] and [`StudySetup`] from `case_dir`'s config:
+/// applies `mutate`, then derives the training scenario source from the
+/// mutated config. Returns the post-`prepare_stochastic` [`System`] that
+/// built the setup — `build_setup_for_case` only borrows it, so both are
+/// available to the caller.
+pub fn fresh_system_and_setup_with(
+    case_dir: &Path,
+    mutate: impl FnOnce(&mut Config),
+) -> (System, StudySetup) {
     let config_path = case_dir.join("config.json");
     let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
     mutate(&mut config);
@@ -221,30 +226,38 @@ pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> St
     let hydro_models =
         prepare_hydro_models(&system, case_dir, false).expect("prepare_hydro_models must succeed");
 
-    build_setup_for_case(case_dir, &config, &system, stochastic, hydro_models)
+    let setup = build_setup_for_case(case_dir, &config, &system, stochastic, hydro_models);
+    (system, setup)
+}
+
+/// Build a fresh [`StudySetup`] from `case_dir`'s config: applies `mutate`,
+/// then derives the training scenario source from the mutated config — the
+/// pipeline shared by every `mpi_wire.rs` determinism gate's `fresh_setup`.
+pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> StudySetup {
+    fresh_system_and_setup_with(case_dir, mutate).1
 }
 
 /// Visits every committed deck (skipping [`SLOW_DECKS`] unless `slow-tests` is
 /// enabled), then every [`in_code_studies::keyed_setups`] entry, then every
-/// [`in_code_studies::structural_studies`] entry, building one [`StudySetup`]
-/// at a time; returns the total visit count.
-pub fn for_each_study(mut visit: impl FnMut(&str, &StudySetup)) -> usize {
+/// [`in_code_studies::structural_studies`] entry, building one [`System`] and
+/// [`StudySetup`] at a time; returns the total visit count.
+pub fn for_each_study(mut visit: impl FnMut(&str, &System, &StudySetup)) -> usize {
     let slow_tests_enabled = cfg!(feature = "slow-tests");
     let mut count = 0;
     for deck in committed_decks() {
         if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
             continue;
         }
-        let setup = fresh_setup_with(&deck.dir, |_| {});
-        visit(&deck.key, &setup);
+        let (system, setup) = fresh_system_and_setup_with(&deck.dir, |_| {});
+        visit(&deck.key, &system, &setup);
         count += 1;
     }
-    for (key, setup) in in_code_studies::keyed_setups() {
-        visit(&key, &setup);
+    for (key, system, setup) in in_code_studies::keyed_setups() {
+        visit(&key, &system, &setup);
         count += 1;
     }
-    for (key, setup) in in_code_studies::structural_studies() {
-        visit(&key, &setup);
+    for (key, system, setup) in in_code_studies::structural_studies() {
+        visit(&key, &system, &setup);
         count += 1;
     }
     count

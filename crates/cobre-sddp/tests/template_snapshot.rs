@@ -223,7 +223,7 @@ fn manifest_lines(decks: &[Deck]) -> Vec<String> {
         .chain(
             common::in_code_studies::keyed_setups()
                 .into_iter()
-                .flat_map(|(key, setup)| fact_lines(&key, &setup)),
+                .flat_map(|(key, _system, setup)| fact_lines(&key, &setup)),
         )
         .chain(sim_view::lines())
         .collect();

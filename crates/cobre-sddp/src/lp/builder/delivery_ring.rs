@@ -47,7 +47,7 @@ impl DeliveryRing {
     /// Panics if `out_block.len()` or `in_block.len()` differs from
     /// `n_lanes * depth`.
     #[must_use]
-    pub fn new(
+    pub(super) fn new(
         out_block: Range<usize>,
         in_block: Range<usize>,
         n_lanes: usize,

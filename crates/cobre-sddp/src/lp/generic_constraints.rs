@@ -32,7 +32,7 @@ use crate::indexer::{
 };
 use crate::lp::builder::{
     StageLayout, TemplateBuildCtx, evaporation_slot, maturing_bucket_in_col,
-    resolve_bucket_arrival_density,
+    resolve_bucket_arrival_density, resolve_shortcircuit_target,
 };
 
 /// Map a [`VariableRef`] and block index to LP column indices with multipliers.
@@ -352,12 +352,14 @@ fn resolve_hydro_inflow(
     };
 
     let upstream = ctx.cascade.upstream(hydro_id);
+    let has_release_columns =
+        !layout.equipment.turbine.is_empty() && !layout.equipment.spillage.is_empty();
 
     let mut result = Vec::with_capacity(2 + 2 * upstream.len());
 
     push_local_inflow_rate(pos_h, blk, ctx, layout, &mut result);
 
-    if !layout.equipment.turbine.is_empty() && !layout.equipment.spillage.is_empty() {
+    if has_release_columns {
         for &up_id in upstream {
             if let Some(pos_up) = ctx.positions.hydro(up_id) {
                 push_upstream_release_rate(pos_up, blk, stage_idx, ctx, layout, &mut result);
@@ -375,6 +377,23 @@ fn resolve_hydro_inflow(
         )[blk.get()];
         if rho != 0.0 {
             result.push((col, rho / layout.clock.tau(blk)));
+        }
+    }
+
+    let stage_id = ctx.time_value.delivery_stage_ids()[stage_idx];
+    for u_idx in 0..ctx.hydros.len() {
+        if resolve_shortcircuit_target(ctx.hydros, ctx.cascade, ctx.positions, stage_id, u_idx)
+            != Some(pos_h)
+        {
+            continue;
+        }
+        push_local_inflow_rate(u_idx, blk, ctx, layout, &mut result);
+        if has_release_columns {
+            for &w_id in ctx.cascade.upstream(ctx.hydros[u_idx].id) {
+                if let Some(pos_w) = ctx.positions.hydro(w_id) {
+                    push_release_columns(pos_w, blk, 1.0, ctx, layout, &mut result);
+                }
+            }
         }
     }
 

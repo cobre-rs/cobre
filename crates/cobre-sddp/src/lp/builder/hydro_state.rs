@@ -31,7 +31,7 @@ pub(super) fn hydro_phase(hydro: &Hydro, stage_id: i32) -> Phase {
 /// The `hydros.len()`-bounded loop is defense-in-depth: `check_cascade_acyclic` already
 /// proves the walk terminates. `None` also when `h` is not `PreFilling`, because its
 /// water stays on its own row.
-pub(super) fn resolve_shortcircuit_target(
+pub(crate) fn resolve_shortcircuit_target(
     hydros: &[Hydro],
     cascade: &CascadeTopology,
     positions: &EntityPositions,

@@ -790,8 +790,6 @@ fn hydro_inflow_rows_match_each_chronological_water_balance_row_with_travel_time
 }
 
 #[test]
-#[ignore = "hydro_inflow omits the water an upstream plant that is not yet built passes \
-            straight through to this plant"]
 fn hydro_inflow_rows_count_a_prefilling_upstream_plants_water_on_a_parallel_stage() {
     let setup = build_setup_in_code(
         build_prefilling_system(false, Some(TRAVEL_TIME_HOURS), BlockMode::Parallel),
@@ -826,8 +824,6 @@ fn hydro_inflow_rows_count_a_prefilling_upstream_plants_water_on_a_parallel_stag
 }
 
 #[test]
-#[ignore = "hydro_inflow omits the water an upstream plant that is not yet built passes \
-            straight through to this plant"]
 fn hydro_inflow_rows_count_a_prefilling_upstream_plants_water_on_each_chronological_block() {
     let setup = build_setup_in_code(
         build_prefilling_system(false, Some(TRAVEL_TIME_HOURS), BlockMode::Chronological),
@@ -862,8 +858,6 @@ fn hydro_inflow_rows_count_a_prefilling_upstream_plants_water_on_each_chronologi
 }
 
 #[test]
-#[ignore = "hydro_inflow omits the water an upstream plant that is not yet built passes \
-            straight through to this plant"]
 fn hydro_inflow_rows_count_a_two_plant_prefilling_chain_on_a_parallel_stage() {
     let setup = build_setup_in_code(
         build_prefilling_system(true, None, BlockMode::Parallel),

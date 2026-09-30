@@ -225,8 +225,9 @@ pub fn fresh_setup_with(case_dir: &Path, mutate: impl FnOnce(&mut Config)) -> St
 }
 
 /// Visits every committed deck (skipping [`SLOW_DECKS`] unless `slow-tests` is
-/// enabled) then every [`in_code_studies::keyed_setups`] entry, building one
-/// [`StudySetup`] at a time; returns the total visit count.
+/// enabled), then every [`in_code_studies::keyed_setups`] entry, then every
+/// [`in_code_studies::structural_studies`] entry, building one [`StudySetup`]
+/// at a time; returns the total visit count.
 pub fn for_each_study(mut visit: impl FnMut(&str, &StudySetup)) -> usize {
     let slow_tests_enabled = cfg!(feature = "slow-tests");
     let mut count = 0;
@@ -239,6 +240,10 @@ pub fn for_each_study(mut visit: impl FnMut(&str, &StudySetup)) -> usize {
         count += 1;
     }
     for (key, setup) in in_code_studies::keyed_setups() {
+        visit(&key, &setup);
+        count += 1;
+    }
+    for (key, setup) in in_code_studies::structural_studies() {
         visit(&key, &setup);
         count += 1;
     }

@@ -1482,3 +1482,289 @@ pub fn keyed_setups() -> Vec<(String, StudySetup)> {
         ),
     ]
 }
+
+const TWO_HYDRO_EVAP_N_STAGES: usize = 2;
+const TWO_HYDRO_EVAP_BUS_ID: EntityId = EntityId(1);
+const TWO_HYDRO_EVAP_HYDRO0_ID: EntityId = EntityId(2);
+const TWO_HYDRO_EVAP_HYDRO1_ID: EntityId = EntityId(3);
+const TWO_HYDRO_EVAP_THERMAL_ID: EntityId = EntityId(4);
+
+// Rationale: the entity/bounds/penalties construction is one sequential
+// fixture; splitting it into helper fns would fragment the declared shape
+// across call sites with no reuse benefit.
+#[allow(clippy::too_many_lines)]
+fn build_two_hydro_evap_system() -> cobre_core::System {
+    let bus = make_bus(
+        TWO_HYDRO_EVAP_BUS_ID,
+        BusSpec {
+            name: "B1".to_string(),
+            operational_start_date: stage_date(0),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        },
+    );
+
+    let hydro0 = make_hydro(
+        TWO_HYDRO_EVAP_HYDRO0_ID,
+        HydroSpec {
+            name: "H0".to_string(),
+            operational_start_date: stage_date(0),
+            bus_id: TWO_HYDRO_EVAP_BUS_ID,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            penalties: hydro_penalties(),
+            ..Default::default()
+        },
+    );
+    let hydro1 = make_hydro(
+        TWO_HYDRO_EVAP_HYDRO1_ID,
+        HydroSpec {
+            name: "H1".to_string(),
+            operational_start_date: stage_date(0),
+            bus_id: TWO_HYDRO_EVAP_BUS_ID,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            generation_model: HydroGenerationModel::ConstantProductivity,
+            penalties: hydro_penalties(),
+            ..Default::default()
+        },
+    );
+
+    let thermal = make_thermal(
+        TWO_HYDRO_EVAP_THERMAL_ID,
+        ThermalSpec {
+            name: "T0".to_string(),
+            operational_start_date: stage_date(0),
+            bus_id: TWO_HYDRO_EVAP_BUS_ID,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_per_mwh: 50.0,
+            ..Default::default()
+        },
+    );
+
+    let blocks = vec![
+        Block {
+            index: 0,
+            name: "BLK0".to_string(),
+            duration_hours: 360.0,
+        },
+        Block {
+            index: 1,
+            name: "BLK1".to_string(),
+            duration_hours: 360.0,
+        },
+    ];
+
+    let stages: Vec<Stage> = (0..TWO_HYDRO_EVAP_N_STAGES)
+        .map(|i| {
+            make_stage(
+                i,
+                StageSpec {
+                    start_date: stage_date(i),
+                    end_date: stage_date(i + 1),
+                    season_id: None,
+                    blocks: blocks.clone(),
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: true,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 1,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                },
+            )
+        })
+        .collect();
+
+    let inflow_models: Vec<InflowModel> = [TWO_HYDRO_EVAP_HYDRO0_ID, TWO_HYDRO_EVAP_HYDRO1_ID]
+        .into_iter()
+        .flat_map(|hydro_id| {
+            (0..TWO_HYDRO_EVAP_N_STAGES).map(move |i| InflowModel {
+                hydro_id,
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 0.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            })
+        })
+        .collect();
+
+    let load_models: Vec<LoadModel> = (0..TWO_HYDRO_EVAP_N_STAGES)
+        .map(|i| LoadModel {
+            bus_id: TWO_HYDRO_EVAP_BUS_ID,
+            stage_id: i as i32,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        })
+        .collect();
+
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 2,
+            n_thermals: 1,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: TWO_HYDRO_EVAP_N_STAGES,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds {
+                max_turbined_m3s: 100.0,
+                max_generation_mw: 250.0,
+                ..Default::default()
+            },
+            thermal: ThermalStageBounds { cost_per_mwh: 50.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 2,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages: TWO_HYDRO_EVAP_N_STAGES,
+        },
+        &PenaltiesDefaults {
+            hydro: hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+
+    let initial_conditions = InitialConditions {
+        storage: vec![
+            HydroStorage {
+                hydro_id: TWO_HYDRO_EVAP_HYDRO0_ID,
+                value_hm3: 100.0,
+            },
+            HydroStorage {
+                hydro_id: TWO_HYDRO_EVAP_HYDRO1_ID,
+                value_hm3: 100.0,
+            },
+        ],
+        filling_storage: vec![],
+        past_anticipated_commitments: vec![],
+        recent_observations: vec![],
+        past_defluences: vec![],
+    };
+
+    let policy_graph = HorizonGraph {
+        stage_discount_rate_overrides: std::collections::BTreeMap::new(),
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate: 0.0,
+        transitions: vec![],
+        nodes: Vec::new(),
+        season_map: None,
+    };
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(vec![hydro0, hydro1])
+        .thermals(vec![thermal])
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .load_models(load_models)
+        .bounds(bounds)
+        .penalties(penalties)
+        .initial_conditions(initial_conditions)
+        .policy_graph(policy_graph)
+        .build()
+        .expect("two_hydro_evaporation_study: valid system")
+}
+
+fn two_hydro_evap_hydro_models(system: &cobre_core::System) -> PrepareHydroModelsResult {
+    let mut hydro_models = PrepareHydroModelsResult::default_from_system(system);
+    hydro_models.evaporation = EvaporationModelSet::new(vec![
+        EvaporationModel::None,
+        EvaporationModel::Linearized {
+            coefficients: vec![
+                LinearizedEvaporation {
+                    intercept_m3s: 1.0,
+                    volume_slope_m3s_per_hm3: 0.01,
+                };
+                TWO_HYDRO_EVAP_N_STAGES
+            ],
+            reference_volumes_hm3: vec![100.0; TWO_HYDRO_EVAP_N_STAGES],
+        },
+    ]);
+    hydro_models
+}
+
+/// Two hydros (`H0`, `H1`); only `H1` — canonical position **1**, not `0` —
+/// evaporates, so a local-index-vs-system-index mix-up keying the evaporation
+/// row's storage columns on the evaporating hydro's position within
+/// `evap_hydro_indices` (`0`) instead of its system index (`1`) is
+/// distinguishable here, unlike on any single-hydro evaporating fixture.
+#[must_use]
+pub fn two_hydro_evaporation_study() -> (cobre_core::System, Config, PrepareHydroModelsResult) {
+    let system = build_two_hydro_evap_system();
+    let hydro_models = two_hydro_evap_hydro_models(&system);
+    (system, build_config(), hydro_models)
+}
+
+/// The in-code studies the structural sweep (`for_each_study`) visits beyond
+/// the manifest's [`keyed_setups`]: [`mixed_lead_anticipated_study`]'s
+/// two anticipated lanes, and [`two_hydro_evaporation_study`]'s
+/// nonzero-position evaporating hydro. Neither joins `keyed_setups()` — doing
+/// so would move the template-snapshot manifest, which stays byte-identical.
+#[must_use]
+pub fn structural_studies() -> Vec<(String, StudySetup)> {
+    let (mixed_lead_system, mixed_lead_config) = mixed_lead_anticipated_study(false);
+    let (evap_system, evap_config, evap_hydro_models) = two_hydro_evaporation_study();
+    vec![
+        (
+            "structural/mixed-lead-anticipated".to_string(),
+            super::build_setup_in_code(mixed_lead_system, &mixed_lead_config),
+        ),
+        (
+            "structural/two-hydro-evaporation".to_string(),
+            super::build_setup_in_code_with_models(evap_system, &evap_config, evap_hydro_models),
+        ),
+    ]
+}

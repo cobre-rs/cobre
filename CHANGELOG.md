@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   balance receives in that block. Studies without water travel time are
   unchanged.
 
+- **A generic constraint's `hydro_inflow` term now counts the water that
+  passes through an upstream plant that is not yet built or is retired.** The
+  water balance already delivered that plant's local inflow, the releases
+  above it and the flows diverted into it to the first operating plant below.
+  The term left them out, so a constraint on that plant's total inflow
+  under-counted. Studies without such a plant are unchanged.
+
 - **A pumping station on a chronological stage with two or more blocks now
   moves water between its own source and destination reservoirs in each
   block.** In 0.16.0 each block's pumped volume was written into another

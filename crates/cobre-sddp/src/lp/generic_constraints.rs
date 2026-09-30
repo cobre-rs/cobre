@@ -323,6 +323,12 @@ fn resolve_hydro_storage_boundary(
 /// downstream balance row credits to this block, and the maturing transit water
 /// entering as a rate.
 ///
+/// Each hydro `u` whose `PreFilling` short-circuit targets `h`
+/// ([`resolve_shortcircuit_target`]) also adds its own local inflow, diverted
+/// inflow, and upstream releases, each at `1.0` in `blk` — the same whole,
+/// no-lag routing `fill_prefilling_shortcircuit` gives them on the
+/// water-balance row.
+///
 /// This is an instantaneous **rate** identity (m³/s), **not** the `−τ`-weighted (hm³)
 /// storage-balance row — the `−τ` sign and `τ` weighting belong to storage balance
 /// and must not be copied here. `h`'s own outflows, evaporation, withdrawal slacks,

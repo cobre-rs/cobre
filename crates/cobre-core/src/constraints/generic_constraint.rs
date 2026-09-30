@@ -260,7 +260,11 @@ pub enum VariableRef {
     /// upstream release enters with the share of it that the water balance credits
     /// to this block. That is the whole release when the arc has no water travel
     /// time. The upstream transit water that matures into this block also enters,
-    /// as a rate. Pumping into the plant is not part of the term. This is a rate
+    /// as a rate. While an upstream plant is not yet built or is retired, its
+    /// local inflow, the releases of the plants above it and the flows diverted
+    /// into it pass straight through to the first operating plant below, and
+    /// enter that plant's term whole, in the block they occur. Pumping into the
+    /// plant is not part of the term. This is a rate
     /// identity in m³/s, NOT the `−τ` volume weighting of the storage-balance row.
     /// Block-dependent (upstream releases are per-block LP columns), so `None`
     /// always expands to one row per block, never a collapsed stage-level row.

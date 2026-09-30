@@ -395,6 +395,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "per_hydro_stage outer length must equal hydros.len()")]
+    fn new_panics_on_hydro_count_mismatch() {
+        let grid = vec![vec![EnergyConversion {
+            equivalent_productivity_mw_per_m3s: 0.5,
+            reference_volume_hm3: 100.0,
+            reference_outflow_m3s: 50.0,
+        }]];
+        let acc = vec![vec![3.5_f64]];
+        let _ = EnergyConversionSet::new(grid, acc, &test_support::minimal_hydros(2), 1);
+    }
+
+    #[test]
     fn new_defaults_integrated_grids_to_reference_point_grids() {
         let grid = vec![
             vec![EnergyConversion {

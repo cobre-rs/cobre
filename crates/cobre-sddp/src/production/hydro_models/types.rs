@@ -756,6 +756,18 @@ mod tests {
         let _ = set.model(2, 0);
     }
 
+    #[test]
+    #[should_panic(expected = "outer dimension must equal hydros.len()")]
+    fn production_model_set_new_panics_on_hydro_count_mismatch() {
+        let _ = ProductionModelSet::new(
+            vec![vec![ResolvedProductionModel::ConstantProductivity {
+                productivity: 0.9,
+            }]],
+            &minimal_hydros(2),
+            1,
+        );
+    }
+
     // ── EvaporationModelSet tests ─────────────────────────────────────────────
 
     #[test]

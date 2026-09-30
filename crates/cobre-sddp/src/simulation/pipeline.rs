@@ -681,7 +681,6 @@ pub(crate) fn extract_sim_stage_result(
     let spec = StageExtractionSpec {
         state,
         study_dims,
-        n_blks: stage_n_blks,
         geometry,
         hydro_cell_index: output.hydro_cell_index,
         entity_counts: output.entity_counts,

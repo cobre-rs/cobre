@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
-use cobre_core::commissioning::{Phase, filling_phase};
+use cobre_core::commissioning::Phase;
 use cobre_core::{
     AffineBound, BlockMode, Bus, CascadeTopology, CoefficientRef, ConstraintExpression,
     ContractType, EnergyContract, EntityId, GenericConstraint, Hydro, Line, LoadModel,
@@ -24,6 +24,7 @@ use crate::indexer::{
 };
 use crate::time_value::TimeValue;
 
+use super::hydro_state::hydro_phase;
 use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET,
     GenericConstraintRowEntry,
@@ -706,15 +707,6 @@ fn build_evap_indices(
 
 // ── Private helper functions ───────────────────────────────────────────────────
 
-pub(super) fn hydro_phase(hydro: &Hydro, stage_id: i32) -> Phase {
-    filling_phase(
-        hydro.filling.as_ref(),
-        hydro.entry_stage_id,
-        hydro.exit_stage_id,
-        stage_id,
-    )
-}
-
 /// Collect the FPHA hydro indices and per-hydro plane counts for this stage.
 ///
 /// A filling hydro is dropped from the FPHA set in `PreFilling` **or** `Filling`:
@@ -723,7 +715,8 @@ pub(super) fn hydro_phase(hydro: &Hydro, stage_id: i32) -> Phase {
 /// generation column block is densely packed by FPHA-local index, dropping a hydro
 /// here removes its column entirely — no orphaned `[0, max]` column for an
 /// unconstrained solve to exploit. `stage_id` is the study `stage.id`, not the
-/// stage index ([`filling_phase`] keys on the commissioning id). A
+/// stage index ([`filling_phase`](cobre_core::commissioning::filling_phase) keys
+/// on the commissioning id). A
 /// commissioning-dormant non-filling hydro is `PreFilling` and is dropped here too;
 /// a non-filling hydro with no window is `Operating` at every stage (parity-neutral).
 fn identify_fpha_hydros(
@@ -783,7 +776,8 @@ fn identify_evap_hydros(ctx: &TemplateBuildCtx<'_>, stage_id: i32) -> Vec<HydroS
 /// σ_fill[t] ≥ V_target[t]` at each. The wrong-but-compiling alternative —
 /// restricting membership to `entry − 1 == stage_id` (the v1 terminal-only rule) —
 /// drops every intermediate floor. `PreFilling`/`Operating` are excluded by
-/// [`filling_phase`] (`filled_min_storage_floor` takes over at/after `entry`). A
+/// [`filling_phase`](cobre_core::commissioning::filling_phase) (`filled_min_storage_floor`
+/// takes over at/after `entry`). A
 /// non-filling hydro is `Operating` at every stage (parity-neutral).
 fn identify_filling_target_hydros(ctx: &TemplateBuildCtx<'_>, stage_id: i32) -> Vec<HydroSys> {
     (0..ctx.hydros.len())

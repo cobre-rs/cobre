@@ -12,9 +12,9 @@ use super::EVAPORATION_FLOW_SAFETY_MARGIN;
 use super::delivery_ring::{ColumnBufs, DeliveryRing};
 use super::hydro_state::{
     GroupBoundLookup, cell_max_generation, cell_max_turbined, cell_min_generation,
-    cell_min_turbined,
+    cell_min_turbined, hydro_phase,
 };
-use super::layout::{StageLayout, TemplateBuildCtx, hydro_phase};
+use super::layout::{StageLayout, TemplateBuildCtx};
 use crate::generic_constraints::contract_family_slot;
 
 /// Fill column lower/upper bounds and objective coefficients for one stage.

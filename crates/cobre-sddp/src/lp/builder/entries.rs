@@ -1,20 +1,19 @@
 use cobre_core::commissioning::Phase;
-use cobre_core::{
-    BlockMode, CascadeTopology, CoefficientRef, ContractType, EntityId, Hydro, Stage,
-};
+use cobre_core::{BlockMode, CoefficientRef, ContractType, EntityId, Stage};
 
 use crate::block_clock::BlockClock;
 use crate::generic_constraints::resolve_variable_ref;
 use crate::hydro_models::EvaporationModel;
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, BusSys, EntityPositions, EvapLocal, FillingTargetLocal,
-    FloorLocal, FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace,
-    ThermalSys, for_each_ring_residue,
+    AnticipatedLocal, BlockIdx, Boundary, BusSys, EvapLocal, FillingTargetLocal, FloorLocal,
+    FphaCellLocal, HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, StateSpace, ThermalSys,
+    for_each_ring_residue,
 };
 
 use super::delivery_ring::DeliveryRing;
 use super::fpha_cursor::for_each_fpha_plane;
-use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx, hydro_phase};
+use super::hydro_state::{hydro_phase, resolve_shortcircuit_target};
+use super::layout::{StageLayout, StageProductionRole, TemplateBuildCtx};
 use crate::generic_constraints::contract_family_slot;
 
 /// Fishing (consumption) coupling: for every anticipated plant whose
@@ -150,42 +149,6 @@ fn fill_anticipated_slot_definition_entries(
         "fill_anticipated_slot_definition_entries: reachable-slot count must match \
          n_anticipated_slot_definition_rows"
     );
-}
-
-/// Resolve the cascade target an absent `PreFilling` hydro `h_idx` routes its water
-/// onto: the FIRST downstream hydro NOT `PreFilling` at this stage. `None` (SINK) when
-/// the chain reaches a terminal, an unresolved id, or stays `PreFilling` all the way
-/// down — then `h`'s water exits the system.
-///
-/// The target MUST be non-`PreFilling`: a `PreFilling` row is the frozen identity
-/// `v_d − v_d_in = 0`, and routing any term onto it corrupts that constraint. Routing
-/// to the immediate `downstream(h)` unconditionally is the wrong-but-compiling
-/// alternative — it corrupts that frozen row when the immediate downstream is itself
-/// `PreFilling` (see [`fill_prefilling_shortcircuit`]).
-///
-/// The `hydros.len()`-bounded loop is defense-in-depth: `check_cascade_acyclic` already
-/// proves the walk terminates. `None` also when `h` is not `PreFilling`, because its
-/// water stays on its own row.
-pub(super) fn resolve_shortcircuit_target(
-    hydros: &[Hydro],
-    cascade: &CascadeTopology,
-    positions: &EntityPositions,
-    stage_id: i32,
-    h_idx: usize,
-) -> Option<usize> {
-    if !matches!(hydro_phase(&hydros[h_idx], stage_id), Phase::PreFilling) {
-        return None;
-    }
-    let mut current_id = hydros[h_idx].id;
-    for _ in 0..hydros.len() {
-        let down_id = cascade.downstream(current_id)?;
-        let d_idx = positions.hydro(down_id)?;
-        if !matches!(hydro_phase(&hydros[d_idx], stage_id), Phase::PreFilling) {
-            return Some(d_idx);
-        }
-        current_id = down_id;
-    }
-    None
 }
 
 /// Fill water-balance row entries. Incoming state is pinned via column bounds, so no

@@ -7,13 +7,13 @@ use std::ops::Range;
 use cobre_core::{BlockMode, EntityId, PostStudyThermalBound};
 use cobre_solver::StageTemplate;
 
-use crate::lp::builder::{GenericConstraintRowEntry, StateBox};
+use crate::lp::builder::{GenericConstraintRowEntry, StageGeometry, StateBox};
 use crate::lp::indexer::{
     BlockRowFamily, EvaporationIndices, HydroSys, StateSpace, StorageBoundaryGrid,
 };
 use crate::time_value::TimeValue;
 
-use super::{StageGeometry, StageTemplates};
+use super::StageTemplates;
 
 pub(crate) type FactGroups = BTreeMap<&'static str, Vec<u8>>;
 

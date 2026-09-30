@@ -57,9 +57,10 @@ mod test_support;
 // --- Public re-exports (stable API) ---
 #[cfg(any(test, feature = "test-support"))]
 pub use delivery_ring::DeliveryRing;
+pub use layout::StageGeometry;
 pub use patch::PatchBuffer;
 pub use state_box::StateBox;
-pub use template::{StageGeometry, StageTemplates, build_stage_templates};
+pub use template::{StageTemplates, build_stage_templates};
 
 // --- Crate-internal re-exports ---
 pub(crate) use build_inputs::LpBuildInputs;

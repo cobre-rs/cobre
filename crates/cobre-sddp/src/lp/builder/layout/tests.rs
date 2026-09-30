@@ -20,7 +20,7 @@ use cobre_core::{
 
 use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, BusSys, CutStateProjection, EvapLocal,
+    AnticipatedLocal, BlockIdx, BlockRowFamily, Boundary, BusSys, CutStateProjection, EvapLocal,
     FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal, HydroCell, HydroCellIndex, HydroSys,
     LineSys, NcsSys, PumpingSys, StateDim, StateRegion, ThermalSys, anticipated_resolution_for,
 };
@@ -1471,6 +1471,112 @@ fn geometry_column_accessors_agree_with_the_layout_in_both_block_modes() {
             }
         }
     }
+}
+
+/// `StageGeometry::water_balance_row` collapses every block onto the single
+/// stage row on a parallel stage, and strides `n_blks` block-major rows per
+/// hydro on a chronological stage.
+#[test]
+fn water_balance_row_collapses_parallel_blocks_and_strides_chronological_blocks() {
+    use super::StageGeometry;
+
+    let parallel = StageGeometry {
+        water_balance: BlockRowFamily::one_per_entity(2..4),
+        n_blks: 3,
+        block_mode: BlockMode::Parallel,
+        ..crate::test_support::equipment_free_geometry(&[3]).remove(0)
+    };
+    assert_eq!(
+        parallel.water_balance_row(HydroSys::new(1), BlockIdx::new(2)),
+        3
+    );
+
+    let chronological = StageGeometry {
+        water_balance: BlockRowFamily::per_block(2..8),
+        n_blks: 3,
+        block_mode: BlockMode::Chronological,
+        ..crate::test_support::equipment_free_geometry(&[3]).remove(0)
+    };
+    assert_eq!(
+        chronological.water_balance_row(HydroSys::new(1), BlockIdx::new(2)),
+        7
+    );
+    for h in 0..2 {
+        for k in 0..3 {
+            assert_eq!(
+                chronological.water_balance_row(HydroSys::new(h), BlockIdx::new(k)),
+                2 + h * 3 + k
+            );
+        }
+    }
+}
+
+/// `StageGeometry::load_balance_row` strides buses by the block count,
+/// regardless of `block_mode`.
+#[test]
+fn load_balance_row_strides_buses_by_the_block_count() {
+    use super::StageGeometry;
+
+    let geometry = StageGeometry {
+        load_balance: BlockRowFamily::per_block(10..22),
+        n_blks: 4,
+        block_mode: BlockMode::Parallel,
+        ..crate::test_support::equipment_free_geometry(&[4]).remove(0)
+    };
+    for bus in 0..3 {
+        for k in 0..4 {
+            assert_eq!(
+                geometry.load_balance_row(BusSys::new(bus), BlockIdx::new(k)),
+                10 + bus * 4 + k
+            );
+        }
+    }
+}
+
+/// Each `StageGeometry` one-per-entity column accessor resolves to
+/// `family.start + local`.
+#[test]
+fn stage_geometry_entity_col_accessors_match_hand_offsets() {
+    use super::StageGeometry;
+
+    let geometry = StageGeometry {
+        anticipated_decision: 40..43,
+        inflow_slack: 10..13,
+        withdrawal_slack_neg: 13..16,
+        withdrawal_slack_pos: 16..19,
+        filling_target_col: 30..32,
+        filled_min_storage_floor_col: 32..33,
+        ..crate::test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    assert_eq!(
+        geometry.anticipated_decision_col(AnticipatedLocal::new(2)),
+        42
+    );
+    assert_eq!(geometry.inflow_slack_col(HydroSys::new(1)), 11);
+    assert_eq!(geometry.withdrawal_slack_neg_col(HydroSys::new(2)), 15);
+    assert_eq!(geometry.withdrawal_slack_pos_col(HydroSys::new(0)), 16);
+    assert_eq!(
+        geometry.filling_target_slack_col(FillingTargetLocal::new(1)),
+        31
+    );
+    assert_eq!(
+        geometry.filled_min_storage_floor_slack_col(FloorLocal::new(0)),
+        32
+    );
+}
+
+/// `inflow_slack_col` debug-asserts the hydro is inside the family.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "outside")]
+fn inflow_slack_col_rejects_a_hydro_past_the_family() {
+    use super::StageGeometry;
+
+    let geometry = StageGeometry {
+        inflow_slack: 10..13,
+        ..crate::test_support::equipment_free_geometry(&[0]).remove(0)
+    };
+    let _ = geometry.inflow_slack_col(HydroSys::new(3));
 }
 
 // ── FPHA-local inverse map ───────────────────────────────────────────────

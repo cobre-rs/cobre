@@ -620,7 +620,6 @@ pub(super) fn fill_anticipated_columns(
         let state_out_col = ring.out_col(res.slot, res.plant);
 
         if is_anticipated_decision_active_for_delivery(
-            layout.state,
             AnticipatedLocal::new(res.plant),
             delivery_stage,
             n_delivery,

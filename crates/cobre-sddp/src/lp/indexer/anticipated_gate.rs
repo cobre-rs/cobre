@@ -67,7 +67,6 @@ pub(crate) fn is_anticipated_decision_active(
     );
     let delivery_stage = stage_idx.saturating_add(state.anticipated_lead_stages[local_idx]);
     is_anticipated_decision_active_for_delivery(
-        state,
         AnticipatedLocal::new(local_idx),
         delivery_stage,
         n_stages,
@@ -84,7 +83,6 @@ pub(crate) fn is_anticipated_decision_active(
 #[inline]
 #[must_use]
 pub(crate) fn is_anticipated_decision_active_for_delivery(
-    _state: &StateSpace,
     local_idx: AnticipatedLocal,
     delivery_stage: usize,
     n_delivery: usize,
@@ -327,13 +325,11 @@ mod tests {
     /// last defined delivery stage.
     #[test]
     fn is_anticipated_decision_active_for_delivery_strict_extended_bound() {
-        let idx = ant_layout(vec![1]);
         let n_delivery = 5;
         let windows = [(None, None)];
         let delivery_stage_ids = [0, 1, 2, 3, 4];
 
         assert!(is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             4,
             n_delivery,
@@ -341,7 +337,6 @@ mod tests {
             &delivery_stage_ids,
         ));
         assert!(!is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             5,
             n_delivery,
@@ -357,13 +352,11 @@ mod tests {
     #[test]
     fn is_anticipated_decision_active_for_delivery_post_study_delivery_admitted_for_windowless_plant()
      {
-        let idx = ant_layout(vec![1]);
         let n_delivery = 8;
         let windows = [(None, None)];
         let delivery_stage_ids = [0, 1, 2, 3, 4, 5, 6, 7];
 
         assert!(is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             6,
             n_delivery,
@@ -381,13 +374,11 @@ mod tests {
     #[test]
     fn is_anticipated_decision_active_for_delivery_uniform_gate_rejects_post_study_delivery_for_exited_plant()
      {
-        let idx = ant_layout(vec![1]);
         let n_delivery = 8;
         let windows = [(Some(0), Some(5))];
         let delivery_stage_ids = [0, 1, 2, 3, 4, 5, 6, 7];
 
         assert!(!is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             6,
             n_delivery,

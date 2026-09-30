@@ -140,7 +140,6 @@ fn fill_commitment_hold_box(
                 continue;
             }
             if !is_anticipated_decision_active_for_delivery(
-                layout,
                 AnticipatedLocal::new(local_idx),
                 m,
                 n_delivery,

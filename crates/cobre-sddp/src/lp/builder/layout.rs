@@ -607,7 +607,6 @@ fn build_anticipated_decision_row_pos(
              ring's deposit-row fill"
         );
         if is_anticipated_decision_active_for_delivery(
-            state,
             plant,
             m,
             n_delivery,

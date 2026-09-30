@@ -209,7 +209,6 @@ fn compute_anticipated_decision_mw(
          extraction, not implemented here"
     );
     if !is_anticipated_decision_active_for_delivery(
-        spec.state,
         local_idx,
         delivery_stage,
         spec.horizon.num_stages(),

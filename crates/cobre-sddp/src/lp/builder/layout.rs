@@ -1162,6 +1162,31 @@ pub(super) enum StageProductionRole {
     Dormant,
 }
 
+fn fpha_cell_offsets(
+    ctx: &TemplateBuildCtx<'_>,
+    fpha_hydro_indices: &[HydroSys],
+    fpha_planes_per_hydro: &[usize],
+    n_h: usize,
+) -> (Vec<Option<FphaLocal>>, Vec<usize>, usize, usize) {
+    let mut fpha_local_index: Vec<Option<FphaLocal>> = vec![None; n_h];
+    let mut fpha_cell_local_start: Vec<usize> = Vec::with_capacity(fpha_hydro_indices.len());
+    let mut n_fpha_cells = 0_usize;
+    let mut total_fpha_rows = 0_usize;
+    for (local_idx, &h) in fpha_hydro_indices.iter().enumerate() {
+        fpha_local_index[h.get()] = Some(FphaLocal::new(local_idx));
+        fpha_cell_local_start.push(n_fpha_cells);
+        let n_cells_h = ctx.hydro_cell_index.cells_of(h).len();
+        n_fpha_cells += n_cells_h;
+        total_fpha_rows += n_cells_h * fpha_planes_per_hydro[local_idx];
+    }
+    (
+        fpha_local_index,
+        fpha_cell_local_start,
+        n_fpha_cells,
+        total_fpha_rows,
+    )
+}
+
 fn allocate_hydro_columns(
     col: &mut RangeCursor,
     n_h: usize,
@@ -1194,6 +1219,54 @@ fn allocate_network_columns(
     (line_fwd, line_rev, deficit, excess)
 }
 
+fn allocate_water_balance_rows(
+    row: &mut RangeCursor,
+    block_mode: BlockMode,
+    n_h: usize,
+    n_blks: usize,
+) -> BlockRowFamily {
+    match block_mode {
+        BlockMode::Chronological => BlockRowFamily::per_block(row.alloc(n_h * n_blks)),
+        BlockMode::Parallel => BlockRowFamily::one_per_entity(row.alloc(n_h)),
+    }
+}
+
+fn allocate_transit_bucket_rows(
+    row: &mut RangeCursor,
+    state: &StateSpace,
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+) -> (Vec<Option<usize>>, Range<usize>) {
+    let (transit_bucket_row_pos, n_transit_bucket_rows) =
+        build_transit_bucket_row_pos(state, &ctx.topology.per_stage_mask, stage_idx);
+    let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
+    (transit_bucket_row_pos, transit_bucket_definition)
+}
+
+fn allocate_fpha(
+    col: &mut RangeCursor,
+    row: &mut RangeCursor,
+    n_fpha_cells: usize,
+    total_fpha_rows: usize,
+    n_blks: usize,
+) -> (Range<usize>, Range<usize>) {
+    let generation = col.alloc(n_fpha_cells * n_blks);
+    let fpha_rows = row.alloc(n_blks * total_fpha_rows);
+    (generation, fpha_rows)
+}
+
+fn allocate_evaporation(
+    col: &mut RangeCursor,
+    row: &mut RangeCursor,
+    n_evap_hydros: usize,
+    n_evap_slots: usize,
+) -> (usize, Vec<EvaporationIndices>) {
+    let cols = col.alloc(n_evap_hydros * n_evap_slots * EVAP_COLS_PER_HYDRO);
+    let rows = row.alloc(n_evap_hydros * n_evap_slots);
+    let evap_indices = build_evap_indices(n_evap_hydros, n_evap_slots, cols.start, rows.start);
+    (cols.start, evap_indices)
+}
+
 impl<'a> StageLayout<'a> {
     #[expect(
         clippy::too_many_lines,
@@ -1217,24 +1290,11 @@ impl<'a> StageLayout<'a> {
         let filled_min_storage_floor_hydro_indices =
             identify_filled_min_storage_floor_hydros(ctx, stage.id);
 
-        let mut fpha_local_index: Vec<Option<FphaLocal>> = vec![None; n_h];
-        for (local_idx, &h) in fpha_hydro_indices.iter().enumerate() {
-            fpha_local_index[h.get()] = Some(FphaLocal::new(local_idx));
-        }
-
-        // FPHA-cell-local start per FPHA-local plant (plant-major, matching
-        // `fpha_hydro_indices`'s own order): the cumulative cell count over
-        // preceding FPHA plants. `n_fpha_cells` (the running total) sizes the
-        // generation family below.
-        let mut fpha_cell_local_start: Vec<usize> = Vec::with_capacity(fpha_hydro_indices.len());
-        let mut n_fpha_cells = 0_usize;
-        let mut total_fpha_rows = 0_usize;
-        for (local_idx, &h) in fpha_hydro_indices.iter().enumerate() {
-            fpha_cell_local_start.push(n_fpha_cells);
-            let n_cells_h = ctx.hydro_cell_index.cells_of(h).len();
-            n_fpha_cells += n_cells_h;
-            total_fpha_rows += n_cells_h * fpha_planes_per_hydro[local_idx];
-        }
+        // `n_fpha_cells` (the running total) sizes the FPHA generation column
+        // family; `total_fpha_rows` sizes its plane rows.
+        let (fpha_local_index, fpha_cell_local_start, n_fpha_cells, total_fpha_rows) =
+            fpha_cell_offsets(ctx, &fpha_hydro_indices, &fpha_planes_per_hydro, n_h);
+        let n_evap_slots = evaporation_slot_count(stage.block_mode, n_blks);
 
         let max_deficit_segments = ctx.study_dims.max_deficit_segments;
 
@@ -1260,55 +1320,36 @@ impl<'a> StageLayout<'a> {
         let has_inflow_slack_columns = ctx.study_dims.inflow_method.has_slack_columns();
         let inflow_slack = col.alloc(if has_inflow_slack_columns { n_h } else { 0 });
 
-        // `generation_col_start` is the empty-block cursor `col_generation_start`
-        // reads; `col.pos()` already carries the correct value whether or not the
-        // inflow-penalty family above was empty. Sized by FPHA CELL, not FPHA
-        // plant: `n_fpha_cells` is the identity (`== fpha_hydro_indices.len()`)
-        // while every FPHA plant has one cell.
-        let generation_col_start = col.pos();
-        let generation = col.alloc(n_fpha_cells * n_blks);
-
-        // `evap_col_start` is the empty-block cursor `col_evap_start` reads; one
-        // `EVAP_COLS_PER_HYDRO` triple per `(evap hydro, slot)`, strided by
-        // `n_evap_slots` (`evaporation_slot_count`).
-        let n_evap_hydros = evap_hydro_indices.len();
-        let n_evap_slots = evaporation_slot_count(stage.block_mode, n_blks);
-        let evap_col_start = col.pos();
-        col.alloc(n_evap_hydros * n_evap_slots * EVAP_COLS_PER_HYDRO);
-
         // ── Role-(b) constraint row ranges ───────────────────────────────────
         // The builder's own rows start immediately after `StateSpace::z_inflow_rows()`,
         // the sole owner of that leading row range. `row` allocates every family
         // through `RangeCursor::alloc`, mirroring `col` above.
         let mut row = RangeCursor::new(state_layout.z_inflow_rows().end);
-        let water_balance = match stage.block_mode {
-            BlockMode::Chronological => BlockRowFamily::per_block(row.alloc(n_h * n_blks)),
-            BlockMode::Parallel => BlockRowFamily::one_per_entity(row.alloc(n_h)),
-        };
+        let water_balance = allocate_water_balance_rows(&mut row, stage.block_mode, n_h, n_blks);
         // Sized from this stage's reachable count, not the stage-invariant
         // `state_layout.n_buckets`: `build_transit_bucket_row_pos` masks a lag beyond
         // `ctx.topology.per_stage_mask[stage_idx]`'s per-plant cap out of the row
         // range entirely — the cap itself is `build_transit_bucket_topology`'s,
         // gated on `boundary_present`.
-        let (transit_bucket_row_pos, n_transit_bucket_rows) =
-            build_transit_bucket_row_pos(state_layout, &ctx.topology.per_stage_mask, stage_idx);
-        let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
+        let (transit_bucket_row_pos, transit_bucket_definition) =
+            allocate_transit_bucket_rows(&mut row, state_layout, ctx, stage_idx);
         let load_balance = BlockRowFamily::per_block(row.alloc(ctx.buses.len() * n_blks));
 
-        // Only the end cursor is kept here (the per-hydro ranges live on
-        // `StageData.indexer`); `fpha_rows_end` is the evaporation-row start even
-        // when the FPHA block is empty. `total_fpha_rows` sums `n_cells(plant) *
+        // Sized by FPHA CELL, not FPHA plant (`n_fpha_cells` == `fpha_hydro_indices.len()`
+        // while every FPHA plant has one cell). `total_fpha_rows` sums `n_cells(plant) *
         // n_planes(plant)`, not `Σ n_planes(plant)`: each cell owns its own
         // `n_blks * n_planes` row block (`for_each_fpha_plane`'s per-cell advance).
         // The plant-only sum undersizes a multi-bus plant's row range, aliasing
         // rows across cells.
-        let fpha_rows_end = row.alloc(n_blks * total_fpha_rows).end;
+        let (generation, fpha_rows) =
+            allocate_fpha(&mut col, &mut row, n_fpha_cells, total_fpha_rows, n_blks);
+        let fpha_rows_end = fpha_rows.end;
 
-        // One row per `(evap hydro, slot)`, so the row block grows by `n_evap_slots`
-        // — the cursor chain below MUST stay in lockstep or every downstream row shifts.
-        let evap_indices =
-            build_evap_indices(n_evap_hydros, n_evap_slots, evap_col_start, fpha_rows_end);
-        row.alloc(n_evap_hydros * n_evap_slots);
+        // One `EVAP_COLS_PER_HYDRO` triple and one row per `(evap hydro, slot)`,
+        // strided by `n_evap_slots` (`evaporation_slot_count`).
+        let n_evap_hydros = evap_hydro_indices.len();
+        let (evap_col_start, evap_indices) =
+            allocate_evaporation(&mut col, &mut row, n_evap_hydros, n_evap_slots);
 
         // Withdrawal slacks + the four operational-violation slack families (after
         // the evaporation columns) and their matching rows (after the evaporation
@@ -1424,7 +1465,7 @@ impl<'a> StageLayout<'a> {
             deficit,
             max_deficit_segments,
             excess,
-            generation_col_start,
+            generation_col_start: generation.start,
             generation,
             evap_col_start,
             col_ncs_start,

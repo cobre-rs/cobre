@@ -6,7 +6,10 @@ use super::common::in_code_studies::discounted_anticipated_study;
 use super::common::{build_setup_in_code, run_simulation};
 use cobre_io::Config;
 use cobre_io::config::{SimulationConfig as IoSimulationConfig, SimulationSelection};
-use cobre_sddp::test_support::equipment_free_geometry;
+use cobre_sddp::test_support::template_structure::{
+    RingLaneKind, RowOwner, UnscaledMatrix, geometry_row_families, ring_lanes, row_owners,
+};
+use cobre_sddp::test_support::{constant_lead_resolution, equipment_free_geometry};
 
 #[test]
 fn min_outflow_active_col_bounds() {
@@ -992,15 +995,11 @@ fn test_anticipated_state_columns_unconstrained() {
     );
 }
 
-/// One anticipated thermal with K=2, n_stages=4: the Cat 6 state-fixing slot at
-/// K_i-1 is a PURE IDENTITY row — the decision-write coefficient is removed (this
-/// test verifies that removal; the decision-write into `anticipated_state_out_def`
-/// is checked elsewhere).
-///
-/// Layout (no hydros, 1 bus, 1 block):
-///   n_state = n_ant_state = K = 2; state-fixing rows: 0, 1;
-///   col_anticipated_state_out_start: 2; col_anticipated_decision_start: 5;
-///   old Cat 6 slot row: row_fix_start + (K_i-1)*n_anticipated = 1.
+/// One anticipated thermal with K=2, n_stages=4: the incoming state is
+/// pinned by column bounds, so no row pins it — the decision column's one
+/// structural entry is its own deposit row in the delivery ring, never a
+/// row addressing `commit_in`/`storage_in`/`transit_buckets_in`/
+/// `inflow_lags` by equality.
 #[test]
 fn test_anticipated_decision_write_to_state_out_def_row() {
     let system = one_anticipated_thermal_system(4, 2, 0.0, 100.0);
@@ -1017,21 +1016,75 @@ fn test_anticipated_decision_write_to_state_out_def_row() {
 
     let t = &result.templates[0]; // stage 0: plant active (0+2<4)
     let col_dec = anticipated_decision_col(2);
+    let lead_stages = vec![2_usize];
+    let resolution = constant_lead_resolution(&lead_stages, 4);
+    let state = StateSpace::new(0, 0, Vec::new(), lead_stages, resolution, &[]);
+    let geom = &result.geometry_per_stage[0];
+    let matrix = UnscaledMatrix::of(t);
+    let owners = row_owners(&system, geom, &state);
 
-    // The decision-write lives on the def-row (-1.0 on decision, +1.0 on state_out),
-    // so the old state-fixing slot (row 1) holds no decision entry.
-    let old_state_fixing_row = 1_usize;
-    let entries_at_old_row = csc_entries_at(t, col_dec, old_state_fixing_row);
+    for (family, rows) in geometry_row_families(geom, &state) {
+        for row in rows {
+            let entries = matrix.row(row);
+            if entries.len() == 1 {
+                let (col, _) = entries[0];
+                let pinned = state.commit_in.contains(&col)
+                    || state.storage_in.contains(&col)
+                    || state.transit_buckets_in.contains(&col)
+                    || state.inflow_lags.contains(&col);
+                assert!(
+                    !(pinned && t.row_lower[row] == t.row_upper[row]),
+                    "stage 0, active plant K=2: {family} row {row}: incoming \
+                     state is pinned by column bounds; no row pins it"
+                );
+            }
+            if entries.iter().any(|&(c, _)| c == col_dec) {
+                assert!(
+                    matches!(owners.get(&row), Some(RowOwner::Load { .. })),
+                    "stage 0, active plant K=2: {family} row {row}: decision \
+                     column must enter only its own bus's load-balance rows, \
+                     got owner {:?}",
+                    owners.get(&row)
+                );
+            }
+        }
+    }
+
+    // Positive check: the decision's one structural entry is its own deposit
+    // row — the row where the matching ring lane's out_col also carries
+    // +1.0 (DeliveryRing::emit_deposit).
+    let decision_entries = matrix.col(col_dec);
+    assert_eq!(
+        decision_entries.len(),
+        1,
+        "stage 0, active plant K=2: decision column must have exactly one \
+         structural entry (its own deposit row), got {decision_entries:?}"
+    );
+    let (deposit_row, value) = decision_entries[0];
+    assert_eq!(
+        value, -1.0,
+        "stage 0, active plant K=2: decision column's deposit-row coefficient must be -1.0"
+    );
+    let decision_lane = ring_lanes(&state, geom)
+        .into_iter()
+        .find(|l| matches!(l.kind, RingLaneKind::Anticipated { lane: 0 }))
+        .expect("anticipated lane 0 must exist");
+    assert_eq!(decision_lane.decision_col, Some(col_dec));
     assert!(
-        entries_at_old_row.is_empty(),
-        "stage 0, active plant K=2: decision column must have NO entry at old state_fixing \
-         slot row={old_state_fixing_row} (Cat 6 write removed), \
-         got {entries_at_old_row:?}"
+        decision_lane.out_cols.iter().any(|&c| matrix
+            .col(c)
+            .iter()
+            .any(|&(r, v)| r == deposit_row && v == 1.0)),
+        "stage 0, active plant K=2: row {deposit_row} must also carry +1.0 on the \
+         lane's own out_col (the deposit row identity)"
     );
 }
 
-/// At an inactive stage (K=2, n_stages=4, stage 3: 3+2=5 > 4) the
-/// anticipated-decision column has no CSC entry at any state-fixing row.
+/// At an inactive stage (K=2, n_stages=4, stage 3: 3+2=5 > 4) the incoming
+/// state is pinned by column bounds, so no row pins it: the
+/// anticipated-decision column has no entry on any row addressing
+/// `commit_in`/`storage_in`/`transit_buckets_in`/`inflow_lags`, nor on any
+/// row outside its own bus's load-balance rows.
 #[test]
 fn test_anticipated_decision_inactive_no_state_write() {
     let system = one_anticipated_thermal_system(4, 2, 0.0, 100.0);
@@ -1047,18 +1100,39 @@ fn test_anticipated_decision_inactive_no_state_write() {
     .expect("build ok");
 
     let t = &result.templates[3]; // stage 3: 3+2=5 > 4 → inactive
-    // n_anticipated=1, k_max=2, n_ant_state=2.
     let col_dec = anticipated_decision_col(2);
-    // Check all n_ant_state state-fixing rows: none should have the decision entry.
-    let row_fix_start = 0_usize;
-    let n_ant_state = 2_usize; // n_anticipated=1 * k_max=2
-    for i in 0..n_ant_state {
-        let row = row_fix_start + i;
-        let entries = csc_entries_at(t, col_dec, row);
-        assert!(
-            entries.is_empty(),
-            "stage 3, inactive plant K=2: CSC at (col={col_dec}, row={row}) must be empty, got {entries:?}"
-        );
+    let lead_stages = vec![2_usize];
+    let resolution = constant_lead_resolution(&lead_stages, 4);
+    let state = StateSpace::new(0, 0, Vec::new(), lead_stages, resolution, &[]);
+    let geom = &result.geometry_per_stage[3];
+    let matrix = UnscaledMatrix::of(t);
+    let owners = row_owners(&system, geom, &state);
+
+    for (family, rows) in geometry_row_families(geom, &state) {
+        for row in rows {
+            let entries = matrix.row(row);
+            if entries.len() == 1 {
+                let (col, _) = entries[0];
+                let pinned = state.commit_in.contains(&col)
+                    || state.storage_in.contains(&col)
+                    || state.transit_buckets_in.contains(&col)
+                    || state.inflow_lags.contains(&col);
+                assert!(
+                    !(pinned && t.row_lower[row] == t.row_upper[row]),
+                    "stage 3, inactive plant K=2: {family} row {row}: incoming \
+                     state is pinned by column bounds; no row pins it"
+                );
+            }
+            if entries.iter().any(|&(c, _)| c == col_dec) {
+                assert!(
+                    matches!(owners.get(&row), Some(RowOwner::Load { .. })),
+                    "stage 3, inactive plant K=2: {family} row {row}: decision \
+                     column must enter only its own bus's load-balance rows, \
+                     got owner {:?}",
+                    owners.get(&row)
+                );
+            }
+        }
     }
 }
 
@@ -1101,8 +1175,6 @@ fn test_n_state_includes_n_ant_state() {
 ///   is stages 0..2 for K=1; INACTIVE at boundary stage 3 (`3+1=4==n_stages`,
 ///   excluded by the strict predicate).
 /// - NPV objective coefficient at stage 0 (no discount): `50*720/1000 = 36.0`.
-/// - State-fixing CSC diagonal +1.0 for slot 0, plant 0.
-/// - Decision-write CSC +1.0 at row `1 + (K-1)*1 = 1` (slot K-1=0).
 /// - Fishing row CSC at stage 1 (first stage with K=1 <= stage_idx=1).
 /// - Fishing row equality bounds 0==0.
 #[test]
@@ -1266,8 +1338,8 @@ fn test_anticipated_thermals_lp_roundtrip_k1() {
 /// - `num_cols == 30` and `num_rows` per stage match K=2 formula.
 /// - Bounds: active at t=0 (`0+2=2<4`), active at t=1 (`1+2=3<4`),
 ///   INACTIVE at boundary t=2 (`2+2=4 NOT < 4`) and t=3 (`3+2=5>4`).
-/// - Decision-write: slot K-1=1; at stage 0 active, col has +1.0 at
-///   `row_fix_start + 1 = 2`.
+/// - Interior carry row: `out(slot 1)` and `in(slot 1)` hold the same-slot
+///   carry identity (+1.0/-1.0), never the retired shift target `in(slot+1)`.
 /// - Fishing row active at stage 2 (K=2 <= 2), absent at stage 1 (K=2 > 1).
 /// - Fishing row CSC pattern at stage 2.
 #[test]
@@ -1454,7 +1526,8 @@ fn test_anticipated_thermals_lp_roundtrip_k2() {
 /// - `num_cols == 31` and `num_rows` per stage match K=3 formula.
 /// - Bounds: active at t=0 (`0+3=3 < 4`), INACTIVE at boundary t=1
 ///   (`1+3=4 NOT < 4`), t=2 (`2+3=5>4`), and t=3.
-/// - Decision-write: slot K-1=2; at stage 0, col has +1.0 at row_fix_start+2=3.
+/// - Interior carry rows: `out(slot)` and `in(slot)` hold the same-slot
+///   carry identity (+1.0/-1.0) for slots 1 and 2.
 /// - Fishing rows: absent at t=0,1,2; present at t=3 (K=3 <= 3).
 /// - Fishing row CSC pattern at stage 3.
 #[test]
@@ -1743,7 +1816,7 @@ fn test_anticipated_thermals_lp_roundtrip_k0_baseline_parity() {
     );
     assert_eq!(
         result_baseline.templates[0].num_rows, 12,
-        "K=0 baseline: num_rows must be 12 (no state-fixing rows)"
+        "K=0 baseline: num_rows must be 12 (no rows pin incoming state)"
     );
 }
 

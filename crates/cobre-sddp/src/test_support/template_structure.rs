@@ -4,7 +4,8 @@
 //! `pub(crate)`, so the decoders live here rather than in an integration-test
 //! crate, which could only re-derive their arithmetic.
 
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 
 use cobre_core::{BlockMode, ContractType, System};
 use cobre_solver::StageTemplate;
@@ -662,4 +663,245 @@ pub fn column_owners(
     }
 
     owners
+}
+
+/// [`ColOwner`] collapsed to the identity a block-mode flip preserves:
+/// identical to [`ColOwner`] in every other variant, but `Evaporation {
+/// hydro, slot }` collapses to `Evaporation { hydro }` because the slot
+/// count differs by mode (stage-level on a parallel stage, per-block on a
+/// chronological one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColKey {
+    /// A storage-boundary column for hydro `hydro` at `boundary`.
+    Storage {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The storage boundary this column addresses.
+        boundary: Boundary,
+    },
+    /// Hydro `hydro`'s realized-inflow column.
+    ZInflow {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// An AR inflow-lag column for hydro `hydro` (any lag depth).
+    InflowLag {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// A water-transit-bucket ring column for plant `plant`, ring slot `slot`.
+    Bucket {
+        /// The bucket ring's owning plant.
+        plant: HydroSys,
+        /// The slot within the plant's own bucket-ring run.
+        slot: usize,
+        /// `true` for the outgoing column, `false` for the incoming one.
+        outgoing: bool,
+    },
+    /// A turbine-flow column for hydro-cell `cell` (owned by `hydro`), block `blk`.
+    Turbine {
+        /// The cell's owning plant.
+        hydro: HydroSys,
+        /// The turbine column's cell.
+        cell: HydroCell,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A spillage column for hydro `hydro`, block `blk`.
+    Spillage {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A diversion-flow column for hydro `hydro`, block `blk`.
+    Diversion {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A pumping-flow column for station `station`, block `blk`.
+    Pumping {
+        /// The column's owning pumping station.
+        station: PumpingSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// An evaporation-flow column for hydro `hydro`, any evaporation slot.
+    Evaporation {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// Hydro `hydro`'s inflow non-negativity slack column.
+    InflowSlack {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// Hydro `hydro`'s below-withdrawal-target slack column.
+    WithdrawalNeg {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// Hydro `hydro`'s above-withdrawal-target slack column.
+    WithdrawalPos {
+        /// The column's owning hydro.
+        hydro: HydroSys,
+    },
+    /// A thermal-generation column for thermal `thermal`, block `blk`.
+    Thermal {
+        /// The column's owning thermal.
+        thermal: ThermalSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A bus-deficit column for bus `bus`, block `blk` (any segment).
+    Deficit {
+        /// The column's owning bus.
+        bus: BusSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A bus-excess column for bus `bus`, block `blk`.
+    Excess {
+        /// The column's owning bus.
+        bus: BusSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A non-controllable-source generation column for `ncs`, block `blk`.
+    Ncs {
+        /// The column's owning non-controllable source.
+        ncs: NcsSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A forward line-flow column for line `line`, block `blk`.
+    LineFwd {
+        /// The column's owning line.
+        line: LineSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// A reverse line-flow column for line `line`, block `blk`.
+    LineRev {
+        /// The column's owning line.
+        line: LineSys,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// An FPHA-generation column for hydro-cell `cell`, block `blk`.
+    Generation {
+        /// The generation column's cell.
+        cell: HydroCell,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+    /// An in-study anticipated-ring incoming column: ring lane `lane`
+    /// (anticipated-local index), slot `slot`.
+    AnticipatedIn {
+        /// The ring lane's anticipated-local index.
+        lane: usize,
+        /// The ring slot.
+        slot: usize,
+    },
+    /// A contract column of direction `contract_type`, per-direction slot
+    /// `family_slot`, block `blk`.
+    Contract {
+        /// The contract's direction.
+        contract_type: ContractType,
+        /// The contract's per-direction slot.
+        family_slot: usize,
+        /// The column's block.
+        blk: BlockIdx,
+    },
+}
+
+impl From<ColOwner> for ColKey {
+    fn from(owner: ColOwner) -> Self {
+        match owner {
+            ColOwner::Storage { hydro, boundary } => ColKey::Storage { hydro, boundary },
+            ColOwner::ZInflow { hydro } => ColKey::ZInflow { hydro },
+            ColOwner::InflowLag { hydro } => ColKey::InflowLag { hydro },
+            ColOwner::Bucket {
+                plant,
+                slot,
+                outgoing,
+            } => ColKey::Bucket {
+                plant,
+                slot,
+                outgoing,
+            },
+            ColOwner::Turbine { hydro, cell, blk } => ColKey::Turbine { hydro, cell, blk },
+            ColOwner::Spillage { hydro, blk } => ColKey::Spillage { hydro, blk },
+            ColOwner::Diversion { hydro, blk } => ColKey::Diversion { hydro, blk },
+            ColOwner::Pumping { station, blk } => ColKey::Pumping { station, blk },
+            ColOwner::Evaporation { hydro, .. } => ColKey::Evaporation { hydro },
+            ColOwner::InflowSlack { hydro } => ColKey::InflowSlack { hydro },
+            ColOwner::WithdrawalNeg { hydro } => ColKey::WithdrawalNeg { hydro },
+            ColOwner::WithdrawalPos { hydro } => ColKey::WithdrawalPos { hydro },
+            ColOwner::Thermal { thermal, blk } => ColKey::Thermal { thermal, blk },
+            ColOwner::Deficit { bus, blk } => ColKey::Deficit { bus, blk },
+            ColOwner::Excess { bus, blk } => ColKey::Excess { bus, blk },
+            ColOwner::Ncs { ncs, blk } => ColKey::Ncs { ncs, blk },
+            ColOwner::LineFwd { line, blk } => ColKey::LineFwd { line, blk },
+            ColOwner::LineRev { line, blk } => ColKey::LineRev { line, blk },
+            ColOwner::Generation { cell, blk } => ColKey::Generation { cell, blk },
+            ColOwner::AnticipatedIn { lane, slot } => ColKey::AnticipatedIn { lane, slot },
+            ColOwner::Contract {
+                contract_type,
+                family_slot,
+                blk,
+            } => ColKey::Contract {
+                contract_type,
+                family_slot,
+                blk,
+            },
+        }
+    }
+}
+
+impl PartialOrd for ColKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ColKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // No field type here derives `Ord`; compare the derived `Debug`
+        // rendering instead — a total order with no per-field wrapper type.
+        format!("{self:?}").cmp(&format!("{other:?}"))
+    }
+}
+
+/// Row `r`'s unscaled `(column, value)` entries, keyed by [`ColKey`] and
+/// summed: several columns one owner splits across — a chronological row's
+/// several block columns, a storage boundary's two columns — collapse to
+/// one coefficient.
+///
+/// # Panics
+/// Panics if a column entry in row `r` has no owner in `cols`.
+#[must_use]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "cols is always column_owners()'s RandomState HashMap; no call site needs a generic hasher"
+)]
+pub fn row_by_owner(
+    m: &UnscaledMatrix,
+    cols: &HashMap<usize, ColOwner>,
+    r: usize,
+) -> BTreeMap<ColKey, f64> {
+    let mut keyed: BTreeMap<ColKey, f64> = BTreeMap::new();
+    for &(c, v) in m.row(r) {
+        #[expect(
+            clippy::panic,
+            reason = "an undecoded column on a water/load/z/FPHA row is a gap in column_owners's coverage, not a runtime condition to recover from"
+        )]
+        let owner = *cols
+            .get(&c)
+            .unwrap_or_else(|| panic!("row {r} has an undecoded column {c}"));
+        *keyed.entry(ColKey::from(owner)).or_insert(0.0) += v;
+    }
+    keyed
 }

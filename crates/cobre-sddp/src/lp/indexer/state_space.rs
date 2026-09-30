@@ -1456,9 +1456,8 @@ mod tests {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2), LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &[720.0; 4],
-                n_decision: 4,
-                n_delivery: 4,
+                study_stage_hours: &[720.0; 4],
+                post_study_stage_hours: &[],
             },
         );
         let idx =

@@ -132,12 +132,12 @@ fn bench_cut_application_with_anticipated(c: &mut Criterion) {
         .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
         .collect();
     let n_margin_stages = K_MAX + 2;
+    let study_stage_hours = vec![720.0; n_margin_stages];
     let resolution = AnticipatedResolution::resolve(
         &leads,
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: n_margin_stages,
-            n_delivery: n_margin_stages,
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &[],
         },
     );
 

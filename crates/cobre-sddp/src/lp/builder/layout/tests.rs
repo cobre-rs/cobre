@@ -2401,9 +2401,8 @@ fn build_anticipated_slot_row_pos_study_only_byte_identity() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Stages(2)],
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 3,
-            n_delivery: 3,
+            study_stage_hours: &[720.0; 3],
+            post_study_stage_hours: &[],
         },
     );
     assert_eq!(
@@ -2436,9 +2435,8 @@ fn build_anticipated_slot_row_pos_extended_axis_carries_post_study_target_m5() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Stages(4)],
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 4,
-            n_delivery: 8,
+            study_stage_hours: &[720.0; 4],
+            post_study_stage_hours: &[720.0; 4],
         },
     );
     assert_eq!(
@@ -2684,9 +2682,8 @@ fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Stages(1), LeadTime::Stages(3)],
         DeliveryAxis {
-            stage_lengths_hours: &[720.0; 4],
-            n_decision: 4,
-            n_delivery: 4,
+            study_stage_hours: &[720.0; 4],
+            post_study_stage_hours: &[],
         },
     );
     let state =
@@ -2763,20 +2760,20 @@ fn build_anticipated_fishing_row_pos_extended_axis_matches_study_only_count() {
     let lead = LeadTime::Stages(4);
     let n_stages = 4;
 
+    let study_stage_hours = vec![720.0; n_stages];
     let study_only_resolution = AnticipatedResolution::resolve(
         &[lead],
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: n_stages,
-            n_delivery: n_stages,
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &[],
         },
     );
+    let post_study_stage_hours = vec![720.0; n_stages];
     let extended_resolution = AnticipatedResolution::resolve(
         &[lead],
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: n_stages,
-            n_delivery: 2 * n_stages,
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &post_study_stage_hours,
         },
     );
     let study_only_state = state_with_attached_resolution(k_max, study_only_resolution);

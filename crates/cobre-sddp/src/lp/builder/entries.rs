@@ -2892,9 +2892,8 @@ mod zero_cost_tests {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0)],
             DeliveryAxis {
-                stage_lengths_hours: &[744.0, 744.0, 744.0, 744.0],
-                n_decision: 4,
-                n_delivery: 4,
+                study_stage_hours: &[744.0, 744.0, 744.0, 744.0],
+                post_study_stage_hours: &[],
             },
         );
         let state = StateSpace::new(
@@ -3021,9 +3020,8 @@ mod zero_cost_tests {
         fixtures.base.anticipated_resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(350.0)],
             DeliveryAxis {
-                stage_lengths_hours: &[100.0; 4],
-                n_decision: 4,
-                n_delivery: 4,
+                study_stage_hours: &[100.0; 4],
+                post_study_stage_hours: &[],
             },
         );
         let ctx = fixtures.make_ctx(3, vec![3], &[0], 1);

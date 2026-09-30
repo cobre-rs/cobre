@@ -41,9 +41,8 @@ mod deck_independent_fanout {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &stage_lengths_hours,
-                n_decision: stage_lengths_hours.len(),
-                n_delivery: stage_lengths_hours.len(),
+                study_stage_hours: &stage_lengths_hours,
+                post_study_stage_hours: &[],
             },
         );
 
@@ -64,9 +63,8 @@ mod deck_independent_fanout {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0)],
             DeliveryAxis {
-                stage_lengths_hours: &stage_lengths_hours,
-                n_decision: stage_lengths_hours.len(),
-                n_delivery: stage_lengths_hours.len(),
+                study_stage_hours: &stage_lengths_hours,
+                post_study_stage_hours: &[],
             },
         );
 

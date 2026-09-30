@@ -274,12 +274,12 @@ pub fn constant_lead_resolution(lead_stages: &[usize], n_stages: usize) -> Antic
         .iter()
         .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
         .collect();
+    let study_stage_hours = vec![720.0; n_stages];
     AnticipatedResolution::resolve(
         &leads,
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: n_stages,
-            n_delivery: n_stages,
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &[],
         },
     )
 }

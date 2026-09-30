@@ -3633,12 +3633,12 @@ mod anticipated_objective_tests {
             }];
             let anticipated_plants = AnticipatedPlants::build(&thermals);
 
+            let post_study_stage_hours = vec![720.0; n_post];
             let resolution = AnticipatedResolution::resolve(
                 &[LeadTime::Stages(PSA_LEAD)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[],
-                    n_decision: PSA_N_STAGES,
-                    n_delivery: PSA_N_STAGES + n_post,
+                    study_stage_hours: &[720.0; PSA_N_STAGES],
+                    post_study_stage_hours: &post_study_stage_hours,
                 },
             );
             let k_max = resolution.anchored_depth();

@@ -491,9 +491,8 @@ mod tests {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &[],
-                n_decision: 3,
-                n_delivery: 3,
+                study_stage_hours: &[720.0; 3],
+                post_study_stage_hours: &[],
             },
         );
         let ant_state = StateSpace::new(3, 2, Vec::new(), vec![2], resolution, &[2, 2, 2]);

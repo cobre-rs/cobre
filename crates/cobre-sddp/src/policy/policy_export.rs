@@ -1006,9 +1006,8 @@ mod tests {
         AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &[720.0],
-                n_decision: 1,
-                n_delivery: 1,
+                study_stage_hours: &[720.0],
+                post_study_stage_hours: &[],
             },
         )
     }
@@ -1825,9 +1824,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -1895,9 +1893,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -1942,9 +1939,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Time(720.0)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -1986,9 +1982,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(1), LeadTime::Stages(3)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 4],
-                    n_decision: 4,
-                    n_delivery: 4,
+                    study_stage_hours: &[720.0; 4],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2058,9 +2053,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(1), LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2116,9 +2110,8 @@ mod tests {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0), LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &[720.0; 3],
-                n_decision: 3,
-                n_delivery: 3,
+                study_stage_hours: &[720.0; 3],
+                post_study_stage_hours: &[],
             },
         );
 
@@ -2190,9 +2183,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(3)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 4,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[720.0; 1],
                 },
             ),
         );
@@ -2243,9 +2235,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2287,9 +2278,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(1)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[336.0, 840.0],
-                    n_decision: 2,
-                    n_delivery: 2,
+                    study_stage_hours: &[336.0, 840.0],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2343,9 +2333,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(3)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 4,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[720.0; 1],
                 },
             ),
         );
@@ -2410,9 +2399,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 64],
-                    n_decision: 64,
-                    n_delivery: 66,
+                    study_stage_hours: &[720.0; 64],
+                    post_study_stage_hours: &[720.0; 2],
                 },
             ),
         );
@@ -2460,9 +2448,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 64],
-                    n_decision: 64,
-                    n_delivery: 64,
+                    study_stage_hours: &[720.0; 64],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2505,9 +2492,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(3)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2573,9 +2559,8 @@ mod tests {
             AnticipatedResolution::resolve(
                 &[LeadTime::Stages(1), LeadTime::Stages(2)],
                 DeliveryAxis {
-                    stage_lengths_hours: &[720.0; 3],
-                    n_decision: 3,
-                    n_delivery: 3,
+                    study_stage_hours: &[720.0; 3],
+                    post_study_stage_hours: &[],
                 },
             ),
         );
@@ -2638,9 +2623,8 @@ mod tests {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Stages(7)],
             DeliveryAxis {
-                stage_lengths_hours: &[720.0; 10],
-                n_decision: 4,
-                n_delivery: 10,
+                study_stage_hours: &[720.0; 10][..4],
+                post_study_stage_hours: &[720.0; 10][4..],
             },
         );
         assert_eq!(

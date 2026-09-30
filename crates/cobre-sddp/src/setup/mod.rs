@@ -1203,9 +1203,8 @@ pub(crate) fn resolve_anticipated_commitments_core(
     let resolution = AnticipatedResolution::resolve(
         &leads,
         DeliveryAxis {
-            stage_lengths_hours: calendar.total_hours(),
-            n_decision: n_stages,
-            n_delivery: calendar.n_delivery(),
+            study_stage_hours: calendar.study_total_hours(),
+            post_study_stage_hours: calendar.post_study_total_hours(),
         },
     );
 

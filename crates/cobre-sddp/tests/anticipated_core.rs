@@ -6343,9 +6343,8 @@ mod a1c_stage_count_mode_anchor {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &D37_DURATIONS,
-                n_decision: 6,
-                n_delivery: 6,
+                study_stage_hours: &D37_DURATIONS,
+                post_study_stage_hours: &[],
             },
         );
         let point = &resolution.per_plant[0];
@@ -6393,17 +6392,15 @@ mod a1c_stage_count_mode_anchor {
         let on_d37 = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &D37_DURATIONS,
-                n_decision: 6,
-                n_delivery: 6,
+                study_stage_hours: &D37_DURATIONS,
+                post_study_stage_hours: &[],
             },
         );
         let on_uniform = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &[672.0; 6],
-                n_decision: 6,
-                n_delivery: 6,
+                study_stage_hours: &[672.0; 6],
+                post_study_stage_hours: &[],
             },
         );
 
@@ -6434,17 +6431,15 @@ mod a1c_stage_count_mode_anchor {
         let physical = AnticipatedResolution::resolve(
             &[LeadTime::Time(1450.0)],
             DeliveryAxis {
-                stage_lengths_hours: &D37_DURATIONS,
-                n_decision: 6,
-                n_delivery: 6,
+                study_stage_hours: &D37_DURATIONS,
+                post_study_stage_hours: &[],
             },
         );
         let stage_count = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &D37_DURATIONS,
-                n_decision: 6,
-                n_delivery: 6,
+                study_stage_hours: &D37_DURATIONS,
+                post_study_stage_hours: &[],
             },
         );
 
@@ -6758,9 +6753,8 @@ mod a1c_stage_count_mode_anchor {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(LEAD_TIME_HOURS)],
             DeliveryAxis {
-                stage_lengths_hours: &D37_DURATIONS,
-                n_decision: 6,
-                n_delivery: 6,
+                study_stage_hours: &D37_DURATIONS,
+                post_study_stage_hours: &[],
             },
         );
         assert_eq!(
@@ -7258,9 +7252,8 @@ mod anticipated_ring_axis_regressions {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(COLLISION_LEAD_HOURS)],
             DeliveryAxis {
-                stage_lengths_hours: &calendar,
-                n_decision: N_STUDY_STAGES,
-                n_delivery: calendar.len(),
+                study_stage_hours: &calendar[..N_STUDY_STAGES],
+                post_study_stage_hours: &calendar[N_STUDY_STAGES..],
             },
         );
         let decider = &resolution.per_plant[0].decider;
@@ -7395,9 +7388,8 @@ mod anticipated_ring_axis_regressions {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(CLOSURE_LEAD_HOURS)],
             DeliveryAxis {
-                stage_lengths_hours: &calendar,
-                n_decision: N_STUDY_STAGES,
-                n_delivery: calendar.len(),
+                study_stage_hours: &calendar[..N_STUDY_STAGES],
+                post_study_stage_hours: &calendar[N_STUDY_STAGES..],
             },
         );
         let point = &resolution.per_plant[0];
@@ -7577,9 +7569,8 @@ mod anticipated_ring_axis_regressions {
         AnticipatedResolution::resolve(
             leads,
             DeliveryAxis {
-                stage_lengths_hours: durations,
-                n_decision: N_STUDY_STAGES,
-                n_delivery: durations.len(),
+                study_stage_hours: &durations[..N_STUDY_STAGES],
+                post_study_stage_hours: &durations[N_STUDY_STAGES..],
             },
         )
     }

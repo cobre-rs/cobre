@@ -330,30 +330,33 @@ pub enum LeadTime {
 }
 
 /// The delivery-vs-decision domain split for [`resolve_point`]: the decision
-/// axis `[0, n_decision)` is a prefix of the delivery axis `[0, n_delivery)`
-/// (`n_decision <= n_delivery`). `n_delivery` is explicit rather than derived
-/// from `stage_lengths_hours.len()`, so a [`LeadTime::Stages`] empty calendar
-/// keeps its full delivery domain. Built by struct literal (never a positional
-/// `new`) so a `n_decision`/`n_delivery` transposition is a field-name error at
-/// the call site, not a silent argument swap.
+/// axis `[0, n_decision())` is a prefix of the delivery axis
+/// `[0, n_delivery())`. `n_decision() <= n_delivery()` holds by construction
+/// — `n_delivery()` sums both slices' lengths, never a separately supplied
+/// count — mirroring [`crate::time_value::DeliveryCalendar`]. Built by struct
+/// literal (never a positional `new`) so a `study`/`post_study` transposition
+/// is a field-name error at the call site, not a silent argument swap.
 #[derive(Debug, Clone, Copy)]
 pub struct DeliveryAxis<'a> {
-    /// Delivery calendar's per-stage total hours: length `n_delivery` in
-    /// [`LeadTime::Time`] mode, unconstrained (typically empty) in
-    /// [`LeadTime::Stages`] mode.
-    pub stage_lengths_hours: &'a [f64],
-    /// In-study (decision) stage count.
-    pub n_decision: usize,
-    /// Delivery-stage count, `>= n_decision`.
-    pub n_delivery: usize,
+    /// Study (in-horizon decision) calendar's per-stage total hours.
+    pub study_stage_hours: &'a [f64],
+    /// Post-study continuation calendar's per-stage total hours; empty with
+    /// no post-study calendar declared. [`LeadTime::Stages`] never reads
+    /// either slice's values.
+    pub post_study_stage_hours: &'a [f64],
 }
 
 impl DeliveryAxis<'_> {
-    fn debug_assert_well_formed(self) {
-        debug_assert!(
-            self.n_decision <= self.n_delivery,
-            "n_decision must not exceed n_delivery (decision axis is a delivery-axis prefix)"
-        );
+    /// In-study (decision) stage count.
+    #[must_use]
+    pub fn n_decision(self) -> usize {
+        self.study_stage_hours.len()
+    }
+
+    /// Delivery-stage count, `>= n_decision()`.
+    #[must_use]
+    pub fn n_delivery(self) -> usize {
+        self.study_stage_hours.len() + self.post_study_stage_hours.len()
     }
 }
 
@@ -527,27 +530,21 @@ impl PointResolution {
 /// per-decision-stage outgoing commitment sets, and the per-decision-stage
 /// depths.
 ///
-/// `axis.stage_lengths_hours` must have length `axis.n_delivery`;
-/// [`LeadTime::Stages`] never reads it.
-///
 /// # Panics
 ///
-/// Debug builds panic if `axis.n_decision > axis.n_delivery`, if
-/// `axis.stage_lengths_hours.len() != axis.n_delivery` in [`LeadTime::Time`]
-/// mode, if a stage length or the lead time is not finite and positive, or if a
-/// delivery stage decided in-study (decider `Some(t)`, `t < axis.n_decision`)
-/// fails to appear in its own decision set.
+/// Debug builds panic if a stage length or the lead time is not finite and
+/// positive, or if a delivery stage decided in-study (decider `Some(t)`,
+/// `t < axis.n_decision()`) fails to appear in its own decision set.
 #[must_use]
 pub fn resolve_point(lag: LeadTime, axis: DeliveryAxis<'_>) -> PointResolution {
-    axis.debug_assert_well_formed();
     let decider = match lag {
-        LeadTime::Time(delta_hours) => {
-            resolve_decider_physical(delta_hours, axis.stage_lengths_hours, axis.n_delivery)
+        LeadTime::Time(delta_hours) => resolve_decider_physical(delta_hours, axis),
+        LeadTime::Stages(lead_stages) => {
+            resolve_decider_stage_count(lead_stages, axis.n_delivery())
         }
-        LeadTime::Stages(lead_stages) => resolve_decider_stage_count(lead_stages, axis.n_delivery),
     };
     let (decision_sets, depth, occupancy) =
-        build_decision_sets_and_depth(&decider, axis.n_decision);
+        build_decision_sets_and_depth(&decider, axis.n_decision());
 
     PointResolution {
         decider,
@@ -626,11 +623,15 @@ impl AnticipatedResolution {
 }
 
 /// Cumulative stage-end boundaries `S_0 = 0, S_1, .., S_n` on the hour clock.
-fn cumulative_stage_boundaries(stage_lengths_hours: &[f64]) -> Vec<f64> {
-    let mut boundaries = Vec::with_capacity(stage_lengths_hours.len() + 1);
+fn cumulative_stage_boundaries(axis: DeliveryAxis<'_>) -> Vec<f64> {
+    let mut boundaries = Vec::with_capacity(axis.n_delivery() + 1);
     let mut cumulative = 0.0_f64;
     boundaries.push(cumulative);
-    for &length in stage_lengths_hours {
+    for &length in axis
+        .study_stage_hours
+        .iter()
+        .chain(axis.post_study_stage_hours)
+    {
         debug_assert!(
             length.is_finite() && length > 0.0,
             "every stage length must be finite and > 0.0"
@@ -646,22 +647,14 @@ fn cumulative_stage_boundaries(stage_lengths_hours: &[f64]) -> Vec<f64> {
 /// sub-stage lead (`Δ < h_m`) gives `c(m) = m`; a start-anchored `start_m −
 /// Δ` could never reach that. `None` when the target precedes the
 /// horizon start.
-fn resolve_decider_physical(
-    delta_hours: f64,
-    stage_lengths_hours: &[f64],
-    n_delivery: usize,
-) -> Vec<Option<usize>> {
+fn resolve_decider_physical(delta_hours: f64, axis: DeliveryAxis<'_>) -> Vec<Option<usize>> {
     debug_assert!(
         delta_hours.is_finite() && delta_hours > 0.0,
         "delta_hours must be finite and > 0.0"
     );
-    debug_assert_eq!(
-        stage_lengths_hours.len(),
-        n_delivery,
-        "stage_lengths_hours must cover every delivery stage in physical mode"
-    );
 
-    let boundaries = cumulative_stage_boundaries(stage_lengths_hours);
+    let boundaries = cumulative_stage_boundaries(axis);
+    let n_delivery = axis.n_delivery();
 
     (0..n_delivery)
         .map(|m| {

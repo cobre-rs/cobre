@@ -4,138 +4,166 @@
 //! column (`push_z_inflow_coupling` in `lp/builder/entries.rs`) rather than
 //! an AR-lag column or a PAR base baked into the row's own RHS.
 
+use std::collections::HashSet;
+
 use super::*;
 
-use cobre_sddp::test_support::decks::{SLOW_DECKS, committed_decks};
+use cobre_sddp::indexer::{BlockIdx, HydroSys};
+use cobre_sddp::test_support::template_structure::{
+    RowOwner, UnscaledMatrix, hours_to_hm3, row_owners, z_inflow_column,
+};
 
-use super::common::fresh_setup_with;
-
-/// Nonzero-entry count per row across the whole template (every column), used
-/// to detect a frozen water row (the `v_h - v_h_in = 0` identity, exactly two
-/// nonzero entries) without depending on the builder's private phase state.
-#[allow(clippy::cast_sign_loss)]
-fn row_nnz_counts(t: &StageTemplate) -> Vec<usize> {
-    let mut counts = vec![0usize; t.num_rows];
-    for &r in &t.row_indices {
-        counts[r as usize] += 1;
-    }
-    counts
-}
+use super::common;
 
 #[test]
-fn every_committed_deck_reads_z_inflow_on_its_water_rows() {
-    const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
-    let slow_tests_enabled = cfg!(feature = "slow-tests");
-
-    for deck in committed_decks() {
-        if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
-            continue;
-        }
-        let deck_key = deck.key.as_str();
-        let setup = fresh_setup_with(&deck.dir, |_| {});
-        let n_hydros = setup.stage_state().hydro_count;
+fn every_study_reads_z_inflow_on_its_water_rows() {
+    let count = common::for_each_study(|key, system, setup| {
+        let state = setup.stage_state();
+        let n_hydros = state.hydro_count;
         if n_hydros == 0 {
-            continue;
+            return;
         }
-        let z_inflow_start = setup.stage_state().z_inflow.start;
-        let inflow_lags = setup.stage_state().inflow_lags.clone();
+        let inflow_lags = state.inflow_lags.clone();
         let templates = &setup.inputs.stage_data.stage_templates;
 
         for (s, t) in templates.templates.iter().enumerate() {
             let geom = &templates.geometry_per_stage[s];
-            let water = geom.water_balance.range();
-            let stride = water.len() / n_hydros;
+            let owners = row_owners(system, geom, state);
+            let matrix = UnscaledMatrix::of(t);
+            let rows_per_entity = geom.water_balance.rows_per_entity(geom.n_blks);
             let block_hours = &templates.block_hours_per_stage[s];
-            let zeta = block_hours.iter().sum::<f64>() * M3S_TO_HM3;
-            let nnz = row_nnz_counts(t);
-            let is_frozen =
-                |d: usize| -> bool { (0..stride).all(|k| nnz[water.start + d * stride + k] == 2) };
-            let unscale = |r: usize, c: usize, v: f64| -> f64 {
-                let rs = t.row_scale.get(r).copied().unwrap_or(1.0);
-                let cs = t.col_scale.get(c).copied().unwrap_or(1.0);
-                v / (rs * cs)
+            let zeta = hours_to_hm3(block_hours.iter().sum());
+            let water_hydro_of = |r: usize| -> Option<HydroSys> {
+                match owners.get(&r) {
+                    Some(&RowOwner::Water { hydro, .. }) => Some(hydro),
+                    _ => None,
+                }
+            };
+            let is_frozen = |d: usize| -> bool {
+                (0..rows_per_entity).all(|k| {
+                    matrix
+                        .row(geom.water_balance_row(HydroSys::new(d), BlockIdx::new(k)))
+                        .len()
+                        == 2
+                })
             };
 
             for h in 0..n_hydros {
-                let col_z = z_inflow_start + h;
-                let water_entries: Vec<(usize, f64)> = entries_for_col(t, col_z)
-                    .into_iter()
-                    .filter(|&(r, _)| water.contains(&r))
+                let h_sys = HydroSys::new(h);
+                let col_z = z_inflow_column(state, h_sys);
+                let water_entries: Vec<(usize, f64)> = matrix
+                    .col(col_z)
+                    .iter()
+                    .copied()
+                    .filter(|&(r, _)| water_hydro_of(r).is_some())
                     .collect();
 
                 if water_entries.is_empty() {
                     assert!(
                         is_frozen(h),
-                        "{deck_key}: stage {s} hydro {h}: z_{h} has no water-row entry, but \
+                        "{key}: stage {s} hydro {h}: z_{h} has no water-row entry, but \
                          hydro {h} is not frozen"
                     );
                     continue;
                 }
 
-                let owners: std::collections::BTreeSet<usize> = water_entries
+                let hydros_hit: std::collections::BTreeSet<usize> = water_entries
                     .iter()
-                    .map(|&(r, _)| (r - water.start) / stride)
+                    .map(|&(r, _)| water_hydro_of(r).expect("filtered above").get())
                     .collect();
                 assert_eq!(
-                    owners.len(),
+                    hydros_hit.len(),
                     1,
-                    "{deck_key}: stage {s} hydro {h}: z_{h} has water-row entries on more than \
-                     one hydro's rows: {owners:?}"
+                    "{key}: stage {s} hydro {h}: z_{h} has water-row entries on more than \
+                     one hydro's rows: {hydros_hit:?}"
                 );
-                let d = *owners
+                let d = *hydros_hit
                     .iter()
                     .next()
-                    .expect("owners has exactly one element");
+                    .expect("hydros_hit has exactly one element");
 
                 assert_eq!(
                     water_entries.len(),
-                    stride,
-                    "{deck_key}: stage {s} hydro {h}: z_{h} must have exactly one entry per row \
-                     of hydro {d} ({stride} rows), got {}",
+                    rows_per_entity,
+                    "{key}: stage {s} hydro {h}: z_{h} must have exactly one entry per row \
+                     of hydro {d} ({rows_per_entity} rows), got {}",
                     water_entries.len()
                 );
 
                 for &(r, v) in &water_entries {
-                    let unscaled = unscale(r, col_z, v);
-                    let expected = if stride == 1 {
+                    let RowOwner::Water { blk, .. } = owners[&r] else {
+                        unreachable!("filtered to Water rows above")
+                    };
+                    let expected = if rows_per_entity == 1 {
                         -zeta
                     } else {
-                        let k = r - (water.start + d * stride);
-                        -(block_hours[k] * M3S_TO_HM3)
+                        -hours_to_hm3(block_hours[blk.get()])
                     };
                     assert!(
-                        (unscaled - expected).abs() < 1e-12 * zeta.abs(),
-                        "{deck_key}: stage {s} hydro {h}: z_{h} coefficient at row {r} = \
-                         {unscaled}, expected {expected}"
+                        (v - expected).abs() < 1e-12 * zeta.abs(),
+                        "{key}: stage {s} hydro {h}: z_{h} coefficient at row {r} = \
+                         {v}, expected {expected}"
                     );
                 }
+
+                // (e) the sum of z_h's water coefficients is -zeta whenever z_h
+                // has any water-row entry at all (0.0, the empty-entries branch
+                // above, only when h is frozen).
+                let sum: f64 = water_entries.iter().map(|&(_, v)| v).sum();
+                let expected_sum = -zeta;
+                assert!(
+                    (sum - expected_sum).abs() <= 1e-12 * zeta.abs(),
+                    "{key}: stage {s} hydro {h}: sum of z_{h}'s water coefficients = {sum}, \
+                     expected {expected_sum}"
+                );
 
                 if is_frozen(h) {
                     assert!(
                         d == h || !is_frozen(d),
-                        "{deck_key}: stage {s} hydro {h}: z_{h} routes to hydro {d}'s water \
+                        "{key}: stage {s} hydro {h}: z_{h} routes to hydro {d}'s water \
                          rows, but hydro {d} is also frozen"
                     );
                 } else {
                     assert_eq!(
                         d, h,
-                        "{deck_key}: stage {s} hydro {h}: hydro {h} is not frozen, but z_{h} \
+                        "{key}: stage {s} hydro {h}: hydro {h} is not frozen, but z_{h} \
                          routes to hydro {d}'s water rows"
                     );
                 }
             }
 
             for c in inflow_lags.clone() {
-                for &(r, _) in &entries_for_col(t, c) {
+                for &(r, _) in matrix.col(c) {
                     assert!(
-                        !water.contains(&r),
-                        "{deck_key}: stage {s}: inflow-lag column {c} has an entry on water \
+                        water_hydro_of(r).is_none(),
+                        "{key}: stage {s}: inflow-lag column {c} has an entry on water \
                          row {r}"
                     );
                 }
             }
+
+            // (d) no (row, col) pair occurs twice on any water row, for any column.
+            for (&r, owner) in &owners {
+                if matches!(owner, RowOwner::Water { .. }) {
+                    let mut seen = HashSet::new();
+                    for &(c, _) in matrix.row(r) {
+                        assert!(
+                            seen.insert(c),
+                            "{key}: stage {s}: water row {r} has a duplicate entry for \
+                             column {c}"
+                        );
+                    }
+                }
+            }
         }
-    }
+    });
+
+    assert_eq!(
+        count,
+        common::expected_study_count(),
+        "every committed deck (minus SLOW_DECKS skips) plus every in-code and structural \
+         study must be swept"
+    );
 }
 
 /// Builder-level structural check on the PAR fixture of

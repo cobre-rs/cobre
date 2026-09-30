@@ -1011,7 +1011,7 @@ pub(crate) fn build_study_setup(
         estimation_path,
         estimation_report.as_ref(),
         setup.inputs.stochastic.provenance(),
-        system.hydros().len(),
+        system.hydros(),
         &setup.hydro_models.provenance,
     );
     // Fingerprint the derived lag seed (training-side library only) so

@@ -546,7 +546,7 @@ fn run_root_exports(
             path,
             root_estimation_report,
             setup.inputs.stochastic.provenance(),
-            system.hydros().len(),
+            system.hydros(),
             &setup.hydro_models.provenance,
         );
         // Stale-library detection compares this digest on later runs.

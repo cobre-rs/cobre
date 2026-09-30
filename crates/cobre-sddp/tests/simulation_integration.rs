@@ -103,24 +103,14 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
 
 /// Carries the non-state study shape directly: this external test crate cannot see
 /// the parent crate's `#[cfg(test)]`/`test-support` surface. `max_deficit_segments`
-/// is `1`; `n_pumping`/anticipated are empty for these fixtures.
-fn study_dims_for(
-    n_thermals: usize,
-    n_lines: usize,
-    n_buses: usize,
-    hydro_count: usize,
-    has_inflow_penalty: bool,
-) -> StudyDimensions {
+/// is `1`; anticipated is empty for these fixtures.
+fn study_dims_for(hydro_count: usize, has_inflow_penalty: bool) -> StudyDimensions {
     StudyDimensions {
-        n_thermals,
-        n_lines,
-        n_buses,
         max_deficit_segments: 1,
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,
         anticipated_plants: AnticipatedPlants::default(),
-        n_pumping: 0,
         downstream_par_order: 0,
     }
 }
@@ -653,7 +643,7 @@ fn train_simulate_write_cycle() {
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
-    let study_dims = study_dims_for(0, 0, 0, 0, false);
+    let study_dims = study_dims_for(0, false);
     let training_context = TrainingContext {
         node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
         horizon: &fx.horizon,
@@ -1256,7 +1246,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let t0 = &templates_result.templates[0];
 
-    let study_dims = study_dims_for(0, 0, 1, 1, false);
+    let study_dims = study_dims_for(1, false);
     // The operational-violation constraint *row* range is owned by `StageLayout` and
     // pinned by `stage_layout_operational_violation_rows_are_contiguous_blocks`; this
     // end-to-end test covers only the slack-*column* extraction path.
@@ -1489,7 +1479,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
-    let study_dims = study_dims_for(0, 0, 0, 0, false);
+    let study_dims = study_dims_for(0, false);
     let node_graph = cobre_sddp::test_support::chain_node_graph(&fx.stochastic);
     let training_context = TrainingContext {
         node_graph: &node_graph,

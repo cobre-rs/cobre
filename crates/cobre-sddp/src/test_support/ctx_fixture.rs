@@ -161,9 +161,6 @@ impl CtxFixture {
         };
         self.state = self.build_state(resolution);
         self.study_dims = StudyDimensions {
-            n_thermals: self.thermals.len(),
-            n_lines: self.lines.len(),
-            n_buses: self.buses.len(),
             max_deficit_segments: self
                 .buses
                 .iter()
@@ -172,7 +169,6 @@ impl CtxFixture {
                 .unwrap_or(0),
             has_inflow_penalty: self.has_penalty,
             anticipated_plants: self.anticipated_plants.clone(),
-            n_pumping: self.pumping_stations.len(),
             ..StudyDimensions::default()
         };
         TemplateBuildCtx {

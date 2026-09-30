@@ -23,12 +23,6 @@ use super::AnticipatedPlants;
 /// the per-stage geometry.
 #[derive(Debug, Clone, Default)]
 pub struct StudyDimensions {
-    /// Number of thermal units (T).
-    pub n_thermals: usize,
-    /// Number of transmission lines (`L_n`).
-    pub n_lines: usize,
-    /// Number of buses (B).
-    pub n_buses: usize,
     /// Maximum number of deficit segments across all buses (S).
     pub max_deficit_segments: usize,
     /// Whether inflow non-negativity penalty slack columns are present.
@@ -39,8 +33,6 @@ pub struct StudyDimensions {
     pub has_operational_violations: bool,
     /// The study's anticipated-plant set.
     pub anticipated_plants: AnticipatedPlants,
-    /// Number of pumping stations.
-    pub n_pumping: usize,
     /// PAR order of the downstream (coarser) resolution model. Non-zero only when
     /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
     /// transition); zero for uniform-resolution studies.

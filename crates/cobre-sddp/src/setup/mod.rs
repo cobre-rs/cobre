@@ -1127,15 +1127,11 @@ pub(crate) fn build_study_dimensions(
     // deliberately absent — it is per-stage, owned by the per-stage geometry, never
     // study-global.
     StudyDimensions {
-        n_thermals: system.thermals().len(),
-        n_lines: system.lines().len(),
-        n_buses: system.buses().len(),
         max_deficit_segments,
         has_inflow_penalty,
         has_withdrawal: hydro_count > 0,
         has_operational_violations: hydro_count != 0,
         anticipated_plants,
-        n_pumping: system.n_pumping_stations(),
         downstream_par_order,
     }
 }

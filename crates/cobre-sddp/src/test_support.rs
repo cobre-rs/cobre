@@ -1262,15 +1262,11 @@ pub fn study_dims() -> StudyDimensions {
 #[must_use]
 pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {
-        n_thermals: dims.n_thermals,
-        n_lines: dims.n_lines,
-        n_buses: dims.n_buses,
         max_deficit_segments: dims.max_deficit_segments,
         has_inflow_penalty: dims.has_inflow_penalty,
         has_withdrawal: dims.hydro_count > 0,
         has_operational_violations: dims.hydro_count != 0,
         anticipated_plants: dims.anticipated_plants.clone(),
-        n_pumping: 0,
         downstream_par_order: 0,
     }
 }

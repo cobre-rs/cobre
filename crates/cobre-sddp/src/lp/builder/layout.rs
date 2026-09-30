@@ -1162,21 +1162,53 @@ pub(super) enum StageProductionRole {
     Dormant,
 }
 
+fn allocate_hydro_columns(
+    col: &mut RangeCursor,
+    n_h: usize,
+    n_cells: usize,
+    block_mode: BlockMode,
+    n_blks: usize,
+) -> (usize, Range<usize>, Range<usize>, Range<usize>) {
+    let n_interior = match block_mode {
+        BlockMode::Chronological => n_blks.saturating_sub(1),
+        BlockMode::Parallel => 0,
+    };
+    let storage_internal_start = col.alloc(n_h * n_interior).start;
+    let turbine = col.alloc(n_cells * n_blks);
+    let spillage = col.alloc(n_h * n_blks);
+    let diversion = col.alloc(n_h * n_blks);
+    (storage_internal_start, turbine, spillage, diversion)
+}
+
+fn allocate_network_columns(
+    col: &mut RangeCursor,
+    n_lines: usize,
+    n_buses: usize,
+    max_deficit_segments: usize,
+    n_blks: usize,
+) -> (Range<usize>, Range<usize>, Range<usize>, Range<usize>) {
+    let line_fwd = col.alloc(n_lines * n_blks);
+    let line_rev = col.alloc(n_lines * n_blks);
+    let deficit = col.alloc(n_buses * max_deficit_segments * n_blks);
+    let excess = col.alloc(n_buses * n_blks);
+    (line_fwd, line_rev, deficit, excess)
+}
+
 impl<'a> StageLayout<'a> {
     #[expect(
         clippy::too_many_lines,
-        clippy::similar_names,
-        reason = "each range starts at the previous range's end, so the offset chain stays one linear read beside the established state/stage names"
+        reason = "each range starts at the previous range's end, so the offset chain stays one linear read"
     )]
     pub(crate) fn new(
         ctx: &TemplateBuildCtx<'_>,
-        state: &'a StateSpace,
+        state_layout: &'a StateSpace,
         stage: &'a Stage,
         stage_idx: usize,
     ) -> Self {
         let clock = BlockClock::new(stage);
         let n_blks = clock.n_blks();
-        let n_h = state.hydro_count;
+        let n_h = state_layout.hydro_count;
+        let n_cells = ctx.hydro_cell_index.n_cells();
 
         let (fpha_hydro_indices, fpha_planes_per_hydro) =
             identify_fpha_hydros(ctx, stage_idx, stage.id);
@@ -1212,23 +1244,18 @@ impl<'a> StageLayout<'a> {
         // by THIS stage's `n_blks` (the per-stage authority over the stage-0 global
         // stride). Adjacency between consecutive families is structural, never a
         // hand-copied `.end`.
-        let n_interior = match stage.block_mode {
-            BlockMode::Chronological => n_blks.saturating_sub(1),
-            BlockMode::Parallel => 0,
-        };
-        let mut col = RangeCursor::new(state.control_region_start());
-        let storage_internal_start = col.alloc(n_h * n_interior).start;
-        let n_cells = ctx.hydro_cell_index.n_cells();
-        let turbine = col.alloc(n_cells * n_blks);
-        let spillage = col.alloc(n_h * n_blks);
-        let diversion = col.alloc(n_h * n_blks);
+        let mut col = RangeCursor::new(state_layout.control_region_start());
+        let (storage_internal_start, turbine, spillage, diversion) =
+            allocate_hydro_columns(&mut col, n_h, n_cells, stage.block_mode, n_blks);
         let thermal = col.alloc(ctx.thermals.len() * n_blks);
-        let thermal_end = thermal.end;
-        col.alloc(state.n_anticipated);
-        let line_fwd = col.alloc(ctx.lines.len() * n_blks);
-        let line_rev = col.alloc(ctx.lines.len() * n_blks);
-        let deficit = col.alloc(ctx.buses.len() * max_deficit_segments * n_blks);
-        let excess = col.alloc(ctx.buses.len() * n_blks);
+        let anticipated_decision = col.alloc(state_layout.n_anticipated);
+        let (line_fwd, line_rev, deficit, excess) = allocate_network_columns(
+            &mut col,
+            ctx.lines.len(),
+            ctx.buses.len(),
+            max_deficit_segments,
+            n_blks,
+        );
 
         let has_inflow_slack_columns = ctx.study_dims.inflow_method.has_slack_columns();
         let inflow_slack = col.alloc(if has_inflow_slack_columns { n_h } else { 0 });
@@ -1253,18 +1280,18 @@ impl<'a> StageLayout<'a> {
         // The builder's own rows start immediately after `StateSpace::z_inflow_rows()`,
         // the sole owner of that leading row range. `row` allocates every family
         // through `RangeCursor::alloc`, mirroring `col` above.
-        let mut row = RangeCursor::new(state.z_inflow_rows().end);
+        let mut row = RangeCursor::new(state_layout.z_inflow_rows().end);
         let water_balance = match stage.block_mode {
             BlockMode::Chronological => BlockRowFamily::per_block(row.alloc(n_h * n_blks)),
             BlockMode::Parallel => BlockRowFamily::one_per_entity(row.alloc(n_h)),
         };
         // Sized from this stage's reachable count, not the stage-invariant
-        // `state.n_buckets`: `build_transit_bucket_row_pos` masks a lag beyond
+        // `state_layout.n_buckets`: `build_transit_bucket_row_pos` masks a lag beyond
         // `ctx.topology.per_stage_mask[stage_idx]`'s per-plant cap out of the row
         // range entirely — the cap itself is `build_transit_bucket_topology`'s,
         // gated on `boundary_present`.
         let (transit_bucket_row_pos, n_transit_bucket_rows) =
-            build_transit_bucket_row_pos(state, &ctx.topology.per_stage_mask, stage_idx);
+            build_transit_bucket_row_pos(state_layout, &ctx.topology.per_stage_mask, stage_idx);
         let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
         let load_balance = BlockRowFamily::per_block(row.alloc(ctx.buses.len() * n_blks));
 
@@ -1313,17 +1340,17 @@ impl<'a> StageLayout<'a> {
         // delivery matures this stage (`build_anticipated_fishing_row_pos`) —
         // a `K = 0` self-delivery excludes a plant's row this stage, so the
         // row family is sparse like the deposit family below, not the dense
-        // `state.n_anticipated` count.
+        // `state_layout.n_anticipated` count.
         let n_stages = ctx.resolved.bounds.n_stages();
         let (anticipated_fishing_row_pos, n_anticipated_fishing_rows) =
-            build_anticipated_fishing_row_pos(state, n_stages, stage_idx);
+            build_anticipated_fishing_row_pos(state_layout, n_stages, stage_idx);
         let row_anticipated_fishing_start = row.alloc(n_anticipated_fishing_rows).start;
 
         // Anticipated-state-out (latch/deposit) definition rows
         // (`build_anticipated_decision_row_pos`).
         let (anticipated_decision_row_pos, n_anticipated_state_out_def_rows) =
             build_anticipated_decision_row_pos(
-                state,
+                state_layout,
                 stage_idx,
                 ctx.study_dims.anticipated_plants.windows(),
                 ctx.time_value.delivery_stage_ids(),
@@ -1335,7 +1362,7 @@ impl<'a> StageLayout<'a> {
         // deliveries only; the commitment maturing this stage is fished by
         // the maturity row above instead.
         let (anticipated_slot_row_pos, n_anticipated_slot_definition_rows) =
-            build_anticipated_slot_row_pos(state, stage_idx);
+            build_anticipated_slot_row_pos(state_layout, stage_idx);
         let row_anticipated_slot_definition_start =
             row.alloc(n_anticipated_slot_definition_rows).start;
 
@@ -1374,7 +1401,7 @@ impl<'a> StageLayout<'a> {
         let num_rows = row.pos();
 
         let anticipated = AnticipatedLayout {
-            col_anticipated_decision_start: thermal_end,
+            col_anticipated_decision_start: anticipated_decision.start,
             row_anticipated_state_out_def_start,
             n_anticipated_state_out_def_rows,
             anticipated_decision_row_pos,
@@ -1435,7 +1462,7 @@ impl<'a> StageLayout<'a> {
         };
 
         Self {
-            state,
+            state: state_layout,
             anticipated,
             equipment,
             slack,

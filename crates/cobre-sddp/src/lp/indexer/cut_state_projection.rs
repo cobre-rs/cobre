@@ -295,7 +295,7 @@ impl CutStateProjection {
 #[cfg(test)]
 mod tests {
     use super::{CutSlot, CutStateProjection, InCol, OutCol, StageStateConfig, StateDim};
-    use crate::indexer::{StateRegion, StateSpace};
+    use crate::indexer::{HydroSys, StateRegion, StateSpace};
     use crate::lead_time::AnticipatedResolution;
     use crate::test_support::constant_lead_resolution;
 
@@ -316,7 +316,7 @@ mod tests {
     fn finalized_with_transit_buckets(
         hydro_count: usize,
         max_par_order: usize,
-        transit_bucket_column_order: Vec<(usize, usize)>,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
         anticipated_lead_stages: &[usize],
     ) -> StateSpace {
         let lag_counts = vec![max_par_order; hydro_count];
@@ -602,7 +602,12 @@ mod tests {
     /// bucket slots between storage and anticipated.
     #[test]
     fn bucket_block_always_included_with_storage_only() {
-        let global = finalized_with_transit_buckets(2, 1, vec![(0, 1), (1, 1)], &[2]);
+        let global = finalized_with_transit_buckets(
+            2,
+            1,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(1), 1)],
+            &[2],
+        );
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 6);
@@ -637,7 +642,12 @@ mod tests {
     /// column.
     #[test]
     fn bucket_render_pairs_sit_between_lag_and_anticipated() {
-        let global = finalized_with_transit_buckets(2, 1, vec![(0, 1), (1, 1)], &[2]);
+        let global = finalized_with_transit_buckets(
+            2,
+            1,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(1), 1)],
+            &[2],
+        );
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.transit_buckets_out, 4..6);
@@ -712,8 +722,17 @@ mod tests {
         // `n_stages − 1 − t` (which reaches 0 at the terminal, keeping only lag 0),
         // so they are frozen `[0, 0]` in the LP today; the state layout retains
         // them (sized from the global max over every anchor).
-        let global =
-            finalized_with_transit_buckets(1, 1, vec![(0, 0), (0, 1), (0, 2), (0, 3)], &[]);
+        let global = finalized_with_transit_buckets(
+            1,
+            1,
+            vec![
+                (HydroSys::new(0), 0),
+                (HydroSys::new(0), 1),
+                (HydroSys::new(0), 2),
+                (HydroSys::new(0), 3),
+            ],
+            &[],
+        );
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert!(
@@ -806,7 +825,7 @@ mod proptests {
     use proptest::test_runner::RngSeed;
 
     use super::{CutSlot, CutStateProjection, OutCol, StageStateConfig, StateDim};
-    use crate::indexer::StateSpace;
+    use crate::indexer::{HydroSys, StateSpace};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
 
     const ALL_ENABLED: StageStateConfig = StageStateConfig {
@@ -877,6 +896,11 @@ mod proptests {
                             post_study_stage_hours: &post_study_stage_hours,
                         },
                     );
+                    let transit_bucket_column_order: Vec<(HydroSys, usize)> =
+                        transit_bucket_column_order
+                            .into_iter()
+                            .map(|(p, lag)| (HydroSys::new(p), lag))
+                            .collect();
                     StateSpace::new(
                         hydro_count,
                         max_par_order,

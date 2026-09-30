@@ -193,7 +193,7 @@ pub fn build_stage_entity_manifest(
             }
             StateRegion::Buckets => {
                 let (plant_idx, lag) = global_layout.transit_bucket_column_order[offset];
-                let hydro = &hydros[plant_idx];
+                let hydro = &hydros[plant_idx.get()];
                 let (interval_start, interval_end) = slot_interval(bucket_arrival_stage(lag));
                 EntitySlot::transit_bucket(
                     hydro.id.0,
@@ -776,7 +776,7 @@ mod tests {
         reserve_boundary_inflow_lag_slots,
     };
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
-    use crate::lp::indexer::{AnticipatedPlants, CutStateProjection, StateSpace};
+    use crate::lp::indexer::{AnticipatedPlants, CutStateProjection, HydroSys, StateSpace};
     use crate::setup::{
         NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         StageIdx, extended_delivery_stages, year_month_day_anchor,
@@ -1029,7 +1029,7 @@ mod tests {
         test_support::state_layout_with_transit_buckets_and_resolution(
             2,
             2,
-            vec![(0, 1), (1, 2)],
+            vec![(HydroSys::new(0), 1), (HydroSys::new(1), 2)],
             vec![2],
             single_plant_lead2_one_stage_resolution(),
         )

@@ -27,7 +27,7 @@ use cobre_io::{
 };
 use cobre_sddp::{
     SimulationWeighting, StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models,
-    lead_time::resolve_spread, setup::prepare_stochastic,
+    indexer::HydroSys, lead_time::resolve_spread, setup::prepare_stochastic,
 };
 use cobre_solver::{ActiveSolver, SolverInterface};
 
@@ -4231,7 +4231,10 @@ fn d47_travel_time_confluence_aggregation() {
         .expect("D47: J (hydro id 2) must exist in the canonical hydro order");
     assert_eq!(
         state.transit_bucket_column_order,
-        vec![(j_canonical_idx, 1), (j_canonical_idx, 2)],
+        vec![
+            (HydroSys::new(j_canonical_idx), 1),
+            (HydroSys::new(j_canonical_idx), 2)
+        ],
         "D47: both bucket slots must belong to J's single block (same plant \
          index, lags 1 and 2), never a separate block per upstream arc"
     );
@@ -4455,7 +4458,10 @@ fn d48_travel_time_ic_seed_windowed_defluence_cost() {
         .expect("D48: J (hydro id 1) must exist in the canonical hydro order");
     assert_eq!(
         state.transit_bucket_column_order,
-        vec![(j_canonical_idx, 1), (j_canonical_idx, 2)],
+        vec![
+            (HydroSys::new(j_canonical_idx), 1),
+            (HydroSys::new(j_canonical_idx), 2)
+        ],
         "D48: both bucket slots must belong to J's single block, lags 1 and 2"
     );
 
@@ -10484,7 +10490,7 @@ mod water_terminal_fcf_valuation {
         let pos = state
             .transit_bucket_column_order
             .iter()
-            .position(|&(p, l)| p == j_idx && l == lag)
+            .position(|&(p, l)| p.get() == j_idx && l == lag)
             .unwrap_or_else(|| panic!("lag {lag} must be a declared bucket slot"));
         state.transit_buckets_out.start + pos
     }

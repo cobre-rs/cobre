@@ -174,6 +174,7 @@ fn fill_commitment_hold_box(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexer::HydroSys;
     use crate::test_support::{
         state_layout_full, state_layout_with_transit_buckets, transit_bucket_only_template,
     };
@@ -236,7 +237,12 @@ mod tests {
     /// `[0, 0]` bounds verbatim, exactly like storage.
     #[test]
     fn state_box_transit_bucket_reachable_is_zero_to_inf_frozen_is_zero_zero() {
-        let layout = state_layout_with_transit_buckets(1, 0, vec![(0, 0), (0, 1)], Vec::new());
+        let layout = state_layout_with_transit_buckets(
+            1,
+            0,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            Vec::new(),
+        );
         let mut template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let reachable_j = layout.transit_buckets_out.start;
         let frozen_j = layout.transit_buckets_out.start + 1;

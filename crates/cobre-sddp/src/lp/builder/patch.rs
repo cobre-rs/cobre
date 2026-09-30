@@ -368,7 +368,7 @@ impl PatchBuffer {
 mod tests {
     use super::{PatchBuffer, StateBox, StateSpace};
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
-    use crate::lp::indexer::{BlockGrid, BlockRowFamily};
+    use crate::lp::indexer::{BlockGrid, BlockRowFamily, HydroSys};
     use crate::test_support::{
         equipment_free_geometry, state_layout, state_layout_full, state_layout_with_transit_buckets,
     };
@@ -384,8 +384,8 @@ mod tests {
     /// Canonical `(plant, lag)` order for a bucket-count-only fixture: content
     /// is irrelevant to capacity, only `.len()` is read as `n_buckets` by
     /// [`crate::lp::indexer::StateSpace::build`].
-    fn bucket_order(n_buckets: usize) -> Vec<(usize, usize)> {
-        (0..n_buckets).map(|d| (0, d)).collect()
+    fn bucket_order(n_buckets: usize) -> Vec<(HydroSys, usize)> {
+        (0..n_buckets).map(|d| (HydroSys::new(0), d)).collect()
     }
 
     // -------------------------------------------------------------------------
@@ -501,7 +501,12 @@ mod tests {
 
         // Travel-time buckets: n_buckets=4 — row capacity unchanged (bucket state is col-only)
         // Col capacity = N*(1+L) + n_buckets + A*K = 3*3 + 4 + 0 = 13
-        let bucket_column_order = vec![(0, 0), (1, 0), (0, 1), (1, 1)];
+        let bucket_column_order = vec![
+            (HydroSys::new(0), 0),
+            (HydroSys::new(1), 0),
+            (HydroSys::new(0), 1),
+            (HydroSys::new(1), 1),
+        ];
         let bucket_state = StateSpace::new(
             3,
             2,
@@ -1038,7 +1043,12 @@ mod tests {
     /// per-opening loop (contrast NCS availability, which patches per opening).
     #[test]
     fn fill_col_state_patches_every_transit_bucket_incoming_column_is_pinned() {
-        let state_layout = state_layout_with_transit_buckets(3, 2, vec![(0, 0), (0, 1)], vec![]);
+        let state_layout = state_layout_with_transit_buckets(
+            3,
+            2,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            vec![],
+        );
         let mut state = vec![0.0_f64; state_layout.n_state];
         state[state_layout.transit_buckets_out.start] = 100.0;
         state[state_layout.transit_buckets_out.start + 1] = 200.0;
@@ -1075,7 +1085,12 @@ mod tests {
         let n = 3;
         let l = 2;
         let n_buckets = 2;
-        let state_layout = state_layout_with_transit_buckets(n, l, vec![(0, 0), (0, 1)], vec![2]);
+        let state_layout = state_layout_with_transit_buckets(
+            n,
+            l,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            vec![2],
+        );
         let unshifted_anticipated_start = n * (1 + l);
         // The state-VECTOR anticipated position is `commit_out`
         // (the `state_to_lp_column` identity domain), shifted by `n_buckets`
@@ -1202,7 +1217,12 @@ mod tests {
     fn fill_col_state_patches_undersized_buffer_panics() {
         let narrow_state = state_layout(3, 2);
         let mut buf = PatchBuffer::new(&narrow_state, &[], &[]);
-        let state_layout = state_layout_with_transit_buckets(3, 2, vec![(0, 0), (0, 1)], vec![]);
+        let state_layout = state_layout_with_transit_buckets(
+            3,
+            2,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            vec![],
+        );
         let state = vec![0.0_f64; state_layout.n_state];
         buf.fill_col_state_patches(
             &state_layout,

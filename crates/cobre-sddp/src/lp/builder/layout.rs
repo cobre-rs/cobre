@@ -496,7 +496,7 @@ struct GenericConstraintLayout {
 /// transition in the scan advances the mask index. Returns the mapping and the
 /// reachable count (`transit_bucket_definition`'s row length).
 fn build_transit_bucket_row_pos(
-    column_order: &[(usize, usize)],
+    column_order: &[(HydroSys, usize)],
     per_stage_mask: &[Vec<usize>],
     stage_idx: usize,
 ) -> (Vec<Option<usize>>, usize) {
@@ -509,7 +509,7 @@ fn build_transit_bucket_row_pos(
     let stage_mask = &per_stage_mask[stage_idx];
     let mut transit_bucket_row_pos = Vec::with_capacity(column_order.len());
     let mut plant_group = 0_usize;
-    let mut prev_plant: Option<usize> = None;
+    let mut prev_plant: Option<HydroSys> = None;
     let mut n_reachable = 0_usize;
     for &(plant_idx, lag) in column_order {
         if prev_plant != Some(plant_idx) {

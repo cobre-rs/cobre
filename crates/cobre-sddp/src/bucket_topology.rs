@@ -34,10 +34,10 @@ pub(crate) struct TransitBucketTopology {
     /// Aggregated depth `L_j` per downstream plant, in [`Self::column_order`]'s
     /// plant order.
     pub(crate) per_plant_depth: Vec<usize>,
-    /// `(plant_canonical_idx, lag)` pairs, `lag = 1..=L_j`, plants sorted by
-    /// canonical `(operational_start_date, id)` index (the position of the
-    /// hydro in [`System::hydros`]).
-    pub(crate) column_order: Vec<(usize, usize)>,
+    /// `(plant, lag)` pairs, `lag = 1..=L_j`, plants sorted by canonical
+    /// `(operational_start_date, id)` index (plant's position in
+    /// [`System::hydros`]).
+    pub(crate) column_order: Vec<(HydroSys, usize)>,
     /// `per_stage_mask[t]` holds the max reachable lag per declared
     /// downstream plant, in the same order as [`Self::per_plant_depth`], at
     /// study stage `t` (`0` when no lag is reachable at that stage).
@@ -216,7 +216,7 @@ pub(crate) fn build_transit_bucket_topology(
 
         per_plant_depth.push(depth);
         for lag in 1..=depth {
-            column_order.push((canonical_idx, lag));
+            column_order.push((downstream, lag));
         }
         for (stage, mask_row) in per_stage_mask.iter_mut().enumerate() {
             // Reachability, not a zero-deposit filter: a transit slot with no
@@ -687,7 +687,13 @@ mod tests {
         assert_eq!(topology.n_buckets(), 5);
         assert_eq!(
             topology.column_order,
-            vec![(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]
+            vec![
+                (HydroSys::new(0), 1),
+                (HydroSys::new(0), 2),
+                (HydroSys::new(0), 3),
+                (HydroSys::new(0), 4),
+                (HydroSys::new(0), 5)
+            ]
         );
     }
 
@@ -783,7 +789,14 @@ mod tests {
             "global depth sizing is unaffected by the per-stage horizon cap"
         );
         assert_eq!(topology.n_buckets(), 3);
-        assert_eq!(topology.column_order, vec![(0, 1), (0, 2), (0, 3)]);
+        assert_eq!(
+            topology.column_order,
+            vec![
+                (HydroSys::new(0), 1),
+                (HydroSys::new(0), 2),
+                (HydroSys::new(0), 3)
+            ]
+        );
 
         assert_eq!(topology.per_stage_mask[0], vec![2], "cap = 3 - 1 - 0 = 2");
         assert_eq!(topology.per_stage_mask[1], vec![1], "cap = 3 - 1 - 1 = 1");

@@ -355,11 +355,12 @@ fn extract_transit_buckets(
     let mut results = Vec::with_capacity(state.n_buckets);
     for (b, &(plant_idx, lag)) in state.transit_bucket_column_order.iter().enumerate() {
         debug_assert!(
-            plant_idx < spec.entity_counts.hydro_ids.len(),
-            "bucket plant index {plant_idx} out of bounds for hydro_ids len {}",
+            plant_idx.get() < spec.entity_counts.hydro_ids.len(),
+            "bucket plant index {} out of bounds for hydro_ids len {}",
+            plant_idx.get(),
             spec.entity_counts.hydro_ids.len(),
         );
-        let hydro_id = spec.entity_counts.hydro_ids[plant_idx];
+        let hydro_id = spec.entity_counts.hydro_ids[plant_idx.get()];
         let in_transit_volume_hm3 = view.primal[state.bucket_outgoing_col(b).get()];
         let delayed_arrival_hm3 = if lag == 1 {
             view.primal[state.bucket_incoming_col(b).get()]

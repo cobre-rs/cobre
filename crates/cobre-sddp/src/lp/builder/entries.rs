@@ -497,10 +497,10 @@ fn fill_arc_release_block_entries(
 /// it declares no incoming arc.
 fn plant_transit_bucket_range(state: &StateSpace, plant_idx: usize) -> Option<Range<usize>> {
     let order = &state.transit_bucket_column_order;
-    let start = order.iter().position(|&(p, _)| p == plant_idx)?;
+    let start = order.iter().position(|&(p, _)| p.get() == plant_idx)?;
     let end = order[start..]
         .iter()
-        .position(|&(p, _)| p != plant_idx)
+        .position(|&(p, _)| p.get() != plant_idx)
         .map_or(order.len(), |offset| start + offset);
     Some(start..end)
 }
@@ -6337,7 +6337,7 @@ mod pumping_water_tests {
 
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_idx, vec![vec![0.5, 0.5]]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_stage_weights = arc_stage_weights;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -6438,7 +6438,7 @@ mod pumping_water_tests {
 
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_idx, vec![vec![0.5, 0.5]]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_stage_weights = arc_stage_weights;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -6512,7 +6512,7 @@ mod pumping_water_tests {
 
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_idx, vec![vec![0.5, 0.5]]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_stage_weights = arc_stage_weights;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -6620,7 +6620,7 @@ mod pumping_water_tests {
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_a_idx, vec![vec![0.5, 0.5]]);
         arc_stage_weights.insert(up_b_idx, vec![vec![0.25, 0.75]]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_stage_weights = arc_stage_weights;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -6697,10 +6697,10 @@ mod pumping_water_tests {
         let down1_idx = fixtures.hydro_pos[&EntityId(h_down1)];
 
         fixtures.base.topology.column_order = vec![
-            (down3_idx, 1),
-            (down3_idx, 2),
-            (down3_idx, 3),
-            (down1_idx, 1),
+            (HydroSys::new(down3_idx), 1),
+            (HydroSys::new(down3_idx), 2),
+            (HydroSys::new(down3_idx), 3),
+            (HydroSys::new(down1_idx), 1),
         ];
         fixtures.base.topology.per_stage_mask = vec![vec![3, 1]];
         let ctx = fixtures.make_ctx();
@@ -6819,7 +6819,7 @@ mod pumping_water_tests {
 
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_idx, vec![vec![0.5, 0.3]]); // sums to 0.8: violates conservation.
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_stage_weights = arc_stage_weights;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -6891,7 +6891,7 @@ mod pumping_water_tests {
 
         let mut arc_spread_chrono = HashMap::new();
         arc_spread_chrono.insert(up_idx, vec![Some(resolution)]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_spread_chrono = arc_spread_chrono;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -7012,7 +7012,7 @@ mod pumping_water_tests {
         let mut par_fixtures = make_fixtures();
         let mut arc_stage_weights = HashMap::new();
         arc_stage_weights.insert(up_idx, vec![stage_weights]);
-        par_fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        par_fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         par_fixtures.base.topology.arc_stage_weights = arc_stage_weights;
         par_fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let par_ctx = par_fixtures.make_ctx();
@@ -7025,7 +7025,7 @@ mod pumping_water_tests {
         let mut chr_fixtures = make_fixtures();
         let mut arc_spread_chrono = HashMap::new();
         arc_spread_chrono.insert(up_idx, vec![Some(resolution)]);
-        chr_fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        chr_fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         chr_fixtures.base.topology.arc_spread_chrono = arc_spread_chrono;
         chr_fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let chr_ctx = chr_fixtures.make_ctx();
@@ -7082,7 +7082,7 @@ mod pumping_water_tests {
         };
         let mut arc_spread_chrono = HashMap::new();
         arc_spread_chrono.insert(up_idx, vec![Some(bad_resolution)]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_spread_chrono = arc_spread_chrono;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -7125,7 +7125,7 @@ mod pumping_water_tests {
         };
         let mut arc_spread_chrono = HashMap::new();
         arc_spread_chrono.insert(up_idx, vec![Some(bad_resolution)]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_spread_chrono = arc_spread_chrono;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -7275,7 +7275,7 @@ mod pumping_water_tests {
         // other than -1.0.
         let mut arc_arrival_density = HashMap::new();
         arc_arrival_density.insert(up_idx, vec![Some(vec![0.9, 0.1])]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_arrival_density = arc_arrival_density;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();
@@ -7319,7 +7319,7 @@ mod pumping_water_tests {
         // Deliberately non-conserving: sums to 0.6, not 1.0.
         let mut arc_arrival_density = HashMap::new();
         arc_arrival_density.insert(up_idx, vec![Some(vec![0.3, 0.3])]);
-        fixtures.base.topology.column_order = vec![(down_idx, 1)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(down_idx), 1)];
         fixtures.base.topology.arc_arrival_density = arc_arrival_density;
         fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let ctx = fixtures.make_ctx();

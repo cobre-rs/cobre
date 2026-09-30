@@ -61,11 +61,9 @@ use crate::lp::builder::{
     FactGroups, PatchBuffer, StageGeometry, StageLayout, StageTemplates, StateBox,
     encode_stage_templates_facts, encode_time_value_facts,
 };
-#[cfg(test)]
-use crate::lp::indexer::HydroSys;
 use crate::lp::indexer::{
     AnticipatedPlants, BlockRowFamily, CutStateProjection, EntityPositions, HydroCellIndex,
-    StateDim, StateSpace, StudyDimensions,
+    HydroSys, StateDim, StateSpace, StudyDimensions,
 };
 use crate::noise::{DownstreamAccumState, LagAccumState};
 use crate::policy::policy_load::{
@@ -1139,7 +1137,7 @@ pub fn state_layout_full(
 pub fn state_layout_with_transit_buckets(
     hydro_count: usize,
     max_par_order: usize,
-    transit_bucket_column_order: Vec<(usize, usize)>,
+    transit_bucket_column_order: Vec<(HydroSys, usize)>,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
     let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
@@ -1160,7 +1158,7 @@ pub fn state_layout_with_transit_buckets(
 pub fn state_layout_with_transit_buckets_and_resolution(
     hydro_count: usize,
     max_par_order: usize,
-    transit_bucket_column_order: Vec<(usize, usize)>,
+    transit_bucket_column_order: Vec<(HydroSys, usize)>,
     anticipated_lead_stages: Vec<usize>,
     anticipated_resolution: AnticipatedResolution,
 ) -> StateSpace {

@@ -2656,7 +2656,7 @@ fn build_initial_transit_bucket_state(
 
     let mut start = 0_usize;
     for &depth in &topology.per_plant_depth {
-        let plant = HydroSys::new(topology.column_order[start].0);
+        let plant = topology.column_order[start].0;
 
         for arc in topology.arcs().iter().filter(|arc| arc.downstream == plant) {
             let upstream = &hydros[arc.upstream.get()];

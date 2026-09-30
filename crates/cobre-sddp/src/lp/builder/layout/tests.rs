@@ -3738,7 +3738,11 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
 /// all three.
 #[test]
 fn build_bucket_row_pos_gates_fewer_rows_as_horizon_cap_shrinks() {
-    let column_order = vec![(0_usize, 1_usize), (0, 2), (0, 3)];
+    let column_order = vec![
+        (HydroSys::new(0), 1_usize),
+        (HydroSys::new(0), 2),
+        (HydroSys::new(0), 3),
+    ];
     let per_stage_mask = vec![vec![2], vec![1], vec![0]];
 
     let (pos_stage0, n_stage0) = build_transit_bucket_row_pos(&column_order, &per_stage_mask, 0);
@@ -4260,7 +4264,11 @@ fn transit_bucket_ring_addressing_matches_state_space_bucket_accessors() {
     let state = StateSpace::new(
         0,
         0,
-        vec![(0, 0), (0, 1), (1, 0)],
+        vec![
+            (HydroSys::new(0), 0),
+            (HydroSys::new(0), 1),
+            (HydroSys::new(1), 0),
+        ],
         vec![],
         AnticipatedResolution::default(),
         &[],
@@ -4539,7 +4547,8 @@ fn row_address_pins_cover_every_family() {
     let mut transit_fixtures = ZeroEntityFixtures::new();
     transit_fixtures.base.topology.per_stage_mask = vec![vec![1]];
     let transit_ctx = transit_fixtures.make_ctx(vec![], &[]);
-    let transit_state = state_layout_with_transit_buckets(0, 0, vec![(0, 1)], vec![]);
+    let transit_state =
+        state_layout_with_transit_buckets(0, 0, vec![(HydroSys::new(0), 1)], vec![]);
     let transit_stage = minimal_stage();
     let transit_layout = StageLayout::new(&transit_ctx, &transit_state, &transit_stage, 0);
     let transit_counts = assert_row_addresses(&transit_layout, BlockMode::Parallel);

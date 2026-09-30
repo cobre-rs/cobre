@@ -51,7 +51,7 @@ use crate::{
     horizon_mode::HorizonMode,
     inflow_method::InflowNonNegativityMethod,
     lp::builder::PatchBuffer,
-    lp::indexer::{CutStateProjection, StateDim},
+    lp::indexer::{CutStateProjection, HydroSys, StateDim},
     risk_measure::{BackwardOutcome, RiskMeasure},
     setup::NodeId,
     setup::node_graph::{NodePos, StageIdx, Traversal},
@@ -601,7 +601,7 @@ fn transit_bucket_only_workspace(
             &test_support::state_layout_with_transit_buckets(
                 0,
                 0,
-                (0..n_buckets).map(|d| (0, d)).collect(),
+                (0..n_buckets).map(|d| (HydroSys::new(0), d)).collect(),
                 vec![],
             ),
             &[],
@@ -4181,7 +4181,12 @@ fn run_one_trial_state_with_stores(
 /// availability, which genuinely varies per opening).
 #[test]
 fn patch_opening_bounds_pins_transit_bucket_incoming_columns_per_stage_visit() {
-    let state = test_support::state_layout_with_transit_buckets(0, 0, vec![(0, 0), (0, 1)], vec![]);
+    let state = test_support::state_layout_with_transit_buckets(
+        0,
+        0,
+        vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+        vec![],
+    );
     assert_eq!(state.n_state, 2);
 
     let stochastic = test_support::hydro_free_stochastic_context(1, 1);

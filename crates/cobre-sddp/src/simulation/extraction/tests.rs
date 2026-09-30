@@ -6173,7 +6173,12 @@ fn make_transit_bucket_primal(transit_buckets_out: &[f64], transit_buckets_in: &
 #[test]
 fn extract_transit_buckets_shape_canonical_order_and_delayed_arrival() {
     let study_dims = test_support::study_dims();
-    let state = test_support::state_layout_with_transit_buckets(2, 1, vec![(0, 1), (0, 2)], vec![]);
+    let state = test_support::state_layout_with_transit_buckets(
+        2,
+        1,
+        vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+        vec![],
+    );
     let ws_start = state.control_region_start();
     let geometry = StageGeometry {
         withdrawal_slack_neg: ws_start..ws_start + 2,
@@ -6308,8 +6313,16 @@ fn extract_transit_buckets_absent_when_n_buckets_zero() {
 fn extract_transit_buckets_rows_follow_canonical_column_order() {
     let study_dims = test_support::study_dims();
     // Plant 0 (hydro_id 10) depth 2, plant 1 (hydro_id 20) depth 1.
-    let state =
-        test_support::state_layout_with_transit_buckets(2, 1, vec![(0, 1), (0, 2), (1, 1)], vec![]);
+    let state = test_support::state_layout_with_transit_buckets(
+        2,
+        1,
+        vec![
+            (HydroSys::new(0), 1),
+            (HydroSys::new(0), 2),
+            (HydroSys::new(1), 1),
+        ],
+        vec![],
+    );
     let ws_start = state.control_region_start();
     let geometry = StageGeometry {
         withdrawal_slack_neg: ws_start..ws_start + 2,

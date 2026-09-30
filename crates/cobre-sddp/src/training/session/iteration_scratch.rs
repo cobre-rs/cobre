@@ -168,6 +168,7 @@ mod tests {
 
     use super::IterationScratch;
     use crate::lp::builder::StageGeometry;
+    use crate::lp::indexer::HydroSys;
     use crate::setup::node_graph::StageIdx;
     use crate::test_support::{
         StageContextFixture, TrainingContextFixture, equipment_free_geometry, state_layout,
@@ -407,7 +408,7 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let bucket_order = (0..n_buckets).map(|d| (0, d)).collect();
+        let bucket_order = (0..n_buckets).map(|d| (HydroSys::new(0), d)).collect();
         let state =
             state_layout_with_transit_buckets(hydro_count, max_par_order, bucket_order, vec![]);
         let training_fixture = TrainingContextFixture::new(state).num_stages(num_stages);

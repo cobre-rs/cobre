@@ -5,8 +5,8 @@ use crate::indexer::{
     BlockIdx, BusSys, EvapLocal, FillingTargetLocal, FloorLocal, HydroCell, HydroSys,
 };
 
-use super::columns::{GroupBoundLookup, cell_min_generation, cell_min_turbined};
 use super::fpha_cursor::for_each_fpha_plane;
+use super::hydro_state::{GroupBoundLookup, cell_min_generation, cell_min_turbined};
 use super::layout::{StageLayout, TemplateBuildCtx, position_table_row};
 
 /// Fill row lower/upper bounds for one stage.

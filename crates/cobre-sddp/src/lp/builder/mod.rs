@@ -44,6 +44,7 @@ mod columns;
 pub(crate) mod delivery_ring;
 mod entries;
 mod fpha_cursor;
+mod hydro_state;
 mod layout;
 mod patch;
 mod rows;

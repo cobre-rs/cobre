@@ -185,7 +185,7 @@ before summing them, exactly as this sub-contract requires — each group's
 supplies one, the declaration otherwise, via `GroupBoundLookup`), never the
 bare declared value.
 
-Read: `crates/cobre-sddp/src/lp/builder/columns.rs` (`cell_max_turbined`).
+Read: `crates/cobre-sddp/src/lp/builder/hydro_state.rs` (`cell_max_turbined`).
 Pinned by `test_same_bus_groups_sum_into_one_cell_box`, mutation-verified
 against sum-then-fold on a two-group fixture whose groups bind on opposite
 sides.
@@ -242,7 +242,7 @@ sit up to that tolerance above declared — the plant term could tighten by
 that same margin. No shipped fixture exercises this; do not round it up to
 "provably inert."
 
-Read: `crates/cobre-sddp/src/lp/builder/columns.rs` (`cell_max_turbined`,
+Read: `crates/cobre-sddp/src/lp/builder/hydro_state.rs` (`cell_max_turbined`,
 `cell_max_generation`), `crates/cobre-io/src/validation/semantic/block_bounds.rs`
 (`check_bound_raises_declared_capacity`, the no-raising rule),
 `crates/cobre-io/src/validation/semantic/hydro.rs` (rule 41). Pinned by
@@ -324,8 +324,9 @@ basis to split by), while a per-cell floor VIOLATION is DETERMINED — each
 cell owns its own row and its own slack column, so there is exactly one
 correct per-cell slack value to sum, never a manufactured one.
 
-Read: `crates/cobre-sddp/src/lp/builder/columns.rs` (`cell_min_turbined`,
-`cell_min_generation`, `fill_cell_block_family`), `crates/cobre-sddp/src/lp/builder/rows.rs`
+Read: `crates/cobre-sddp/src/lp/builder/hydro_state.rs` (`cell_min_turbined`,
+`cell_min_generation`), `crates/cobre-sddp/src/lp/builder/columns.rs`
+(`fill_cell_block_family`), `crates/cobre-sddp/src/lp/builder/rows.rs`
 (`fill_operational_violation_rows`), `crates/cobre-sddp/src/lp/builder/entries.rs`
 (`fill_operational_violation_entries`), `crates/cobre-sddp/src/lp/builder/layout.rs`
 (`OperViolationRanges`), `crates/cobre-sddp/src/simulation/extraction.rs`

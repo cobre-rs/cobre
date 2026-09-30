@@ -277,7 +277,6 @@ impl StateSpace {
 
         let n_anticipated = anticipated_lead_stages.len();
         let k_max = anticipated_resolution.ring_size(&anticipated_lead_stages);
-        #[cfg(debug_assertions)]
         let n_delivery = anticipated_resolution
             .per_plant
             .first()

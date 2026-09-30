@@ -211,6 +211,15 @@ fn put_gc_entry(buf: &mut Vec<u8>, entry: &GenericConstraintRowEntry) {
     put_option_usize(buf, *slack_minus_col);
 }
 
+fn entities_per_block(
+    geometry_per_stage: &[StageGeometry],
+    family: fn(&StageGeometry) -> &Range<usize>,
+) -> usize {
+    geometry_per_stage
+        .first()
+        .map_or(0, |g| family(g).len() / g.n_blks)
+}
+
 fn put_geometry(buf: &mut Vec<u8>, geometry: &StageGeometry, state: &StateSpace) {
     let StageGeometry {
         turbine,
@@ -322,8 +331,6 @@ pub(crate) fn encode_stage_templates_facts(
         cost_scale_factor,
         load_bus_indices,
         generic_constraint_row_entries,
-        n_ncs,
-        n_pumping,
         geometry_per_stage,
         diversion_upstream,
         hydro_productivities_per_stage,
@@ -344,14 +351,20 @@ pub(crate) fn encode_stage_templates_facts(
     for g in geometry_per_stage {
         put_usize(buf, g.ncs_generation.start);
     }
-    put_usize(buf, *n_ncs);
+    put_usize(
+        buf,
+        entities_per_block(geometry_per_stage, |g| &g.ncs_generation),
+    );
 
     let buf = group(groups, "layout.pumping_cols");
     put_u64(buf, geometry_per_stage.len() as u64);
     for g in geometry_per_stage {
         put_usize(buf, g.pumping_flow.start);
     }
-    put_usize(buf, *n_pumping);
+    put_usize(
+        buf,
+        entities_per_block(geometry_per_stage, |g| &g.pumping_flow),
+    );
 
     let geometry_buf = group(groups, "layout.geometry");
     for (stage, geometry) in geometry_per_stage.iter().enumerate() {

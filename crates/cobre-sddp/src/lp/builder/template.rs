@@ -47,15 +47,6 @@ pub struct StageTemplates {
     /// [`GenericConstraintRowEntry`] per active `(constraint, block)` pair at
     /// stage `s`. Empty for stages with no active generic constraints.
     pub generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
-    /// NCS column count — the full system NCS count, identical at every stage.
-    ///
-    /// Under the dense layout every NCS keeps a column at every stage, so the count
-    /// is a single scalar, not a per-stage Vec; a commissioning-dormant NCS keeps
-    /// its column (pinned to `[0, 0]`).
-    pub n_ncs: usize,
-    /// Pumping-station column count — the full system station count, identical at
-    /// every stage (dense). A commissioning-dormant station keeps its column.
-    pub n_pumping: usize,
     /// Per-stage equipment geometry for simulation extraction.
     ///
     /// `geometry_per_stage[stage_idx]` holds the stage-correct column and row
@@ -91,8 +82,6 @@ impl StageTemplates {
             cost_scale_factor,
             load_bus_indices: Vec::new(),
             generic_constraint_row_entries: Vec::new(),
-            n_ncs: 0,
-            n_pumping: 0,
             geometry_per_stage: Vec::new(),
             diversion_upstream: HashMap::new(),
             hydro_productivities_per_stage: Vec::new(),
@@ -486,12 +475,6 @@ pub(super) struct StageBuildOutput {
     pub template: StageTemplate,
     /// Active generic-constraint row metadata for the stage.
     pub gc_entries: Vec<GenericConstraintRowEntry>,
-    /// Number of NCS entities at the stage — the full system count (dense).
-    pub ncs_count: usize,
-    /// Number of pumping stations ACTIVE (contributing columns) at the stage
-    /// (the commissioning-gated count, sourced from
-    /// [`super::layout::EquipmentColumns::n_pumping`]).
-    pub n_pumping: usize,
     /// Stage-correct equipment column ranges for simulation extraction, computed
     /// from this stage's [`StageLayout`].
     pub equipment_geometry: StageGeometry,
@@ -572,8 +555,6 @@ pub(super) fn build_single_stage_template(
     StageBuildOutput {
         template,
         gc_entries: layout.generic_constraint_rows,
-        ncs_count: layout.equipment.n_ncs,
-        n_pumping: layout.equipment.n_pumping,
         equipment_geometry,
     }
 }
@@ -817,36 +798,9 @@ fn assemble_stage_templates_output(
     let mut templates = Vec::with_capacity(n_study);
     let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
     let mut geometry_per_stage = Vec::with_capacity(n_study);
-    // The dense NCS/pumping counts are constant across stages, so they collapse to
-    // scalars: the first output seeds the scalars, later outputs must agree.
-    let mut n_ncs: usize = 0;
-    let mut n_pumping: usize = 0;
-    for (s, out) in stage_outputs.into_iter().enumerate() {
+    for out in stage_outputs {
         templates.push(out.template);
         generic_constraint_row_entries.push(out.gc_entries);
-        if s == 0 {
-            n_ncs = out.ncs_count;
-            n_pumping = out.n_pumping;
-        } else {
-            debug_assert_eq!(
-                out.ncs_count, n_ncs,
-                "dense NCS count must be constant across stages",
-            );
-            debug_assert_eq!(
-                out.n_pumping, n_pumping,
-                "dense pumping count must be constant across stages",
-            );
-        }
-        debug_assert_eq!(
-            out.equipment_geometry.ncs_generation.len(),
-            out.ncs_count * out.equipment_geometry.n_blks,
-            "geometry.ncs_generation must span ncs_count * n_blks columns",
-        );
-        debug_assert_eq!(
-            out.equipment_geometry.pumping_flow.len(),
-            out.n_pumping * out.equipment_geometry.n_blks,
-            "geometry.pumping_flow must span n_pumping * n_blks columns",
-        );
         geometry_per_stage.push(out.equipment_geometry);
     }
 
@@ -859,8 +813,6 @@ fn assemble_stage_templates_output(
         cost_scale_factor,
         load_bus_indices,
         generic_constraint_row_entries,
-        n_ncs,
-        n_pumping,
         geometry_per_stage,
         diversion_upstream,
         hydro_productivities_per_stage,

@@ -3834,10 +3834,9 @@ fn chronological_k1_byte_identical_to_parallel() {
 fn theta_and_n_state_invariant_to_block_mode() {
     let hydro_count = 1_usize;
     let max_par_order = 0_usize;
-    let n_anticipated = 0_usize;
     let n_blks = 3_usize;
 
-    let state = state_layout_full(hydro_count, max_par_order, n_anticipated, vec![]);
+    let state = state_layout_full(hydro_count, max_par_order, vec![]);
     let parallel_theta = state.theta;
     let parallel_n_state = state.n_state;
 

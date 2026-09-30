@@ -2425,7 +2425,6 @@ mod anticipated_ring_matches_forward_propagation {
         let state = test_support::state_layout_with_transit_buckets_and_resolution(
             0,
             0,
-            0,
             Vec::new(),
             vec![2],
             resolution,

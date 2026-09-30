@@ -185,7 +185,7 @@ mod tests {
             .geometry_per_stage
             .extend(equipment_free_geometry(&[0]));
 
-        let state_layout: StateSpace = state_layout_full(1, 0, 0, Vec::new());
+        let state_layout: StateSpace = state_layout_full(1, 0, Vec::new());
         let system = SystemBuilder::new()
             .stages(vec![one_year_stage(0)])
             .bounds(ResolvedBounds::empty())
@@ -231,14 +231,8 @@ mod tests {
         // Matches this fixture's own 2-stage system, not state_layout_full's
         // own wider internal margin.
         let resolution = constant_lead_resolution(&[1], 2);
-        let state_layout: StateSpace = state_layout_with_transit_buckets_and_resolution(
-            0,
-            0,
-            0,
-            Vec::new(),
-            vec![1],
-            resolution,
-        );
+        let state_layout: StateSpace =
+            state_layout_with_transit_buckets_and_resolution(0, 0, Vec::new(), vec![1], resolution);
         assert_eq!(
             state_layout.theta, 2,
             "fixture sanity: theta must sit past commit_out/commit_in"

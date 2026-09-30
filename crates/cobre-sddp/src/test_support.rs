@@ -734,7 +734,6 @@ pub fn geometry(
     let state = state_layout_full(
         dims.hydro_count,
         dims.max_par_order,
-        dims.n_anticipated,
         anticipated_lead_stages,
     );
     let stage = geometry_stage(dims.n_blks);
@@ -1102,7 +1101,7 @@ impl TrainingContextFixture {
 /// `crate::setup::resolve_state_layout` finalizes with no per-hydro AR truncation.
 #[must_use]
 pub fn state_layout(hydro_count: usize, max_par_order: usize) -> StateSpace {
-    state_layout_full(hydro_count, max_par_order, 0, Vec::new())
+    state_layout_full(hydro_count, max_par_order, Vec::new())
 }
 
 /// Build a finalized [`StateSpace`] from explicit state-vector dimensions,
@@ -1111,15 +1110,12 @@ pub fn state_layout(hydro_count: usize, max_par_order: usize) -> StateSpace {
 pub fn state_layout_full(
     hydro_count: usize,
     max_par_order: usize,
-    n_anticipated: usize,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
     state_layout_with_transit_buckets(
         hydro_count,
         max_par_order,
-        0,
         Vec::new(),
-        n_anticipated,
         anticipated_lead_stages,
     )
 }
@@ -1135,22 +1131,14 @@ pub fn state_layout_full(
 pub fn state_layout_with_transit_buckets(
     hydro_count: usize,
     max_par_order: usize,
-    n_buckets: usize,
     transit_bucket_column_order: Vec<(usize, usize)>,
-    n_anticipated: usize,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
-    debug_assert_eq!(
-        n_anticipated,
-        anticipated_lead_stages.len(),
-        "n_anticipated must equal anticipated_lead_stages.len()"
-    );
     let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
     let resolution = constant_lead_resolution(&anticipated_lead_stages, n_stages);
     state_layout_with_transit_buckets_and_resolution(
         hydro_count,
         max_par_order,
-        n_buckets,
         transit_bucket_column_order,
         anticipated_lead_stages,
         resolution,
@@ -1164,16 +1152,10 @@ pub fn state_layout_with_transit_buckets(
 pub fn state_layout_with_transit_buckets_and_resolution(
     hydro_count: usize,
     max_par_order: usize,
-    n_buckets: usize,
     transit_bucket_column_order: Vec<(usize, usize)>,
     anticipated_lead_stages: Vec<usize>,
     anticipated_resolution: AnticipatedResolution,
 ) -> StateSpace {
-    debug_assert_eq!(
-        transit_bucket_column_order.len(),
-        n_buckets,
-        "transit_bucket_column_order must have exactly n_buckets entries"
-    );
     let effective_lag_count = vec![max_par_order; hydro_count];
     StateSpace::new(
         hydro_count,

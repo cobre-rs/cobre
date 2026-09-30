@@ -601,9 +601,7 @@ fn transit_bucket_only_workspace(
             &test_support::state_layout_with_transit_buckets(
                 0,
                 0,
-                n_buckets,
                 (0..n_buckets).map(|d| (0, d)).collect(),
-                0,
                 vec![],
             ),
             &[],
@@ -4183,8 +4181,7 @@ fn run_one_trial_state_with_stores(
 /// availability, which genuinely varies per opening).
 #[test]
 fn patch_opening_bounds_pins_transit_bucket_incoming_columns_per_stage_visit() {
-    let state =
-        test_support::state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, vec![]);
+    let state = test_support::state_layout_with_transit_buckets(0, 0, vec![(0, 0), (0, 1)], vec![]);
     assert_eq!(state.n_state, 2);
 
     let stochastic = test_support::hydro_free_stochastic_context(1, 1);
@@ -4847,7 +4844,7 @@ fn handshake_rejects_nonuniform_workers() {
 /// owner of the resolver).
 #[test]
 fn cut_coefficient_sign_convention_slot_zero_k2() {
-    let state = test_support::state_layout_full(0, 0, 1, vec![2]);
+    let state = test_support::state_layout_full(0, 0, vec![2]);
     assert_eq!(state.commit_out.start, 0);
     assert_eq!(state.n_state, 2);
 

@@ -411,14 +411,8 @@ mod tests {
         ];
 
         for (n, l, n_buckets, a, k, expected_row_cap, expected_col_cap) in cases {
-            let state = state_layout_with_transit_buckets(
-                n,
-                l,
-                n_buckets,
-                bucket_order(n_buckets),
-                a,
-                vec![k; a],
-            );
+            let state =
+                state_layout_with_transit_buckets(n, l, bucket_order(n_buckets), vec![k; a]);
             let buf = PatchBuffer::new(&state, &[], &[]);
 
             for (label, len) in [
@@ -525,7 +519,7 @@ mod tests {
     /// `state_col_patch_count` returns N*(1+L) + n_buckets + A*K.
     #[test]
     fn state_col_patch_count_returns_n_times_one_plus_l() {
-        let buf = PatchBuffer::new(&state_layout_full(3, 2, 1, vec![2]), &[], &[]);
+        let buf = PatchBuffer::new(&state_layout_full(3, 2, vec![2]), &[], &[]);
         // N*(1+L) + n_buckets + A*K = 3*3 + 0 + 1*2 = 11
         assert_eq!(buf.state_col_patch_count(), 11);
     }
@@ -533,7 +527,7 @@ mod tests {
     /// `state_col_patch_count` includes `n_buckets` alongside storage/lag/anticipated.
     #[test]
     fn state_col_patch_count_includes_transit_bucket_count() {
-        let state = state_layout_with_transit_buckets(3, 2, 4, bucket_order(4), 1, vec![2]);
+        let state = state_layout_with_transit_buckets(3, 2, bucket_order(4), vec![2]);
         let buf = PatchBuffer::new(&state, &[], &[]);
         // N*(1+L) + n_buckets + A*K = 3*3 + 4 + 1*2 = 15
         assert_eq!(buf.state_col_patch_count(), 15);
@@ -543,7 +537,7 @@ mod tests {
     /// fixture whose anticipated ring is nonzero.
     #[test]
     fn state_col_patch_count_matches_hydro_lag_bucket_anticipated_formula() {
-        let state = state_layout_with_transit_buckets(3, 2, 4, bucket_order(4), 2, vec![3, 3]);
+        let state = state_layout_with_transit_buckets(3, 2, bucket_order(4), vec![3, 3]);
         let buf = PatchBuffer::new(&state, &[], &[]);
         // N*(1+L) + n_buckets + A*K = 3*3 + 4 + 2*3 = 19
         assert_eq!(buf.state_col_patch_count(), 19);
@@ -868,7 +862,7 @@ mod tests {
     #[test]
     fn fill_col_state_patches_anticipated_state() {
         // N=0, A=1, K=2 anticipated-only state layout.
-        let state_layout = state_layout_full(0, 0, 1, vec![2]);
+        let state_layout = state_layout_full(0, 0, vec![2]);
 
         // n_state = 0 + 1*2 = 2; the state-VECTOR anticipated block is
         // `commit_out` (== 0 here), NOT the relocated incoming
@@ -902,7 +896,7 @@ mod tests {
     /// guaranteed bit-exact.
     #[test]
     fn fill_col_state_patches_anticipated_state_unscaled_is_exact() {
-        let state_layout = state_layout_full(0, 0, 1, vec![2]);
+        let state_layout = state_layout_full(0, 0, vec![2]);
         let ant_state_vec_start = state_layout.commit_out.start;
         let ant_incoming_col_start = state_layout.commit_in.start;
         let mut state = vec![0.0_f64; state_layout.n_state];
@@ -1045,9 +1039,7 @@ mod tests {
     /// per-opening loop (contrast NCS availability, which patches per opening).
     #[test]
     fn fill_col_state_patches_every_transit_bucket_incoming_column_is_pinned() {
-        let n_buckets = 2;
-        let state_layout =
-            state_layout_with_transit_buckets(3, 2, n_buckets, vec![(0, 0), (0, 1)], 0, vec![]);
+        let state_layout = state_layout_with_transit_buckets(3, 2, vec![(0, 0), (0, 1)], vec![]);
         let mut state = vec![0.0_f64; state_layout.n_state];
         state[state_layout.transit_buckets_out.start] = 100.0;
         state[state_layout.transit_buckets_out.start + 1] = 200.0;
@@ -1084,8 +1076,7 @@ mod tests {
         let n = 3;
         let l = 2;
         let n_buckets = 2;
-        let state_layout =
-            state_layout_with_transit_buckets(n, l, n_buckets, vec![(0, 0), (0, 1)], 1, vec![2]);
+        let state_layout = state_layout_with_transit_buckets(n, l, vec![(0, 0), (0, 1)], vec![2]);
         let unshifted_anticipated_start = n * (1 + l);
         // The state-VECTOR anticipated position is `commit_out`
         // (the `state_to_lp_column` identity domain), shifted by `n_buckets`
@@ -1141,7 +1132,7 @@ mod tests {
         let l = 2;
         let a = 2;
         let k = 3;
-        let state_layout = state_layout_full(n, l, a, vec![k; a]);
+        let state_layout = state_layout_full(n, l, vec![k; a]);
         assert_eq!(state_layout.n_buckets, 0);
 
         let state: Vec<f64> = (0..state_layout.n_state)
@@ -1212,8 +1203,7 @@ mod tests {
     fn fill_col_state_patches_undersized_buffer_panics() {
         let narrow_state = state_layout(3, 2);
         let mut buf = PatchBuffer::new(&narrow_state, &[], &[]);
-        let state_layout =
-            state_layout_with_transit_buckets(3, 2, 2, vec![(0, 0), (0, 1)], 0, vec![]);
+        let state_layout = state_layout_with_transit_buckets(3, 2, vec![(0, 0), (0, 1)], vec![]);
         let state = vec![0.0_f64; state_layout.n_state];
         buf.fill_col_state_patches(
             &state_layout,

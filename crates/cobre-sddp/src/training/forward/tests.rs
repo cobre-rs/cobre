@@ -3680,8 +3680,7 @@ mod transit_bucket_copy_gap {
             max_local_fwd: 1,
             noise: NoisePreallocation::StochasticDim,
         };
-        let state =
-            test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
+        let state = test_support::state_layout_with_transit_buckets(1, 1, vec![(0, 0)], vec![1]);
         let stochastic = super::make_stochastic_context_1_hydro(1, false);
         let node_graph = crate::test_support::chain_node_graph(&stochastic);
         let study_dims = test_support::study_dims();
@@ -3723,8 +3722,7 @@ mod transit_bucket_copy_gap {
     /// Run one forward stage over the bucket-aware layout, returning the
     /// captured advanced state (`records[0].state`).
     fn run_transit_bucket_forward_stage() -> Vec<f64> {
-        let state =
-            test_support::state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, vec![1]);
+        let state = test_support::state_layout_with_transit_buckets(1, 1, vec![(0, 0)], vec![1]);
         let template = transit_bucket_template();
         let templates = vec![template.clone()];
         let stochastic = super::make_stochastic_context_1_hydro(1, false);

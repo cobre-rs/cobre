@@ -306,12 +306,7 @@ mod tests {
         let geometry = equipment_free_geometry(&vec![0; num_stages]);
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
-        let state = state_layout_full(
-            hydro_count,
-            max_par_order,
-            n_anticipated,
-            vec![k_max; n_anticipated],
-        );
+        let state = state_layout_full(hydro_count, max_par_order, vec![k_max; n_anticipated]);
         assert_eq!(
             state.k_max, k_max,
             "ring_size must resolve to k_max for uniform leads"
@@ -413,14 +408,8 @@ mod tests {
         let fixture = make_stage_ctx(&templates, &geometry);
         let stage_ctx = fixture.ctx();
         let bucket_order = (0..n_buckets).map(|d| (0, d)).collect();
-        let state = state_layout_with_transit_buckets(
-            hydro_count,
-            max_par_order,
-            n_buckets,
-            bucket_order,
-            0,
-            vec![],
-        );
+        let state =
+            state_layout_with_transit_buckets(hydro_count, max_par_order, bucket_order, vec![]);
         let training_fixture = TrainingContextFixture::new(state).num_stages(num_stages);
         let training_ctx = training_fixture.training_ctx();
 

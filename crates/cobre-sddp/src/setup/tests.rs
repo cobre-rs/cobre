@@ -2261,10 +2261,10 @@ fn layout_for_lag_test(hydro_count: usize, max_par_order: usize) -> StateSpace {
     test_support::state_layout(hydro_count, max_par_order)
 }
 
-/// Must match [`counts_with_anticipated`]: 1 hydro, 0 lags, `n_anticipated`
-/// plants with the given per-plant K.
-fn layout_with_anticipated(n_anticipated: usize, k_values: &[usize]) -> StateSpace {
-    test_support::state_layout_full(1, 0, n_anticipated, k_values.to_vec())
+/// Must match [`counts_with_anticipated`]'s `n_anticipated` (`k_values.len()`):
+/// 1 hydro, 0 lags, one plant per `k_values` entry.
+fn layout_with_anticipated(k_values: &[usize]) -> StateSpace {
+    test_support::state_layout_full(1, 0, k_values.to_vec())
 }
 
 /// 2-hydro PAR(2) system with `inflow_lags`, `season_map`, and
@@ -4224,7 +4224,7 @@ fn build_initial_state_anticipated_seed_correct_under_staggered_commissioning_da
 
     // Canonical (global) order is [id=11 (K=3), id=10 (K=2)]: k_values and
     // thermal_indices follow that order, not declaration order.
-    let layout = layout_with_anticipated(2, &[3, 2]);
+    let layout = layout_with_anticipated(&[3, 2]);
 
     let state = build_initial_state(
         &system,
@@ -4329,7 +4329,7 @@ fn build_initial_state_single_anticipated_thermal_k2() {
     ];
     let system = system_with_anticipated_thermals(&[2], past_commits);
 
-    let layout = layout_with_anticipated(1, &[2]);
+    let layout = layout_with_anticipated(&[2]);
 
     let state = build_initial_state(
         &system,
@@ -4407,7 +4407,7 @@ fn build_initial_state_two_anticipated_thermals_mixed_k() {
     ];
     let system = system_with_anticipated_thermals(&[2, 3], past_commits);
 
-    let layout = layout_with_anticipated(2, &[2, 3]);
+    let layout = layout_with_anticipated(&[2, 3]);
 
     let state = build_initial_state(
         &system,
@@ -4462,7 +4462,7 @@ fn build_initial_state_empty_past_commitments_leaves_zeros() {
 
     let system = system_with_anticipated_thermals(&[2], vec![]);
 
-    let layout = layout_with_anticipated(1, &[2]);
+    let layout = layout_with_anticipated(&[2]);
 
     let state = build_initial_state(
         &system,
@@ -4497,7 +4497,7 @@ fn build_initial_state_unknown_thermal_id_silently_skipped() {
     }];
     let system = system_with_anticipated_thermals(&[2], past_commits);
 
-    let layout = layout_with_anticipated(1, &[2]);
+    let layout = layout_with_anticipated(&[2]);
 
     let state = build_initial_state(
         &system,
@@ -4563,7 +4563,7 @@ fn build_initial_state_anticipated_seed_padding_slot_stays_zero() {
         },
     ];
     let system = system_with_anticipated_thermals(&[1, 2], past_commits);
-    let layout = layout_with_anticipated(2, &[1, 2]);
+    let layout = layout_with_anticipated(&[1, 2]);
 
     let state = build_initial_state(
         &system,
@@ -4674,7 +4674,7 @@ fn initial_state_seeds_every_leading_commitment_under_the_widened_ring_depth() {
     use super::build_initial_state;
 
     let system = bug_doc_reproduction_system();
-    let layout = layout_with_anticipated(1, &[4]);
+    let layout = layout_with_anticipated(&[4]);
 
     let state = build_initial_state(
         &system,
@@ -4736,7 +4736,7 @@ fn initial_state_leaves_padding_slots_zero() {
         },
     ];
     let system = system_with_anticipated_thermals(&[3, 1], past_commits);
-    let layout = layout_with_anticipated(2, &[3, 1]);
+    let layout = layout_with_anticipated(&[3, 1]);
     let k_i_short = layout.anticipated_lead_stages[1];
     assert!(
         k_i_short < layout.k_max,
@@ -4803,7 +4803,7 @@ fn initial_state_rejects_a_covered_stage_beyond_the_plants_own_lead() {
     let system = system_with_anticipated_thermals(&[2], past_commits);
     // Deliberately narrower than a resolved K_i would ever be for this
     // fully-covered history: simulates the desync the cross-check guards.
-    let layout = layout_with_anticipated(1, &[1]);
+    let layout = layout_with_anticipated(&[1]);
 
     let _ = build_initial_state(
         &system,

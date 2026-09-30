@@ -2685,14 +2685,8 @@ fn mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches() {
             n_delivery: 4,
         },
     );
-    let state = state_layout_with_transit_buckets_and_resolution(
-        1,
-        1,
-        0,
-        Vec::new(),
-        vec![1, 3],
-        resolution,
-    );
+    let state =
+        state_layout_with_transit_buckets_and_resolution(1, 1, Vec::new(), vec![1, 3], resolution);
 
     let expected_by_stage: [&[usize]; 4] = [&[2, 3, 5, 1], &[4, 5, 1], &[0, 1], &[]];
 
@@ -4432,7 +4426,7 @@ fn row_address_pins_cover_every_family() {
     let mut transit_fixtures = ZeroEntityFixtures::new();
     transit_fixtures.base.topology.per_stage_mask = vec![vec![1]];
     let transit_ctx = transit_fixtures.make_ctx(vec![], &[]);
-    let transit_state = state_layout_with_transit_buckets(0, 0, 1, vec![(0, 1)], 0, vec![]);
+    let transit_state = state_layout_with_transit_buckets(0, 0, vec![(0, 1)], vec![]);
     let transit_stage = minimal_stage();
     let transit_layout = StageLayout::new(&transit_ctx, &transit_state, &transit_stage, 0);
     let transit_counts = assert_row_addresses(&transit_layout, BlockMode::Parallel);

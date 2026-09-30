@@ -2757,14 +2757,8 @@ mod tests {
     /// pinning contract.
     #[test]
     fn evaluate_lower_bound_pins_transit_bucket_incoming_columns() {
-        let state = test_support::state_layout_with_transit_buckets(
-            0,
-            0,
-            2,
-            vec![(0, 0), (0, 1)],
-            0,
-            vec![],
-        );
+        let state =
+            test_support::state_layout_with_transit_buckets(0, 0, vec![(0, 0), (0, 1)], vec![]);
         assert_eq!(state.n_state, 2);
 
         let template = test_support::transit_bucket_only_template(state.theta + 1, state.n_state);

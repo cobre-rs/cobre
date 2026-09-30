@@ -1018,7 +1018,6 @@ mod tests {
         test_support::state_layout_with_transit_buckets_and_resolution(
             2,
             2,
-            0,
             Vec::new(),
             vec![2],
             single_plant_lead2_one_stage_resolution(),
@@ -1029,7 +1028,6 @@ mod tests {
     /// buckets, sharing [`layout_2h_1ant`]'s attached single-plant resolution.
     fn layout_2h_2buckets_1ant() -> StateSpace {
         test_support::state_layout_with_transit_buckets_and_resolution(
-            2,
             2,
             2,
             vec![(0, 1), (1, 2)],
@@ -1822,7 +1820,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![2],
             AnticipatedResolution::resolve(
@@ -1893,7 +1890,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![2],
             AnticipatedResolution::resolve(
@@ -1941,7 +1937,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![2],
             AnticipatedResolution::resolve(
@@ -1986,7 +1981,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![1, 3],
             AnticipatedResolution::resolve(
@@ -2059,7 +2053,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![1, 2],
             AnticipatedResolution::resolve(
@@ -2146,7 +2139,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![1, 2],
             resolution,
@@ -2193,7 +2185,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![3],
             AnticipatedResolution::resolve(
@@ -2247,7 +2238,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![2],
             AnticipatedResolution::resolve(
@@ -2292,7 +2282,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![1],
             AnticipatedResolution::resolve(
@@ -2349,7 +2338,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![3],
             AnticipatedResolution::resolve(
@@ -2417,7 +2405,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![2],
             AnticipatedResolution::resolve(
@@ -2468,7 +2455,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![2],
             AnticipatedResolution::resolve(
@@ -2514,7 +2500,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![3],
             AnticipatedResolution::resolve(
@@ -2583,7 +2568,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![1, 2],
             AnticipatedResolution::resolve(
@@ -2691,7 +2675,6 @@ mod tests {
         let global = test_support::state_layout_with_transit_buckets_and_resolution(
             1,
             1,
-            0,
             Vec::new(),
             vec![k_max],
             resolution,

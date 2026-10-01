@@ -29,8 +29,9 @@ use cobre_core::temporal::StageStateConfig;
 use cobre_sddp::build_cut_row_batch_into;
 use cobre_sddp::cut::fcf::FutureCostFunction;
 use cobre_sddp::indexer::{CutStateProjection, StateSpace};
-use cobre_sddp::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
+use cobre_sddp::lead_time::AnticipatedResolution;
 use cobre_sddp::setup::NodeId;
+use cobre_sddp::test_support::constant_lead_resolution;
 use cobre_solver::RowBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -122,24 +123,10 @@ fn bench_cut_application_baseline(c: &mut Criterion) {
 fn bench_cut_application_with_anticipated(c: &mut Criterion) {
     // All anticipated plants at K_i = K_max so every slot 0..K_max is nonzero;
     // this keeps the mask fully dense at n_state = 130, matching the baseline.
-    // The resolution is built inline (not through `test_support`, which this
-    // bench cannot reach without the `test-support` feature) over a margin
-    // (`K_max + 2`) wide enough to saturate every plant's ring, mirroring
-    // `constant_lead_resolution`.
+    // The margin (`K_max + 2`) is wide enough to saturate every plant's ring.
     let anticipated_lead_stages: Vec<usize> = vec![K_MAX; N_ANTICIPATED];
-    let leads: Vec<LeadTime> = anticipated_lead_stages
-        .iter()
-        .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
-        .collect();
     let n_margin_stages = K_MAX + 2;
-    let study_stage_hours = vec![720.0; n_margin_stages];
-    let resolution = AnticipatedResolution::resolve(
-        &leads,
-        DeliveryAxis {
-            study_stage_hours: &study_stage_hours,
-            post_study_stage_hours: &[],
-        },
-    );
+    let resolution = constant_lead_resolution(&anticipated_lead_stages, n_margin_stages);
 
     // `StateSpace::new` finalizes both layout caches in its constructor.
     let lag_counts: Vec<usize> = vec![L_ANTICIPATED; N];

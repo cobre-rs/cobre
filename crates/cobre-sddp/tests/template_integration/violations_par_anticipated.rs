@@ -2,7 +2,7 @@
 
 use super::*;
 
-use super::common::in_code_studies::discounted_anticipated_study;
+use super::common::in_code_studies::{discounted_anticipated_study, mixed_lead_anticipated_study};
 use super::common::{build_setup_in_code, run_simulation};
 use cobre_io::Config;
 use cobre_io::config::{SimulationConfig as IoSimulationConfig, SimulationSelection};
@@ -1931,6 +1931,55 @@ fn discounted_anticipated_study_prices_each_decision_relative_to_its_stage() {
         checked_after_stage_zero,
         "vacuity guard: no active anticipated decision at t >= 1 was checked"
     );
+}
+
+/// The discounted-anticipated fixture's stage-1 anticipated decision is
+/// costed: `LeadStages(2)` on a 4-stage horizon decides stages 0 and 1, both
+/// delivering after stage 0, and the decision column's objective coefficient
+/// must be non-zero for the discount path to be exercised at all.
+#[test]
+fn discounted_anticipated_fixture_decides_after_stage_zero() {
+    let (system, config) = discounted_anticipated_study();
+    let setup = build_setup_in_code(system, &config);
+
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[1];
+    assert!(
+        !geometry.anticipated_decision.is_empty(),
+        "stage 1 must have an active anticipated-decision column"
+    );
+    let template = &setup.inputs.stage_data.stage_templates.templates[1];
+    assert!(
+        template.objective[geometry.anticipated_decision.start] > 0.0,
+        "stage 1's anticipated decision must carry a nonzero costed objective coefficient"
+    );
+}
+
+/// The mixed-lead fixture's `LeadStages(3)` thermal has no in-study delivery
+/// target left at decision stages 2-4 (`n_stages == 5`), so each of those
+/// decision columns must be costed against the declared post-study calendar
+/// — the coverage the fixture's own doc comment claims, pinned as a fact
+/// rather than left as a doc-only claim.
+#[test]
+fn mixed_lead_long_lead_late_decisions_target_post_study_delivery() {
+    use cobre_sddp::indexer::AnticipatedLocal;
+
+    let (system, config) = mixed_lead_anticipated_study(false);
+    let setup = build_setup_in_code(system, &config);
+
+    // Canonical anticipated-local order is ascending EntityId: the short lead
+    // (id 10) is local 0, the long lead (id 20) is local 1.
+    let long_lead_local = AnticipatedLocal::new(1);
+    for stage_idx in 2..5 {
+        let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[stage_idx];
+        let template = &setup.inputs.stage_data.stage_templates.templates[stage_idx];
+        let col = geometry.anticipated_decision_col(long_lead_local);
+        assert!(
+            template.objective[col] > 0.0,
+            "stage {stage_idx}'s long-lead decision must carry a nonzero costed \
+             objective coefficient (a post-study delivery target), got {}",
+            template.objective[col]
+        );
+    }
 }
 
 /// The simulation books the anticipated decision's present value at its

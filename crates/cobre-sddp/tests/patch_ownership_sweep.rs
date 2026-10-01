@@ -7,7 +7,9 @@
 //! chronological-noise in-code fixture, that each noise dimension patches
 //! only the row/column family its own entity owns. A third test pins the
 //! lower bound's root-opening LPs to the forward pass's own patched root
-//! templates, bound by bound.
+//! templates, bound by bound. A fourth test,
+//! `every_deck_workspace_pool_is_sized_from_its_owners`, pins each deck's
+//! workspace pool to the sizes its owners declare.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -22,7 +24,7 @@ use cobre_sddp::StudySetup;
 use cobre_sddp::indexer::{BlockIdx, BusSys, HydroSys, NcsSys, StateSpace};
 use cobre_sddp::lp::StageGeometry;
 use cobre_sddp::setup::{NodePos, StageIdx};
-use cobre_sddp::test_support::decks::{SLOW_DECKS, committed_decks};
+use cobre_sddp::test_support::decks::{Deck, SLOW_DECKS, committed_decks};
 use cobre_sddp::test_support::{
     capture_patched_node_template, capture_patched_node_template_at, lower_bound_root_templates,
     node_opening_noise, oracle_initial_state, stage_state_box_bounds, state_space,
@@ -522,5 +524,99 @@ fn lower_bound_root_lp_matches_the_forward_root_lp() {
         violations.is_empty(),
         "lower-bound vs forward root LP mismatches:\n{}",
         violations.join("\n")
+    );
+}
+
+fn active_decks() -> Vec<Deck> {
+    let slow_tests_enabled = cfg!(feature = "slow-tests");
+    committed_decks()
+        .into_iter()
+        .filter(|deck| slow_tests_enabled || !SLOW_DECKS.contains(&deck.key.as_str()))
+        .collect()
+}
+
+/// Build `deck`'s [`StudySetup`], panicking with the deck's key on any
+/// build failure — no deck is ever skipped silently.
+fn build_deck_or_panic(deck: &Deck) -> StudySetup {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fresh_setup_with(&deck.dir, |_| {})
+    }))
+    .unwrap_or_else(|payload| {
+        let msg = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic payload>");
+        panic!("deck {} failed to build: {msg}", deck.key);
+    })
+}
+
+#[test]
+fn every_deck_workspace_pool_is_sized_from_its_owners() {
+    use cobre_comm::LocalBackend;
+    use cobre_sddp::test_support::workspace_downstream_lag_shape;
+
+    let mut any_downstream_par_order_positive = false;
+
+    for deck in active_decks() {
+        let setup = build_deck_or_panic(&deck);
+        let stage_ctx = setup.stage_ctx();
+        let training_ctx = setup.training_ctx();
+        let state = training_ctx.state;
+        let max_n_blks = stage_ctx
+            .geometry_per_stage
+            .iter()
+            .map(|g| g.n_blks)
+            .max()
+            .unwrap_or(0);
+
+        any_downstream_par_order_positive |= training_ctx.study_dims.downstream_par_order > 0;
+
+        let comm = LocalBackend;
+        let pool = setup
+            .create_workspace_pool(&comm, 1, ActiveSolver::new)
+            .unwrap_or_else(|e| panic!("deck {}: workspace pool: {e:?}", deck.key));
+
+        for ws in &pool.workspaces {
+            assert_eq!(
+                ws.patch_buf.indices.len(),
+                stage_ctx.load_bus_indices.len() * max_n_blks + state.hydro_count,
+                "deck {}: patch_buf.indices length",
+                deck.key
+            );
+            assert_eq!(
+                ws.patch_buf.col_indices.len(),
+                state.hydro_count * (1 + state.max_par_order)
+                    + state.n_buckets
+                    + state.n_anticipated * state.k_max,
+                "deck {}: patch_buf.col_indices length",
+                deck.key
+            );
+            assert!(
+                ws.current_state.capacity() >= state.n_state,
+                "deck {}: current_state capacity",
+                deck.key
+            );
+            let (downstream_completed_lags_len, lag_accumulator_len) =
+                workspace_downstream_lag_shape(ws);
+            assert_eq!(
+                downstream_completed_lags_len,
+                lag_accumulator_len * training_ctx.study_dims.downstream_par_order,
+                "deck {}: downstream_completed_lags length",
+                deck.key
+            );
+        }
+
+        assert_eq!(
+            stage_ctx.templates.len(),
+            training_ctx.horizon.num_stages(),
+            "deck {}: stage template count",
+            deck.key
+        );
+    }
+
+    assert!(
+        any_downstream_par_order_positive,
+        "at least one swept deck must have downstream_par_order > 0"
     );
 }

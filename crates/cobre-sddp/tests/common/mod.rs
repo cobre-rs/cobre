@@ -267,8 +267,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 /// Builds `case_dir` with every `stages.json` stage forced to `mode`: copies
 /// the case into a temporary directory, rewrites its `"block_mode"` fields,
 /// and builds through [`fresh_system_and_setup_with`] under `catch_unwind`,
-/// turning a build panic into `Err(message)` the way `build_deck_or_panic`
-/// (`tests/template_snapshot.rs`) extracts one.
+/// turning a build panic into `Err(message)`.
 pub fn fresh_system_and_setup_in_block_mode(
     case_dir: &Path,
     mode: BlockMode,

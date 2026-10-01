@@ -78,6 +78,22 @@ fn cut_oracles_hold_on_the_chronological_pumping_study() {
 }
 
 #[test]
+fn cut_oracles_hold_on_the_chronological_and_parallel_storage_decks() {
+    let decks = committed_decks();
+    for key in [
+        "crates/cobre-sddp/tests/fixtures/chronological_storage",
+        "crates/cobre-sddp/tests/fixtures/parallel_storage",
+    ] {
+        let deck = decks
+            .iter()
+            .find(|deck| deck.key == key)
+            .unwrap_or_else(|| panic!("committed deck {key} is absent"));
+        let setup = fresh_setup_with(&deck.dir, apply_oracle_config);
+        run_cut_oracles(&deck.key, setup).assert_sound(&deck.key);
+    }
+}
+
+#[test]
 #[cfg_attr(
     not(feature = "slow-tests"),
     ignore = "trains every committed deck that carries inflow-lag or anticipated state"

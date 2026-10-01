@@ -1227,3 +1227,19 @@ fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
         );
     }
 }
+
+/// The parallel-multiblock-evaporation fixture's stage 0 is a 3-block
+/// parallel stage with active evaporation.
+#[test]
+fn parallel_evaporation_fixture_evaporates_on_a_multiblock_parallel_stage() {
+    let (system, config, hydro_models) = parallel_multiblock_evaporation_study();
+    let setup = build_setup_in_code_with_models(system, &config, hydro_models);
+
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[0];
+    assert_eq!(geometry.block_mode, cobre_core::BlockMode::Parallel);
+    assert_eq!(geometry.n_blks, 3);
+    assert!(
+        !geometry.evap_hydro_indices.is_empty(),
+        "stage 0 must have an active evaporation slot"
+    );
+}

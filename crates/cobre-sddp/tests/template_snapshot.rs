@@ -3,10 +3,7 @@
 //! an ignored regeneration test that rewrites the manifest.
 //!
 //! Temporary safety net for the stage-LP builder consolidation: this manifest
-//! and its two tests are deleted once the consolidation's last step lands. A
-//! third test, `every_deck_workspace_pool_is_sized_from_its_owners`, shares
-//! this file but is unrelated to the manifest and is permanent — it is NOT
-//! deleted with it.
+//! and its two tests are deleted once the consolidation's last step lands.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -319,72 +316,6 @@ fn template_snapshot_matches_manifest() {
     );
 }
 
-/// The discounted-anticipated fixture's stage-1 anticipated decision is
-/// costed: `LeadStages(2)` on a 4-stage horizon decides stages 0 and 1, both
-/// delivering after stage 0, and the decision column's objective coefficient
-/// must be non-zero for the discount path to be exercised at all.
-#[test]
-fn discounted_anticipated_fixture_decides_after_stage_zero() {
-    let (system, config) = common::in_code_studies::discounted_anticipated_study();
-    let setup = common::build_setup_in_code(system, &config);
-
-    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[1];
-    assert!(
-        !geometry.anticipated_decision.is_empty(),
-        "stage 1 must have an active anticipated-decision column"
-    );
-    let template = &setup.inputs.stage_data.stage_templates.templates[1];
-    assert!(
-        template.objective[geometry.anticipated_decision.start] > 0.0,
-        "stage 1's anticipated decision must carry a nonzero costed objective coefficient"
-    );
-}
-
-/// The mixed-lead fixture's `LeadStages(3)` thermal has no in-study delivery
-/// target left at decision stages 2-4 (`n_stages == 5`), so each of those
-/// decision columns must be costed against the declared post-study calendar
-/// — the coverage the fixture's own doc comment claims, pinned as a fact
-/// rather than left as a doc-only claim.
-#[test]
-fn mixed_lead_long_lead_late_decisions_target_post_study_delivery() {
-    use cobre_sddp::indexer::AnticipatedLocal;
-
-    let (system, config) = common::in_code_studies::mixed_lead_anticipated_study(false);
-    let setup = common::build_setup_in_code(system, &config);
-
-    // Canonical anticipated-local order is ascending EntityId: the short lead
-    // (id 10) is local 0, the long lead (id 20) is local 1.
-    let long_lead_local = AnticipatedLocal::new(1);
-    for stage_idx in 2..5 {
-        let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[stage_idx];
-        let template = &setup.inputs.stage_data.stage_templates.templates[stage_idx];
-        let col = geometry.anticipated_decision_col(long_lead_local);
-        assert!(
-            template.objective[col] > 0.0,
-            "stage {stage_idx}'s long-lead decision must carry a nonzero costed \
-             objective coefficient (a post-study delivery target), got {}",
-            template.objective[col]
-        );
-    }
-}
-
-/// The parallel-multiblock-evaporation fixture's stage 0 is a 3-block
-/// parallel stage with active evaporation.
-#[test]
-fn parallel_evaporation_fixture_evaporates_on_a_multiblock_parallel_stage() {
-    let (system, config, hydro_models) =
-        common::in_code_studies::parallel_multiblock_evaporation_study();
-    let setup = common::build_setup_in_code_with_models(system, &config, hydro_models);
-
-    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[0];
-    assert_eq!(geometry.block_mode, cobre_core::BlockMode::Parallel);
-    assert_eq!(geometry.n_blks, 3);
-    assert!(
-        !geometry.evap_hydro_indices.is_empty(),
-        "stage 0 must have an active evaporation slot"
-    );
-}
-
 #[cfg(feature = "slow-tests")]
 fn require_slow_tests() {}
 
@@ -421,75 +352,4 @@ fn template_snapshot_regen() {
     let tmp_path = path.with_extension("tsv.tmp");
     std::fs::write(&tmp_path, content).expect("write temporary manifest");
     std::fs::rename(&tmp_path, &path).expect("rename temporary manifest into place");
-}
-
-#[test]
-fn every_deck_workspace_pool_is_sized_from_its_owners() {
-    use cobre_comm::LocalBackend;
-    use cobre_sddp::test_support::workspace_downstream_lag_shape;
-    use cobre_solver::ActiveSolver;
-
-    let mut any_downstream_par_order_positive = false;
-
-    for deck in active_decks() {
-        let setup = build_deck_or_panic(&deck);
-        let stage_ctx = setup.stage_ctx();
-        let training_ctx = setup.training_ctx();
-        let state = training_ctx.state;
-        let max_n_blks = stage_ctx
-            .geometry_per_stage
-            .iter()
-            .map(|g| g.n_blks)
-            .max()
-            .unwrap_or(0);
-
-        any_downstream_par_order_positive |= training_ctx.study_dims.downstream_par_order > 0;
-
-        let comm = LocalBackend;
-        let pool = setup
-            .create_workspace_pool(&comm, 1, ActiveSolver::new)
-            .unwrap_or_else(|e| panic!("deck {}: workspace pool: {e:?}", deck.key));
-
-        for ws in &pool.workspaces {
-            assert_eq!(
-                ws.patch_buf.indices.len(),
-                stage_ctx.load_bus_indices.len() * max_n_blks + state.hydro_count,
-                "deck {}: patch_buf.indices length",
-                deck.key
-            );
-            assert_eq!(
-                ws.patch_buf.col_indices.len(),
-                state.hydro_count * (1 + state.max_par_order)
-                    + state.n_buckets
-                    + state.n_anticipated * state.k_max,
-                "deck {}: patch_buf.col_indices length",
-                deck.key
-            );
-            assert!(
-                ws.current_state.capacity() >= state.n_state,
-                "deck {}: current_state capacity",
-                deck.key
-            );
-            let (downstream_completed_lags_len, lag_accumulator_len) =
-                workspace_downstream_lag_shape(ws);
-            assert_eq!(
-                downstream_completed_lags_len,
-                lag_accumulator_len * training_ctx.study_dims.downstream_par_order,
-                "deck {}: downstream_completed_lags length",
-                deck.key
-            );
-        }
-
-        assert_eq!(
-            stage_ctx.templates.len(),
-            training_ctx.horizon.num_stages(),
-            "deck {}: stage template count",
-            deck.key
-        );
-    }
-
-    assert!(
-        any_downstream_par_order_positive,
-        "at least one swept deck must have downstream_par_order > 0"
-    );
 }

@@ -38,9 +38,11 @@ use cobre_sddp::{
     indexer::{CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
-    lp::builder::StateBox,
     risk_measure::RiskMeasure,
-    test_support::{StageContextFixture, equipment_free_geometry, geometry_with_load_balance},
+    test_support::{
+        StageContextFixture, equipment_free_geometry, geometry_with_load_balance,
+        permissive_state_boxes,
+    },
     train,
 };
 use cobre_solver::{
@@ -324,18 +326,6 @@ fn iteration_limit(limit: u64) -> StoppingRuleSet {
         rules: vec![StoppingRule::IterationLimit { limit }],
         mode: StoppingMode::Any,
     }
-}
-
-/// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving
-/// `train` through the seam without exercising the clamp.
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
 }
 
 // ===========================================================================

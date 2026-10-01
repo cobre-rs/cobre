@@ -55,6 +55,7 @@ use cobre_sddp::{
     setup::node_graph::Traversal,
     simulate,
     simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+    test_support::permissive_state_boxes,
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
 };
@@ -454,18 +455,6 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
 // ===========================================================================
 // Shared test helpers
 // ===========================================================================
-
-/// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving
-/// `train`/`simulate` through the seam without exercising the clamp.
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
-}
 
 fn base_stage_context<'a>(
     fx: &'a Fixture,

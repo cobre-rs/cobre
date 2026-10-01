@@ -39,7 +39,7 @@ use cobre_sddp::{
     indexer::{StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
-    lp::builder::{PatchBuffer, StateBox},
+    lp::builder::PatchBuffer,
     setup::node_graph::{
         NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         StageIdx, Traversal,
@@ -47,7 +47,7 @@ use cobre_sddp::{
     simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
     test_support::{
         StageContextFixture, all_enabled_cut_state_layouts, hydro_only_bus_geometry,
-        hydro_only_bus_solution, hydro_only_bus_template,
+        hydro_only_bus_solution, hydro_only_bus_template, permissive_state_boxes,
     },
     workspace::{SolverWorkspace, WorkspaceSizing},
 };
@@ -477,16 +477,6 @@ fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         &StageContextFixture::new(&[], &[], &[]).ctx(),
         WorkspaceSizing::default(),
     )]
-}
-
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

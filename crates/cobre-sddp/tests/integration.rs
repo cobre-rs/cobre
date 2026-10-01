@@ -50,9 +50,8 @@ use cobre_sddp::{
     indexer::{CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
-    lp::builder::StateBox,
     risk_measure::RiskMeasure,
-    test_support::{StageContextFixture, equipment_free_geometry},
+    test_support::{StageContextFixture, equipment_free_geometry, permissive_state_boxes},
     train,
 };
 
@@ -529,16 +528,6 @@ impl Fixture {
             risk_measures,
         }
     }
-}
-
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
 }
 
 /// Run a single training pass with a given stochastic context.

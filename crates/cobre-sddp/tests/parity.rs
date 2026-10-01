@@ -791,12 +791,12 @@ mod determinism {
         indexer::{CutStateProjection, StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
         lead_time::AnticipatedResolution,
-        lp::builder::{PatchBuffer, StageGeometry, StateBox},
+        lp::builder::{PatchBuffer, StageGeometry},
         risk_measure::RiskMeasure,
         setup::node_graph::Traversal,
         simulate,
         simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
-        test_support::{GeometryDims, StageContextFixture, geometry},
+        test_support::{GeometryDims, StageContextFixture, geometry, permissive_state_boxes},
         train,
         workspace::{SolverWorkspace, WorkspaceSizing},
     };
@@ -1237,16 +1237,6 @@ mod determinism {
                 risk_measures,
             }
         }
-    }
-
-    fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-        vec![
-            StateBox {
-                lower: vec![f64::NEG_INFINITY; n_state],
-                upper: vec![f64::INFINITY; n_state],
-            };
-            n_stages
-        ]
     }
 
     // ===========================================================================

@@ -171,8 +171,8 @@ pub fn fill_consistent_basis(out: &mut Basis) {
 
 /// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving a solve
 /// through the seam without exercising the clamp.
-#[cfg(test)]
-pub(crate) fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
+#[must_use]
+pub fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
     vec![
         StateBox {
             lower: vec![f64::NEG_INFINITY; n_state],

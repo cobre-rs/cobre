@@ -60,7 +60,7 @@ use cobre_sddp::{
     indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
-    lp::builder::{PatchBuffer, StageGeometry, StateBox},
+    lp::builder::{PatchBuffer, StageGeometry},
     risk_measure::RiskMeasure,
     setup::{
         SimulationEnumeratedRequest, StudySetup,
@@ -75,7 +75,8 @@ use cobre_sddp::{
     test_support::{
         StageContextFixture, branching_tree_setup_enumerated, extensive_form_optimum,
         hydro_only_bus_geometry, k_fan_setup_enumerated, node_prefix_counts, node_scenario_count,
-        single_path_enumerated_setup, trunk_fan_setup_enumerated, water_binding_external_fan_setup,
+        permissive_state_boxes, single_path_enumerated_setup, trunk_fan_setup_enumerated,
+        water_binding_external_fan_setup,
     },
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
@@ -382,18 +383,6 @@ fn iteration_limit(limit: u64) -> StoppingRuleSet {
         rules: vec![StoppingRule::IterationLimit { limit }],
         mode: StoppingMode::Any,
     }
-}
-
-/// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving
-/// `train`/`simulate` through the seam without exercising the clamp.
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
 }
 
 fn default_single_hydro_entity_counts() -> EntityCounts {

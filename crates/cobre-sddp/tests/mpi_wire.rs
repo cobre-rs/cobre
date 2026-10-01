@@ -1338,12 +1338,11 @@ mod by_node_scratch {
         forward::EnumeratedForwardScratch,
         horizon_mode::HorizonMode,
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::StateBox,
         risk_measure::RiskMeasure,
         setup::Traversal,
         test_support::{
             StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
-            state_layout, study_dims, trial_state_records,
+            permissive_state_boxes, state_layout, study_dims, trial_state_records,
         },
         workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
     };
@@ -1468,16 +1467,6 @@ mod by_node_scratch {
             iterations: 0,
             solve_time_seconds: 0.0,
         }
-    }
-
-    fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-        vec![
-            StateBox {
-                lower: vec![f64::NEG_INFINITY; n_state],
-                upper: vec![f64::INFINITY; n_state],
-            };
-            n_stages
-        ]
     }
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {

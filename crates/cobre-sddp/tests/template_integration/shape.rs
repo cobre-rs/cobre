@@ -288,7 +288,8 @@ fn theta_column_has_unit_objective() {
     .theta;
     assert_eq!(
         t.objective[theta_col], 1.0,
-        "theta column objective must be 1.0 (theta is not scaled by COST_SCALE_FACTOR)"
+        "theta column objective must be the stage's one-step discount factor \
+         (1.0 at rate 0), never divided by the cost scale factor"
     );
 }
 

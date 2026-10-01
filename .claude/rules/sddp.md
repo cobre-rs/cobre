@@ -1457,15 +1457,17 @@ declared, each of the following is a contract.
 ### Shared lagged-delivery ring skeleton
 
 The water in-transit bucket ring and the anticipated-thermal ring are one
-lagged-delivery ring construct, owned by `DeliveryRing`: a borrowed outgoing
-block (identity-resolved, contributing to `n_state`) and a separate borrowed
-incoming block (pinned via `state_to_lp_incoming_column`), advanced one
-Markov-1 slot per stage by the same interior shift row
-(`DeliveryRing::emit_shift_rows`) and the same paired row-cap/column-freeze
-masking (`DeliveryRing::freeze_masked_columns`). The two rings differ only in
-how each deposits into its newest slot and in what a masked terminal slot
-means — both differences live entirely at each ring's own call site, never a
-second skeleton implementation:
+lagged-delivery ring construct, owned by `DeliveryRing`. They share a borrowed
+outgoing block (identity-resolved, contributing to `n_state`), a separate
+borrowed incoming block (pinned via `state_to_lp_incoming_column`), and the
+paired row-cap/column-freeze masking (`DeliveryRing::freeze_masked_columns`).
+The interior transition differs: water shifts one Markov-1 slot per stage
+(`DeliveryRing::emit_shift_rows`, slot → slot+1), while anticipated holds each
+commitment in its own slot (`DeliveryRing::emit_carry_rows`, same slot). The
+rings also differ in how each deposits into its newest slot and in what a
+masked terminal slot means. Every difference lives entirely at each ring's own
+call site, never a second skeleton implementation; the side-by-side table in
+`docs/design/anticipated-thermals-and-water-travel-time.md` §4 lists them:
 
 - **Deposit.** Water's block-mode-coupled per-lag deposit share is emitted at
   its own call site (`fill_arc_release_block_entries`), never through

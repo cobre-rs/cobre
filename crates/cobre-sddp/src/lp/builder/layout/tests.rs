@@ -826,7 +826,7 @@ fn useful_volume_fold_collapses_block_independent_expression_to_one_row() {
     );
 }
 
-/// C5: the fold reads the ENTITY physical `min_storage_hm3` — stage-invariant —
+/// The fold reads the ENTITY physical `min_storage_hm3` — stage-invariant —
 /// never the per-stage resolved `HydroStageBounds.min_storage_hm3`, which can
 /// carry an operative floor (flood control, DECOMP RHV) diverging from it.
 #[test]

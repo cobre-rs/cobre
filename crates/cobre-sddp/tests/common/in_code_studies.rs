@@ -234,9 +234,10 @@ fn build_system() -> cobre_core::System {
             },
         },
     );
-    // The padding region [n_stages, n_stages + k) is the delivery-stage axis
-    // `fill_anticipated_columns` reads; it must carry the thermal's own cost
-    // and capacity so the decision column's objective coefficient is non-zero.
+    // The loop fills the whole thermal axis [0, n_stages + k), so the study's
+    // resolved bounds are total. The decision columns read the study stages'
+    // cost and capacity; a delivery past the horizon is priced from the
+    // post-study calendar, not from this axis.
     for s in 0..thermal_axis {
         *bounds.thermal_bounds_mut(0, s) = ThermalStageBounds { cost_per_mwh: 50.0 };
         *bounds.thermal_block_base_mut(0, s) = ThermalBlockBounds {
@@ -535,10 +536,11 @@ fn build_mixed_lead_system(reversed: bool) -> cobre_core::System {
             },
         },
     );
-    // The padding region [n_stages, n_stages + k_max) is the delivery-stage
-    // axis `fill_anticipated_columns` reads; it must carry each thermal's own
-    // cost and capacity so its decision column's objective coefficient is
-    // non-zero, for both thermals regardless of their own (shallower) lead.
+    // The loop fills the whole thermal axis [0, n_stages + k_max) for both
+    // thermals regardless of their own (shallower) lead, so the study's
+    // resolved bounds are total. The decision columns read the study stages'
+    // cost and capacity; a delivery past the horizon is priced from the
+    // post-study calendar below, not from this axis.
     for thermal_idx in 0..2 {
         for s in 0..thermal_axis {
             *bounds.thermal_bounds_mut(thermal_idx, s) = ThermalStageBounds { cost_per_mwh: 50.0 };

@@ -35,9 +35,9 @@ per stage:
 The in-flight amount lives in a **ring of state slots**. Each stage, the ring
 advances one slot; the slot that matures this stage is consumed; a fresh slot is
 deposited. That ring is one shared code primitive — `DeliveryRing`
-(`crates/cobre-sddp/src/lp/builder/delivery_ring.rs`) — and both subsystems occupy
-one contiguous region of the SDDP state vector. They differ only in four
-call-site-local ways, spelled out in §4.
+(`crates/cobre-sddp/src/lp/builder/delivery_ring.rs`) — and each subsystem
+occupies its own region of the SDDP state vector (`Buckets` and
+`CommitmentHold`). They differ in the call-site-local ways §4 tabulates.
 
 ---
 
@@ -249,8 +249,9 @@ optimal cost.
 
 ### 2.4 LP entry
 
-The topology tables are built once and threaded onto the stage templates (never
-re-derived). Per stage, `build_transit_bucket_row_pos` turns the mask into compact
+The topology tables are resolved once and borrowed by the template build
+(`lp/builder/template.rs`); they are never stored on the templates and never
+re-derived. Per stage, `build_transit_bucket_row_pos` turns the mask into compact
 row positions (`None` = masked). Then:
 
 - **One `DeliveryRing` per downstream plant**, `n_lanes = 1`, over that plant's
@@ -538,9 +539,10 @@ the commitment valued against a real future.
 
 ## 4. Side by side
 
-Both rings share the `DeliveryRing` skeleton, one contiguous state region, the
-out-by-identity / in-pinned column resolution, the two-sided masking discipline,
-and the dual sign convention. They differ in exactly four call-site-local ways:
+Both rings share the `DeliveryRing` skeleton, the out-by-identity / in-pinned
+column resolution, the two-sided masking discipline, and the dual sign
+convention; each occupies its own state region (`Buckets`, `CommitmentHold`).
+They differ in the call-site-local ways the table lists:
 
 | Aspect                   | Water travel time                                                                 | Anticipated thermal                                                             |
 | ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |

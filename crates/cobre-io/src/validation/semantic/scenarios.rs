@@ -3149,7 +3149,8 @@ mod tests {
     }
 
     /// A coherent single-class deck (no `nodes[]`) produces no coherence
-    /// diagnostics — the C1 precondition the golden parity gate rests on.
+    /// diagnostics, so the coherence checks never fire on a deck without a node
+    /// graph.
     #[test]
     fn coherent_external_deck_has_no_coherence_errors() {
         let data = external_data(

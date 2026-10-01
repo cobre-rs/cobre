@@ -2364,7 +2364,7 @@ mod zero_cost_tests {
         }
     }
 
-    /// C13 regression: `build_anticipated_fishing_row_pos` gates a plant's
+    /// Regression: `build_anticipated_fishing_row_pos` gates a plant's
     /// fishing row on `k_max >= 1`, not merely `n_anticipated >= 1`. A lead-0
     /// plant (`K = 0` self-delivery) is the only state production can build
     /// with `k_max == 0` (`ring_size(&[0]) == 0`), and it reaches this same
@@ -2812,7 +2812,7 @@ mod zero_cost_tests {
         }
     }
 
-    /// Three-family collapse (C13 guard): a lead-0 plant's ring is the only
+    /// Three-family collapse: a lead-0 plant's ring is the only
     /// `k_max == 0` state production can build. All three row
     /// families — fishing, deposit, and interior carry — collapse to zero,
     /// and none of the three entry-fill functions panics or writes a
@@ -3137,11 +3137,9 @@ mod zero_cost_tests {
     /// Asserts `build_stage_matrix_entries` produces no state-fixing
     /// diagonals in the CSC output.
     ///
-    /// Coverage strategy: storage-fixing and lag-fixing diagonals are
-    /// guaranteed absent by structural deletion of their for-loops in
-    /// `fill_state_and_water_entries` (verified by C1+C2 grep — the
-    /// functions/loops emitting those entries no longer exist in the
-    /// source). Anticipated-state-fixing diagonals are checked dynamically:
+    /// Coverage strategy: storage-fixing and lag-fixing diagonals are absent
+    /// by construction, because no loop in `fill_state_and_water_entries`
+    /// emits them. Anticipated-state-fixing diagonals are checked dynamically:
     /// the test builds a fixture with `n_anticipated = 2, k_max = 3` and
     /// asserts every `(slot, plant)` column at
     /// `state.commit_in.start + slot*A + plant` has no entry at

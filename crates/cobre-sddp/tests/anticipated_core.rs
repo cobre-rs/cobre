@@ -3367,8 +3367,8 @@ mod anticipated_closed_form_lb_k1_single_thermal {
     //!
     //! The decision objective coefficient is set by
     //! `fill_anticipated_columns` to
-    //! `c_a · total_hours_per_stage[delivery=1] · cumulative_discount_factors[1] =
-    //! c_a · 1 · 1 = c_a`.
+    //! `c_a · TimeValue::delivery_total_hours(1) ·
+    //! TimeValue::relative_delivery_discount(0, 1) = c_a · 1 · 1 = c_a`.
     //!
     //! Stage 1 (delivery; fishing always active; decision
     //! `1 + 1 < 2` — FALSE, so `d_ant_1 ∈ [0,0]` and per-block anticipated cost

@@ -401,6 +401,9 @@ jobs:
       - run: cargo doc --workspace --no-deps --features "${{ env.NON_SOLVER_FEATURES }}"
         env:
           RUSTDOCFLAGS: -Dwarnings
+      - run: cargo doc --workspace --no-deps --document-private-items --features "${{ env.NON_SOLVER_FEATURES }}"
+        env:
+          RUSTDOCFLAGS: -Dwarnings
 
   # cargo-audit reads Cargo.lock and the advisory DB; it does not compile any
   # crate, so it never trips cobre-solver's both-backends `compile_error!`.

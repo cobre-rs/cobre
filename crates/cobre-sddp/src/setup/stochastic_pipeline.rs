@@ -2332,4 +2332,63 @@ mod tests {
             other => panic!("expected SddpError::Io, got: {other:?}"),
         }
     }
+
+    /// `build_opening_tree_library`'s rank-0 opening-tree build routes through
+    /// `build_inflow_par`, which must surface `InvalidParParameters` itself —
+    /// not some other error from downstream history discovery — when a PAR
+    /// model carries AR order > 0 with zero standard deviation.
+    #[test]
+    fn build_opening_tree_library_rejects_invalid_par_parameters() {
+        let stages = vec![ring_stage(
+            0,
+            0,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+            0,
+            31.0 * 24.0,
+        )];
+        let inflow_models = vec![
+            InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id: -1,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+            InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id: 0,
+                mean_m3s: 100.0,
+                std_m3s: 0.0,
+                ar_coefficients: vec![0.6],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+        let system = ring_system(
+            &stages,
+            inflow_models,
+            Vec::new(),
+            monthly_season_map(),
+            Vec::new(),
+        );
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        let err = build_opening_tree_library(&system, &training_source, None)
+            .expect_err("a zero-std AR(1) model must be rejected");
+        match err {
+            SddpError::Stochastic(cobre_stochastic::StochasticError::InvalidParParameters {
+                ..
+            }) => {}
+            other => panic!("expected InvalidParParameters, got: {other:?}"),
+        }
+    }
 }

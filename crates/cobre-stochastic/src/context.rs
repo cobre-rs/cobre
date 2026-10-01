@@ -833,7 +833,10 @@ mod tests {
         test_support::{BusSpec, HydroSpec, StageSpec, single_block},
     };
 
-    use super::{ClassSchemes, OpeningTreeInputs, build_stochastic_context, noise_entity_order};
+    use super::{
+        ClassSchemes, OpeningTreeInputs, build_inflow_par, build_stochastic_context,
+        noise_entity_order,
+    };
     use crate::StochasticError;
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
@@ -1131,6 +1134,34 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
         );
+
+        assert!(
+            matches!(result, Err(StochasticError::InvalidParParameters { .. })),
+            "expected InvalidParParameters, got: {result:?}"
+        );
+    }
+
+    /// AC: `build_inflow_par` validates PAR parameters itself — a caller that
+    /// reaches it without going through `build_stochastic_context` (e.g. the
+    /// opening-tree path) must still see an AR(1) model's zero standard
+    /// deviation rejected.
+    #[test]
+    fn build_inflow_par_rejects_invalid_par() {
+        let hydros = vec![make_hydro(1)];
+        let stages = vec![make_stage(0, 0, 3)];
+        // AR(1) with std == 0.0 is the fatal case.
+        let inflow_models = vec![make_inflow_model(1, 0, 0.0, vec![0.3])];
+
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(identity_correlation(&[1]))
+            .build()
+            .unwrap();
+
+        let result = build_inflow_par(&system, None);
 
         assert!(
             matches!(result, Err(StochasticError::InvalidParParameters { .. })),

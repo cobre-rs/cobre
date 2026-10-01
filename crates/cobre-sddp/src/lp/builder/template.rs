@@ -127,21 +127,7 @@ pub(super) fn build_single_stage_template(
     };
     entries::fill_generic_constraint_entries(ctx, stage_idx, &layout, &mut buffers);
 
-    // Scale every monetary objective coefficient by 1/K for numerical
-    // conditioning; outputs are unscaled at the reporting boundary.
-    //
-    // Theta must NOT be divided: the Benders cuts already enforce
-    // `theta >= Q_successor / K`, so theta holds the SCALED future cost. Dividing
-    // it too would make the LP `stage_cost/K + (1/K)*theta`, which recovers
-    // `stage_cost + future_cost/K` at the boundary — wrong. `layout.col_theta()`
-    // reads the correct index even when `n_anticipated > 0` shifts theta.
-    let theta_col = layout.col_theta();
-    let cost_scale_factor = ctx.resolved.resolved_parameters.cost_scale_factor;
-    for (i, coeff) in objective.iter_mut().enumerate() {
-        if i != theta_col {
-            *coeff /= cost_scale_factor;
-        }
-    }
+    finalize_stage_objective(ctx, stage_idx, &layout, &mut objective);
 
     // CSC invariant: each column's entries must be row-sorted.
     for col_entry_vec in &mut col_entries {
@@ -172,6 +158,34 @@ pub(super) fn build_single_stage_template(
         gc_entries: layout.generic_constraint_rows,
         equipment_geometry: layout.geometry,
     }
+}
+
+/// Turn the stage's raw costs into its final objective: every coefficient but
+/// θ's is divided by the cost scale factor, and θ takes the stage's one-step
+/// discount factor, which cascades every later stage's cost to the root exactly
+/// once.
+///
+/// θ is not divided because the Benders cuts already bound it by the scaled
+/// future cost.
+fn finalize_stage_objective(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    objective: &mut [f64],
+) {
+    debug_assert_eq!(
+        ctx.time_value.discount_factors().len(),
+        ctx.resolved.bounds.n_stages(),
+        "time_value.discount_factors must have length n_stages"
+    );
+    let theta_col = layout.col_theta();
+    let cost_scale_factor = ctx.resolved.resolved_parameters.cost_scale_factor;
+    for (i, coeff) in objective.iter_mut().enumerate() {
+        if i != theta_col {
+            *coeff /= cost_scale_factor;
+        }
+    }
+    objective[theta_col] = ctx.time_value.discount_factors()[stage_idx];
 }
 
 /// Synthesize one entity-model per `(entity, stage)` for every entity in

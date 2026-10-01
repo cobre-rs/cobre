@@ -32,8 +32,7 @@ use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
 use crate::resolved_parameters::ResolvedParameters;
 use crate::test_support::{
-    assert_templates_byte_identical, postprocess_templates, resolve_anticipated_commitments,
-    state_layout_full,
+    assert_templates_byte_identical, resolve_anticipated_commitments, state_layout_full,
 };
 use crate::time_value::{
     DeliveryCalendar, PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
@@ -2219,12 +2218,12 @@ fn stage_templates_empty_is_all_empty() {
     );
 }
 
-// ── discount-factor placeholder is replaced by the public path ─────────────
+// ── theta's coefficient is the stage's one-step discount factor ────────────
 
 /// Build a 3-stage thermals-only system carrying a non-zero global annual
 /// discount rate. Empty `transitions` means every stage falls back to the
-/// global rate, so the postprocessed per-stage factors are all < 1.0 and the
-/// cumulative vector compounds below the 1.0 placeholder.
+/// global rate, so the per-stage factors are all < 1.0 and the cumulative
+/// vector compounds below 1.0.
 fn discounted_multi_stage_system() -> cobre_core::System {
     discounted_multi_stage_system_with_post_study(None)
 }
@@ -2361,11 +2360,11 @@ fn discounted_multi_stage_system_with_post_study(
         .expect("discounted_multi_stage_system: valid system")
 }
 
-/// The public build+postprocess path applies `TimeValue`'s real discount
-/// factors, resolved from the system's non-zero annual discount rate, to the
-/// theta objective coefficient.
+/// Building the templates gives every stage's theta coefficient the one-step
+/// discount factor `TimeValue` resolves from the system's non-zero annual
+/// discount rate.
 #[test]
-fn postprocessed_stage_templates_carry_discounted_factors() {
+fn built_stage_templates_carry_the_one_step_discount_on_theta() {
     let system = discounted_multi_stage_system();
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
@@ -2389,7 +2388,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         &hydro_cell_index,
         &resolved_params,
     );
-    let mut templates = super::build_stage_templates(
+    let templates = super::build_stage_templates(
         &system,
         &par_lp,
         &hydro_result.production,
@@ -2399,20 +2398,24 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
         inputs,
     );
 
-    let _report = postprocess_templates(
-        &mut templates,
-        &system,
-        &layout.state,
-        &layout.anticipated_plants,
-        DEFAULT_COST_SCALE_FACTOR,
-        &time_value,
+    let discount_factors = time_value.discount_factors();
+    assert!(
+        discount_factors.iter().any(|&d| d < 1.0),
+        "the 0.10 annual rate must give at least one one-step factor below 1.0, got {discount_factors:?}"
     );
+    for (t, template) in templates.templates.iter().enumerate() {
+        assert_eq!(
+            template.objective[layout.state.theta].to_bits(),
+            discount_factors[t].to_bits(),
+            "stage {t}: theta's objective must be the stage's one-step discount factor"
+        );
+    }
 
     let cumulative = time_value.cumulative_discount_factors();
     assert_eq!(
         cumulative.len(),
         templates.templates.len(),
-        "cumulative_discount_factors length must equal templates.len() after postprocess"
+        "cumulative_discount_factors length must equal templates.len()"
     );
     assert_eq!(
         cumulative[0], 1.0,
@@ -2420,13 +2423,97 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     );
     assert!(
         cumulative.iter().any(|&d| d < 1.0),
-        "postprocessed cumulative factors must drop below the 1.0 placeholder, got {cumulative:?}"
+        "cumulative factors must drop below 1.0, got {cumulative:?}"
     );
     assert!(
         cumulative[cumulative.len() - 1] < 1.0,
         "the final cumulative factor must be discounted below 1.0, got {}",
         cumulative[cumulative.len() - 1]
     );
+}
+
+/// Theta's coefficient lands on `state.theta`, never a hand re-derivation from
+/// `n_state`/`n_hydros`: this fixture's commitment-hold region (one anticipated
+/// thermal, `k_max = 1`) shifts `theta` off both (`n_state == 1`,
+/// `n_hydros == 0`, `theta == 2`), so a wrong re-derivation would silently
+/// discount the wrong column. Two builds that differ only in the one-step
+/// factors may differ in theta and in the anticipated decision's price (which
+/// carries its relative delivery discount), and nowhere else.
+#[test]
+fn theta_discount_lands_on_the_state_theta_column_with_anticipated_thermals() {
+    let system = anticipated_lead_config_system(2, 744.0, AnticipatedConfig::LeadStages(1), 1);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let resolved_params = empty_resolved_params();
+    let (topology, layout) = crate::test_support::resolved_layout_for(&system, &par_lp);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let study_dims = crate::test_support::build_study_dimensions(
+        &system,
+        InflowNonNegativityMethod::None,
+        layout.anticipated_plants.clone(),
+        0,
+    );
+    assert_eq!(
+        layout.state.theta, 2,
+        "fixture sanity: theta must sit past commit_out/commit_in"
+    );
+    assert_eq!(
+        layout.state.n_state, 1,
+        "fixture sanity: one commitment slot"
+    );
+
+    let build = |discount_factors: &[f64]| {
+        let time_value = TimeValue::from_parts(
+            discount_factors.to_vec(),
+            compute_cumulative_discount_factors(discount_factors),
+            vec![744.0; discount_factors.len()],
+            vec![0, 1],
+            PostStudyResolved::default(),
+        );
+        let inputs = crate::test_support::resolve_lp_build_inputs(
+            &system,
+            &[],
+            &hydro_result.production,
+            &study_dims,
+            &time_value,
+            &hydro_cell_index,
+            &resolved_params,
+        );
+        super::build_stage_templates(
+            &system,
+            &par_lp,
+            &hydro_result.production,
+            &hydro_result.evaporation,
+            &layout.state,
+            &topology,
+            inputs,
+        )
+    };
+
+    let discount_factors = [0.6_f64, 0.3_f64];
+    let undiscounted = build(&[1.0, 1.0]);
+    let discounted = build(&discount_factors);
+
+    let theta = layout.state.theta;
+    for (t, &d) in discount_factors.iter().enumerate() {
+        assert_eq!(
+            discounted.templates[t].objective[theta].to_bits(),
+            d.to_bits(),
+            "stage {t}: theta's objective must be the stage's one-step discount factor"
+        );
+        let decision_col =
+            discounted.geometry_per_stage[t].anticipated_decision_col(AnticipatedLocal::new(0));
+        for j in 0..discounted.templates[t].num_cols {
+            if j == theta || j == decision_col {
+                continue;
+            }
+            assert_eq!(
+                discounted.templates[t].objective[j].to_bits(),
+                undiscounted.templates[t].objective[j].to_bits(),
+                "stage {t} col {j}: only theta and the decision's delivery discount may move with the factors"
+            );
+        }
+    }
 }
 
 // ── Delivery-axis extended vectors (delivery_stage_ids / delivery_total_hours /

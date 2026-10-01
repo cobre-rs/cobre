@@ -171,7 +171,6 @@ fn fill_anticipated_state_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_
 fn fill_theta_column(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
     bufs.col_lower[layout.col_theta()] = 0.0;
     bufs.col_upper[layout.col_theta()] = f64::INFINITY;
-    bufs.objective[layout.col_theta()] = 1.0;
 }
 
 /// Turbine columns per hydro cell per block.
@@ -420,8 +419,9 @@ pub(super) fn fill_thermal_columns(
 ///
 /// The decision objective is priced in the DECISION stage's own units —
 /// `cost * delivery_hours * D(delivery)/D(decision)`, UNSCALED — so the θ
-/// cascade discounts it back to the root exactly once instead of twice; the
-/// caller divides every non-theta entry by `COST_SCALE_FACTOR`.
+/// cascade discounts it back to the root exactly once instead of twice;
+/// `finalize_stage_objective` divides every non-theta entry by the cost scale
+/// factor.
 pub(super) fn fill_anticipated_columns(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
@@ -1052,7 +1052,8 @@ fn fill_contract_columns(
 
 /// Per-stage `σ_fill`-target slack columns: one stage-level slack per Filling-phase
 /// filling hydro. `[0, +∞)`, objective is the RESOLVED `filling_target_violation_cost`,
-/// written UNSCALED (the caller divides non-theta entries by `COST_SCALE_FACTOR`).
+/// written UNSCALED (`finalize_stage_objective` divides non-theta entries by the
+/// cost scale factor).
 ///
 /// CRITICAL — the cost is NOT multiplied by stage hours. `σ_fill` is a
 /// STORAGE-VOLUME slack (hm³) and the cost is $/hm³, so `σ_fill · cost` is already
@@ -2732,8 +2733,8 @@ mod filling_phase_gating_tests {
                 f64::INFINITY,
                 "σ_fill col_upper = +∞ at id {stage_id}"
             );
-            // Cost is UNSCALED here (the global /COST_SCALE_FACTOR pass runs later in
-            // build_single_stage_template) and carries NO hours factor.
+            // Cost is UNSCALED here (the global division by the cost scale factor runs
+            // later in `finalize_stage_objective`) and carries NO hours factor.
             assert_eq!(
                 objective[col], FILLING_TARGET_COST,
                 "σ_fill objective = filling_target_violation_cost (unscaled, no hours) at id {stage_id}"
@@ -2857,8 +2858,8 @@ mod filling_phase_gating_tests {
         let col = col_start;
         assert_eq!(col_lower[col], 0.0, "σ^{{v-}} col_lower = 0");
         assert_eq!(col_upper[col], f64::INFINITY, "σ^{{v-}} col_upper = +∞");
-        // Cost is UNSCALED here (the global /COST_SCALE_FACTOR pass runs later in
-        // build_single_stage_template) and carries NO hours factor.
+        // Cost is UNSCALED here (the global division by the cost scale factor runs
+        // later in `finalize_stage_objective`) and carries NO hours factor.
         assert_eq!(
             objective[col], STORAGE_BELOW_COST,
             "σ^{{v-}} objective = storage_violation_below_cost (unscaled, no hours)"

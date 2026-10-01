@@ -2352,6 +2352,7 @@ prices a commitment against a different bound than its own box permits.
 
 Read: `lp/builder/columns.rs` (`fill_anticipated_columns`),
 `time_value.rs` (`TimeValue::relative_delivery_discount`),
+`lp/builder/template.rs` (`finalize_stage_objective`, which divides the stage-`t` price by the cost scale and gives θ the one-step factor that carries it to the root),
 `lp/builder/state_box.rs` (`fill_commitment_hold_box`, the box reader of the same
 delivery-anchored base),
 `lp/indexer/anticipated_gate.rs` (`is_anticipated_decision_active_for_delivery`),

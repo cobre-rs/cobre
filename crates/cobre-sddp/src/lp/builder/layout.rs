@@ -137,59 +137,50 @@ pub(crate) struct TemplateBuildCtx<'a> {
 /// block-layout struct — [`StageLayout::new`] allocates both columns and rows
 /// in one pass.
 pub(crate) struct AnticipatedLayout {
-    /// Start of the `anticipated_state_out_def` equality row block: one row
-    /// per plant with a genuine, ACTIVE decision this stage
+    /// The `anticipated_state_out_def` equality row block: one row per plant
+    /// with a genuine, ACTIVE decision this stage
     /// (`PointResolution::genuine_decisions_at(stage_idx).next()`, AND the
     /// delivery stage's commissioning window), pinning that decision's ring
-    /// slot (`ring_index(delivery_stage) mod k_max`) to its decision column. Immediately
-    /// after `row_anticipated_fishing_start`.
-    pub(crate) row_anticipated_state_out_def_start: usize,
-    /// Count of genuine, active decisions this stage (`Some` count of
-    /// `anticipated_decision_row_pos`); drives the active-row iteration.
-    pub(crate) n_anticipated_state_out_def_rows: usize,
+    /// slot (`ring_index(delivery_stage) mod k_max`) to its decision column.
+    /// Immediately after [`Self::fishing_rows`].
+    pub(crate) state_out_def_rows: Range<usize>,
     /// For each plant (local order), this stage's compact row position
     /// within the deposit-row family, or `None` when the plant has no
     /// genuine decision this stage (`PointResolution::genuine_decisions_at`)
     /// or the delivery is commissioning-inactive. Length `n_anticipated`.
     pub(crate) anticipated_decision_row_pos: Vec<Option<usize>>,
-    /// Start of the commitment-MATURITY rows: one per anticipated plant
-    /// whose delivery matures THIS stage (`PointResolution::is_anticipated_at`,
+    /// The commitment-MATURITY rows: one per anticipated plant whose
+    /// delivery matures THIS stage (`PointResolution::is_anticipated_at`,
     /// `false` at a `K = 0` self-delivery). Every such plant gets exactly one
     /// row here regardless of commissioning activeness — maturity always
     /// fishes, via [`super::entries::fill_anticipated_fishing_entries`].
     /// After operational-violation rows.
-    pub(crate) row_anticipated_fishing_start: usize,
-    /// Commitment-maturity row count this stage (`Some` count of
-    /// `anticipated_fishing_row_pos`).
-    pub(crate) n_anticipated_fishing_rows: usize,
+    pub(crate) fishing_rows: Range<usize>,
     /// For each anticipated plant (local order), this stage's compact row
     /// position within the maturity-row family, or `None` when no delivery
     /// matures this stage (including a `K = 0` self-delivery, which never
     /// matures through the ring at all). Length `n_anticipated`.
     pub(crate) anticipated_fishing_row_pos: Vec<Option<usize>>,
-    /// Start of the future-window commitment-carry equality rows (same-slot
-    /// hold, `slot^out − slot^in = 0`, routed by
+    /// The future-window commitment-carry equality rows (same-slot hold,
+    /// `slot^out − slot^in = 0`, routed by
     /// `fill_anticipated_slot_definition_entries` via
     /// [`super::delivery_ring::DeliveryRing::emit_carry_rows`]): every
     /// STRICTLY FUTURE, not-yet-due in-study slot, modular-addressed
     /// (`ring_index(delivery_target) mod k_max`). The commitment maturing THIS
     /// stage is never here — it always fishes through the maturity row above;
     /// carry-to-terminal belongs to the post-study-targeted slot alone, so this
-    /// family and `row_anticipated_fishing_start` never double-book the same
-    /// delivery. Immediately after `row_anticipated_state_out_def_start`.
-    pub(crate) row_anticipated_slot_definition_start: usize,
-    /// Count of future-window carrying slots this stage
-    /// (`anticipated_slot_row_pos`'s `Some` count).
-    pub(crate) n_anticipated_slot_definition_rows: usize,
+    /// family and [`Self::fishing_rows`] never double-book the same delivery.
+    /// Immediately after [`Self::state_out_def_rows`].
+    pub(crate) slot_definition_rows: Range<usize>,
     /// For each GLOBAL in-study commitment-hold slot (`(ring_index(m) mod k_max) *
     /// n_anticipated + plant`, modular slot-major/plant-minor —
     /// [`StateSpace::commitment_hold_in_study_offset`]'s own addressing), this
     /// stage's compact row position within the future-window carry-row
     /// family, or `None` when the slot's target is this stage's own latch
-    /// (`row_anticipated_state_out_def_start` owns it), matures THIS stage
-    /// (always fished instead, `row_anticipated_fishing_start` owns it), is
-    /// beyond the study horizon, or is not yet ready
-    /// (`PointResolution::is_ready_at`). Length `n_anticipated * k_max`.
+    /// ([`Self::state_out_def_rows`] owns it), matures THIS stage (always
+    /// fished instead, [`Self::fishing_rows`] owns it), is beyond the study
+    /// horizon, or is not yet ready (`PointResolution::is_ready_at`). Length
+    /// `n_anticipated * k_max`.
     pub(crate) anticipated_slot_row_pos: Vec<Option<usize>>,
 }
 
@@ -207,33 +198,29 @@ impl AnticipatedLayout {
         // maturity-row family is sparse like the deposit-row family below, not
         // the dense `state.n_anticipated` count.
         let n_stages = ctx.resolved.bounds.n_stages();
-        let (anticipated_fishing_row_pos, n_anticipated_fishing_rows) =
+        let (anticipated_fishing_row_pos, n_fishing_rows) =
             build_anticipated_fishing_row_pos(state, n_stages, stage_idx);
-        let row_anticipated_fishing_start = row.alloc(n_anticipated_fishing_rows).start;
+        let fishing_rows = row.alloc(n_fishing_rows);
 
-        let (anticipated_decision_row_pos, n_anticipated_state_out_def_rows) =
+        let (anticipated_decision_row_pos, n_state_out_def_rows) =
             build_anticipated_decision_row_pos(
                 state,
                 stage_idx,
                 ctx.study_dims.anticipated_plants.windows(),
                 ctx.time_value.delivery_stage_ids(),
             );
-        let row_anticipated_state_out_def_start = row.alloc(n_anticipated_state_out_def_rows).start;
+        let state_out_def_rows = row.alloc(n_state_out_def_rows);
 
-        let (anticipated_slot_row_pos, n_anticipated_slot_definition_rows) =
+        let (anticipated_slot_row_pos, n_slot_definition_rows) =
             build_anticipated_slot_row_pos(state, stage_idx);
-        let row_anticipated_slot_definition_start =
-            row.alloc(n_anticipated_slot_definition_rows).start;
+        let slot_definition_rows = row.alloc(n_slot_definition_rows);
 
         Self {
-            row_anticipated_state_out_def_start,
-            n_anticipated_state_out_def_rows,
+            state_out_def_rows,
             anticipated_decision_row_pos,
-            row_anticipated_fishing_start,
-            n_anticipated_fishing_rows,
+            fishing_rows,
             anticipated_fishing_row_pos,
-            row_anticipated_slot_definition_start,
-            n_anticipated_slot_definition_rows,
+            slot_definition_rows,
             anticipated_slot_row_pos,
         }
     }
@@ -459,7 +446,7 @@ fn build_transit_bucket_row_pos(
 /// row position within the future-window carry-row family, or `None` when the
 /// slot's physical delivery target `m` is a genuine fresh decision this stage
 /// (`decider[m] == Some(stage_idx)`, the deposit-row family
-/// `row_anticipated_state_out_def_start` owns it instead), beyond the
+/// [`AnticipatedLayout::state_out_def_rows`] owns it instead), beyond the
 /// EXTENDED delivery calendar (`m >= state.n_delivery()`),
 /// or not yet ready ([`for_each_live_commitment_slot`]'s own filter,
 /// structural padding). Masking on the study horizon (`m >= n_stages`)
@@ -1636,7 +1623,7 @@ impl StageLayout<'_> {
     #[inline]
     pub(crate) fn anticipated_fishing_row(&self, local: AnticipatedLocal) -> Option<usize> {
         position_table_row(
-            self.anticipated.row_anticipated_fishing_start,
+            self.anticipated.fishing_rows.start,
             &self.anticipated.anticipated_fishing_row_pos,
             local.get(),
         )
@@ -1647,7 +1634,7 @@ impl StageLayout<'_> {
     #[inline]
     pub(crate) fn anticipated_state_out_def_row(&self, local: AnticipatedLocal) -> Option<usize> {
         position_table_row(
-            self.anticipated.row_anticipated_state_out_def_start,
+            self.anticipated.state_out_def_rows.start,
             &self.anticipated.anticipated_decision_row_pos,
             local.get(),
         )

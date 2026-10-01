@@ -41,7 +41,7 @@ use super::{
     EVAP_COLS_PER_HYDRO, EVAP_F_MINUS_OFFSET, EVAP_F_PLUS_OFFSET, EVAP_FLOW_OFFSET, RangeCursor,
     StageLayout, StateSpace, TemplateBuildCtx, build_anticipated_decision_row_pos,
     build_anticipated_fishing_row_pos, build_anticipated_slot_row_pos,
-    build_transit_bucket_row_pos, fold_endpoint, variable_ref_is_block_independent,
+    build_transit_bucket_row_pos, entity_flat, fold_endpoint, variable_ref_is_block_independent,
 };
 
 // ── RangeCursor ──────────────────────────────────────────────────────────
@@ -2369,12 +2369,13 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
 
 // ── Anticipated-fishing row positioning ──────────────────────────────────
 
-/// `row_anticipated_fishing_start` immediately follows the operational
-/// violation row block, i.e. equals `row_min_generation_start + n_op_rows`.
+/// [`super::AnticipatedLayout::fishing_rows`] immediately follows the operational
+/// violation row block, i.e. its start equals `row_min_generation_start +
+/// n_op_rows`.
 ///
 /// Uses a zero-hydro context so `n_op_rows == 0`, which means the fishing
 /// start equals `row_min_generation_start` exactly. The algebraic identity
-/// `row_anticipated_fishing_start == row_min_generation_start + n_op_rows`
+/// `fishing_rows.start == row_min_generation_start + n_op_rows`
 /// is verified for the general formula; the case `n_op_rows > 0` is covered by
 /// the production code path (`n_hydros * n_blks` counts operational violation rows).
 ///
@@ -2384,7 +2385,7 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
 /// in-study guard reads the fixture's own `n_stages`, so a `stage_idx=1` probe
 /// needs a real study-stage count to stay in-study). At `stage_idx=1`:
 /// - `n_op_rows = 0 * 1 = 0` (no hydros)
-/// - `row_anticipated_fishing_start` must equal `row_min_generation_start + 0`
+/// - `fishing_rows.start` must equal `row_min_generation_start + 0`
 #[test]
 fn anticipated_fishing_row_offset_after_operational_violations() {
     let mut fixtures = AntFixturesWithNStages::new(4);
@@ -2398,21 +2399,23 @@ fn anticipated_fishing_row_offset_after_operational_violations() {
     // n_op_rows = n_hydros * n_blks = 0 * 1 = 0
     let n_op_rows = 0_usize;
     assert_eq!(
-        layout.anticipated.row_anticipated_fishing_start,
+        layout.anticipated.fishing_rows.start,
         layout.oper_violation.min_generation.start + n_op_rows,
-        "row_anticipated_fishing_start must equal row_min_generation_start + n_op_rows"
+        "fishing_rows.start must equal row_min_generation_start + n_op_rows"
     );
     assert_eq!(
-        layout.anticipated.n_anticipated_fishing_rows, 2,
-        "n_anticipated_fishing_rows must equal n_anticipated (2) under always-active predicate"
+        layout.anticipated.fishing_rows.len(),
+        2,
+        "fishing_rows.len() must equal n_anticipated (2) under always-active predicate"
     );
 }
 
-/// `n_anticipated_fishing_rows` equals `n_anticipated` at every stage under
-/// the always-active predicate. With `K_i=[1,2]` and `n_anticipated=2`, the
-/// count is 2 at every stage in `[0, 1, 2, 3]`. `n_stages=4` covers the
-/// probed range (`AntFixturesWithNStages`, not the study-stage-count-0
-/// `ZeroEntityFixtures` — see the sibling test above for why).
+/// [`super::AnticipatedLayout::fishing_rows`]'s length equals `n_anticipated` at
+/// every stage under the always-active predicate. With `K_i=[1,2]` and
+/// `n_anticipated=2`, the count is 2 at every stage in `[0, 1, 2, 3]`.
+/// `n_stages=4` covers the probed range (`AntFixturesWithNStages`, not the
+/// study-stage-count-0 `ZeroEntityFixtures` — see the sibling test above for
+/// why).
 #[test]
 fn anticipated_fishing_row_count_grows_with_stage() {
     let mut fixtures = AntFixturesWithNStages::new(4);
@@ -2425,8 +2428,9 @@ fn anticipated_fishing_row_count_grows_with_stage() {
     for (stage_idx, expected) in [(0_usize, 2), (1, 2), (2, 2), (3, 2)] {
         let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
         assert_eq!(
-            layout.anticipated.n_anticipated_fishing_rows, expected,
-            "n_anticipated_fishing_rows must equal {expected} at stage_idx={stage_idx}"
+            layout.anticipated.fishing_rows.len(),
+            expected,
+            "fishing_rows.len() must equal {expected} at stage_idx={stage_idx}"
         );
     }
 }
@@ -2908,7 +2912,7 @@ fn build_anticipated_fishing_row_pos_extended_axis_matches_study_only_count() {
 /// Build a `ResolvedBounds` with zero entities but the given `n_stages`.
 ///
 /// Used to exercise the `is_anticipated_decision_active` gate
-/// in `n_anticipated_state_out_def_rows` without needing real entity data.
+/// in [`super::AnticipatedLayout::state_out_def_rows`] without needing real entity data.
 fn bounds_with_n_stages(n_stages: usize) -> ResolvedBounds {
     bounds_with_pumping(0, n_stages)
 }
@@ -2953,8 +2957,8 @@ impl AntFixturesWithNStages {
 /// The ring's own out-block start (`StateSpace::commit_out.start`) is sourced
 /// from the state-region position immediately after `transit_buckets_out`
 /// (before `z_inflow`), `col_line_fwd_start` follows `anticipated_decision`
-/// directly, and `n_anticipated_state_out_def_rows` counts both active plants
-/// at stage 0.
+/// directly, and [`super::AnticipatedLayout::state_out_def_rows`] counts both active
+/// plants at stage 0.
 ///
 /// Fixture: `n_anticipated=2`, `K=[2,3]`, `k_max=3`, `n_stages=6`,
 /// `stage_idx=0`, `N=0`, `L=0`, `B=0`. Both plants are active: `0+2=2 < 6` and
@@ -2980,16 +2984,15 @@ fn test_layout_state_out_block_adjacent_to_decision() {
         layout.geometry.anticipated_decision.start + 2,
         "line_fwd must be immediately after the anticipated_decision block"
     );
-    assert_eq!(layout.anticipated.n_anticipated_state_out_def_rows, 2);
+    assert_eq!(layout.anticipated.state_out_def_rows.len(), 2);
     assert_eq!(
-        layout.anticipated.row_anticipated_state_out_def_start,
-        layout.anticipated.row_anticipated_fishing_start
-            + layout.anticipated.n_anticipated_fishing_rows
+        layout.anticipated.state_out_def_rows.start,
+        layout.anticipated.fishing_rows.end
     );
 }
 
-/// `n_anticipated_state_out_def_rows == 0` when all plants are inactive at
-/// the given stage, but the column block stays allocated.
+/// [`super::AnticipatedLayout::state_out_def_rows`] is empty when all plants are
+/// inactive at the given stage, but the column block stays allocated.
 ///
 /// Fixture: `n_anticipated=2`, `K=[2,3]`, `n_stages=6`, `stage_idx=5`.
 /// Both inactive: `5+2=7 >= 6` and `5+3=8 >= 6`.
@@ -3003,7 +3006,7 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 5);
 
-    assert_eq!(layout.anticipated.n_anticipated_state_out_def_rows, 0);
+    assert_eq!(layout.anticipated.state_out_def_rows.len(), 0);
     // Column block stays allocated at the ctx.state-region offset regardless of
     // activity: N*(1+L) + B = 0.
     assert_eq!(layout.state.commit_out.start, 0);
@@ -3017,7 +3020,7 @@ fn test_layout_no_anticipated_unchanged_num_cols() {
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
-    assert_eq!(layout.anticipated.n_anticipated_state_out_def_rows, 0);
+    assert_eq!(layout.anticipated.state_out_def_rows.len(), 0);
 }
 
 // ── Pumping-flow column region ─────────────────────────────────────────────
@@ -4320,7 +4323,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
             .get(i)
             .copied()
             .flatten()
-            .map(|pos| anticipated.row_anticipated_fishing_start + pos);
+            .map(|pos| entity_flat(&anticipated.fishing_rows, pos));
         let actual = layout.anticipated_fishing_row(AnticipatedLocal::new(i));
         assert_eq!(actual, expected, "fishing row disagreement at local {i}");
         if let Some(row) = actual {
@@ -4330,9 +4333,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
     fishing_rows.sort_unstable();
     assert_eq!(
         fishing_rows,
-        (anticipated.row_anticipated_fishing_start
-            ..anticipated.row_anticipated_fishing_start + anticipated.n_anticipated_fishing_rows)
-            .collect::<Vec<_>>(),
+        anticipated.fishing_rows.clone().collect::<Vec<_>>(),
         "fishing rows must exactly cover their allocated range"
     );
     counts[0] = fishing_rows.len();
@@ -4344,7 +4345,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
             .get(i)
             .copied()
             .flatten()
-            .map(|pos| anticipated.row_anticipated_state_out_def_start + pos);
+            .map(|pos| entity_flat(&anticipated.state_out_def_rows, pos));
         let actual = layout.anticipated_state_out_def_row(AnticipatedLocal::new(i));
         assert_eq!(
             actual, expected,
@@ -4357,10 +4358,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
     state_out_def_rows.sort_unstable();
     assert_eq!(
         state_out_def_rows,
-        (anticipated.row_anticipated_state_out_def_start
-            ..anticipated.row_anticipated_state_out_def_start
-                + anticipated.n_anticipated_state_out_def_rows)
-            .collect::<Vec<_>>(),
+        anticipated.state_out_def_rows.clone().collect::<Vec<_>>(),
         "state-out-def rows must exactly cover their allocated range"
     );
     counts[1] = state_out_def_rows.len();
@@ -4369,7 +4367,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
     let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
     ring.emit_carry_rows(
         &anticipated.anticipated_slot_row_pos,
-        anticipated.row_anticipated_slot_definition_start,
+        anticipated.slot_definition_rows.start,
         &mut col_entries,
     );
 
@@ -4380,7 +4378,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
             .get(i)
             .copied()
             .flatten()
-            .map(|pos| anticipated.row_anticipated_slot_definition_start + pos);
+            .map(|pos| entity_flat(&anticipated.slot_definition_rows, pos));
         let (slot, lane) = ring.slot_lane_at(i);
         let actual = col_entries[ring.out_col(slot, lane)]
             .first()
@@ -4396,10 +4394,7 @@ fn assert_row_addresses(layout: &StageLayout) -> [usize; 8] {
     slot_definition_rows.sort_unstable();
     assert_eq!(
         slot_definition_rows,
-        (anticipated.row_anticipated_slot_definition_start
-            ..anticipated.row_anticipated_slot_definition_start
-                + anticipated.n_anticipated_slot_definition_rows)
-            .collect::<Vec<_>>(),
+        anticipated.slot_definition_rows.clone().collect::<Vec<_>>(),
         "slot definition rows must exactly cover their allocated range"
     );
     counts[2] = slot_definition_rows.len();

@@ -504,7 +504,8 @@ pub(super) fn fill_anticipated_columns(
         }
     });
     debug_assert_eq!(
-        active_count, layout.anticipated.n_anticipated_state_out_def_rows,
+        active_count,
+        layout.anticipated.state_out_def_rows.len(),
         "active state_out column count must match def-row count at stage {stage_idx}"
     );
 }

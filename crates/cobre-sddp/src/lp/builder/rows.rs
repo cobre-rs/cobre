@@ -499,13 +499,14 @@ pub(super) fn fill_anticipated_fishing_rows(
     row_upper: &mut [f64],
 ) {
     let n_active = fill_zero_equality_rows(
-        layout.anticipated.row_anticipated_fishing_start,
+        layout.anticipated.fishing_rows.start,
         &layout.anticipated.anticipated_fishing_row_pos,
         row_lower,
         row_upper,
     );
     debug_assert_eq!(
-        n_active, layout.anticipated.n_anticipated_fishing_rows,
+        n_active,
+        layout.anticipated.fishing_rows.len(),
         "fill_anticipated_fishing_rows: active count mismatch"
     );
 }
@@ -522,13 +523,14 @@ pub(super) fn fill_anticipated_state_out_def_rows(
     row_upper: &mut [f64],
 ) {
     let n_active = fill_zero_equality_rows(
-        layout.anticipated.row_anticipated_state_out_def_start,
+        layout.anticipated.state_out_def_rows.start,
         &layout.anticipated.anticipated_decision_row_pos,
         row_lower,
         row_upper,
     );
     debug_assert_eq!(
-        n_active, layout.anticipated.n_anticipated_state_out_def_rows,
+        n_active,
+        layout.anticipated.state_out_def_rows.len(),
         "fill_anticipated_state_out_def_rows: active count mismatch"
     );
 }
@@ -546,7 +548,7 @@ fn fill_anticipated_slot_definition_rows(
     row_upper: &mut [f64],
 ) {
     fill_zero_equality_rows(
-        layout.anticipated.row_anticipated_slot_definition_start,
+        layout.anticipated.slot_definition_rows.start,
         &layout.anticipated.anticipated_slot_row_pos,
         row_lower,
         row_upper,

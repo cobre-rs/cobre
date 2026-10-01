@@ -74,7 +74,8 @@ pub(super) fn fill_anticipated_fishing_entries(
         n_active += 1;
     }
     debug_assert_eq!(
-        n_active, layout.anticipated.n_anticipated_fishing_rows,
+        n_active,
+        layout.anticipated.fishing_rows.len(),
         "fill_anticipated_fishing_entries: active count mismatch"
     );
 }
@@ -116,7 +117,8 @@ pub(super) fn fill_anticipated_state_out_def_entries(
         n_active += 1;
     });
     debug_assert_eq!(
-        n_active, layout.anticipated.n_anticipated_state_out_def_rows,
+        n_active,
+        layout.anticipated.state_out_def_rows.len(),
         "fill_anticipated_state_out_def_entries: active count mismatch at stage {stage_idx}"
     );
 }
@@ -135,17 +137,17 @@ fn fill_anticipated_slot_definition_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
-    let row_start = layout.anticipated.row_anticipated_slot_definition_start;
     let ring = DeliveryRing::anticipated(layout.state);
     let n_reachable = ring.emit_carry_rows(
         &layout.anticipated.anticipated_slot_row_pos,
-        row_start,
+        layout.anticipated.slot_definition_rows.start,
         col_entries,
     );
     debug_assert_eq!(
-        n_reachable, layout.anticipated.n_anticipated_slot_definition_rows,
+        n_reachable,
+        layout.anticipated.slot_definition_rows.len(),
         "fill_anticipated_slot_definition_entries: reachable-slot count must match \
-         n_anticipated_slot_definition_rows"
+         slot_definition_rows"
     );
 }
 
@@ -1989,7 +1991,7 @@ mod zero_cost_tests {
 
     use super::super::columns::{fill_stage_columns, fill_thermal_columns};
     use super::super::delivery_ring::ColumnBufs;
-    use super::super::layout::{StageLayout, TemplateBuildCtx};
+    use super::super::layout::{StageLayout, TemplateBuildCtx, entity_flat};
     use super::super::rows::{
         fill_anticipated_fishing_rows, fill_anticipated_state_out_def_rows, fill_stage_rows,
     };
@@ -2243,9 +2245,10 @@ mod zero_cost_tests {
 
         // Always-active: both plants active at stage 2 → two fishing rows.
         assert_eq!(
-            layout.anticipated.n_anticipated_fishing_rows, 2,
-            "expected n_anticipated_fishing_rows == 2, got {}",
-            layout.anticipated.n_anticipated_fishing_rows
+            layout.anticipated.fishing_rows.len(),
+            2,
+            "expected fishing_rows.len() == 2, got {}",
+            layout.anticipated.fishing_rows.len()
         );
 
         let mut row_lower = vec![f64::NAN; layout.rows.num_rows];
@@ -2254,8 +2257,8 @@ mod zero_cost_tests {
         fill_anticipated_fishing_rows(&layout, &mut row_lower, &mut row_upper);
 
         // Both plants write a row with (0.0, 0.0) bounds.
-        for local_idx in 0..layout.anticipated.n_anticipated_fishing_rows {
-            let row = layout.anticipated.row_anticipated_fishing_start + local_idx;
+        for local_idx in 0..layout.anticipated.fishing_rows.len() {
+            let row = entity_flat(&layout.anticipated.fishing_rows, local_idx);
             assert_eq!(
                 row_lower[row], 0.0,
                 "row_lower[{row}] (local_idx={local_idx}) expected 0.0, got {}",
@@ -2271,7 +2274,7 @@ mod zero_cost_tests {
 
     /// Always-active at `stage_idx = 0`: with `K = [1, 5]` and `n_anticipated = 2`,
     /// both plants are active even before their lead time elapses.
-    /// Asserts `layout.anticipated.n_anticipated_fishing_rows == 2`, that both rows
+    /// Asserts `layout.anticipated.fishing_rows.len() == 2`, that both rows
     /// are filled with `(0.0, 0.0)` bounds, and that the anticipated-ctx.state
     /// slot-0 column carries the `-block_hours_total` coupling for both plants.
     #[test]
@@ -2284,9 +2287,10 @@ mod zero_cost_tests {
 
         // Always-active: both plants are active at stage 0 → two fishing rows.
         assert_eq!(
-            layout.anticipated.n_anticipated_fishing_rows, 2,
-            "expected n_anticipated_fishing_rows == 2 at stage 0, got {}",
-            layout.anticipated.n_anticipated_fishing_rows
+            layout.anticipated.fishing_rows.len(),
+            2,
+            "expected fishing_rows.len() == 2 at stage 0, got {}",
+            layout.anticipated.fishing_rows.len()
         );
 
         let mut row_lower = vec![f64::NAN; layout.rows.num_rows];
@@ -2295,8 +2299,8 @@ mod zero_cost_tests {
         fill_anticipated_fishing_rows(&layout, &mut row_lower, &mut row_upper);
 
         // Both plants write equality rows with (0.0, 0.0) bounds.
-        for local_idx in 0..layout.anticipated.n_anticipated_fishing_rows {
-            let row = layout.anticipated.row_anticipated_fishing_start + local_idx;
+        for local_idx in 0..layout.anticipated.fishing_rows.len() {
+            let row = entity_flat(&layout.anticipated.fishing_rows, local_idx);
             assert_eq!(
                 row_lower[row], 0.0,
                 "row_lower[{row}] (local_idx={local_idx}) expected 0.0, got {}",
@@ -2318,8 +2322,8 @@ mod zero_cost_tests {
 
         let block_hours_total: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let expected_neg = -block_hours_total;
-        for local_idx in 0..layout.anticipated.n_anticipated_fishing_rows {
-            let row = layout.anticipated.row_anticipated_fishing_start + local_idx;
+        for local_idx in 0..layout.anticipated.fishing_rows.len() {
+            let row = entity_flat(&layout.anticipated.fishing_rows, local_idx);
             let col_state = layout.state.commit_in.start + local_idx;
             let state_couplings: Vec<&(usize, f64)> = col_entries[col_state]
                 .iter()
@@ -2460,9 +2464,10 @@ mod zero_cost_tests {
         let stage5 = two_block_stage(5, [372.0, 372.0]);
         let layout5 = StageLayout::new(&ctx, ctx.state, &stage5, 5);
         assert_eq!(
-            layout5.anticipated.n_anticipated_state_out_def_rows, 0,
+            layout5.anticipated.state_out_def_rows.len(),
+            0,
             "stage 5 inactive: expected no def rows, got {}",
-            layout5.anticipated.n_anticipated_state_out_def_rows,
+            layout5.anticipated.state_out_def_rows.len(),
         );
         let (col_lower5, col_upper5, _objective5) = fill_stage_columns(&ctx, &stage5, 5, &layout5);
         // At the inactive stage every anticipated slot is masked [0, 0] (no
@@ -2488,7 +2493,7 @@ mod zero_cost_tests {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// At stage 0 with `K=[2,3]` and `n_stages=6`, both plants are active
-    /// (0+2 < 6, 0+3 < 6), so `n_anticipated_state_out_def_rows == 2` and
+    /// (0+2 < 6, 0+3 < 6), so `state_out_def_rows.len() == 2` and
     /// both definition rows must have equality bounds `[0.0, 0.0]`.
     #[test]
     fn test_fill_anticipated_state_out_def_rows_two_active_plants() {
@@ -2497,9 +2502,10 @@ mod zero_cost_tests {
         let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         assert_eq!(
-            layout.anticipated.n_anticipated_state_out_def_rows, 2,
-            "expected n_anticipated_state_out_def_rows == 2, got {}",
-            layout.anticipated.n_anticipated_state_out_def_rows
+            layout.anticipated.state_out_def_rows.len(),
+            2,
+            "expected state_out_def_rows.len() == 2, got {}",
+            layout.anticipated.state_out_def_rows.len()
         );
 
         let mut row_lower = vec![f64::NEG_INFINITY; layout.rows.num_rows];
@@ -2507,7 +2513,7 @@ mod zero_cost_tests {
         fill_anticipated_state_out_def_rows(&layout, &mut row_lower, &mut row_upper);
 
         for k in 0..2 {
-            let row = layout.anticipated.row_anticipated_state_out_def_start + k;
+            let row = entity_flat(&layout.anticipated.state_out_def_rows, k);
             assert_eq!(
                 row_lower[row], 0.0,
                 "def row {k}: row_lower expected 0.0, got {}",
@@ -2543,7 +2549,7 @@ mod zero_cost_tests {
         let leads = [2_usize, 3];
         let k_max = 3_usize;
         for (k, &lead) in leads.iter().enumerate() {
-            let row = layout.anticipated.row_anticipated_state_out_def_start + k;
+            let row = entity_flat(&layout.anticipated.state_out_def_rows, k);
             let slot = lead % k_max; // delivery (0 + lead) mod k_max
             let col_state_out = DeliveryRing::anticipated(layout.state).out_col(slot, k);
             let col_decision = layout.geometry.anticipated_decision.start + k;
@@ -2595,14 +2601,14 @@ mod zero_cost_tests {
             "slot 2 reachable (m=5, row pos 0); slots 0 and 1 map to past-horizon \
              targets m=6, m=7 and are masked"
         );
-        assert_eq!(layout.anticipated.n_anticipated_slot_definition_rows, 1);
+        assert_eq!(layout.anticipated.slot_definition_rows.len(), 1);
 
         let (col_lower, col_upper, _objective) = fill_stage_columns(&ctx, &stage, 4, &layout);
         let (row_lower, row_upper) = fill_stage_rows(&ctx, &stage, 4, &layout);
         let col_entries = build_stage_matrix_entries(&ctx, &stage, 4, &layout);
 
         let base = layout.state.commit_out.start;
-        let row_start = layout.anticipated.row_anticipated_slot_definition_start;
+        let row_start = layout.anticipated.slot_definition_rows.start;
 
         // Reachable slot 2: free column, a defining row exists, and the CSC
         // carries the same-slot carry identity `out(2) - in(2) = 0`.
@@ -2680,7 +2686,6 @@ mod zero_cost_tests {
         let mut actual: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut actual);
 
-        let row_start = layout.anticipated.row_anticipated_slot_definition_start;
         let mut expected: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         let mut n_expected_reachable = 0_usize;
         for (global_slot, pos) in layout
@@ -2690,7 +2695,7 @@ mod zero_cost_tests {
             .enumerate()
         {
             let Some(pos) = *pos else { continue };
-            let row = row_start + pos;
+            let row = entity_flat(&layout.anticipated.slot_definition_rows, pos);
             // Carry identity: +1 on the outgoing slot, -1 on the SAME incoming slot.
             expected[ctx.state.commit_out.start + global_slot].push((row, 1.0));
             expected[ctx.state.commit_in.start + global_slot].push((row, -1.0));
@@ -2698,7 +2703,8 @@ mod zero_cost_tests {
         }
 
         assert_eq!(
-            n_expected_reachable, layout.anticipated.n_anticipated_slot_definition_rows,
+            n_expected_reachable,
+            layout.anticipated.slot_definition_rows.len(),
             "fixture sanity: reachable count must match the layout's own count"
         );
         assert!(
@@ -2748,15 +2754,18 @@ mod zero_cost_tests {
             let stage = two_block_stage(stage_idx, [372.0, 372.0]);
             let layout = StageLayout::new(&ctx, &state, &stage, stage_idx);
             assert_eq!(
-                layout.anticipated.n_anticipated_fishing_rows, 0,
+                layout.anticipated.fishing_rows.len(),
+                0,
                 "stage {stage_idx}: K=0 must exclude the fishing row entirely"
             );
             assert_eq!(
-                layout.anticipated.n_anticipated_state_out_def_rows, 0,
+                layout.anticipated.state_out_def_rows.len(),
+                0,
                 "stage {stage_idx}: K=0 must exclude the deposit row entirely"
             );
             assert_eq!(
-                layout.anticipated.n_anticipated_slot_definition_rows, 0,
+                layout.anticipated.slot_definition_rows.len(),
+                0,
                 "stage {stage_idx}: K=0 must exclude every interior carry row"
             );
             assert_eq!(
@@ -2818,15 +2827,18 @@ mod zero_cost_tests {
         let layout = StageLayout::new(&ctx, &state, &stage, 0);
 
         assert_eq!(
-            layout.anticipated.n_anticipated_fishing_rows, 0,
+            layout.anticipated.fishing_rows.len(),
+            0,
             "k_max == 0 must collapse the fishing-row family to zero"
         );
         assert_eq!(
-            layout.anticipated.n_anticipated_state_out_def_rows, 0,
+            layout.anticipated.state_out_def_rows.len(),
+            0,
             "k_max == 0 must collapse the deposit-row family to zero"
         );
         assert_eq!(
-            layout.anticipated.n_anticipated_slot_definition_rows, 0,
+            layout.anticipated.slot_definition_rows.len(),
+            0,
             "k_max == 0 must collapse the interior-carry-row family to zero"
         );
 
@@ -2915,7 +2927,7 @@ mod zero_cost_tests {
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
-        let row = layout.anticipated.row_anticipated_state_out_def_start;
+        let row = layout.anticipated.state_out_def_rows.start;
         let slot = 3_usize;
         let col_state_out = DeliveryRing::anticipated(layout.state).out_col(slot, 0);
         let col_decision = layout.geometry.anticipated_decision.start;
@@ -2994,7 +3006,7 @@ mod zero_cost_tests {
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
 
-        let row = layout.anticipated.row_anticipated_state_out_def_start;
+        let row = layout.anticipated.state_out_def_rows.start;
         let col_decision = layout.geometry.anticipated_decision.start;
         let ring = DeliveryRing::anticipated(layout.state);
         let col_slot0 = ring.out_col(0, 0);
@@ -3093,7 +3105,7 @@ mod zero_cost_tests {
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 2, &layout, &mut col_entries);
 
-        let row = layout.anticipated.row_anticipated_fishing_start;
+        let row = layout.anticipated.fishing_rows.start;
         let col_in_slot2 = layout.state.commit_in.start + 2;
         let block_hours_total: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         let expected_neg = -block_hours_total;

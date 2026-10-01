@@ -2160,13 +2160,12 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
             "stage {stage_idx}: state_start"
         );
         assert_eq!(
-            layout_a.anticipated.row_anticipated_fishing_start,
-            layout_b.anticipated.row_anticipated_fishing_start,
+            layout_a.anticipated.fishing_rows.start, layout_b.anticipated.fishing_rows.start,
             "stage {stage_idx}: fish_start"
         );
         assert_eq!(
-            layout_a.anticipated.n_anticipated_fishing_rows,
-            layout_b.anticipated.n_anticipated_fishing_rows,
+            layout_a.anticipated.fishing_rows.len(),
+            layout_b.anticipated.fishing_rows.len(),
             "stage {stage_idx}: n_fish_rows"
         );
 
@@ -2184,14 +2183,14 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
                 .state
                 .anticipated_resolution
                 .ring_size(&ctx_a.state.anticipated_lead_stages),
-            layout_a.anticipated.row_anticipated_fishing_start,
-            layout_b.anticipated.row_anticipated_fishing_start,
-            layout_a.anticipated.n_anticipated_fishing_rows,
-            layout_a.anticipated.row_anticipated_state_out_def_start,
-            layout_b.anticipated.row_anticipated_state_out_def_start,
-            layout_a.anticipated.n_anticipated_state_out_def_rows,
-            layout_a.anticipated.row_anticipated_slot_definition_start,
-            layout_b.anticipated.row_anticipated_slot_definition_start,
+            layout_a.anticipated.fishing_rows.start,
+            layout_b.anticipated.fishing_rows.start,
+            layout_a.anticipated.fishing_rows.len(),
+            layout_a.anticipated.state_out_def_rows.start,
+            layout_b.anticipated.state_out_def_rows.start,
+            layout_a.anticipated.state_out_def_rows.len(),
+            layout_a.anticipated.slot_definition_rows.start,
+            layout_b.anticipated.slot_definition_rows.start,
             &layout_a.anticipated.anticipated_slot_row_pos,
             &layout_b.anticipated.anticipated_slot_row_pos,
             stage_idx,

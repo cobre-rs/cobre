@@ -3818,6 +3818,99 @@ mod anticipated_closed_form_lb_k1_single_thermal {
         );
     }
 }
+mod discounted_delivery_closed_form_lb {
+    use cobre_solver::ActiveSolver;
+
+    use super::common::in_code_studies::{
+        DELIVERY_ORACLE_ANNUAL_RATE, DELIVERY_ORACLE_ANTICIPATED_CAP_MW,
+        DELIVERY_ORACLE_ANTICIPATED_COST, DELIVERY_ORACLE_BACKUP_COST, DELIVERY_ORACLE_LOAD_MW,
+        DELIVERY_ORACLE_POST_STUDY_COST, DELIVERY_ORACLE_POST_STUDY_HOURS,
+        DELIVERY_ORACLE_POST_STUDY_MIN_MW, DELIVERY_ORACLE_STAGE_DAYS,
+        DELIVERY_ORACLE_STAGE0_HOURS, DELIVERY_ORACLE_STAGE1_BLOCK_HOURS,
+        discounted_delivery_oracle_study,
+    };
+    use super::common::{StubComm, build_setup_in_code};
+
+    const REL_TOL: f64 = 1e-9;
+    const STAGE1_HOURS: f64 =
+        DELIVERY_ORACLE_STAGE1_BLOCK_HOURS[0] + DELIVERY_ORACLE_STAGE1_BLOCK_HOURS[1];
+
+    const STAGE1_ANTICIPATED_COST: f64 = DELIVERY_ORACLE_ANTICIPATED_COST[1];
+
+    const _: () = assert!(STAGE1_HOURS != DELIVERY_ORACLE_STAGE0_HOURS);
+    const _: () = assert!(STAGE1_HOURS != DELIVERY_ORACLE_POST_STUDY_HOURS);
+    const _: () = assert!(DELIVERY_ORACLE_ANTICIPATED_COST[0] != STAGE1_ANTICIPATED_COST);
+
+    /// derived: c_b·H_0·L + D_1·H_1·(c_a1·A + c_b·(L − A)) + c_p·H_2·D_2·P
+    fn closed_form_total_cost(annual_rate: f64) -> f64 {
+        let one_step_factor = |days: i64| {
+            if annual_rate == 0.0 {
+                1.0
+            } else {
+                (1.0 + annual_rate).powf(-(days as f64) / 365.25)
+            }
+        };
+        let d_1 = one_step_factor(DELIVERY_ORACLE_STAGE_DAYS[0]);
+        let d_2 = d_1 * one_step_factor(DELIVERY_ORACLE_STAGE_DAYS[1]);
+        DELIVERY_ORACLE_BACKUP_COST * DELIVERY_ORACLE_STAGE0_HOURS * DELIVERY_ORACLE_LOAD_MW
+            + d_1
+                * STAGE1_HOURS
+                * (STAGE1_ANTICIPATED_COST * DELIVERY_ORACLE_ANTICIPATED_CAP_MW
+                    + DELIVERY_ORACLE_BACKUP_COST
+                        * (DELIVERY_ORACLE_LOAD_MW - DELIVERY_ORACLE_ANTICIPATED_CAP_MW))
+            + DELIVERY_ORACLE_POST_STUDY_COST
+                * DELIVERY_ORACLE_POST_STUDY_HOURS
+                * d_2
+                * DELIVERY_ORACLE_POST_STUDY_MIN_MW
+    }
+
+    fn assert_trained_lb_matches_closed_form(annual_rate: f64) {
+        let (system, config) = discounted_delivery_oracle_study(annual_rate);
+        let mut setup = build_setup_in_code(system, &config);
+        let comm = StubComm;
+        let mut solver = ActiveSolver::new().expect("ActiveSolver::new");
+
+        let outcome = setup
+            .train(&mut solver, &comm, 1, ActiveSolver::new, None, None)
+            .expect("train must not return Err");
+        assert!(
+            outcome.error.is_none(),
+            "training error: {:?}",
+            outcome.error
+        );
+
+        let expected = closed_form_total_cost(annual_rate);
+        let final_lb = outcome.result.final_lb;
+        assert!(
+            (final_lb - expected).abs() <= REL_TOL * expected,
+            "closed-form LB mismatch at annual rate {annual_rate}: built {final_lb}, \
+             expected {expected}"
+        );
+        let final_gap = outcome.result.final_gap;
+        assert!(
+            final_gap.abs() < 1e-9,
+            "final_gap must be ~0 on a deterministic fixture; got {final_gap}"
+        );
+    }
+
+    #[test]
+    fn discounted_delivery_oracle_matches_its_closed_form() {
+        assert_trained_lb_matches_closed_form(DELIVERY_ORACLE_ANNUAL_RATE);
+    }
+
+    #[test]
+    fn discounted_delivery_oracle_zero_rate_twin_matches_its_own_closed_form() {
+        assert_trained_lb_matches_closed_form(0.0);
+
+        let undiscounted = closed_form_total_cost(0.0);
+        let discounted = closed_form_total_cost(DELIVERY_ORACLE_ANNUAL_RATE);
+        assert!(
+            (discounted - undiscounted).abs() > 1e3 * REL_TOL * undiscounted,
+            "the rate must move the closed form: discounted {discounted}, undiscounted \
+             {undiscounted}"
+        );
+    }
+}
 mod lead_time_single_decider_end_to_end {
     //! The first true `LeadTime` parse→validate→setup→train load-path exercise:
     //! a single-decider `LeadTime` thermal (`|C(t)| <= 1` everywhere) must solve

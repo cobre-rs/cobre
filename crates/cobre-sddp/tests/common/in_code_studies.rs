@@ -14,10 +14,12 @@
 //! `chronological_noise_study`'s `pumping_station` field adds a pumping
 //! station whose source hydro sits at a nonzero canonical position, a
 //! combination no committed deck combines.
+//! `discounted_delivery_oracle_study` backs `discounted_delivery_closed_form_lb`
+//! in `tests/anticipated_core.rs`.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, TimeDelta};
 use cobre_core::entities::hydro::{HydroGenerationModel, HydroPenalties};
 use cobre_core::scenario::{InflowModel, LoadModel, NcsModel};
 use cobre_core::temporal::{
@@ -683,6 +685,254 @@ fn build_mixed_lead_system(reversed: bool) -> cobre_core::System {
 #[must_use]
 pub fn mixed_lead_anticipated_study(reversed: bool) -> (cobre_core::System, Config) {
     (build_mixed_lead_system(reversed), build_config())
+}
+
+pub const DELIVERY_ORACLE_ANNUAL_RATE: f64 = 0.06;
+pub const DELIVERY_ORACLE_STAGE_DAYS: [i64; 2] = [31, 28];
+pub const DELIVERY_ORACLE_STAGE0_HOURS: f64 = 744.0;
+pub const DELIVERY_ORACLE_STAGE1_BLOCK_HOURS: [f64; 2] = [400.0, 272.0];
+pub const DELIVERY_ORACLE_POST_STUDY_HOURS: f64 = 744.0;
+pub const DELIVERY_ORACLE_LOAD_MW: f64 = 50.0;
+pub const DELIVERY_ORACLE_ANTICIPATED_CAP_MW: f64 = 40.0;
+pub const DELIVERY_ORACLE_POST_STUDY_MIN_MW: f64 = 30.0;
+pub const DELIVERY_ORACLE_BACKUP_COST: f64 = 100.0;
+pub const DELIVERY_ORACLE_ANTICIPATED_COST: [f64; 2] = [15.0, 10.0];
+pub const DELIVERY_ORACLE_POST_STUDY_COST: f64 = 20.0;
+
+const DELIVERY_ORACLE_N_STAGES: usize = DELIVERY_ORACLE_STAGE_DAYS.len();
+const DELIVERY_ORACLE_BACKUP_CAP_MW: f64 = 200.0;
+const DELIVERY_ORACLE_BUS_ID: EntityId = EntityId(1);
+const DELIVERY_ORACLE_ANTICIPATED_ID: EntityId = EntityId(2);
+const DELIVERY_ORACLE_BACKUP_ID: EntityId = EntityId(3);
+
+fn delivery_oracle_boundaries() -> [NaiveDate; DELIVERY_ORACLE_N_STAGES + 1] {
+    let start = NaiveDate::from_ymd_opt(2025, 1, 1)
+        .expect("discounted_delivery_oracle_study: valid start date");
+    let mid = start + TimeDelta::days(DELIVERY_ORACLE_STAGE_DAYS[0]);
+    [
+        start,
+        mid,
+        mid + TimeDelta::days(DELIVERY_ORACLE_STAGE_DAYS[1]),
+    ]
+}
+
+fn delivery_oracle_stages() -> Vec<Stage> {
+    let boundaries = delivery_oracle_boundaries();
+    let block_hours: [&[f64]; DELIVERY_ORACLE_N_STAGES] = [
+        &[DELIVERY_ORACLE_STAGE0_HOURS],
+        &DELIVERY_ORACLE_STAGE1_BLOCK_HOURS,
+    ];
+    (0..DELIVERY_ORACLE_N_STAGES)
+        .map(|i| {
+            make_stage(
+                i,
+                StageSpec {
+                    start_date: boundaries[i],
+                    end_date: boundaries[i + 1],
+                    season_id: None,
+                    blocks: block_hours[i]
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &duration_hours)| Block {
+                            index,
+                            name: format!("BLK{index}"),
+                            duration_hours,
+                        })
+                        .collect(),
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: false,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 1,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                },
+            )
+        })
+        .collect()
+}
+
+fn delivery_oracle_bounds() -> ResolvedBounds {
+    let backup_capacity = ThermalBlockBounds {
+        min_generation_mw: 0.0,
+        max_generation_mw: DELIVERY_ORACLE_BACKUP_CAP_MW,
+    };
+    let mut bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 0,
+            n_thermals: 2,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: DELIVERY_ORACLE_N_STAGES,
+            k_max: 1,
+        },
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 0.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds::default(),
+            thermal: ThermalStageBounds {
+                cost_per_mwh: DELIVERY_ORACLE_BACKUP_COST,
+            },
+            thermal_block: backup_capacity,
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    for axis in 0..=DELIVERY_ORACLE_N_STAGES {
+        *bounds.thermal_bounds_mut(0, axis) = ThermalStageBounds {
+            cost_per_mwh: DELIVERY_ORACLE_ANTICIPATED_COST[axis.min(DELIVERY_ORACLE_N_STAGES - 1)],
+        };
+        *bounds.thermal_block_base_mut(0, axis) = ThermalBlockBounds {
+            min_generation_mw: 0.0,
+            max_generation_mw: DELIVERY_ORACLE_ANTICIPATED_CAP_MW,
+        };
+    }
+    bounds
+}
+
+fn delivery_oracle_post_study(study_end: NaiveDate) -> PostStudyStages {
+    PostStudyStages {
+        stages: vec![PostStudyStage {
+            start_date: study_end,
+            duration_hours: DELIVERY_ORACLE_POST_STUDY_HOURS,
+        }],
+        thermal_bounds: vec![PostStudyThermalBound {
+            thermal_id: DELIVERY_ORACLE_ANTICIPATED_ID,
+            post_study_stage_index: 0,
+            cost_per_mwh: DELIVERY_ORACLE_POST_STUDY_COST,
+            min_mw: DELIVERY_ORACLE_POST_STUDY_MIN_MW,
+            max_mw: DELIVERY_ORACLE_ANTICIPATED_CAP_MW,
+        }],
+    }
+}
+
+fn build_delivery_oracle_system(annual_discount_rate: f64) -> cobre_core::System {
+    let boundaries = delivery_oracle_boundaries();
+    let bus = make_bus(
+        DELIVERY_ORACLE_BUS_ID,
+        BusSpec {
+            name: "B1".to_string(),
+            operational_start_date: boundaries[0],
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        },
+    );
+    let thermal_anticipated = make_thermal(
+        DELIVERY_ORACLE_ANTICIPATED_ID,
+        ThermalSpec {
+            name: "T_ant".to_string(),
+            operational_start_date: boundaries[0],
+            bus_id: DELIVERY_ORACLE_BUS_ID,
+            min_generation_mw: 0.0,
+            max_generation_mw: DELIVERY_ORACLE_ANTICIPATED_CAP_MW,
+            cost_per_mwh: DELIVERY_ORACLE_ANTICIPATED_COST[0],
+            anticipated_config: Some(AnticipatedConfig::LeadStages(1)),
+            ..Default::default()
+        },
+    );
+    let thermal_backup = make_thermal(
+        DELIVERY_ORACLE_BACKUP_ID,
+        ThermalSpec {
+            name: "T_backup".to_string(),
+            operational_start_date: boundaries[0],
+            bus_id: DELIVERY_ORACLE_BUS_ID,
+            min_generation_mw: 0.0,
+            max_generation_mw: DELIVERY_ORACLE_BACKUP_CAP_MW,
+            cost_per_mwh: DELIVERY_ORACLE_BACKUP_COST,
+            ..Default::default()
+        },
+    );
+    let load_models: Vec<LoadModel> = (0..DELIVERY_ORACLE_N_STAGES)
+        .map(|i| LoadModel {
+            bus_id: DELIVERY_ORACLE_BUS_ID,
+            stage_id: i as i32,
+            mean_mw: DELIVERY_ORACLE_LOAD_MW,
+            std_mw: 0.0,
+        })
+        .collect();
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros: 0,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs: 0,
+            n_stages: DELIVERY_ORACLE_N_STAGES,
+        },
+        &PenaltiesDefaults {
+            hydro: hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+    let initial_conditions = InitialConditions {
+        storage: vec![],
+        filling_storage: vec![],
+        past_anticipated_commitments: vec![AnticipatedCommitmentHistory {
+            thermal_id: DELIVERY_ORACLE_ANTICIPATED_ID,
+            start_date: boundaries[0],
+            end_date: boundaries[1],
+            value_mw: 0.0,
+        }],
+        recent_observations: vec![],
+        past_defluences: vec![],
+    };
+    let policy_graph = HorizonGraph {
+        stage_discount_rate_overrides: std::collections::BTreeMap::new(),
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate,
+        transitions: vec![],
+        nodes: Vec::new(),
+        season_map: None,
+    };
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .thermals(vec![thermal_anticipated, thermal_backup])
+        .stages(delivery_oracle_stages())
+        .load_models(load_models)
+        .bounds(delivery_oracle_bounds())
+        .penalties(penalties)
+        .initial_conditions(initial_conditions)
+        .policy_graph(policy_graph)
+        .post_study_stages(Some(delivery_oracle_post_study(boundaries[2])))
+        .build()
+        .expect("discounted_delivery_oracle_study: valid system")
+}
+
+/// Two stages (Jan and Feb 2025; the second has two unequal blocks) with a
+/// `LeadStages(1)` anticipated thermal delivering at the second stage and one
+/// post-study delivery, discounted at `annual_discount_rate`: unequal delivery
+/// hours, a positive rate and a post-study delivery in one no-hydro study.
+#[must_use]
+pub fn discounted_delivery_oracle_study(annual_discount_rate: f64) -> (cobre_core::System, Config) {
+    let mut config = build_config();
+    config.training.stopping_rules = Some(vec![StoppingRuleConfig::IterationLimit { limit: 3 }]);
+    (build_delivery_oracle_system(annual_discount_rate), config)
 }
 
 const EVAP_N_STAGES: usize = 2;

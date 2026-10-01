@@ -317,9 +317,8 @@ pub(crate) fn build_external_ncs_library(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        Block, BlockMode, ExternalLoadRow, ExternalScenarioRow, Hydro, HydroGenerationModel,
-        HydroPenalties, InflowModel, NoiseMethod, ScenarioSourceConfig, StageRiskConfig,
-        StageStateConfig, System, SystemBuilder,
+        Block, BlockMode, ExternalLoadRow, ExternalScenarioRow, InflowModel, NoiseMethod,
+        ScenarioSourceConfig, StageRiskConfig, StageStateConfig, System, SystemBuilder,
     };
     use cobre_stochastic::{PrecomputedNormal, StochasticError, derive_external_sample_moments};
 
@@ -375,45 +374,13 @@ mod tests {
         }
     }
 
-    fn minimal_hydro(id: EntityId) -> Hydro {
-        let mut hydro = Hydro {
-            id,
-            name: String::new(),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            downstream_id: None,
-            travel_time_hours: None,
-            entry_stage_id: None,
-            exit_stage_id: None,
-            min_storage_hm3: 0.0,
-            max_storage_hm3: 0.0,
-            min_outflow_m3s: 0.0,
-            max_outflow_m3s: None,
-            generation_model: HydroGenerationModel::ConstantProductivity,
-            min_turbined_m3s: 0.0,
-            max_turbined_m3s: 0.0,
-            specific_productivity_mw_per_m3s_per_m: None,
-            min_generation_mw: 0.0,
-            max_generation_mw: 0.0,
-            unit_groups: Vec::new(),
-            tailrace: None,
-            hydraulic_losses: None,
-            efficiency: None,
-            evaporation_coefficients_mm: None,
-            evaporation_reference_volumes_hm3: None,
-            diversion: None,
-            filling: None,
-            penalties: HydroPenalties::uniform(0.0),
-        };
-        hydro.declare_mirror_unit_group(EntityId(1));
-        hydro
-    }
-
     /// A `System` holding one hydro and the given external inflow rows — the
     /// production reader for [`build_external_inflow_library`]'s new
     /// `system`-sourced inputs.
     fn inflow_system(hydro_id: EntityId, external_rows: Vec<ExternalScenarioRow>) -> System {
+        let idx = usize::try_from(hydro_id.0).unwrap();
         SystemBuilder::new()
-            .hydros(vec![minimal_hydro(hydro_id)])
+            .hydros(vec![crate::test_support::geometry_hydro(idx)])
             .external_scenarios(external_rows)
             .build()
             .expect("system must build")

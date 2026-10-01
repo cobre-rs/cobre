@@ -63,12 +63,6 @@ pub(super) fn for_each_fpha_plane<F>(
             }
         };
         let n_planes = planes.len();
-        debug_assert_eq!(
-            n_planes,
-            layout.fpha_planes_per_hydro[local_idx],
-            "plane count mismatch for FPHA hydro {} at stage {stage_idx}",
-            h.get()
-        );
         let local_idx = FphaLocal::new(local_idx);
         let cell_base = layout.fpha_cell_local_start[local_idx.get()];
         for (offset, c) in ctx.hydro_cell_index.cells_of(h).enumerate() {

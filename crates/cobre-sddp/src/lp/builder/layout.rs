@@ -400,8 +400,6 @@ pub(crate) struct StageLayout<'a> {
     /// identity (`[0, 1, 2, ...]`) while every FPHA plant has one cell. Single
     /// owner of the FPHA-cell prefix sum, read by [`Self::fpha_local_first_cell`].
     pub(crate) fpha_cell_local_start: Vec<usize>,
-    /// Hyperplane count per FPHA hydro at this stage.
-    pub(crate) fpha_planes_per_hydro: Vec<usize>,
     /// Evaporation slots per evaporating hydro at this stage: single-owner result
     /// of [`evaporation_slot_count`] (`1` on a parallel stage, `n_blks` on a
     /// chronological one) — the stride every evaporation column/row family uses.
@@ -656,9 +654,8 @@ fn identify_fpha_hydros(
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
     stage_id: i32,
-) -> (Vec<HydroSys>, Vec<usize>) {
+) -> Vec<HydroSys> {
     let mut fpha_hydro_indices: Vec<HydroSys> = Vec::new();
-    let mut fpha_planes_per_hydro: Vec<usize> = Vec::new();
     for h_idx in 0..ctx.hydros.len() {
         let hydro = &ctx.hydros[h_idx];
         if matches!(
@@ -667,14 +664,14 @@ fn identify_fpha_hydros(
         ) {
             continue;
         }
-        if let ResolvedProductionModel::Fpha { planes, .. } =
-            ctx.production_models.model(h_idx, stage_idx)
-        {
+        if matches!(
+            ctx.production_models.model(h_idx, stage_idx),
+            ResolvedProductionModel::Fpha { .. }
+        ) {
             fpha_hydro_indices.push(HydroSys::new(h_idx));
-            fpha_planes_per_hydro.push(planes.len());
         }
     }
-    (fpha_hydro_indices, fpha_planes_per_hydro)
+    fpha_hydro_indices
 }
 
 /// Collect the indices of hydros with linearized evaporation at this stage.
@@ -1099,7 +1096,7 @@ pub(super) enum StageProductionRole {
 fn fpha_cell_offsets(
     ctx: &TemplateBuildCtx<'_>,
     fpha_hydro_indices: &[HydroSys],
-    fpha_planes_per_hydro: &[usize],
+    stage_idx: usize,
     n_h: usize,
 ) -> (Vec<Option<FphaLocal>>, Vec<usize>, usize, usize) {
     let mut fpha_local_index: Vec<Option<FphaLocal>> = vec![None; n_h];
@@ -1111,7 +1108,18 @@ fn fpha_cell_offsets(
         fpha_cell_local_start.push(n_fpha_cells);
         let n_cells_h = ctx.hydro_cell_index.cells_of(h).len();
         n_fpha_cells += n_cells_h;
-        total_fpha_rows += n_cells_h * fpha_planes_per_hydro[local_idx];
+        let n_planes = match ctx.production_models.model(h.get(), stage_idx) {
+            ResolvedProductionModel::Fpha { planes, .. } => planes.len(),
+            ResolvedProductionModel::ConstantProductivity { .. } => {
+                debug_assert!(
+                    false,
+                    "fpha_hydro_indices contains hydro {} but model is ConstantProductivity",
+                    h.get()
+                );
+                0
+            }
+        };
+        total_fpha_rows += n_cells_h * n_planes;
     }
     (
         fpha_local_index,
@@ -1280,8 +1288,7 @@ impl<'a> StageLayout<'a> {
         let n_h = state_layout.hydro_count;
         let n_cells = ctx.hydro_cell_index.n_cells();
 
-        let (fpha_hydro_indices, fpha_planes_per_hydro) =
-            identify_fpha_hydros(ctx, stage_idx, stage.id);
+        let fpha_hydro_indices = identify_fpha_hydros(ctx, stage_idx, stage.id);
         let filling_target_hydro_indices = identify_filling_target_hydros(ctx, stage.id);
         let filled_min_storage_floor_hydro_indices =
             identify_filled_min_storage_floor_hydros(ctx, stage.id);
@@ -1289,7 +1296,7 @@ impl<'a> StageLayout<'a> {
         // `n_fpha_cells` (the running total) sizes the FPHA generation column
         // family; `total_fpha_rows` sizes its plane rows.
         let (fpha_local_index, fpha_cell_local_start, n_fpha_cells, total_fpha_rows) =
-            fpha_cell_offsets(ctx, &fpha_hydro_indices, &fpha_planes_per_hydro, n_h);
+            fpha_cell_offsets(ctx, &fpha_hydro_indices, stage_idx, n_h);
         let n_evap_slots = evaporation_slot_count(stage.block_mode, n_blks);
 
         let mut geometry = StageGeometry::unallocated(stage.block_mode, n_blks);
@@ -1427,7 +1434,6 @@ impl<'a> StageLayout<'a> {
             clock,
             fpha_local_index,
             fpha_cell_local_start,
-            fpha_planes_per_hydro,
             n_evap_slots,
             generic_constraint_rows: generic.generic_constraint_rows,
         }

@@ -1,4 +1,4 @@
-//! `Q1` probe — sign convention of `reduced_cost` for fixed-at-bound columns.
+//! Sign convention of `reduced_cost` for fixed-at-bound columns.
 //!
 //! Whether `HiGHS` reports `reduced_cost` for a column fixed at `lb == ub` so it
 //! numerically matches the row dual of the equivalent equality row. Two
@@ -23,7 +23,7 @@
 use cobre_solver::{HighsSolver, RowBatch, SolverInterface, StageTemplate};
 
 #[test]
-fn q1_sign_convention_row_equality_vs_column_bound() {
+fn fixed_column_reduced_cost_matches_equality_row_dual() {
     // LP-R: row 0 = x2+x3 >= 4, row 1 = x1 == 7.
     let template_r = StageTemplate {
         num_cols: 3,

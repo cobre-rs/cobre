@@ -512,13 +512,12 @@ impl StateSpace {
     #[inline]
     #[must_use]
     pub fn lp_column_for_state(&self, j: StateDim) -> OutCol {
-        let j = j.get();
         debug_assert_eq!(
             self.state_to_lp_column_map.len(),
             self.n_state,
             "state_to_lp_column_map must be finalized to n_state length"
         );
-        self.state_to_lp_column_map[j]
+        self.state_to_lp_column_map[j.get()]
     }
 
     /// Map a state-vector index to its **incoming-state** LP column — the column

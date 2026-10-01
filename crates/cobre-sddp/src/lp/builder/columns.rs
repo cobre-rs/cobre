@@ -359,13 +359,13 @@ pub(super) fn fill_thermal_columns(
             .anticipated_plants
             .local_of(ThermalSys::new(t_idx))
             .is_some_and(|local| {
-                layout
-                    .anticipated
-                    .anticipated_fishing_row_pos
-                    .get(local.get())
-                    .copied()
-                    .flatten()
-                    .is_some()
+                matches!(
+                    layout
+                        .anticipated
+                        .anticipated_fishing_row_pos
+                        .get(local.get()),
+                    Some(Some(_))
+                )
             });
         for blk in 0..layout.clock.n_blks() {
             let tb = ctx
@@ -1012,11 +1012,11 @@ fn fill_contract_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
+    let (n_contract_import, n_contract_export) = contract_direction_counts(ctx.contracts);
     for (c_sys, contract) in ctx.contracts.iter().enumerate() {
         let active =
             commissioning_active(contract.entry_stage_id, contract.exit_stage_id, stage.id);
         let (contract_type, family_slot) = contract_family_slot(ctx.contracts, c_sys);
-        let (n_contract_import, n_contract_export) = contract_direction_counts(ctx.contracts);
         let family_count = match contract_type {
             ContractType::Import => n_contract_import,
             ContractType::Export => n_contract_export,

@@ -35,6 +35,7 @@ use crate::{
 };
 
 /// Rank-0 risk-measure aggregation scratch, reused across iterations.
+#[derive(Default)]
 pub struct LbEvalScratch {
     /// Per-opening objectives.
     pub objectives_buf: Vec<f64>,
@@ -46,16 +47,7 @@ impl LbEvalScratch {
     /// Empty buffers; no allocation until the first `evaluate_lower_bound` call.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            objectives_buf: Vec::new(),
-            weights_buf: Vec::new(),
-        }
-    }
-}
-
-impl Default for LbEvalScratch {
-    fn default() -> Self {
-        Self::new()
+        Self::default()
     }
 }
 
@@ -394,8 +386,7 @@ fn lb_aggregate_and_broadcast<C: Communicator>(
         )));
     }
     let mut lb = risk_measure.evaluate_risk(objectives, weights) * cost_scale_factor;
-    comm.broadcast(std::slice::from_mut(&mut lb), 0)
-        .map_err(SddpError::from)?;
+    comm.broadcast(std::slice::from_mut(&mut lb), 0)?;
     Ok(lb)
 }
 
@@ -472,8 +463,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     }
 
     reconcile_error_flag(Ok(()), comm, &mut reconcile_scratch)?;
-    comm.broadcast(std::slice::from_mut(&mut lb), 0)
-        .map_err(SddpError::from)?;
+    comm.broadcast(std::slice::from_mut(&mut lb), 0)?;
     Ok(lb)
 }
 

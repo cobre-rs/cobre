@@ -121,9 +121,7 @@ impl StageTemplates {
 /// [`StageTemplates`]. Adding a per-stage datum is one field here plus one
 /// transpose line in the assembler.
 pub(super) struct StageBuildOutput {
-    /// Structural LP template for the stage.
     pub template: StageTemplate,
-    /// Active generic-constraint row metadata for the stage.
     pub gc_entries: Vec<GenericConstraintRowEntry>,
     /// Stage-correct equipment column ranges for simulation extraction, computed
     /// from this stage's [`StageLayout`].

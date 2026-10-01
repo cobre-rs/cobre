@@ -923,7 +923,7 @@ pub(crate) fn resolve_state_layout(
     }
 
     let hydro_count = system.hydros().len();
-    let max_par_order: usize = widen_lag_state_depth(
+    let max_par_order = widen_lag_state_depth(
         system
             .inflow_models()
             .iter()
@@ -1154,10 +1154,7 @@ fn first_fanned_plant_id(
 ///
 /// The sole `resolve_point` consumer (via [`AnticipatedResolution::resolve`]).
 /// Warn-free: [`resolve_anticipated_commitments`] wraps this with the setup-time
-/// `K = 0` advisory; `lp::builder::test_support`'s fixture calls this core
-/// directly to attach an identical resolution onto its own `StateSpace` — the
-/// same accepted redundant-but-deterministic recompute this crate already
-/// applies to the bucket topology, not a second advisory emission. Returns the
+/// `K = 0` advisory. Returns the
 /// per-plant resolution and the anticipated-local constant leads: a
 /// `LeadStages(ℓ)` plant keeps `ℓ` byte-for-byte; a `LeadTime` plant takes its
 /// per-plant ring depth ([`PointResolution::ring_depth`]) —
@@ -1166,10 +1163,7 @@ fn first_fanned_plant_id(
 ///
 /// The delivery axis is EXTENDED: `n_delivery = n_stages + n_post` while
 /// `n_decision` stays `n_stages` (decisions are only ever made in-study), so a
-/// `LeadTime` plant's resolution can target a post-study delivery. Widening
-/// this site alone is a half-switch — [`crate::lp::indexer::anticipated_resolution_for`]'s
-/// fixture fallback must widen in lockstep or the two resolution paths desync
-/// the moment a study declares `post_study_stages`.
+/// `LeadTime` plant's resolution can target a post-study delivery.
 pub(crate) fn resolve_anticipated_commitments_core(
     system: &System,
     calendar: &DeliveryCalendar,
@@ -1230,9 +1224,8 @@ pub(crate) fn resolve_anticipated_commitments_core(
 }
 
 /// [`resolve_anticipated_commitments_core`] plus the setup-time `K = 0`
-/// advisory ([`warn_on_sub_stage_lead`]) — the single owner of that advisory.
-/// Every other caller (e.g. [`crate::lp::builder::build_stage_templates`]) uses
-/// the core directly so the advisory never double-emits.
+/// advisory ([`warn_on_sub_stage_lead`]) — the single owner of that advisory, so
+/// it is emitted once per setup.
 pub(crate) fn resolve_anticipated_commitments(
     system: &System,
     calendar: &DeliveryCalendar,
@@ -1414,11 +1407,9 @@ fn build_checked_node_graph(
     n_stages: usize,
     training_enumerated: bool,
 ) -> Result<NodeGraph, SddpError> {
-    // G1: binds after `build_scenario_libraries` — an `External`-bound
-    // node's Ω addresses the standardized library's raw scenario axis,
-    // so binding earlier would race the library's own standardization.
-    // Also binds BEFORE the FCF / cut_state_layouts construction below: the
-    // pool axis they use is resolved through this graph's `node → pool` map.
+    // Binds after `build_scenario_libraries`: an `External`-bound node's Ω
+    // addresses the standardized library's raw scenario axis, so binding
+    // earlier would race the library's own standardization.
     let stage_id_resolver = StageIdResolver::from_study_stage_ids(study_stage_ids);
     let node_graph = node_graph::build_node_graph(
         system.policy_graph(),
@@ -1499,10 +1490,8 @@ fn build_future_cost_function(
     node_graph: &NodeGraph,
     loop_params: &LoopParams,
 ) -> (FutureCostFunction, Vec<CutStateProjection>) {
-    // Resolved AFTER the guard-checked counts above (`resolve_enumerated_training_count`
-    // has already run the enumerated admissibility guards for a `true`
-    // `training_enumerated`), so this resolution cannot fail — it is the
-    // typed reification of what the two calls above already validated.
+    // Cannot fail: `loop_params` comes from `resolve_phase_configs`, which already
+    // ran the enumerated admissibility guards for a `true` `training_enumerated`.
     let traversal = node_graph::Traversal::resolve(
         node_graph,
         loop_params.training_enumerated,

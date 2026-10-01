@@ -1703,7 +1703,6 @@ impl StageLayout<'_> {
 /// differing block count the stage-0 base/length addresses the WRONG primal
 /// columns. The per-stage `n_blks` stride was already correct; this closes the
 /// matching base/length gap. Uniform-block studies coincide with stage 0.
-///
 #[derive(Debug, Clone)]
 pub struct StageGeometry {
     /// Turbined-flow column range (one per hydro per block). `turbine.start` is

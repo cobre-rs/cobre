@@ -212,18 +212,16 @@ fn fill_parallel_water_entries(
             .storage_incoming_col(HydroSys::new(h_idx))
             .get();
 
+        col_entries[storage_out_col].push((row, 1.0));
+        col_entries[storage_in_col].push((row, -1.0));
+
         if matches!(hydro_phase(hydro, stage.id), Phase::PreFilling) {
-            // Frozen-storage identity `v_h − v_h_in = 0`: emit ONLY these two entries.
-            // Any inflow/upstream/AR-lag/withdrawal/evaporation coupling left here makes
-            // `β_h` stale-nonzero — a wrong cut that still compiles.
-            col_entries[storage_out_col].push((row, 1.0));
-            col_entries[storage_in_col].push((row, -1.0));
+            // Frozen-storage identity `v_h − v_h_in = 0`: emit ONLY the two storage entries
+            // above. Any inflow/upstream/AR-lag/withdrawal/evaporation coupling left here
+            // makes `β_h` stale-nonzero — a wrong cut that still compiles.
             fill_prefilling_shortcircuit(ctx, stage, h_idx, layout, col_entries);
             continue;
         }
-
-        col_entries[storage_out_col].push((row, 1.0));
-        col_entries[storage_in_col].push((row, -1.0));
 
         // The maturing-now bucket `b_1^in`: a SINGLE entry — the confluence sum over
         // every upstream arc lives in the state variable itself. Absent with no arc.

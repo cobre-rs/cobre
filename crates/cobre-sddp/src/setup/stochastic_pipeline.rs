@@ -103,8 +103,7 @@ fn load_user_opening_tree_inner(
 
             validate_noise_openings(&rows, expected_dim, &expected_openings_per_stage, &resolver)?;
 
-            let tree = assemble_opening_tree(rows, expected_dim, &resolver);
-            Ok(Some(tree))
+            Ok(Some(assemble_opening_tree(rows, expected_dim, &resolver)))
         }
     }
 }
@@ -208,14 +207,13 @@ fn build_opening_tree_library(
     let par = build_inflow_par(system, class_schemes_for(training_source).inflow)?;
     let lag_depth = widen_lag_state_depth(par.max_order(), declared_lag_depth);
     let seeds = resolve_inflow_seeds(system, lag_depth);
-    let lib = scenario_libraries::build_historical_inflow_library(
+    Ok(Some(scenario_libraries::build_historical_inflow_library(
         system,
         &par,
         seeds.as_seed(lag_depth),
         training_source.historical_years.as_ref(),
         1,
-    )?;
-    Ok(Some(lib))
+    )?))
 }
 
 /// Per-class per-stage raw scenario count for opening-tree clamping, keyed by the
@@ -349,8 +347,7 @@ pub fn prepare_stochastic(
 /// factors re-read from `case_dir`), the opening-tree historical library, and the
 /// forward seed. Both rank 0 (via [`prepare_stochastic`], after PAR estimation and
 /// user-tree loading) and the CLI non-root reconstruction call this one builder, so
-/// the non-root path is no longer a hand-mirror of this derivation across the crate
-/// boundary. `user_tree` and `external_scenario_counts` are the two inputs that
+/// the two paths cannot drift. `user_tree` and `external_scenario_counts` are the two inputs that
 /// differ by rank — rank 0 loads / computes them; a non-root rank receives the tree
 /// over the wire and passes `None` counts.
 ///
@@ -393,7 +390,7 @@ pub fn build_stochastic_context_for_study(
         build_opening_tree_library(system, training_source, inflow_lag_depth)?;
 
     let forward_seed = training_source.seed.map(i64::unsigned_abs);
-    let stochastic = build_stochastic_context(
+    Ok(build_stochastic_context(
         system,
         seed,
         forward_seed,
@@ -406,8 +403,7 @@ pub fn build_stochastic_context_for_study(
             noise_group_ids: Some(study_stage_noise_group_ids(system)),
         },
         class_schemes_for(training_source),
-    )?;
-    Ok(stochastic)
+    )?)
 }
 
 #[cfg(test)]

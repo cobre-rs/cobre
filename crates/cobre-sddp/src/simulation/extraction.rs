@@ -290,14 +290,13 @@ pub(crate) fn extract_anticipated_lanes(
     let state = spec.state;
     let mut results = Vec::new();
     for local in 0..state.n_anticipated {
-        let resolution = anticipated_resolution_for(state, AnticipatedLocal::new(local));
+        let local_idx = AnticipatedLocal::new(local);
+        let resolution = anticipated_resolution_for(state, local_idx);
         for m in resolution.genuine_decisions_at(spec.stage_index) {
             if m < spec.horizon.num_stages() {
                 continue;
             }
-            let decision_col = spec
-                .geometry
-                .anticipated_decision_col(AnticipatedLocal::new(local));
+            let decision_col = spec.geometry.anticipated_decision_col(local_idx);
             let carried_col = state.commitment_hold_outgoing_col(local, m).get();
             debug_assert!(
                 decision_col < view.primal.len() && carried_col < view.primal.len(),
@@ -312,7 +311,7 @@ pub(crate) fn extract_anticipated_lanes(
             let sys_thermal = spec
                 .study_dims
                 .anticipated_plants
-                .thermal_of(AnticipatedLocal::new(local))
+                .thermal_of(local_idx)
                 .get();
             results.push(SimulationAnticipatedLaneResult {
                 stage_id,
@@ -958,7 +957,6 @@ fn extract_hydro_per_block<'a>(
         // (`S⁰`), block `K−1` outgoing == `ctx.storage_final` (`Sᴷ`).
         let (storage_initial, storage_final) = match spec.geometry.block_mode {
             BlockMode::Chronological => {
-                let n_blks = spec.geometry.n_blks;
                 let hydro = HydroSys::new(h);
                 let storage_col =
                     |boundary| spec.geometry.block_storage_col(spec.state, hydro, boundary);
@@ -989,7 +987,7 @@ fn extract_hydro_per_block<'a>(
                 (BlockMode::Chronological, Some(local)) => {
                     let n_evap_slots =
                         evaporation_slot_count(spec.geometry.block_mode, spec.geometry.n_blks);
-                    let slot = evaporation_slot(n_evap_slots, BlockIdx::new(b));
+                    let slot = evaporation_slot(n_evap_slots, blk);
                     let ei = &spec.geometry.evap_indices[local.get() * n_evap_slots + slot.get()];
                     debug_assert!(
                         ei.evaporation_flow_col < view.primal.len()
@@ -1033,7 +1031,7 @@ fn extract_hydro_per_block<'a>(
             stored_energy_final_mwh,
             spillage_cost: spillage * view.objective_coeffs[s_col] / spec.col_scale_factor(s_col)
                 * spec.cost_scale_factor,
-            water_value_per_hm3: water_value_per_hm3(view, spec, h, BlockIdx::new(b)),
+            water_value_per_hm3: water_value_per_hm3(view, spec, h, blk),
             storage_binding_code: 0,
             operative_state_code: 1,
             turbined_slack_m3s: turbined_slack,

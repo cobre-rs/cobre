@@ -24,13 +24,13 @@ use cobre_core::temporal::{
     Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
 };
 use cobre_core::{
-    BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ConstraintExpression, ContractBlockBounds,
-    DeficitSegment, DiversionChannel, EntityId, GenericConstraint, HydroBlockBounds,
-    HydroPenalties, HydroStageBounds, HydroStorage, HydroUnitGroup, InitialConditions,
-    LineBlockBounds, LineStagePenalties, LinearTerm, NcsStagePenalties, PenaltiesCountsSpec,
-    PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds, ResolvedGenericConstraintBounds,
-    ResolvedPenalties, SlackConfig, System, SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
-    VariableRef,
+    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ConstraintExpression,
+    ContractBlockBounds, DeficitSegment, DiversionChannel, EntityId, GenericConstraint,
+    HydroBlockBounds, HydroPenalties, HydroStageBounds, HydroStorage, HydroUnitGroup,
+    InitialConditions, LineBlockBounds, LineStagePenalties, LinearTerm, NcsStagePenalties,
+    PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
+    ResolvedGenericConstraintBounds, ResolvedPenalties, SlackConfig, System, SystemBuilder,
+    ThermalBlockBounds, ThermalStageBounds, VariableRef,
 };
 use cobre_io::config::{
     Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, InflowNonNegativityMethod,
@@ -234,13 +234,8 @@ fn downstream_inflow_constraint() -> (GenericConstraint, ResolvedGenericConstrai
     (generic_constraint, resolved_generic_bounds)
 }
 
-/// A minimal upstream (`hydro 1`) -> downstream (`hydro 2`) cascade, each
-/// stage two parallel blocks (`BLOCK_HOURS`), with one `GenericConstraint` on
-/// `VariableRef::HydroInflow { hydro_id: DOWNSTREAM_ID, block_id: None }` at a
-/// non-binding upper bound active at stage 1. `travel_time_hours` toggles the
-/// arc's travel-time bucket between present and absent.
-fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System {
-    let bus = make_bus(
+fn standard_bus() -> Bus {
+    make_bus(
         EntityId(BUS_ID),
         BusSpec {
             deficit_segments: vec![DeficitSegment {
@@ -250,7 +245,16 @@ fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System
             excess_cost: 0.0,
             ..BusSpec::default()
         },
-    );
+    )
+}
+
+/// A minimal upstream (`hydro 1`) -> downstream (`hydro 2`) cascade, each
+/// stage two parallel blocks (`BLOCK_HOURS`), with one `GenericConstraint` on
+/// `VariableRef::HydroInflow { hydro_id: DOWNSTREAM_ID, block_id: None }` at a
+/// non-binding upper bound active at stage 1. `travel_time_hours` toggles the
+/// arc's travel-time bucket between present and absent.
+fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System {
+    let bus = standard_bus();
 
     let downstream = make_hydro(
         EntityId(DOWNSTREAM_ID),
@@ -341,17 +345,7 @@ fn build_system(travel_time_hours: Option<f64>, block_mode: BlockMode) -> System
 /// `HydroCellIndex` cells instead of one.
 fn build_two_cell_system(block_mode: BlockMode) -> System {
     let split_bus_id = EntityId(BUS_ID + 1);
-    let bus = make_bus(
-        EntityId(BUS_ID),
-        BusSpec {
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 500.0,
-            }],
-            excess_cost: 0.0,
-            ..BusSpec::default()
-        },
-    );
+    let bus = standard_bus();
     let split_bus = make_bus(split_bus_id, BusSpec::default());
 
     let downstream = make_hydro(
@@ -481,17 +475,7 @@ fn build_prefilling_system(
     travel_time_hours: Option<f64>,
     block_mode: BlockMode,
 ) -> System {
-    let bus = make_bus(
-        EntityId(BUS_ID),
-        BusSpec {
-            deficit_segments: vec![DeficitSegment {
-                depth_mw: None,
-                cost_per_mwh: 500.0,
-            }],
-            excess_cost: 0.0,
-            ..BusSpec::default()
-        },
-    );
+    let bus = standard_bus();
 
     let w = make_hydro(
         EntityId(UPSTREAM_ID),
@@ -758,12 +742,12 @@ fn assert_hydro_inflow_matches_water_balance(
         .collect();
 
     let mut columns: Vec<usize> = inflow_columns.to_vec();
-    let bucket_columns: Vec<usize> = state_space
-        .transit_buckets_in
-        .clone()
-        .filter(|&c| matrix_entry(tpl, w_row, c) != 0.0)
-        .collect();
-    columns.extend(&bucket_columns);
+    columns.extend(
+        state_space
+            .transit_buckets_in
+            .clone()
+            .filter(|&c| matrix_entry(tpl, w_row, c) != 0.0),
+    );
 
     for &c in &columns {
         let lhs: f64 = (0..n_blks)
@@ -806,12 +790,12 @@ fn assert_hydro_inflow_matches_each_chronological_water_balance_row(
     let w_row = |b: usize| geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(b));
 
     let mut columns: Vec<usize> = inflow_columns.to_vec();
-    let bucket_columns: Vec<usize> = state_space
-        .transit_buckets_in
-        .clone()
-        .filter(|&c| (0..n_blks).any(|b| matrix_entry(tpl, w_row(b), c) != 0.0))
-        .collect();
-    columns.extend(&bucket_columns);
+    columns.extend(
+        state_space
+            .transit_buckets_in
+            .clone()
+            .filter(|&c| (0..n_blks).any(|b| matrix_entry(tpl, w_row(b), c) != 0.0)),
+    );
 
     for b in 0..n_blks {
         let row_w = w_row(b);

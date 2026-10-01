@@ -75,15 +75,15 @@ pub fn storage_column_owners(
     state: &StateSpace,
 ) -> HashMap<usize, (HydroSys, Boundary)> {
     let mut owners = HashMap::new();
+    let boundaries: Vec<Boundary> = match geom.block_mode {
+        BlockMode::Parallel => vec![Boundary::Incoming, Boundary::Outgoing],
+        BlockMode::Chronological => (0..=geom.n_blks)
+            .map(|k| Boundary::from_index(k, geom.n_blks))
+            .collect(),
+    };
     for h in 0..state.hydro_count {
         let h = HydroSys::new(h);
-        let boundaries: Vec<Boundary> = match geom.block_mode {
-            BlockMode::Parallel => vec![Boundary::Incoming, Boundary::Outgoing],
-            BlockMode::Chronological => (0..=geom.n_blks)
-                .map(|k| Boundary::from_index(k, geom.n_blks))
-                .collect(),
-        };
-        for b in boundaries {
+        for &b in &boundaries {
             owners.insert(geom.block_storage_col(state, h, b), (h, b));
         }
     }

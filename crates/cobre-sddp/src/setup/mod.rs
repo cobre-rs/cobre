@@ -1689,7 +1689,7 @@ fn resolve_stage_data(
     let study_dims = build_study_dimensions(
         system,
         config.inflow_method,
-        layout.anticipated_plants.clone(),
+        layout.anticipated_plants,
         downstream_par_order,
     );
 

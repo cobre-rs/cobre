@@ -482,17 +482,18 @@ pub(super) fn fill_operational_violation_rows(
 
         let hydro = &ctx.hydros[h_idx];
         for blk in 0..layout.clock.n_blks() {
+            let b = BlockIdx::new(blk);
             let lookup =
                 GroupBoundLookup::new(ctx.resolved.bounds.group_overlay(), h_idx, stage_idx, blk);
-            for cell_idx in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
+            for cell_idx in ctx.hydro_cell_index.cells_of(hydro_sys) {
                 let cell = HydroCell::new(cell_idx);
                 let positions = ctx.hydro_cell_index.groups_of(cell);
 
-                let row_t = layout.min_turbine_row(cell, BlockIdx::new(blk));
+                let row_t = layout.min_turbine_row(cell, b);
                 row_lower[row_t] = cell_min_turbined(&hydro.unit_groups, positions, lookup);
                 row_upper[row_t] = f64::INFINITY;
 
-                let row_g = layout.min_generation_row(cell, BlockIdx::new(blk));
+                let row_g = layout.min_generation_row(cell, b);
                 row_lower[row_g] = cell_min_generation(&hydro.unit_groups, positions, lookup);
                 row_upper[row_g] = f64::INFINITY;
             }

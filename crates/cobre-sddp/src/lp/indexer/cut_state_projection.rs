@@ -133,6 +133,17 @@ impl CutStateProjection {
         self.incoming_columns.len()
     }
 
+    #[inline]
+    fn checked_slot(&self, s: CutSlot) -> usize {
+        let j = s.get();
+        debug_assert!(
+            j < self.n_slots(),
+            "cut slot {j} out of bounds (n_slots = {})",
+            self.n_slots()
+        );
+        j
+    }
+
     /// Map a cut slot `s ∈ [0, n_slots())` to the global [`StateDim`] it
     /// projects — the gather index for reading a `StateDim`-packed trial-state
     /// vector into the pool's projected slot space.
@@ -150,13 +161,7 @@ impl CutStateProjection {
     #[inline]
     #[must_use]
     pub fn global_state_index(&self, s: CutSlot) -> StateDim {
-        let j = s.get();
-        debug_assert!(
-            j < self.n_slots(),
-            "cut slot {j} out of bounds (n_slots = {})",
-            self.n_slots()
-        );
-        self.global_state_indices[j]
+        self.global_state_indices[self.checked_slot(s)]
     }
 
     /// Dot this pool's projected cut `coefficients` (length [`Self::n_slots`])
@@ -229,13 +234,7 @@ impl CutStateProjection {
     #[inline]
     #[must_use]
     pub fn incoming_column(&self, s: CutSlot) -> InCol {
-        let j = s.get();
-        debug_assert!(
-            j < self.n_slots(),
-            "cut slot {j} out of bounds (n_slots = {})",
-            self.n_slots()
-        );
-        self.incoming_columns[j]
+        self.incoming_columns[self.checked_slot(s)]
     }
 
     /// Map a cut slot `s ∈ [0, n_slots())` to its LP **outgoing**-state
@@ -253,13 +252,7 @@ impl CutStateProjection {
     #[inline]
     #[must_use]
     pub fn outgoing_column(&self, s: CutSlot) -> OutCol {
-        let j = s.get();
-        debug_assert!(
-            j < self.n_slots(),
-            "cut slot {j} out of bounds (n_slots = {})",
-            self.n_slots()
-        );
-        self.outgoing_columns[j]
+        self.outgoing_columns[self.checked_slot(s)]
     }
 
     /// Iterate the cut-row render pairs `(cut_slot, outgoing_lp_column)` for this

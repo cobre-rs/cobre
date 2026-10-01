@@ -235,39 +235,38 @@ fn resolve_delivery(
     );
 
     let mut arrival_density = Vec::with_capacity(stage_reach);
-    let mut stage_start = 0.0_f64;
+    let mut stage_start = future_calendar[0];
 
-    for (d, &stage_len) in future_calendar[..=stage_reach].iter().enumerate() {
+    for (d, &stage_len) in future_calendar[1..=stage_reach].iter().enumerate() {
         let stage_end = stage_start + stage_len;
-        if d >= 1 {
-            let blocks = arrival_blocks[d - 1];
-            if let Some(partition) = blocks {
-                debug_assert!(
-                    (partition.iter().sum::<f64>() - stage_len).abs() < 1e-9,
-                    "an arrival-stage block partition must sum to that stage's own length"
-                );
-            }
-
-            let overlap_start = window_start.max(stage_start);
-            let overlap_end = window_end.min(stage_end);
-            let width = (overlap_end - overlap_start).max(0.0);
-
-            let row = if width > 0.0 {
-                let local_start = overlap_start - stage_start;
-                blocks.map_or_else(
-                    || vec![1.0],
-                    |partition| {
-                        window_period_overlaps(local_start, width, partition)
-                            .iter()
-                            .map(|&overlap| overlap / width)
-                            .collect()
-                    },
-                )
-            } else {
-                Vec::new()
-            };
-            arrival_density.push(row);
+        let blocks = arrival_blocks[d];
+        if let Some(partition) = blocks {
+            debug_assert!(
+                (partition.iter().sum::<f64>() - stage_len).abs() < 1e-9,
+                "an arrival-stage block partition must sum to that stage's own length"
+            );
         }
+
+        let overlap_start = window_start.max(stage_start);
+        let overlap_end = window_end.min(stage_end);
+        let width = (overlap_end - overlap_start).max(0.0);
+
+        let row = if width > 0.0 {
+            let local_start = overlap_start - stage_start;
+            blocks.map_or_else(
+                || vec![1.0],
+                |partition| {
+                    window_period_overlaps(local_start, width, partition)
+                        .iter()
+                        .map(|&overlap| overlap / width)
+                        .collect()
+                },
+            )
+        } else {
+            Vec::new()
+        };
+        arrival_density.push(row);
+
         stage_start = stage_end;
     }
 

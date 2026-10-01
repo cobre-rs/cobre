@@ -218,14 +218,9 @@ fn resolve_hydro_storage(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(pos) = ctx.positions.hydro(hydro_id) {
-        vec![(
-            layout.state.storage_outgoing_col(HydroSys::new(pos)).get(),
-            1.0,
-        )]
-    } else {
-        vec![]
-    }
+    resolve_block_column(ctx.positions.hydro(hydro_id), |pos| {
+        layout.state.storage_outgoing_col(HydroSys::new(pos)).get()
+    })
 }
 
 /// Resolve `HydroStorageInitial`/`HydroStorageFinal` to a single fixed storage
@@ -242,16 +237,14 @@ fn resolve_hydro_storage_boundary(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(pos) = ctx.positions.hydro(hydro_id) {
+    resolve_block_column(ctx.positions.hydro(hydro_id), |pos| {
         let k = match block_id {
             Some(k) => k + boundary_offset,
             None => boundary_offset * layout.clock.n_blks(),
         };
         let boundary = Boundary::from_index(k, layout.clock.n_blks());
-        vec![(layout.block_storage_col(HydroSys::new(pos), boundary), 1.0)]
-    } else {
-        vec![]
-    }
+        layout.block_storage_col(HydroSys::new(pos), boundary)
+    })
 }
 
 /// Resolve `HydroInflow` to the cascade total-inflow expression at `blk`: the
@@ -561,15 +554,14 @@ fn resolve_line_exchange(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(pos) = ctx.positions.line(line_id) {
-        let sys = LineSys::new(pos);
-        vec![
-            (layout.geometry.line_fwd_col(sys, blk), 1.0),
-            (layout.geometry.line_rev_col(sys, blk), -1.0),
-        ]
-    } else {
-        vec![]
-    }
+    let Some(pos) = ctx.positions.line(line_id) else {
+        return vec![];
+    };
+    let sys = LineSys::new(pos);
+    vec![
+        (layout.geometry.line_fwd_col(sys, blk), 1.0),
+        (layout.geometry.line_rev_col(sys, blk), -1.0),
+    ]
 }
 
 /// Resolve `BusDeficit` to one column per deficit segment via
@@ -581,13 +573,12 @@ fn resolve_bus_deficit(
     ctx: &TemplateBuildCtx<'_>,
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
-    if let Some(b_pos) = ctx.positions.bus(bus_id) {
-        (0..layout.equipment.max_deficit_segments)
-            .map(|seg| (layout.deficit_col(BusSys::new(b_pos), seg, blk), 1.0))
-            .collect()
-    } else {
-        vec![]
-    }
+    let Some(b_pos) = ctx.positions.bus(bus_id) else {
+        return vec![];
+    };
+    (0..layout.equipment.max_deficit_segments)
+        .map(|seg| (layout.deficit_col(BusSys::new(b_pos), seg, blk), 1.0))
+        .collect()
 }
 
 /// Resolve `AnticipatedDecision` to `layout.geometry.anticipated_decision_col(local)`,

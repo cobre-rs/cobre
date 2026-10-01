@@ -1783,6 +1783,7 @@ pub fn run(
 )]
 mod tests {
     use std::path::Path;
+    use std::path::PathBuf;
 
     use cobre_sddp::setup::prepare_stochastic;
     use cobre_sddp::{SolverStatsDelta, SolverStatsLogEntry, aggregate_solver_stats_log};
@@ -1798,6 +1799,15 @@ mod tests {
         run_via_study,
     };
 
+    fn example_case_dir(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cobre-python parent")
+            .parent()
+            .expect("crates parent")
+            .join(relative)
+    }
+
     /// `build_study_setup` is Python-free, so its happy path can be exercised
     /// without a GIL token. It must load `examples/1dtoy`, resolve the effective
     /// config, build a fully prepared `StudySetup`, and return populated
@@ -1805,12 +1815,7 @@ mod tests {
     /// rely on.
     #[test]
     fn build_study_setup_succeeds_for_1dtoy() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_build_study_{}", std::process::id()));
@@ -1845,12 +1850,7 @@ mod tests {
     /// with no binding change in this crate.
     #[test]
     fn build_study_setup_succeeds_for_d56_external_authoritative() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/deterministic/d56-external-authoritative");
+        let case_dir = example_case_dir("examples/deterministic/d56-external-authoritative");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_build_study_d56_{}", std::process::id()));
@@ -1873,12 +1873,7 @@ mod tests {
     /// No GIL token is required (no `Python::initialize()`).
     #[test]
     fn apply_training_policy_mode_default_mode_is_noop() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_policy_mode_noop_{}", std::process::id()));
@@ -2061,12 +2056,7 @@ mod tests {
 
     #[test]
     fn prepare_stochastic_succeeds_for_d01_case_via_python_path() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/deterministic/d01-thermal-dispatch");
+        let case_dir = example_case_dir("examples/deterministic/d01-thermal-dispatch");
 
         let system = cobre_io::load_case(&case_dir).expect("load_case must succeed for D01");
         let config = cobre_io::parse_config(&case_dir.join("config.json"))
@@ -2099,12 +2089,7 @@ mod tests {
     /// populate the carriers.
     #[test]
     fn python_run_1dtoy_metadata_matches_cli_golden_values() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_parity_{}", std::process::id()));
@@ -2249,12 +2234,7 @@ mod tests {
     /// whose runtime this mirrors (one 1dtoy train+simulate per path).
     #[test]
     fn override_path_equals_edited_config_for_1dtoy() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let base =
             std::env::temp_dir().join(format!("cobre_py_override_parity_{}", std::process::id()));
@@ -2330,12 +2310,7 @@ mod tests {
     /// the study's freshly built FCF. No GIL token (no `Python::initialize()`).
     #[test]
     fn reconstruct_policy_from_checkpoint_roundtrips_for_1dtoy() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_reconstruct_{}", std::process::id()));
@@ -2410,12 +2385,7 @@ mod tests {
     )]
     #[test]
     fn python_simulation_only_metadata_matches_train_then_simulate() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_simonly_parity_{}", std::process::id()));

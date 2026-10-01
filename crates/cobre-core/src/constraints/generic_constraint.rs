@@ -405,15 +405,9 @@ fn canonical_variable_key(v: &VariableRef) -> (u8, i32, i64, i64) {
             block_sentinel(block_id),
             bus_sentinel(bus_id),
         ),
-        VariableRef::HydroSpillage { hydro_id, block_id } => {
-            (2, hydro_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::HydroDiversion { hydro_id, block_id } => {
-            (3, hydro_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::HydroOutflow { hydro_id, block_id } => {
-            (4, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroSpillage { hydro_id, block_id } => block_key(2, hydro_id, block_id),
+        VariableRef::HydroDiversion { hydro_id, block_id } => block_key(3, hydro_id, block_id),
+        VariableRef::HydroOutflow { hydro_id, block_id } => block_key(4, hydro_id, block_id),
         VariableRef::HydroGeneration {
             hydro_id,
             block_id,
@@ -424,68 +418,58 @@ fn canonical_variable_key(v: &VariableRef) -> (u8, i32, i64, i64) {
             block_sentinel(block_id),
             bus_sentinel(bus_id),
         ),
-        VariableRef::HydroEvaporation { hydro_id, block_id } => {
-            (6, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroEvaporation { hydro_id, block_id } => block_key(6, hydro_id, block_id),
         VariableRef::HydroWithdrawal { hydro_id } => (7, hydro_id.0, -1, -1),
         VariableRef::ThermalGeneration {
             thermal_id,
             block_id,
-        } => (8, thermal_id.0, block_sentinel(block_id), -1),
-        VariableRef::LineDirect { line_id, block_id } => {
-            (9, line_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::LineReverse { line_id, block_id } => {
-            (10, line_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::LineExchange { line_id, block_id } => {
-            (11, line_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::BusDeficit { bus_id, block_id } => {
-            (12, bus_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::BusExcess { bus_id, block_id } => (13, bus_id.0, block_sentinel(block_id), -1),
+        } => block_key(8, thermal_id, block_id),
+        VariableRef::LineDirect { line_id, block_id } => block_key(9, line_id, block_id),
+        VariableRef::LineReverse { line_id, block_id } => block_key(10, line_id, block_id),
+        VariableRef::LineExchange { line_id, block_id } => block_key(11, line_id, block_id),
+        VariableRef::BusDeficit { bus_id, block_id } => block_key(12, bus_id, block_id),
+        VariableRef::BusExcess { bus_id, block_id } => block_key(13, bus_id, block_id),
         VariableRef::PumpingFlow {
             station_id,
             block_id,
-        } => (14, station_id.0, block_sentinel(block_id), -1),
+        } => block_key(14, station_id, block_id),
         VariableRef::PumpingPower {
             station_id,
             block_id,
-        } => (15, station_id.0, block_sentinel(block_id), -1),
+        } => block_key(15, station_id, block_id),
         VariableRef::ContractImport {
             contract_id,
             block_id,
-        } => (16, contract_id.0, block_sentinel(block_id), -1),
+        } => block_key(16, contract_id, block_id),
         VariableRef::ContractExport {
             contract_id,
             block_id,
-        } => (17, contract_id.0, block_sentinel(block_id), -1),
+        } => block_key(17, contract_id, block_id),
         VariableRef::NonControllableGeneration {
             source_id,
             block_id,
-        } => (18, source_id.0, block_sentinel(block_id), -1),
+        } => block_key(18, source_id, block_id),
         VariableRef::NonControllableCurtailment {
             source_id,
             block_id,
-        } => (19, source_id.0, block_sentinel(block_id), -1),
+        } => block_key(19, source_id, block_id),
         VariableRef::AnticipatedDecision { thermal_id } => (20, thermal_id.0, -1, -1),
-        VariableRef::HydroInflow { hydro_id, block_id } => {
-            (21, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroInflow { hydro_id, block_id } => block_key(21, hydro_id, block_id),
         VariableRef::HydroStorageInitial { hydro_id, block_id } => {
-            (22, hydro_id.0, block_sentinel(block_id), -1)
+            block_key(22, hydro_id, block_id)
         }
-        VariableRef::HydroStorageFinal { hydro_id, block_id } => {
-            (23, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroStorageFinal { hydro_id, block_id } => block_key(23, hydro_id, block_id),
         VariableRef::HydroUsefulVolumeInitial { hydro_id, block_id } => {
-            (24, hydro_id.0, block_sentinel(block_id), -1)
+            block_key(24, hydro_id, block_id)
         }
         VariableRef::HydroUsefulVolumeFinal { hydro_id, block_id } => {
-            (25, hydro_id.0, block_sentinel(block_id), -1)
+            block_key(25, hydro_id, block_id)
         }
     }
+}
+
+fn block_key(tag: u8, id: EntityId, block_id: Option<usize>) -> (u8, i32, i64, i64) {
+    (tag, id.0, block_sentinel(block_id), -1)
 }
 
 /// `None` maps to `-1` (a block-independent reference orders before block 0).

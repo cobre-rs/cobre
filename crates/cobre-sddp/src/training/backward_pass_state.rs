@@ -550,11 +550,7 @@ impl BackwardPassState {
         );
 
         let start = Instant::now();
-        let solves_before: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_before: u64 = total_solve_count(inputs.workspaces);
 
         // `set_profile` is delta-tracked: it issues solver-option calls only for
         // fields that differ from the solver's current state.
@@ -670,11 +666,7 @@ impl BackwardPassState {
         }
 
         let elapsed_ms = ms_elapsed(start);
-        let solves_after: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_after: u64 = total_solve_count(inputs.workspaces);
 
         Ok(BackwardResult {
             cuts_generated,
@@ -728,11 +720,7 @@ impl BackwardPassState {
         S: SolverInterface<Profile = ActiveProfile> + Send,
     {
         let start = Instant::now();
-        let solves_before: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_before: u64 = total_solve_count(inputs.workspaces);
 
         let backward_profile = self.profile;
         for ws in inputs.workspaces.iter_mut() {
@@ -878,11 +866,7 @@ impl BackwardPassState {
                 timings: ws0.worker_timing_buf,
             });
         }
-        let solves_after: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_after: u64 = total_solve_count(inputs.workspaces);
 
         let rank_i32 = i32::try_from(my_rank).map_err(|_| {
             SddpError::Validation(format!(
@@ -1297,6 +1281,14 @@ struct NodeCompute {
 #[allow(clippy::cast_possible_truncation)]
 fn ms_elapsed(start: Instant) -> u64 {
     start.elapsed().as_millis() as u64
+}
+
+/// Total LP solve count across every worker's solver, for a before/after delta.
+fn total_solve_count<S: SolverInterface>(workspaces: &[SolverWorkspace<S>]) -> u64 {
+    workspaces
+        .iter()
+        .map(|ws| ws.solver.statistics().solve_count)
+        .sum()
 }
 
 /// Resolve the effective backward thread scheduler for the SAMPLED path

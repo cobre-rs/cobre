@@ -172,12 +172,10 @@ pub(super) fn build_single_stage_template(
         row_scale: Vec::new(),
     };
 
-    let equipment_geometry = layout.geometry.clone();
-
     StageBuildOutput {
         template,
         gc_entries: layout.generic_constraint_rows,
-        equipment_geometry,
+        equipment_geometry: layout.geometry,
     }
 }
 

@@ -347,10 +347,9 @@ fn solve_forward_node<S: SolverInterface + Send>(
             dcs_ctx,
         )?;
         let view = ws.backward_accum.dcs_solve.result_view();
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
         capture_fused_terminal_slice(&view, col_scale, fusion_cut_state, fused_out);
-        objective
+        view.objective
     } else {
         let inputs = StageInputs {
             stage_context: ctx,
@@ -366,10 +365,9 @@ fn solve_forward_node<S: SolverInterface + Send>(
         } else {
             run_stage_solve(ws, &inputs)?
         };
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
         capture_fused_terminal_slice(&view, col_scale, fusion_cut_state, fused_out);
-        objective
+        view.objective
     };
 
     let d_t = ctx.discount_factor(t);
@@ -729,12 +727,13 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
         let node = stage_units[u];
         let local_m = m_rep[node];
         let global_scenario = params.fwd_offset + local_m;
+        let parent_node = parent[node];
 
         // Install the incoming state: the parent visit's outgoing state (already
         // scattered in the previous stage's sequential pass), or the initial
         // state at a root.
         ws.current_state.clear();
-        if let Some(p) = parent[node] {
+        if let Some(p) = parent_node {
             debug_assert!(solved[p], "parent visit must be solved before its child");
             ws.current_state.extend_from_slice(&arena[p].out_state);
             arena[p].accum.restore_into(&mut ws.scratch);
@@ -749,7 +748,7 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
         let (node_opening_offset, node_opening_len) = node_graph.node_opening_range(node);
         let pinned_scenario = node_graph.node_pinned_scenario(node);
 
-        if parent[node].is_none() {
+        if parent_node.is_none() {
             let class_req = ClassSampleRequest {
                 iteration: i32_it,
                 scenario: s32,
@@ -800,7 +799,7 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
             ws,
             params,
             node,
-            parent[node],
+            parent_node,
             t,
             local_m,
             raw_noise,

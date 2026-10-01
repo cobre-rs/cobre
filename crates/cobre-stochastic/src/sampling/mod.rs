@@ -743,10 +743,9 @@ pub(crate) fn build_observation_sequence(
 
     match season_map {
         Some(map) => {
-            let def0 = first_stage
+            if let Some(def0) = first_stage
                 .season_id
-                .and_then(|sid| map.seasons.iter().find(|def| def.id == sid));
-            if let Some(def0) = def0
+                .and_then(|sid| map.seasons.iter().find(|def| def.id == sid))
                 && let Some(occurrences) = StageCalendar::new(std::slice::from_ref(first_stage))
                     .season_occurrences(map, def0, max_order)
             {

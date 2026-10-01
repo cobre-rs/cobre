@@ -366,6 +366,15 @@ mod tests {
         }
     }
 
+    fn empty_derived_seed() -> DerivedSeed<'static> {
+        DerivedSeed {
+            lag_values: &[],
+            l_state: 0,
+            accum: &[],
+            weight: &[],
+        }
+    }
+
     fn minimal_hydro(id: EntityId) -> Hydro {
         let mut hydro = Hydro {
             id,
@@ -447,12 +456,7 @@ mod tests {
             &system,
             &stages,
             &par,
-            DerivedSeed {
-                lag_values: &[],
-                l_state: 0,
-                accum: &[],
-                weight: &[],
-            },
+            empty_derived_seed(),
             &transitions,
             1,
             0,
@@ -502,12 +506,7 @@ mod tests {
             &system,
             &stages,
             &par,
-            DerivedSeed {
-                lag_values: &[],
-                l_state: 0,
-                accum: &[],
-                weight: &[],
-            },
+            empty_derived_seed(),
             &transitions,
             1,
             0,
@@ -750,12 +749,7 @@ mod tests {
             &system,
             &stages,
             &par,
-            DerivedSeed {
-                lag_values: &[],
-                l_state: 0,
-                accum: &[],
-                weight: &[],
-            },
+            empty_derived_seed(),
             &transitions,
             2,
             0,
@@ -1058,12 +1052,7 @@ mod tests {
             &system,
             &stages,
             &par,
-            DerivedSeed {
-                lag_values: &[],
-                l_state: 0,
-                accum: &[],
-                weight: &[],
-            },
+            empty_derived_seed(),
             &transitions,
             1,
             0,

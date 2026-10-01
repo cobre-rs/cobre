@@ -122,13 +122,7 @@ impl EnergyConversionSet {
         self
     }
 
-    /// Return the [`EnergyConversion`] for `(hydro, stage)`.
-    ///
-    /// # Panics
-    ///
-    /// In debug builds, panics on out-of-range indices.
-    #[must_use]
-    pub fn conversion(&self, hydro: usize, stage: usize) -> &EnergyConversion {
+    fn check_indices(&self, hydro: usize, stage: usize) {
         debug_assert!(
             hydro < self.per_hydro_stage.len(),
             "hydro index {hydro} out of bounds (n_hydros = {})",
@@ -139,6 +133,16 @@ impl EnergyConversionSet {
             "stage index {stage} out of bounds (n_stages = {})",
             self.n_stages
         );
+    }
+
+    /// Return the [`EnergyConversion`] for `(hydro, stage)`.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics on out-of-range indices.
+    #[must_use]
+    pub fn conversion(&self, hydro: usize, stage: usize) -> &EnergyConversion {
+        self.check_indices(hydro, stage);
         &self.per_hydro_stage[hydro][stage]
     }
 
@@ -149,16 +153,7 @@ impl EnergyConversionSet {
     /// In debug builds, panics on out-of-range indices.
     #[must_use]
     pub fn accumulated_productivity(&self, hydro: usize, stage: usize) -> f64 {
-        debug_assert!(
-            hydro < self.per_hydro_stage.len(),
-            "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.per_hydro_stage.len()
-        );
-        debug_assert!(
-            stage < self.n_stages,
-            "stage index {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        self.check_indices(hydro, stage);
         self.accumulated[hydro][stage]
     }
 
@@ -169,16 +164,7 @@ impl EnergyConversionSet {
     /// In debug builds, panics on out-of-range indices.
     #[must_use]
     pub fn integrated_equivalent_productivity(&self, hydro: usize, stage: usize) -> f64 {
-        debug_assert!(
-            hydro < self.per_hydro_stage.len(),
-            "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.per_hydro_stage.len()
-        );
-        debug_assert!(
-            stage < self.n_stages,
-            "stage index {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        self.check_indices(hydro, stage);
         self.integrated_equivalent[hydro][stage]
     }
 
@@ -189,16 +175,7 @@ impl EnergyConversionSet {
     /// In debug builds, panics on out-of-range indices.
     #[must_use]
     pub fn integrated_accumulated_productivity(&self, hydro: usize, stage: usize) -> f64 {
-        debug_assert!(
-            hydro < self.per_hydro_stage.len(),
-            "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.per_hydro_stage.len()
-        );
-        debug_assert!(
-            stage < self.n_stages,
-            "stage index {stage} out of bounds (n_stages = {})",
-            self.n_stages
-        );
+        self.check_indices(hydro, stage);
         self.integrated_accumulated[hydro][stage]
     }
 

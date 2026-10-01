@@ -532,6 +532,14 @@ fn map_solver_error(e: SolverError, ctx: DcsSolveContext) -> SddpError {
     }
 }
 
+fn solve_mapped<'a, S: SolverInterface>(
+    solver: &'a mut ProfiledSolver<S>,
+    basis: Option<&Basis>,
+    ctx: DcsSolveContext,
+) -> Result<SolutionView<'a>, SddpError> {
+    solver.solve(basis).map_err(|e| map_solver_error(e, ctx))
+}
+
 /// Solve one (stage, solve) lazily under Dynamic Cut Selection, given an
 /// already-loaded core LP.
 ///
@@ -593,7 +601,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
     let mut view = if ctx.continue_carry {
         // CONTINUE: carry the loaded LP, resident rows, and warm basis; only the
         // bounds changed. No reset / seed / reload — just re-solve warm.
-        solver.solve(None).map_err(|e| map_solver_error(e, ctx))?
+        solve_mapped(solver, None, ctx)?
     } else {
         // FRESH: reset the carried row map, append the seed, run the initial
         // solve. Must NOT reload the model — that would discard the caller's
@@ -623,11 +631,9 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
                 core.num_rows + cut_rows,
                 core.num_rows,
             )?;
-            solver
-                .solve(Some(&scratch.recon_basis))
-                .map_err(|e| map_solver_error(e, ctx))?
+            solve_mapped(solver, Some(&scratch.recon_basis), ctx)?
         } else {
-            solver.solve(None).map_err(|e| map_solver_error(e, ctx))?
+            solve_mapped(solver, None, ctx)?
         }
     };
 
@@ -667,7 +673,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
             &mut scratch.row_map,
             &mut scratch.batch,
         );
-        view = solver.solve(None).map_err(|e| map_solver_error(e, ctx))?;
+        view = solve_mapped(solver, None, ctx)?;
     }
 
     // TC fallback (cap hit with violations remaining): add ALL remaining
@@ -701,7 +707,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
             &mut scratch.batch,
         );
     }
-    let view = solver.solve(None).map_err(|e| map_solver_error(e, ctx))?;
+    let view = solve_mapped(solver, None, ctx)?;
     scratch.store_result(&view);
     Ok(())
 }

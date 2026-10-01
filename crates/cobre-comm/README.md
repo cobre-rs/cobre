@@ -107,7 +107,11 @@ carries `unsafe impl Send + Sync` on top of it: sound because the backend is
 the sole owner of `Mpi` until drop (single ownership bars any other thread
 from finalizing it), and the training loop's `ThreadLevel::Funneled` model
 means every MPI call already originates from the same (main) thread that
-constructed the backend. All collective communication otherwise goes through
+constructed the backend. ferrompi enforces that model: below
+`ThreadLevel::Serialized`, an MPI call from any other thread returns
+`Error::ThreadLevelViolation` (mapped to `CommError::CollectiveFailed` with
+code `-1`), and dropping the backend on another thread aborts the process.
+All collective communication otherwise goes through
 `ferrompi::Communicator`, an integer handle into a C-side table that is
 already `Send + Sync`.
 

@@ -311,8 +311,9 @@ fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> CommError
             expected: 0,
             actual: 0,
         },
-        ferrompi::Error::AlreadyInitialized => InvalidCommunicator,
-        // NotSupported / Internal carry no MPI error code; use -1.
+        ferrompi::Error::AlreadyInitialized | ferrompi::Error::Finalized => InvalidCommunicator,
+        // ThreadLevelViolation / NotSupported / Internal and any future variant
+        // (`Error` is #[non_exhaustive]) carry no MPI error code; use -1.
         _ => CollectiveFailed {
             operation,
             mpi_error_code: -1,
@@ -599,6 +600,31 @@ mod tests {
             let err = map_ferrompi_error(&ferrompi::Error::AlreadyInitialized, "barrier");
             assert!(
                 matches!(err, CommError::InvalidCommunicator),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn test_map_ferrompi_error_finalized() {
+            let err = map_ferrompi_error(&ferrompi::Error::Finalized, "barrier");
+            assert!(
+                matches!(err, CommError::InvalidCommunicator),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn test_map_ferrompi_error_thread_level_violation() {
+            let err = map_ferrompi_error(&ferrompi::Error::ThreadLevelViolation, "allreduce");
+            assert!(
+                matches!(
+                    err,
+                    CommError::CollectiveFailed {
+                        operation: "allreduce",
+                        mpi_error_code: -1,
+                        ..
+                    }
+                ),
                 "unexpected error: {err:?}"
             );
         }

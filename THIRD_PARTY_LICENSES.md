@@ -9,29 +9,30 @@ propagated Apache-2.0 `NOTICE` text lives in `NOTICE`.
 
 ## Overview
 
-- Apache License 2.0: 168 crate(s)
-- MIT License: 31 crate(s)
-- BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License: 2 crate(s)
+- Apache License 2.0: 169 crate(s)
+- MIT License: 30 crate(s)
+- BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License: 3 crate(s)
 - Creative Commons Zero v1.0 Universal: 1 crate(s)
 - Unicode License v3: 1 crate(s)
 
 ## Apache License 2.0
 
 Used by:
-- arrow-arith 59.3.0
-- arrow-array 59.3.0
-- arrow-buffer 59.3.0
-- arrow-cast 59.3.0
-- arrow-data 59.3.0
-- arrow-ipc 59.3.0
-- arrow-ord 59.3.0
-- arrow-row 59.3.0
-- arrow-schema 59.3.0
-- arrow-select 59.3.0
-- arrow-string 59.3.0
-- arrow 59.3.0
+- arrow-arith 60.0.0
+- arrow-array 60.0.0
+- arrow-buffer 60.0.0
+- arrow-cast 60.0.0
+- arrow-cmp 60.0.0
+- arrow-data 60.0.0
+- arrow-ipc 60.0.0
+- arrow-ord 60.0.0
+- arrow-row 60.0.0
+- arrow-schema 60.0.0
+- arrow-select 60.0.0
+- arrow-string 60.0.0
+- arrow 60.0.0
 - encode_unicode 1.0.0
-- parquet 59.3.0
+- parquet 60.0.0
 - siphasher 1.0.4
 
 ```
@@ -3839,8 +3840,9 @@ limitations under the License.
 ## BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License
 
 Used by:
-- zstd-safe 7.3.0
+- zstd-safe 8.0.0
 - zstd-sys 2.1.0+zstd.1.5.7
+- zstd 0.14.0
 
 ```
 BSD 3-Clause License
@@ -4200,7 +4202,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License
 
 Used by:
-- atoi 2.0.0
+- atoi 3.1.0
 
 ```
 MIT License
@@ -4230,7 +4232,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- comfy-table 7.2.2
+- comfy-table 8.0.1
 
 ```
 MIT License
@@ -4291,7 +4293,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- arrow-array 59.3.0
+- arrow-array 60.0.0
 
 ```
 MIT License
@@ -4591,23 +4593,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-- zstd 0.13.3
-
-```
-The MIT License (MIT)
-Copyright (c) 2016 Alexandre Bury
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the &quot;Software&quot;), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ```
 

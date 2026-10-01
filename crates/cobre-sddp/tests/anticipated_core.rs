@@ -4328,9 +4328,6 @@ mod anticipated_numerical_reconciliation_k2 {
     //! The 5/6/7 entity IDs are distinct from the K=2 and K=3 saturation tests so
     //! combined nextest runs give unambiguous per-entity failure attribution.
 
-    use cobre_io::config::{SimulationSelection, TrainingSelection};
-    use std::sync::mpsc;
-
     use cobre_core::HorizonGraph;
     use cobre_core::entities::{
         bus::DeficitSegment, hydro::HydroGenerationModel, thermal::AnticipatedConfig,
@@ -4347,19 +4344,12 @@ mod anticipated_numerical_reconciliation_k2 {
         PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
         ResolvedPenalties, SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
     };
-    use cobre_io::config::{
-        Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-        InflowNonNegativityMethod as CfgInflowMethod, ModelingConfig, PolicyConfig,
-        RowSelectionConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
-        TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
-    };
-    use cobre_solver::ActiveSolver;
 
-    use super::common::StubComm;
     use super::common::build_setup_in_code;
     use super::common::builders::{
         BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
     };
+    use super::common::run_simulation;
 
     // ---------------------------------------------------------------------------
     // Analytical optimum constants (documented in module-level doc comment above)
@@ -4682,46 +4672,6 @@ mod anticipated_numerical_reconciliation_k2 {
     }
 
     // ---------------------------------------------------------------------------
-    // Config builder
-    // ---------------------------------------------------------------------------
-
-    /// Ten training iterations let the 500x cost asymmetry produce cuts that signal
-    /// the value of anticipated dispatch, driving the observed cost to the optimum.
-    fn build_config() -> Config {
-        Config {
-            schema: None,
-            modeling: ModelingConfig {
-                inflow_non_negativity: InflowNonNegativityConfig {
-                    method: CfgInflowMethod::Penalty,
-                },
-
-                cost_scale_factor: None,
-            },
-            training: TrainingConfig {
-                enabled: true,
-                tree_seed: Some(42),
-                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 10 }]),
-                stopping_mode: cobre_io::config::StoppingMode::Any,
-                cut_selection: RowSelectionConfig::default(),
-                solver: TrainingSolverConfig::default(),
-                parallelism: cobre_io::config::ParallelismConfig::default(),
-                scenario_source: None,
-                selection: Some(TrainingSelection::Sampled { forward_passes: 1 }),
-            },
-            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
-            policy: PolicyConfig::default(),
-            simulation: IoSimulationConfig {
-                enabled: true,
-                io_channel_capacity: 8,
-                selection: Some(SimulationSelection::Sampled { num_scenarios: 1 }),
-                ..IoSimulationConfig::default()
-            },
-            exports: ExportsConfig::default(),
-            estimation: EstimationConfig::default(),
-        }
-    }
-
-    // ---------------------------------------------------------------------------
     // Test
     // ---------------------------------------------------------------------------
 
@@ -4731,39 +4681,11 @@ mod anticipated_numerical_reconciliation_k2 {
     #[test]
     fn lp_total_cost_matches_analytical_optimum_k2_discount_zero() {
         let system = build_system_reconciliation_k2();
-        let config = build_config();
+        // Ten iterations let the 500x cost asymmetry produce cuts that signal the
+        // value of anticipated dispatch, driving the observed cost to the optimum.
+        let config = super::build_config(10);
         let mut setup = build_setup_in_code(system, &config);
-        let comm = StubComm;
-        let mut solver = ActiveSolver::new().expect("ActiveSolver::new: must succeed");
-
-        let outcome = setup
-            .train(&mut solver, &comm, 10, ActiveSolver::new, None, None)
-            .expect("training error: train() must not return Err");
-        assert!(
-            outcome.error.is_none(),
-            "training error: training returned an error: {:?}",
-            outcome.error,
-        );
-
-        let mut pool = setup
-            .create_workspace_pool(&comm, 1, ActiveSolver::new)
-            .expect("workspace pool error: create_workspace_pool must succeed");
-        let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
-        let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
-        let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
-
-        let _sim_run = setup
-            .simulate(
-                &mut pool.workspaces,
-                &comm,
-                &result_tx,
-                None,
-                None,
-                &outcome.result.basis_cache,
-            )
-            .expect("simulation error: simulate() must not return Err");
-        drop(result_tx);
-        let scenario_results = drain_handle.join().expect("drain thread must not panic");
+        let scenario_results = run_simulation(&mut setup, 10);
 
         assert_eq!(
             scenario_results.len(),
@@ -4881,9 +4803,6 @@ mod anticipated_bridge_st_cruz_nova_k1 {
     //! The 60-series entity IDs are distinct from the other anticipated tests so
     //! combined nextest runs give unambiguous per-entity failure attribution.
 
-    use cobre_io::config::{SimulationSelection, TrainingSelection};
-    use std::sync::mpsc;
-
     use cobre_core::HorizonGraph;
     use cobre_core::entities::{
         bus::DeficitSegment, hydro::HydroGenerationModel, thermal::AnticipatedConfig,
@@ -4900,19 +4819,12 @@ mod anticipated_bridge_st_cruz_nova_k1 {
         PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
         ResolvedPenalties, SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
     };
-    use cobre_io::config::{
-        Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-        InflowNonNegativityMethod as CfgInflowMethod, ModelingConfig, PolicyConfig,
-        RowSelectionConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
-        TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
-    };
-    use cobre_solver::ActiveSolver;
 
-    use super::common::StubComm;
     use super::common::build_setup_in_code;
     use super::common::builders::{
         BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
     };
+    use super::common::run_simulation;
 
     // ---------------------------------------------------------------------------
     // Analytical cost bound constants (documented in module doc comment above)
@@ -5224,47 +5136,6 @@ mod anticipated_bridge_st_cruz_nova_k1 {
     }
 
     // ---------------------------------------------------------------------------
-    // Config builder
-    // ---------------------------------------------------------------------------
-
-    /// One training iteration suffices: the stage-0 fishing equality pins the seed
-    /// delivery regardless of cut quality, and the cost bound is deliberately
-    /// generous to absorb the loose 1-iteration cut.
-    fn build_config() -> Config {
-        Config {
-            schema: None,
-            modeling: ModelingConfig {
-                inflow_non_negativity: InflowNonNegativityConfig {
-                    method: CfgInflowMethod::Penalty,
-                },
-
-                cost_scale_factor: None,
-            },
-            training: TrainingConfig {
-                enabled: true,
-                tree_seed: Some(42),
-                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
-                stopping_mode: cobre_io::config::StoppingMode::Any,
-                cut_selection: RowSelectionConfig::default(),
-                solver: TrainingSolverConfig::default(),
-                parallelism: cobre_io::config::ParallelismConfig::default(),
-                scenario_source: None,
-                selection: Some(TrainingSelection::Sampled { forward_passes: 1 }),
-            },
-            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
-            policy: PolicyConfig::default(),
-            simulation: IoSimulationConfig {
-                enabled: true,
-                io_channel_capacity: 8,
-                selection: Some(SimulationSelection::Sampled { num_scenarios: 1 }),
-                ..IoSimulationConfig::default()
-            },
-            exports: ExportsConfig::default(),
-            estimation: EstimationConfig::default(),
-        }
-    }
-
-    // ---------------------------------------------------------------------------
     // Test
     // ---------------------------------------------------------------------------
 
@@ -5274,41 +5145,12 @@ mod anticipated_bridge_st_cruz_nova_k1 {
     #[test]
     fn pre_horizon_seed_delivers_at_stage_zero_st_cruz_nova_k1() {
         let system = build_system();
-        let config = build_config();
+        // One iteration suffices: the stage-0 fishing equality pins the seed delivery
+        // regardless of cut quality, and the cost bound is deliberately generous to
+        // absorb the loose 1-iteration cut.
+        let config = super::build_config(1);
         let mut setup = build_setup_in_code(system, &config);
-        let comm = StubComm;
-        let mut solver = ActiveSolver::new().expect("ActiveSolver::new");
-
-        let outcome = setup
-            .train(&mut solver, &comm, 1, ActiveSolver::new, None, None)
-            .expect("train: must not return Err");
-        assert!(
-            outcome.error.is_none(),
-            "training error: {:?}",
-            outcome.error
-        );
-
-        let mut pool = setup
-            .create_workspace_pool(&comm, 1, ActiveSolver::new)
-            .expect("create_workspace_pool: must succeed");
-        let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
-        let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
-
-        let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
-
-        let _sim_run = setup
-            .simulate(
-                &mut pool.workspaces,
-                &comm,
-                &result_tx,
-                None,
-                None,
-                &outcome.result.basis_cache,
-            )
-            .expect("simulate: must not return Err");
-
-        drop(result_tx);
-        let scenario_results = drain_handle.join().expect("drain thread must not panic");
+        let scenario_results = run_simulation(&mut setup, 1);
 
         assert_eq!(
             scenario_results.len(),
@@ -6931,13 +6773,6 @@ mod anticipated_ring_axis_regressions {
         PostStudyThermalBound, PumpingBlockBounds, ResolvedBounds, ResolvedPenalties,
         SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
     };
-    use cobre_io::config::{
-        Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-        InflowNonNegativityMethod as CfgInflowMethod, ModelingConfig, PolicyConfig,
-        RowSelectionConfig, SimulationConfig as IoSimulationConfig, SimulationSelection,
-        StoppingRuleConfig, TrainingConfig, TrainingSelection, TrainingSolverConfig,
-        UpperBoundEvaluationConfig,
-    };
     use cobre_sddp::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 
     use super::common::build_setup_in_code;
@@ -7196,41 +7031,6 @@ mod anticipated_ring_axis_regressions {
             .collect()
     }
 
-    fn build_config() -> Config {
-        Config {
-            schema: None,
-            modeling: ModelingConfig {
-                inflow_non_negativity: InflowNonNegativityConfig {
-                    method: CfgInflowMethod::Penalty,
-                },
-                cost_scale_factor: None,
-            },
-            training: TrainingConfig {
-                enabled: true,
-                tree_seed: Some(42),
-                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit {
-                    limit: ITERATIONS as u32,
-                }]),
-                stopping_mode: cobre_io::config::StoppingMode::Any,
-                cut_selection: RowSelectionConfig::default(),
-                solver: TrainingSolverConfig::default(),
-                parallelism: cobre_io::config::ParallelismConfig::default(),
-                scenario_source: None,
-                selection: Some(TrainingSelection::Sampled { forward_passes: 1 }),
-            },
-            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
-            policy: PolicyConfig::default(),
-            simulation: IoSimulationConfig {
-                enabled: true,
-                io_channel_capacity: 8,
-                selection: Some(SimulationSelection::Sampled { num_scenarios: 1 }),
-                ..IoSimulationConfig::default()
-            },
-            exports: ExportsConfig::default(),
-            estimation: EstimationConfig::default(),
-        }
-    }
-
     /// Read the anticipated plant's fished commitment (MW) at study stage `t`
     /// from the one-scenario simulation result.
     fn committed_at(scenario: &cobre_sddp::SimulationScenarioResult, t: usize) -> Option<f64> {
@@ -7375,7 +7175,7 @@ mod anticipated_ring_axis_regressions {
              span (7)",
         );
 
-        let config = build_config();
+        let config = super::build_config(ITERATIONS);
         let mut setup = build_setup_in_code(build_collision_system(), &config);
 
         // The excision must NOT pad the state with the masked fixed-window
@@ -7504,7 +7304,7 @@ mod anticipated_ring_axis_regressions {
              every simultaneous pre-study seed gets its own slot",
         );
 
-        let config = build_config();
+        let config = super::build_config(ITERATIONS);
         let mut setup = build_setup_in_code(build_closure_system(), &config);
         let results = run_simulation(&mut setup, ITERATIONS);
         assert_eq!(results.len(), 1, "one simulated scenario");
@@ -7866,7 +7666,7 @@ mod anticipated_ring_axis_regressions {
         );
         let resolution = bn_resolve(&leads, &durations);
 
-        let config = build_config();
+        let config = super::build_config(ITERATIONS);
         let setup = build_setup_in_code(bn_with_post_study_system(), &config);
         let state = setup.stage_state();
         bn_assert_identity_geometry(
@@ -7892,7 +7692,7 @@ mod anticipated_ring_axis_regressions {
         );
         let resolution = bn_resolve(&leads, &durations);
 
-        let config = build_config();
+        let config = super::build_config(ITERATIONS);
         let setup = build_setup_in_code(bn_study_only_system(), &config);
         let state = setup.stage_state();
         bn_assert_identity_geometry(
@@ -7923,7 +7723,7 @@ mod anticipated_ring_axis_regressions {
         ];
         for (system, durations, leads) in cases {
             let resolution = bn_resolve(&leads, &durations);
-            let config = build_config();
+            let config = super::build_config(ITERATIONS);
             let setup = build_setup_in_code(system, &config);
             let k_max = setup.stage_state().k_max;
             bn_assert_carry_slot_identity(&resolution, k_max, N_STUDY_STAGES, durations.len());

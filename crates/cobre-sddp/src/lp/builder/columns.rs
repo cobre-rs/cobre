@@ -28,7 +28,7 @@ pub(super) fn fill_stage_columns(
     let mut col_lower = vec![0.0_f64; layout.num_cols];
     let mut col_upper = vec![f64::INFINITY; layout.num_cols];
     let mut objective = vec![0.0_f64; layout.num_cols];
-    let total_stage_hours: f64 = layout.clock.total_hours();
+    let total_stage_hours = layout.clock.total_hours();
     let bufs = &mut ColumnBufs {
         col_lower: &mut col_lower,
         col_upper: &mut col_upper,
@@ -129,13 +129,11 @@ fn fill_transit_bucket_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) 
     }
 }
 
-/// Commitment-hold outgoing columns: the leading in-study slots keep the
-/// two-sided reachability masking under the carry geometry — open
-/// `(-inf, inf)` bounds (a committed MW value carries either sign, unlike
-/// the water buckets' `[0, inf)`) for every reachable slot, frozen `[0, 0]`
-/// otherwise (mirroring [`fill_transit_bucket_columns`]; a plant's own
-/// latching slot is bounded later by [`fill_anticipated_columns`], which
-/// overwrites this fill when active).
+/// Commitment-hold outgoing columns: open `(-inf, inf)` for every reachable slot
+/// (a committed MW value carries either sign, unlike the water buckets' `[0, inf)`),
+/// frozen `[0, 0]` otherwise (mirroring [`fill_transit_bucket_columns`]). A plant's
+/// own latching slot is bounded later by [`fill_anticipated_columns`], which
+/// overwrites this fill when active.
 fn fill_anticipated_slot_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
     let ring = DeliveryRing::anticipated(layout.state);
     ring.freeze_masked_columns(
@@ -664,9 +662,7 @@ fn fill_fpha_generation_columns(
 ///
 /// The evaporation-outflow column is bounded symmetrically `[-q_max, +q_max]`, zero
 /// objective. `f_evap_plus`/`f_evap_minus` are `[0, +inf)` and carry the directional
-/// violation costs scaled by **that block's** `duration_hours`, not `total_stage_hours`
-/// — the flow enters the water balance per block, so a stage-total factor inflates the
-/// penalty `K`-fold at `K ≥ 2`.
+/// violation costs; the pricing hours per block mode are chosen where they are written.
 fn fill_evaporation_columns(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,

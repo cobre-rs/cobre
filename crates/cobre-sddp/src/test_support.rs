@@ -222,17 +222,18 @@ pub fn eq_with_anticipated(
     lead_stages: usize,
 ) -> GeometryDims {
     GeometryDims {
-        hydro_count,
-        max_par_order,
-        n_thermals,
-        n_lines,
-        n_buses,
-        n_blks,
-        has_inflow_penalty,
         n_anticipated,
         lead_stages,
         anticipated_plants: anticipated_plants_at(&(0..n_anticipated).collect::<Vec<usize>>()),
-        ..Default::default()
+        ..eq(
+            hydro_count,
+            max_par_order,
+            n_thermals,
+            n_lines,
+            n_buses,
+            n_blks,
+            has_inflow_penalty,
+        )
     }
 }
 
@@ -496,7 +497,7 @@ pub fn minimal_hydros(n: usize) -> Vec<Hydro> {
 /// it actually queries.
 #[must_use]
 pub fn identity_hydro_cell_index(n_hydros: usize) -> HydroCellIndex {
-    HydroCellIndex::build(&(0..n_hydros).map(geometry_hydro).collect::<Vec<_>>())
+    HydroCellIndex::build(&minimal_hydros(n_hydros))
 }
 
 /// Fixture bus at system position `idx` carrying exactly `max_deficit_segments`
@@ -666,7 +667,7 @@ pub fn geometry(
     fpha_planes: &[usize],
     evap_hydro_indices: Vec<usize>,
 ) -> StageGeometry {
-    let hydros: Vec<Hydro> = (0..dims.hydro_count).map(geometry_hydro).collect();
+    let hydros = minimal_hydros(dims.hydro_count);
     let hydro_cell_index = HydroCellIndex::build(&hydros);
     let thermals: Vec<Thermal> = (0..dims.n_thermals).map(geometry_thermal).collect();
     let lines: Vec<Line> = (0..dims.n_lines).map(geometry_line).collect();
@@ -2149,20 +2150,12 @@ const K_FAN_DEFAULT_STATE_CONFIG: StageStateConfig = StageStateConfig {
 /// One study stage at `(index, id)` with a single 744h block, `state_config` as
 /// given, `branching_factor: 1` — every scale/routing signal in the K-fan comes
 /// from the declared node branching, never from within-node opening variance.
-///
-/// # Panics
-///
-/// Never in practice — see the rationale below.
-#[expect(
-    clippy::expect_used,
-    reason = "the literal calendar dates below are valid by construction (checked at write time); from_ymd_opt only returns None for an out-of-range calendar date"
-)]
 fn k_fan_stage(index: usize, id: i32, state_config: StageStateConfig) -> Stage {
     Stage {
         index,
         id,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).expect("valid date"),
+        start_date: ymd(2024, 1, 1),
+        end_date: ymd(2024, 2, 1),
         season_id: None,
         blocks: vec![Block {
             index: 0,
@@ -2247,7 +2240,7 @@ impl StorageSpec {
 )]
 #[expect(
     clippy::expect_used,
-    reason = "the literal calendar dates and the fixed study built here are valid and internally consistent by construction"
+    reason = "the fixed study built here is valid and internally consistent by construction"
 )]
 fn fan_or_chain_system_ext(
     n_stages: usize,
@@ -2266,7 +2259,7 @@ fn fan_or_chain_system_ext(
     let bus = Bus {
         id: bus_id,
         name: "B".to_string(),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
+        operational_start_date: ymd(2024, 1, 1),
         deficit_segments: vec![DeficitSegment {
             depth_mw: None,
             cost_per_mwh: 500.0,
@@ -2278,7 +2271,7 @@ fn fan_or_chain_system_ext(
         unit_groups: Vec::new(),
         id: hydro_id,
         name: "H".to_string(),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
+        operational_start_date: ymd(2024, 1, 1),
         downstream_id: None,
         travel_time_hours: None,
         entry_stage_id: None,

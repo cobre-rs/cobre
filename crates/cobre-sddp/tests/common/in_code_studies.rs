@@ -1533,10 +1533,8 @@ fn build_chronological_noise_system(spec: &ChronologicalNoiseSpec) -> cobre_core
             make_stage(
                 i,
                 StageSpec {
-                    start_date: NaiveDate::from_ymd_opt(2024, (i % 12 + 1) as u32, 1)
-                        .expect("chronological_noise_study: valid date"),
-                    end_date: NaiveDate::from_ymd_opt(2024, ((i % 12 + 1) % 12 + 1) as u32, 1)
-                        .expect("chronological_noise_study: valid date"),
+                    start_date: stage_date(i),
+                    end_date: stage_date(i + 1),
                     season_id: Some(0),
                     blocks: blocks.clone(),
                     block_mode: spec.block_modes[i],

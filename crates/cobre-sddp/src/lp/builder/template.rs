@@ -321,7 +321,6 @@ pub(crate) fn models_from_normal<M>(
 /// 0.0; the violation slacks carry the evaporation penalty.  One equality
 /// constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == intercept_m3s`.
-///
 #[must_use]
 pub(crate) fn build_stage_templates(
     system: &System,
@@ -359,10 +358,11 @@ pub(crate) fn build_stage_templates(
         &inputs,
     );
 
-    let mut stage_outputs = Vec::with_capacity(study_stages.len());
-    for (stage_idx, stage) in study_stages.iter().enumerate() {
-        stage_outputs.push(build_single_stage_template(&ctx, stage, stage_idx));
-    }
+    let stage_outputs = study_stages
+        .iter()
+        .enumerate()
+        .map(|(stage_idx, stage)| build_single_stage_template(&ctx, stage, stage_idx))
+        .collect();
 
     assemble_stage_templates_output(
         stage_outputs,
@@ -374,13 +374,8 @@ pub(crate) fn build_stage_templates(
     )
 }
 
-/// Build the [`TemplateBuildCtx`] shared across all per-stage builds, from
-/// `system`'s own slices plus every field it borrows from `inputs` (the
-/// resolved positions, load models, filling target, diversion map, study
-/// dimensions, time value, hydro-cell index, and resolved parameters).
-///
-/// Called once per `build_stage_templates` invocation, after the early-return
-/// guard for empty systems.
+/// Build the [`TemplateBuildCtx`] shared across all per-stage builds from
+/// `system`'s slices and the fields it borrows from `inputs`.
 fn build_template_build_ctx<'a>(
     system: &'a System,
     par_lp: &'a PrecomputedPar,
@@ -436,8 +431,6 @@ fn assemble_stage_templates_output(
     cost_scale_factor: f64,
 ) -> StageTemplates {
     let n_study = stage_outputs.len();
-    // Index `s` of every parallel Vec must refer to the same stage, so preserve the
-    // per-stage push order.
     let mut templates = Vec::with_capacity(n_study);
     let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
     let mut geometry_per_stage = Vec::with_capacity(n_study);

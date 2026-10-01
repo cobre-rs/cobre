@@ -4019,7 +4019,7 @@ fn block_layout_and_template(
     (layout, template, tau)
 }
 
-/// AC#1: a chronological `K = 2` Operating hydro emits two chained rows; block
+/// A chronological `K = 2` Operating hydro emits two chained rows; block
 /// `k`'s row carries `+1.0` on `Sᵏ`, `−1.0` on `Sᵏ⁻¹`, and `+τ_k` on that block's
 /// turbine column.
 #[test]
@@ -4089,7 +4089,7 @@ fn chronological_water_balance_chained_rows() {
     );
 }
 
-/// AC#2: summing the `K` chronological water rows coefficient-wise (over every
+/// Summing the `K` chronological water rows coefficient-wise (over every
 /// column) reproduces the parallel single-row build. The interior `Sⁱ` terms cancel
 /// to `+1.0` on `Sᴷ` and `−1.0` on `S⁰`, and every `τ_k`-scaled flow term sums to
 /// its `ζ`-scaled parallel coefficient (`Σ_k τ_k = ζ`).
@@ -4665,7 +4665,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     );
 }
 
-/// AC#3: a chronological `K = 1` build's water-balance row is byte-identical to the
+/// A chronological `K = 1` build's water-balance row is byte-identical to the
 /// parallel build's — the single chained row IS the parallel row (`τ_1 = ζ`, no
 /// interior boundary). The full-template anchor is
 /// [`chronological_k1_byte_identical_to_parallel`]; this isolates the water row.

@@ -887,7 +887,7 @@ pub(crate) struct ResolvedStateLayout {
 /// # Errors
 ///
 /// - [`SddpError::Validation`] — a `LeadTime` anticipated plant's resolution
-///   fans out (`AnticipatedResolution::max_fanout > 1`); per-delivery-stage
+///   fans out (`AnticipatedResolution::max_fanout() > 1`); per-delivery-stage
 ///   fan-out simulation output is not yet supported.
 pub(crate) fn resolve_state_layout(
     system: &System,

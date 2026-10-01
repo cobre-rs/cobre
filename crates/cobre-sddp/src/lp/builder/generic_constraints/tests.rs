@@ -276,9 +276,9 @@ fn constant_productivity_models(n_hydros: usize, productivity: f64) -> Productio
 ///   generation: [79, 79+2*3) = 79..85  (2 FPHA hydros * 3 blocks)
 ///   evap: none
 ///   withdrawal_slack_neg: [85, 89)  withdrawal_slack_pos: [89, 93) (4 hydros)
-///   pumping:    [93, 93+2*3) = 93..99   (2 stations * 3 blocks)
-///   contract_import: [99, 99+2*3) = 99..105   (2 import contracts * 3 blocks)
-///   contract_export: [105, 105+1*3) = 105..108 (1 export contract * 3 blocks)
+///
+/// Later families (slacks, pumping, contracts) are read through the layout
+/// accessors, not hand-derived.
 fn default_fixture() -> ResolverFixture {
     let hydros = vec![
         make_hydro(10, None),

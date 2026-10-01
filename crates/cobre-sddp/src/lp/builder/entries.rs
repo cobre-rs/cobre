@@ -2325,7 +2325,7 @@ mod zero_cost_tests {
     /// Always-active at `stage_idx = 0`: with `K = [1, 5]` and `n_anticipated = 2`,
     /// both plants are active even before their lead time elapses.
     /// Asserts `layout.anticipated.fishing_rows.len() == 2`, that both rows
-    /// are filled with `(0.0, 0.0)` bounds, and that the anticipated-ctx.state
+    /// are filled with `(0.0, 0.0)` bounds, and that the anticipated-state
     /// slot-0 column carries the `-block_hours_total` coupling for both plants.
     #[test]
     fn fishing_rows_always_active_stage_zero() {
@@ -2396,7 +2396,7 @@ mod zero_cost_tests {
 
     /// C13 regression: `build_anticipated_fishing_row_pos` gates a plant's
     /// fishing row on `k_max >= 1`, not merely `n_anticipated >= 1`. A lead-0
-    /// plant (`K = 0` self-delivery) is the only ctx.state production can build
+    /// plant (`K = 0` self-delivery) is the only state production can build
     /// with `k_max == 0` (`ring_size(&[0]) == 0`), and it reaches this same
     /// guard: `fill_anticipated_fishing_entries` must reach the final line
     /// without panicking and without writing any coupling.
@@ -3226,7 +3226,7 @@ mod zero_cost_tests {
                     .any(|&(r, v)| r == diag_row && (v - 1.0).abs() < 1e-15);
                 assert!(
                     !has_diag,
-                    "anticipated-ctx.state-fixing diagonal (row={diag_row}, val=1.0) must be absent \
+                    "anticipated-state-fixing diagonal (row={diag_row}, val=1.0) must be absent \
                      from col {col} (slot={slot}, plant={plant})"
                 );
             }
@@ -4646,7 +4646,7 @@ mod pumping_water_tests {
         .with_generic_constraint(make_constraint(), 100.0);
         let csc_b = assemble(&mut fixtures_b);
 
-        // Order-A layout (held by the test, owning its ctx/ctx.state) for the offset
+        // Order-A layout (held by the test, owning its ctx/state) for the offset
         // reads below. The layout offsets are declaration-order-invariant, so this
         // matches the layout order A's CSC was assembled with.
         let ctx_a = fixtures_a.make_ctx();
@@ -8029,7 +8029,7 @@ mod pumping_water_tests {
     }
 
     /// Cut-validity guard (§4 trap 3): the `σ_fill` soft row couples to the storage
-    /// ctx.state through the constraint matrix, so LP duality folds its dual into the
+    /// state through the constraint matrix, so LP duality folds its dual into the
     /// SINGLE reduced cost of the incoming-storage column the cut already reads as
     /// `rc / col_scale`. The `σ_fill` builder code therefore must NEVER reference the
     /// dual-extraction entry point — doing so would signal a hand-combination of the

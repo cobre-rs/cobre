@@ -22,11 +22,10 @@ use crate::time_value::{PostStudyResolved, TimeValue};
 
 /// Owns every value a [`TemplateBuildCtx`] borrows, or holds by value, so a
 /// test builds one through [`Self::ctx`] instead of hand-writing its own
-/// field-by-field construction — the same shape `columns.rs`'s
-/// `InteriorStorageFixtures` and `generic_constraints::tests::ResolverFixture`
-/// each duplicate independently. `ctx()` derives `positions` from its own
-/// slices, the way `build_template_build_ctx` does; every other field is
-/// copied through unchanged.
+/// field-by-field construction; larger builder fixtures embed it as their
+/// `base`. `ctx()` derives `positions` from its own slices, the way
+/// [`EntityPositions::build`] does; every other field is copied through
+/// unchanged.
 pub(crate) struct CtxFixture {
     /// Derived fresh, from the slices below, on every [`Self::ctx`] call — the
     /// backing store [`TemplateBuildCtx::positions`] borrows.
@@ -134,7 +133,7 @@ impl Default for CtxFixture {
 
 impl CtxFixture {
     /// Derives `positions`, `state`, and `study_dims` from this fixture's own
-    /// slices, the way `build_template_build_ctx`/`build_study_dimensions` do;
+    /// slices, the way [`EntityPositions::build`]/`build_study_dimensions` do;
     /// every other field is copied through unchanged. `&mut self`: all three
     /// are recomputed into `self`'s own fields on every call, so
     /// [`TemplateBuildCtx::positions`]/`state`/`study_dims` can borrow a

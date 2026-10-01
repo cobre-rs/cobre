@@ -9,8 +9,8 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
-use cobre_core::System;
 use cobre_core::scenario::SamplingScheme;
+use cobre_core::{BlockMode, System};
 use cobre_io::Config;
 use cobre_sddp::{
     BoundaryStateRequirements, SimulationScenarioResult, StudySetup,
@@ -271,7 +271,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 /// (`tests/template_snapshot.rs`) extracts one.
 pub fn fresh_system_and_setup_in_block_mode(
     case_dir: &Path,
-    mode: cobre_core::BlockMode,
+    mode: BlockMode,
 ) -> Result<(System, StudySetup), String> {
     let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     copy_dir_recursive(case_dir, tmp.path());
@@ -282,8 +282,8 @@ pub fn fresh_system_and_setup_in_block_mode(
     let mut value: serde_json::Value = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("parse {}: {e}", stages_path.display()));
     let mode_str = match mode {
-        cobre_core::BlockMode::Parallel => "parallel",
-        cobre_core::BlockMode::Chronological => "chronological",
+        BlockMode::Parallel => "parallel",
+        BlockMode::Chronological => "chronological",
     };
     let stages = value
         .get_mut("stages")
@@ -325,7 +325,7 @@ pub fn fresh_system_and_setup_in_block_mode(
 /// Deck keys whose block-mode flip is rejected by a `cobre-io` validation
 /// rule, paired with the rejection's expected message substring: a deck
 /// here must still fail its flip with that substring, or the entry is
-/// stale (D2).
+/// stale.
 pub const BLOCK_MODE_FLIP_REJECTED: &[(&str, &str)] = &[];
 
 /// Resolves [`fresh_system_and_setup_in_block_mode`]'s result against
@@ -335,7 +335,7 @@ pub const BLOCK_MODE_FLIP_REJECTED: &[(&str, &str)] = &[];
 fn build_flip_or_panic(
     key: &str,
     case_dir: &Path,
-    mode: cobre_core::BlockMode,
+    mode: BlockMode,
 ) -> Option<(System, StudySetup)> {
     match fresh_system_and_setup_in_block_mode(case_dir, mode) {
         Ok(pair) => Some(pair),
@@ -358,7 +358,7 @@ fn build_flip_or_panic(
 /// flip's `block_hours_per_stage` — building both mode flips and visiting
 /// `(key, chronological, parallel)`; returns the visited count.
 ///
-/// [`Parallel`]: cobre_core::BlockMode::Parallel
+/// [`Parallel`]: BlockMode::Parallel
 pub fn for_each_deck_in_both_block_modes(
     mut visit: impl FnMut(&str, (&System, &StudySetup), (&System, &StudySetup)),
 ) -> usize {
@@ -369,7 +369,7 @@ pub fn for_each_deck_in_both_block_modes(
             continue;
         }
         let Some((parallel_system, parallel_setup)) =
-            build_flip_or_panic(&deck.key, &deck.dir, cobre_core::BlockMode::Parallel)
+            build_flip_or_panic(&deck.key, &deck.dir, BlockMode::Parallel)
         else {
             continue;
         };
@@ -384,7 +384,7 @@ pub fn for_each_deck_in_both_block_modes(
             continue;
         }
         let Some((chrono_system, chrono_setup)) =
-            build_flip_or_panic(&deck.key, &deck.dir, cobre_core::BlockMode::Chronological)
+            build_flip_or_panic(&deck.key, &deck.dir, BlockMode::Chronological)
         else {
             continue;
         };

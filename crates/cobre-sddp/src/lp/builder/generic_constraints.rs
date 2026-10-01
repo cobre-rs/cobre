@@ -367,11 +367,11 @@ fn push_local_inflow_rate(
 }
 
 /// Push arc `u_idx → h`'s per-block release rate onto `out`, mirroring the water
-/// balance's own branch (D2, `lp/builder/entries.rs`'s `fill_arc_release_block_entries`
-/// / `fill_arc_release_chrono_block_entries`): a chronological spread entry routes
+/// balance's own branch (`fill_arc_release_block_entries` /
+/// `fill_arc_release_chrono_block_entries`): a chronological spread entry routes
 /// each source block's share; a stage-clock-weights entry uses its same-block share
 /// `k_0` bare (the balance's own `τ_b · k_0` product, never re-multiplied); absent
-/// either, the whole release lands at `blk` (today's `+1.0`, the zero-lag reduction).
+/// either, the whole release lands at `blk` at `+1.0` (the zero-lag reduction).
 fn push_upstream_release_rate(
     u_idx: usize,
     blk: BlockIdx,

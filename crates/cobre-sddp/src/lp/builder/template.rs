@@ -384,8 +384,6 @@ fn build_template_build_ctx<'a>(
         evaporation_models,
         generic_constraints: system.generic_constraints(),
         non_controllable_sources: system.non_controllable_sources(),
-        // Iterate the (ID-sorted) station slice in slot order, NOT declaration
-        // order, to uphold the declaration-order bit-determinism rule.
         pumping_stations: system.pumping_stations(),
         contracts: system.contracts(),
         diversion_upstream: &inputs.diversion_upstream,

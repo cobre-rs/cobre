@@ -139,8 +139,7 @@ pub(crate) struct PostStudyResolved {
     /// `Vec<Vec<_>>` (a per-plant allocation) or an `EntityId`-keyed map (a
     /// nondeterministic-iteration-order read).
     anticipated_bounds: Vec<Option<(f64, f64, f64)>>,
-    /// Row stride of [`Self::anticipated_bounds`] — the post-study stage count,
-    /// `total_hours.len()`.
+    /// Row stride of [`Self::anticipated_bounds`]: the post-study stage count.
     anticipated_bounds_stride: usize,
 }
 

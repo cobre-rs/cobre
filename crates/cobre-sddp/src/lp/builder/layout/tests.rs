@@ -1048,7 +1048,7 @@ fn chronological_interior_storage_boundary_sizing() {
 }
 
 /// `block_storage_col` resolves all `K + 1` boundaries: the two endpoints to the
-/// ctx.state columns (`k = 0 → storage_in[h]`, `k = K → storage[h] = h`) and the
+/// state columns (`k = 0 → storage_in[h]`, `k = K → storage[h] = h`) and the
 /// `K − 1` interiors into the interior storage-boundary family at stride
 /// `n_blks − 1`. At `K = 1` only the two endpoints resolve (no interior column
 /// is addressed).
@@ -1063,12 +1063,12 @@ fn block_storage_col_resolves_all_boundaries() {
     assert_eq!(
         chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Incoming),
         chrono_k3.state.storage_in.start + h,
-        "k = 0 resolves to the incoming-ctx.state column storage_in[h]"
+        "k = 0 resolves to the incoming-state column storage_in[h]"
     );
     assert_eq!(
         chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Outgoing),
         h,
-        "k = K resolves to the outgoing-ctx.state column storage[h] = storage.start + h = h"
+        "k = K resolves to the outgoing-state column storage[h] = storage.start + h = h"
     );
     let interior_1 = chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Interior(1));
     let interior_2 = chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Interior(2));
@@ -1113,7 +1113,7 @@ fn block_storage_col_resolves_all_boundaries() {
 /// resolve their endpoint arms to the exact same columns `StateSpace`'s own
 /// `storage_incoming_col`/`storage_outgoing_col` accessors return, for every
 /// hydro — the migration-proof pin for routing `StorageBoundaryGrid`'s endpoint
-/// arms through those accessors instead of its own copied ctx.state bases.
+/// arms through those accessors instead of its own copied state bases.
 #[test]
 fn storage_boundary_endpoints_match_state_space_accessors() {
     let mut fixtures = TwoHydroFixtures::new();
@@ -2067,12 +2067,12 @@ fn anticipated_decision_columns_placed_between_thermal_and_line_fwd() {
         "line_fwd.start == anticipated_decision.start + n_anticipated \
              (state_out relocated out of the control region)"
     );
-    // The outgoing ring start equals the indexer's ctx.state-region position:
+    // The outgoing ring start equals the indexer's state-region position:
     // immediately after `transit_buckets_out` (N*(1+L) + B). Here N=0, L=0,
     // B=0 → the ring starts at 0.
     assert_eq!(
         layout.state.commit_out.start, 0,
-        "commit_out.start must equal the ctx.state-region offset N*(1+L) + B"
+        "commit_out.start must equal the state-region offset N*(1+L) + B"
     );
     assert_eq!(
         layout.geometry.line_fwd.start - layout.geometry.thermal.start,
@@ -2189,7 +2189,7 @@ fn anticipated_fishing_row_count_grows_with_stage() {
     }
 }
 
-/// `num_rows` does not include ctx.state-fixing rows; the LP row layout starts
+/// `num_rows` does not include state-fixing rows; the LP row layout starts
 /// directly with `z_inflow_rows` at row 0.
 ///
 /// State pinning uses column bounds, so there is no `[0, n_state)` row
@@ -2223,14 +2223,14 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
         "num_rows equals anticipated_fishing_rows (2) for this fixture"
     );
 
-    // Reference value: if ctx.state-fixing rows existed, num_rows would be observed + n_state.
+    // Reference value: if state-fixing rows existed, num_rows would be observed + n_state.
     let num_rows_if_state_rows_existed = observed + n_state;
     assert_eq!(
         num_rows_if_state_rows_existed, 8,
         "observed + n_state is 8 for this fixture"
     );
     // Structural invariant proving the reduction: row_water_balance_start
-    // equals ctx.hydros.len() (no n_state offset). With ctx.state-fixing rows it
+    // equals ctx.hydros.len() (no n_state offset). With state-fixing rows it
     // would be n_state + ctx.hydros.len().
     assert_eq!(
         layout.geometry.water_balance.start(),
@@ -2727,10 +2727,10 @@ fn test_layout_state_out_block_adjacent_to_decision() {
     let stage = minimal_stage();
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
-    // The outgoing ring sits in the ctx.state region: N*(1+L) + B.
+    // The outgoing ring sits in the state region: N*(1+L) + B.
     assert_eq!(
         layout.state.commit_out.start, 0,
-        "outgoing-ring columns must be sourced from the ctx.state-region offset \
+        "outgoing-ring columns must be sourced from the state-region offset \
              N*(1+L) + B"
     );
     assert_eq!(
@@ -2761,7 +2761,7 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
     let layout = StageLayout::new(&ctx, ctx.state, &stage, 5);
 
     assert_eq!(layout.anticipated.state_out_def_rows.len(), 0);
-    // Column block stays allocated at the ctx.state-region offset regardless of
+    // Column block stays allocated at the state-region offset regardless of
     // activity: N*(1+L) + B = 0.
     assert_eq!(layout.state.commit_out.start, 0);
 }
@@ -3245,7 +3245,7 @@ fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
 /// `0..0` fallback (losing the cursor position) would fail these equality
 /// assertions.
 ///
-/// The column cursor is additionally asserted `!= 0`: the theta and ctx.state columns
+/// The column cursor is additionally asserted `!= 0`: the theta and state columns
 /// always precede the equipment/slack region, so `evap_col_start` is
 /// provably positive and a spurious `0` is directly detectable. The row cursor is
 /// NOT asserted `!= 0`: with zero hydros AND zero buses no rows precede the
@@ -3268,7 +3268,7 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     );
 
     // Column cursor: the eight column accessors collapse onto `evap_col_start`
-    // with no hydros, and that cursor is provably positive (theta + ctx.state
+    // with no hydros, and that cursor is provably positive (theta + state
     // columns precede it).
     let post_col = layout.equipment.evap_col_start;
     assert_ne!(post_col, 0, "post-equipment column cursor must not be 0");

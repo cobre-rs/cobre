@@ -35,10 +35,10 @@ test-support = ["cobre-core/test-support", "dep:tempfile"]
 [dependencies]
 cobre-core = { version = "0.16.0", path = "../cobre-core", features = ["serde"] }
 cobre-stochastic = { version = "0.16.0", path = "../cobre-stochastic" }
-arrow = { version = "59", default-features = false, features = ["prettyprint"] }
+arrow = { version = "60", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"
-parquet = { version = "59", default-features = false, features = ["arrow", "zstd"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 postcard = { version = "1", features = ["alloc"] }
 schemars = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -52,7 +52,7 @@ gethostname = "1.1.0"
 [dev-dependencies]
 cobre-core = { version = "0.16.0", path = "../cobre-core", features = ["test-support"] }
 cobre-io = { path = ".", features = ["test-support"] }
-parquet = { version = "59", default-features = false, features = ["arrow", "zstd"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 proptest = "1"
 tempfile = "3"
 

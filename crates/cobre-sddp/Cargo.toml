@@ -72,7 +72,7 @@ tracing = "0.1"
 cc = "1.2"
 
 [dev-dependencies]
-arrow = { version = "59", default-features = false, features = ["prettyprint"] }
+arrow = { version = "60", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 cobre-core = { version = "0.16.0", path = "../cobre-core", features = ["test-support"] }
 criterion = { version = "0.7", default-features = false }
@@ -80,7 +80,7 @@ criterion = { version = "0.7", default-features = false }
 # per-candidate `dgemm` baseline (the crate's own `gemm_block` wrapper is
 # `pub(crate)` and so unreachable from a bench). Same pin as the normal dep.
 matrixmultiply = { workspace = true }
-parquet = { version = "59", default-features = false, features = ["arrow", "zstd"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 proptest = "1"
 rand = "0.10"
 rand_distr = "0.6"

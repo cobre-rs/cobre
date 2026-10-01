@@ -57,7 +57,7 @@ mpi = ["cobre-comm/mpi"]
 slow-tests = []
 
 [dev-dependencies]
-arrow = { version = "59", default-features = false }
+arrow = { version = "60", default-features = false }
 assert_cmd = "2"
 cobre-core = { version = "0.16.0", path = "../cobre-core", features = ["test-support"] }
 cobre-io = { version = "0.16.0", path = "../cobre-io" }
@@ -65,7 +65,7 @@ cobre-sddp = { version = "0.16.0", path = "../cobre-sddp", default-features = fa
     "test-support",
 ] }
 cobre-solver = { version = "0.16.0", path = "../cobre-solver", default-features = false }
-parquet = { version = "59", default-features = false, features = ["arrow"] }
+parquet = { version = "60", default-features = false, features = ["arrow"] }
 predicates = "3"
 tempfile = "3"
 

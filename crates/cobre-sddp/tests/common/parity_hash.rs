@@ -40,6 +40,7 @@ use cobre_sddp::{
     setup::{StudyParams, prepare_stochastic},
 };
 use sha2::{Digest, Sha256};
+use std::fmt::Write;
 
 use super::StubComm;
 use super::permute::permute_case;
@@ -118,7 +119,13 @@ pub fn compute_parity_hash(
         }
     }
 
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 // ---------------------------------------------------------------------------
